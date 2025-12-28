@@ -1,0 +1,109 @@
+{
+  "isaac_nucleus_dir": "http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac",
+  "scan_time": "2025-11-19",
+  "categories": {
+    "Props": {
+      "Blocks": {
+        "files": [
+          "basic_block.usd",
+          "block.usd",
+          "block_instanceable.usd",
+          "blue_block.usd",
+          "green_block.usd",
+          "nvidia_cube.usd",
+          "red_block.usd",
+          "yellow_block.usd"
+        ],
+        "subdirs": [
+          ".thumbs",
+          "DexCube",
+          "Materials",
+          "MultiColorCube"
+        ],
+        "path": "Props/Blocks"
+      },
+      "YCB": {
+        "files": [],
+        "subdirs": [
+          "Axis_Aligned",
+          "Axis_Aligned_Physics"
+        ],
+        "path": "Props/YCB"
+      },
+      "Warehouse": {
+        "files": [],
+        "subdirs": [],
+        "path": "Props/Warehouse"
+      },
+      "S1": {
+        "files": [],
+        "subdirs": [],
+        "path": "Props/S1"
+      },
+      "SM": {
+        "files": [],
+        "subdirs": [],
+        "path": "Props/SM"
+      }
+    },
+    "Environments": {
+      "Hospital": {
+        "files": [
+          "hospital.usd"
+        ],
+        "subdirs": [
+          ".thumbs",
+          "Materials",
+          "Props"
+        ],
+        "path": "Environments/Hospital"
+      },
+      "Office": {
+        "files": [
+          "office.usd"
+        ],
+        "subdirs": [
+          ".thumbs",
+          "Animations",
+          "Materials",
+          "Props"
+        ],
+        "path": "Environments/Office"
+      },
+      "Simple_Room": {
+        "files": [
+          "simple_room.usd"
+        ],
+        "subdirs": [
+          ".thumbs",
+          "Materials",
+          "Props"
+        ],
+        "path": "Environments/Simple_Room"
+      },
+      "Simple_Warehouse": {
+        "files": [
+          "full_warehouse.usd",
+          "warehouse.usd",
+          "warehouse_multiple_shelves.usd",
+          "warehouse_with_forklifts.usd"
+        ],
+        "subdirs": [
+          ".thumbs",
+          "Materials",
+          "Props",
+          "Stage"
+        ],
+        "path": "Environments/Simple_Warehouse"
+      },
+      "Modular_Warehouse": {
+        "files": [],
+        "subdirs": [
+          "Library",
+          "Props"
+        ],
+        "path": "Environments/Modular_Warehouse"
+      }
+    }
+  }
+}

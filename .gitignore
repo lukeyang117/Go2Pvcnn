@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Logs
+logs/
+*.log
+nohup.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Model checkpoints and training outputs
+runs/
+checkpoints/
+*.pth
+*.ckpt
+
+# Data
+data/*/
+!data/*/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
