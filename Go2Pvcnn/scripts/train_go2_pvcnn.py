@@ -53,27 +53,35 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
 # ========================================
-# ISAAC LAB OFFICIAL MULTI-GPU PATTERN
+# HACK GPU MAPPING BEFORE APPLAUNCH
 # ========================================
-# Following /mnt/mydisk/lhy/IsaacLab/scripts/reinforcement_learning/rsl_rl/train.py
-# Read from environment variable (set by launch script) or default to 0
-GPU_OFFSET = int(os.environ.get("GPU_OFFSET", 0))
+# AppLauncher will use: device_id = LOCAL_RANK + GPU_OFFSET
+# To use specific GPUs (e.g., 1,3), we modify GPU_OFFSET based on LOCAL_RANK
 
-if args_cli.distributed:
-    # Get local rank from app_launcher (set by torch.distributed.run via LOCAL_RANK env var)
-    # This will be 0, 1, 2, ... for each process
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+if args_cli.distributed and "GPU_IDS" in os.environ:
+    # Parse GPU IDs from environment variable (filter empty strings)
+    gpu_ids = [int(x.strip()) for x in os.environ["GPU_IDS"].split(",") if x.strip()]
+    original_local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
-    # Apply GPU offset to skip occupied GPUs
-    actual_gpu_id = local_rank + GPU_OFFSET
+    if original_local_rank >= len(gpu_ids):
+        raise RuntimeError(
+            f"LOCAL_RANK={original_local_rank} but GPU_IDS only has {len(gpu_ids)} GPUs: {os.environ['GPU_IDS']}"
+        )
     
-    # Set device using actual GPU ID
-    # This tells Isaac Sim which GPU to use for this process
-    args_cli.device = f"cuda:{actual_gpu_id}"
+    # Target GPU ID for this rank
+    target_gpu_id = gpu_ids[original_local_rank]
     
-    print(f"\n[Multi-GPU] Rank {local_rank} using physical GPU {actual_gpu_id}: {args_cli.device}")
+    # Trick AppLauncher by setting GPU_OFFSET
+    # Since AppLauncher does: device_id = LOCAL_RANK + GPU_OFFSET
+    # We need: target_gpu_id = original_local_rank + GPU_OFFSET
+    # So: GPU_OFFSET = target_gpu_id - original_local_rank
+    required_offset = target_gpu_id - original_local_rank
+    os.environ["GPU_OFFSET"] = str(required_offset)
+    
+    print(f"\n[GPU Mapping] LOCAL_RANK={original_local_rank} -> GPU {target_gpu_id}")
+    print(f"[GPU Mapping] Set GPU_OFFSET={required_offset} (AppLauncher will compute: {original_local_rank} + {required_offset} = {target_gpu_id})")
 
-# Launch Isaac Sim - AppLauncher will use args_cli.device
+# Launch Isaac Sim - AppLauncher will read LOCAL_RANK and GPU_OFFSET from env
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -130,8 +138,8 @@ def main():
         # Initialize process group
         dist.init_process_group(backend="nccl", init_method="env://")
         
-        # Set CUDA device for this process (with GPU offset)
-        device_id = local_rank + GPU_OFFSET
+        # Set CUDA device for this process (use app_launcher.device_id which already has GPU_OFFSET applied)
+        device_id = app_launcher.device_id
         torch.cuda.set_device(device_id)
         
         # Divide environments evenly across GPUs
@@ -139,10 +147,10 @@ def main():
         args_cli.num_envs = envs_per_gpu
         print(f"[Multi-GPU] Adjusted to {envs_per_gpu} envs per GPU ({envs_per_gpu * world_size} total)")
     else:
-        # Single GPU mode (also skip GPU 0)
+        # Single GPU mode
         rank = 0
         world_size = 1
-        device_id = GPU_OFFSET  # Use GPU 1 by default
+        device_id = app_launcher.device_id  # Use device_id from AppLauncher
         torch.cuda.set_device(device_id)
         print(f"[Single-GPU] Using device: cuda:{device_id}")
     
@@ -162,12 +170,11 @@ def main():
     env_cfg = Go2PvcnnEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
     
-    # ISAAC LAB OFFICIAL PATTERN: Use app_launcher.local_rank for device assignment
+    # Use app_launcher.device_id (AppLauncher already handles GPU_OFFSET from env var)
+    env_cfg.sim.device = f"cuda:{app_launcher.device_id}"
     if args_cli.distributed:
-        env_cfg.sim.device = f"cuda:{app_launcher.local_rank + GPU_OFFSET}"
         env_cfg.seed = args_cli.seed + app_launcher.local_rank  # Different seed per rank
     else:
-        env_cfg.sim.device = f"cuda:{GPU_OFFSET}"  # Single GPU mode also uses GPU 1
         env_cfg.seed = args_cli.seed
     
     
@@ -274,7 +281,7 @@ def main():
             "critic_hidden_dims": [256, 256, 256],
             "activation": "elu",
             "use_cost_map": True,
-            "cost_map_channels": 1,  # 单通道 cost_map
+            "cost_map_channels": 2,  # 双通道: cost_map + height_map
             "cost_map_size": 16,  # 16×16 网格（匹配 height_scanner）
             "cnn_channels": [32, 64],  # 减少层数以适应小尺寸输入
             "cnn_feature_dim": 128,

@@ -179,15 +179,10 @@ if [[ "$MULTI_GPU" == true ]]; then
     echo "Command: python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=$NUM_GPUS $FULL_SCRIPT_PATH $PYTHON_ARGS"
     echo ""
     
-    # Export GPU_IDS if set externally, otherwise use default GPU_OFFSET
-    if [[ -n "$GPU_IDS" ]]; then
-        export GPU_IDS="$GPU_IDS"
-        echo "✓ GPU_IDS=$GPU_IDS (using specified GPUs)"
-    else
-        # Set GPU_OFFSET environment variable to skip GPU 0
-        export GPU_OFFSET=1
-        echo "✓ GPU_OFFSET=$GPU_OFFSET (skipping GPU 0, using GPU 1, 2, 3...)"
-    fi
+    # Set GPU_OFFSET environment variable to skip GPU 0
+    # Python code will read this and use GPUs starting from GPU_OFFSET
+    export GPU_OFFSET=1
+    echo "✓ GPU_OFFSET=$GPU_OFFSET (skipping GPU 0, using GPU 1, 2, 3...)"
     
     python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=$NUM_GPUS "$FULL_SCRIPT_PATH" $PYTHON_ARGS
 else

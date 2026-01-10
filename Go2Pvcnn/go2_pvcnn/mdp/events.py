@@ -92,3 +92,35 @@ def reset_dynamic_objects_position(
     # Write to physics simulation
     objects.write_object_link_pose_to_sim(object_pose, env_ids=env_ids)
     objects.write_object_link_velocity_to_sim(velocities, env_ids=env_ids)
+
+
+def reset_goal_positions(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    goal_distance: float = 5.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> None:
+    """Reset goal positions for environments.
+    
+    This function resets the goal positions when episodes are reset (due to collision,
+    timeout, or other termination conditions). It ensures each new episode starts with
+    a goal at goal_distance meters ahead in the X direction.
+    
+    Args:
+        env: Environment instance
+        env_ids: Environment IDs to reset
+        goal_distance: Distance to goal in X direction (meters). Default: 5.0m
+        asset_cfg: Robot asset configuration
+    """
+    # Get robot asset
+    robot: Articulation = env.scene[asset_cfg.name]
+    robot_pos = robot.data.root_pos_w[env_ids, :2]  # (len(env_ids), 2) - [x, y]
+    
+    # Initialize goal_positions if not exists
+    if not hasattr(env.unwrapped, 'goal_positions'):
+        env.unwrapped.goal_positions = torch.zeros(env.num_envs, 2, device=env.device)
+        env.unwrapped.goal_distance = goal_distance
+    
+    # Reset goals: current_position + [goal_distance, 0]
+    env.unwrapped.goal_positions[env_ids, 0] = robot_pos[:, 0] + goal_distance
+    env.unwrapped.goal_positions[env_ids, 1] = robot_pos[:, 1]

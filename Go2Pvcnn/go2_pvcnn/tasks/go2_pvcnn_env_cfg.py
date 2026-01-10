@@ -225,11 +225,8 @@ class Go2SceneCfg(InteractiveSceneCfg):
         pattern_cfg=LivoxPatternCfg(
             sensor_type="mid360",
             use_simple_grid=True,  # Use simple grid pattern
-            # 优化显存：从100×100=10000减少到50×50=2500光线
-            # Memory optimization: Reduced from 100×100=10000 to 50×50=2500 rays
             vertical_line_num=50,  # 50 vertical lines (was 100)
             horizontal_line_num=50,  # 50 horizontal lines = 2500 rays (was 10000)
-            samples=24000,  # 仅在 use_simple_grid=False 时生效
         ),
         mesh_prim_paths=[
             "/World/ground"                      # 地形
@@ -280,14 +277,20 @@ class Go2SceneCfg(InteractiveSceneCfg):
 @configclass
 class CommandsCfg:
     """Command specifications for the MDP."""
-    # Simple velocity command
+    # Velocity command with heading control
     base_velocity = isaac_mdp.UniformVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.1,
+        heading_command=True,  # 启用航向控制模式
+        heading_control_stiffness=1.0,  # 航向误差到角速度的转换系数
+        rel_standing_envs=0.02,  # 减少静止环境比例，鼓励运动
+        rel_heading_envs=0.8,  # 80%的环境使用航向控制，20%使用直接角速度
         debug_vis=True,
         ranges=isaac_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
+            lin_vel_x=(-0.1, 0.1), 
+            lin_vel_y=(-0.1, 0.1), 
+            ang_vel_z=(-1, 1),
+            heading=(-math.pi, math.pi),  # 目标航向角范围：-π到π
         ),
     )
 
@@ -443,7 +446,7 @@ class RewardsCfg:
     # -- task rewards
     track_lin_vel_xy_exp = RewTerm(
         func=custom_mdp.track_lin_vel_xy_exp,
-        weight=1.0,
+        weight=10.0,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
     track_ang_vel_z_exp = RewTerm(
@@ -510,6 +513,19 @@ class RewardsCfg:
             "sensor_cfg": SceneEntityCfg("object_2_contact"),
             "threshold": 0.1,
             "exclude_foot": False,
+        },
+    )
+    
+    # 足端落在高代价区域的惩罚（基于上一时刻的代价地图）
+    foot_step_on_cost = RewTerm(
+        func=custom_mdp.foot_cost_map_penalty,
+        weight=-2.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces"),
+            "force_threshold": 10.0,  # 足端接触力阈值 (N)
+            "grid_resolution": 0.1,  # 与height_scanner一致
+            "x_range": (-0.75, 0.75),  # 与cost_map_generator一致
+            "y_range": (-0.75, 0.75),
         },
     )
 

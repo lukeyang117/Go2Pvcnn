@@ -83,7 +83,7 @@ class CostMapGenerator:
         Returns:
             cost_map: (batch, H, W) - 单通道代价地图（加权组合）
                 - 综合了障碍物、距离、梯度、高度的加权代价
-                - 符号由height_map决定：正值=难走上坡，负值=难走下坡
+                - 所有代价均为正值（0-1范围）
         """
         self._call_count += 1
         batch_size = point_xyz.shape[0]
@@ -192,35 +192,21 @@ class CostMapGenerator:
         # 7. 计算绝对高度代价（高度越大代价越高）
         abs_height_cost = torch.abs(height_map)
         
-        # 8. 根据高度图的正负决定所有代价的符号
-        # height > 0 (上坡) → 代价为正（难走）
-        # height < 0 (下坡) → 代价为负（难走）
-        # height = 0 (平地) → 代价为0
-        height_sign = torch.sign(height_map)  # +1, 0, or -1
-        
-        # 加权求和后应用符号
-        combined_cost_abs = (
+        # 8. 加权求和得到最终代价（全部为正值，范围0-1）
+        cost_map = (
             self.weight_obstacle * obstacle_cost_abs +
             self.weight_distance * distance_cost_abs +
             self.weight_gradient * gradient_cost_abs +
             self.weight_abs_height * abs_height_cost
-        )
-        
-        # 最终代价 = 绝对代价 × 高度符号
-        cost_map = combined_cost_abs * height_sign  # (batch, H, W)
+        )  # (batch, H, W)
         if self._call_count % 100 == 1:
             print(f"  - Output: cost_map {cost_map.shape}")
-            print(f"  - Obstacle cost (abs) range: [{obstacle_cost_abs.min():.3f}, {obstacle_cost_abs.max():.3f}]")
-            print(f"  - Distance cost (abs) range: [{distance_cost_abs.min():.3f}, {distance_cost_abs.max():.3f}]")
-            print(f"  - Gradient cost (abs) range: [{gradient_cost_abs.min():.3f}, {gradient_cost_abs.max():.3f}]")
+            print(f"  - Obstacle cost range: [{obstacle_cost_abs.min():.3f}, {obstacle_cost_abs.max():.3f}]")
+            print(f"  - Distance cost range: [{distance_cost_abs.min():.3f}, {distance_cost_abs.max():.3f}]")
+            print(f"  - Gradient cost range: [{gradient_cost_abs.min():.3f}, {gradient_cost_abs.max():.3f}]")
             print(f"  - Abs height cost range: [{abs_height_cost.min():.3f}, {abs_height_cost.max():.3f}]")
-            print(f"  - Height sign: positive={((height_sign > 0).sum()).item()}, negative={((height_sign < 0).sum()).item()}, zero={((height_sign == 0).sum()).item()}")
-            print(f"  - Final cost range (with sign): [{cost_map.min():.3f}, {cost_map.max():.3f}]")
+            print(f"  - Final cost range: [{cost_map.min():.3f}, {cost_map.max():.3f}]")
             print(f"  - Weights: obstacle={self.weight_obstacle}, distance={self.weight_distance}, gradient={self.weight_gradient}, abs_height={self.weight_abs_height}")
-            print(f"  - Gradient cost (abs) range: [{gradient_cost_abs.min():.3f}, {gradient_cost_abs.max():.3f}]")
-            print(f"  - Height sign: positive={((height_sign > 0).sum()).item()}, negative={((height_sign < 0).sum()).item()}, zero={((height_sign == 0).sum()).item()}")
-            print(f"  - Final cost range (with sign): [{cost_map.min():.3f}, {cost_map.max():.3f}]")
-            print(f"  - Weights: obstacle={self.weight_obstacle}, distance={self.weight_distance}, gradient={self.weight_gradient}")
         
         return cost_map
     

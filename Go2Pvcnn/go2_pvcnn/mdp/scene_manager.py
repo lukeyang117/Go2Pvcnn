@@ -12,7 +12,7 @@ import torch
 from typing import TYPE_CHECKING, List, Dict, Tuple
 from pathlib import Path
 
-from isaaclab.assets import RigidObject, RigidObjectCfg, RigidObjectCollectionCfg
+from isaaclab.assets import RigidObject, RigidObjectCfg, RigidObjectCollectionCfg, AssetBaseCfg
 from isaaclab.managers import SceneEntityCfg
 import isaaclab.sim as sim_utils
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -62,11 +62,14 @@ def create_dynamic_objects_collection_cfg(num_objects: int = 3) -> RigidObjectCo
     # Create rigid objects dictionary
     rigid_objects = {}
     
-    for i, obj_info in enumerate(ycb_objects):
+    # Create num_objects objects by cycling through the 3 YCB objects
+    for i in range(num_objects):
+        obj_info = ycb_objects[i % len(ycb_objects)]  # Cycle through YCB objects
+        
         # 使用 {ENV_REGEX_NS} 让物体在每个环境中自动复制
         # Use {ENV_REGEX_NS} to automatically replicate objects across environments
         rigid_objects[f"object_{i}"] = RigidObjectCfg(
-            prim_path=f"{{ENV_REGEX_NS}}/Object_{i}",  # 每个环境: Object_0, Object_1, Object_2
+            prim_path=f"{{ENV_REGEX_NS}}/Object_{i}",  # 每个环境: Object_0, Object_1, Object_2, ...
             spawn=sim_utils.UsdFileCfg(
                 usd_path=obj_info["usd_path"],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -85,5 +88,9 @@ def create_dynamic_objects_collection_cfg(num_objects: int = 3) -> RigidObjectCo
             ),
         )
     return RigidObjectCollectionCfg(rigid_objects=rigid_objects)
+
+
+
+
 
 

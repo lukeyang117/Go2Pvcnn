@@ -257,3 +257,122 @@ def non_foot_ground_contact_penalty(
     has_collision = torch.any(non_foot_ground_contact, dim=-1)  # [num_envs]
     
     return has_collision.float()
+
+
+def foot_cost_map_penalty(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces"),
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    force_threshold: float = 10.0,
+    grid_resolution: float = 0.1,
+    x_range: tuple = (-0.75, 0.75),
+    y_range: tuple = (-0.75, 0.75),
+) -> torch.Tensor:
+    """根据足端落在代价地图上的位置给予惩罚。
+    
+    逻辑：
+    1. 检测四足是否着地（接触力超过阈值）
+    2. 对于着地的足端，获取其在机器人坐标系下的位置
+    3. 将位置映射到代价地图的网格索引
+    4. 从上一时刻保存的代价地图中查询该位置的代价值
+    5. 根据代价值给予惩罚（代价越高惩罚越大）
+    
+    Args:
+        env: 环境实例
+        sensor_cfg: 足端的接触传感器配置
+        asset_cfg: 机器人配置
+        force_threshold: 判断足端着地的力阈值 (N)
+        grid_resolution: 代价地图分辨率 (m/grid)
+        x_range: 代价地图X轴范围 (m)
+        y_range: 代价地图Y轴范围 (m)
+    
+    Returns:
+        torch.Tensor: 惩罚值 [num_envs]，根据足端所在位置的代价值加权求和
+    """
+    # 获取接触传感器和机器人
+    contact_sensor = env.scene.sensors[sensor_cfg.name]
+    robot: Articulation = env.scene[asset_cfg.name]
+    
+    # 获取上一时刻保存的代价地图 (在observations.py中保存)
+    if not hasattr(env.unwrapped, 'last_cost_map_2d') or env.unwrapped.last_cost_map_2d is None:
+        # 第一次调用时还没有代价地图，返回0惩罚
+        return torch.zeros(env.num_envs, device=env.device)
+    
+    cost_map_2d = env.unwrapped.last_cost_map_2d  # [num_envs, H, W]
+    H, W = cost_map_2d.shape[1], cost_map_2d.shape[2]
+    
+    # 获取足端body的索引和位置
+    body_names = robot.data.body_names
+    foot_indices = []
+    for i, name in enumerate(body_names):
+        if "foot" in name.lower():
+            foot_indices.append(i)
+    
+    if len(foot_indices) == 0:
+        return torch.zeros(env.num_envs, device=env.device)
+    
+    # 获取足端接触力 [num_envs, num_bodies, 3] -> [num_envs, num_feet, 3]
+    net_forces = contact_sensor.data.net_forces_w[:, foot_indices, :]
+    force_norm = torch.norm(net_forces, dim=-1)  # [num_envs, num_feet]
+    
+    # 判断足端是否着地
+    is_contact = force_norm > force_threshold  # [num_envs, num_feet]
+    
+    # 获取足端在世界坐标系下的位置
+    foot_pos_w = robot.data.body_pos_w[:, foot_indices, :]  # [num_envs, num_feet, 3]
+    
+    # 获取机器人base的位置和朝向
+    base_pos_w = robot.data.root_pos_w  # [num_envs, 3]
+    base_quat_w = robot.data.root_quat_w  # [num_envs, 4]
+    
+    # 将足端位置转换到机器人坐标系（yaw-aligned frame）
+    # 只考虑yaw旋转，忽略roll和pitch
+    # math_utils already imported at top of file
+    
+    # 计算从世界坐标到机器人坐标的变换
+    foot_pos_rel = foot_pos_w - base_pos_w.unsqueeze(1)  # [num_envs, num_feet, 3]
+    
+    # 使用四元数逆变换将位置转到机器人坐标系
+    foot_pos_b = math_utils.quat_rotate_inverse(
+        base_quat_w.unsqueeze(1).expand(-1, len(foot_indices), -1).reshape(-1, 4),
+        foot_pos_rel.reshape(-1, 3)
+    ).reshape(env.num_envs, len(foot_indices), 3)
+    
+    # 提取XY坐标用于映射到网格
+    foot_xy_b = foot_pos_b[:, :, :2]  # [num_envs, num_feet, 2]
+    
+    # 将XY坐标映射到网格索引
+    x_min, x_max = x_range
+    y_min, y_max = y_range
+    
+    x_indices = ((foot_xy_b[:, :, 0] - x_min) / grid_resolution).long()  # [num_envs, num_feet]
+    y_indices = ((foot_xy_b[:, :, 1] - y_min) / grid_resolution).long()  # [num_envs, num_feet]
+    
+    # 限制在有效范围内
+    x_indices = torch.clamp(x_indices, 0, W - 1)
+    y_indices = torch.clamp(y_indices, 0, H - 1)
+    
+    # 查询代价地图上的代价值
+    # cost_map_2d: [num_envs, H, W]
+    # 使用gather操作提取对应位置的代价
+    batch_size = env.num_envs
+    num_feet = len(foot_indices)
+    
+    penalty = torch.zeros(batch_size, device=env.device)
+    
+    for env_idx in range(batch_size):
+        for foot_idx in range(num_feet):
+            if is_contact[env_idx, foot_idx]:
+                # 足端着地，查询代价
+                grid_x = x_indices[env_idx, foot_idx]
+                grid_y = y_indices[env_idx, foot_idx]
+                cost_value = cost_map_2d[env_idx, grid_y, grid_x]
+                
+                # 累加惩罚（代价值已经是0-1范围）
+                penalty[env_idx] += cost_value
+    
+    # 返回平均惩罚（除以足端数量避免过大）
+    penalty = penalty / num_feet
+    
+    return penalty
+

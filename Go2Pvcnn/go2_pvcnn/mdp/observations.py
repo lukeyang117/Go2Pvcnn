@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Dict
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import RayCaster
+from isaaclab.sensors import RayCaster, ContactSensor
 from isaaclab.envs import mdp as isaac_mdp
 
 if TYPE_CHECKING:
@@ -15,6 +15,98 @@ if TYPE_CHECKING:
 
 # Import cost map generator
 from go2_pvcnn.mdp.cost_map import CostMapGenerator
+
+
+def binary_contact_state(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float = 1.0,
+) -> torch.Tensor:
+    """Binary contact state for each foot (1 if in contact, -1 if not).
+    
+    This matches the ABS training observation format: contact_filt.float() * 2 - 1.0
+    
+    Args:
+        env: The environment.
+        sensor_cfg: The SceneEntity associated with a ContactSensor (with body_names filtering).
+        threshold: Contact force threshold in Newtons. Defaults to 1.0.
+    
+    Returns:
+        Binary contact state: (batch, num_bodies). Values are +1 (contact) or -1 (no contact).
+    """
+    # Extract the ContactSensor
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    
+    # Get contact forces (net forces in world frame)
+    # Shape: (num_envs, num_bodies, 3)
+    contact_forces = sensor.data.net_forces_w
+    
+    # Filter to specific bodies if body_ids is specified
+    if sensor_cfg.body_ids is not None and len(sensor_cfg.body_ids) > 0:
+        contact_forces = contact_forces[:, sensor_cfg.body_ids, :]
+    
+    # Compute force magnitude for each body
+    # Shape: (num_envs, num_filtered_bodies)
+    force_magnitude = torch.norm(contact_forces, dim=-1)
+    
+    # Binary contact: True if force > threshold
+    in_contact = force_magnitude > threshold
+    
+    # Convert to ABS format: +1 for contact, -1 for no contact
+    # (contact_filt.float() * 2 - 1.0)
+    binary_state = in_contact.float() * 2.0 - 1.0
+    
+    return binary_state
+
+
+def ray2d_obstacle_distance(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    log2_scale: bool = True,
+    max_distance: float = 6.0,
+) -> torch.Tensor:
+    """Calculate 2D ray distances from RayCaster sensor.
+    
+    This function computes the Euclidean distance from the sensor to the hit points
+    in the XY plane (ignoring Z), similar to the ray2d sensor in Isaac Gym.
+    
+    Args:
+        env: The environment.
+        sensor_cfg: The SceneEntity associated with a RayCaster sensor.
+        log2_scale: Whether to apply log2 scaling to distances. Defaults to True.
+        max_distance: Maximum distance for rays that don't hit anything. Defaults to 6.0m.
+    
+    Returns:
+        Ray distances in XY plane. Shape is (num_envs, num_rays).
+        If log2_scale=True, applies torch.log2() to the distances.
+    """
+    # Extract the RayCaster sensor
+    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
+    
+    # Get sensor position and ray hit points (both in world frame)
+    sensor_pos = sensor.data.pos_w  # Shape: (num_envs, 3)
+    ray_hits = sensor.data.ray_hits_w  # Shape: (num_envs, num_rays, 3)
+    
+    # Compute 2D distance (XY plane only)
+    # Expand sensor_pos to match ray_hits shape: (num_envs, 1, 3) -> (num_envs, num_rays, 3)
+    sensor_pos_expanded = sensor_pos.unsqueeze(1)
+    
+    # Calculate distance in XY plane
+    xy_diff = ray_hits[..., :2] - sensor_pos_expanded[..., :2]  # Shape: (num_envs, num_rays, 2)
+    distances = torch.norm(xy_diff, dim=-1)  # Shape: (num_envs, num_rays)
+    
+    # Handle rays that didn't hit anything or have invalid data
+    # Clamp to avoid log2(0) and handle initialization issues
+    distances = torch.clamp(distances, min=0.1, max=max_distance)
+    
+    # Replace any NaN/inf values with max_distance
+    distances = torch.nan_to_num(distances, nan=max_distance, posinf=max_distance, neginf=0.1)
+    
+    # Apply log2 scaling if requested (as in ABS training)
+    if log2_scale:
+        distances = torch.log2(distances)
+    
+    return distances
 
 
 def pvcnn_features_with_cost_map(
@@ -36,11 +128,11 @@ def pvcnn_features_with_cost_map(
             - Confidence cost: semantic uncertainty (from PVCNN confidence)
     
     Returns:
-        cost_map: (batch, 256) - Flattened single-channel cost map (16×16=256)
-            - 综合了障碍物、距离、梯度、高度的加权代价
-            - 符号由height_map决定：正值=难走上坡，负值=难走下坡
+        dual_channel_map: (batch, 512) - Flattened dual-channel map (2 channels × 16×16 = 512)
+            - Channel 0: cost_map (代价地图，综合障碍物、距离、梯度、高度的加权代价)
+            - Channel 1: height_map (高程图，原始高度信息)
     
-    Note: This function stores point_cloud and semantic_labels in env for PPO training.
+    Note: This function stores point_cloud, cost_map, and height_map in env for reward calculation.
     """
     # Initialize debug counters and cost map generator
     if not hasattr(pvcnn_features_with_cost_map, '_debug_printed'):
@@ -335,33 +427,113 @@ def pvcnn_features_with_cost_map(
             height_map=height_map_2d,  # (batch, H, W) - from height scanner
         )
         
-        # Flatten cost_map (batch, H, W) -> (batch, H*W)
-        cost_map_flat = cost_map_2d.reshape(cost_map_2d.shape[0], -1)
+        # Flatten cost_map and height_map
+        cost_map_flat = cost_map_2d.reshape(cost_map_2d.shape[0], -1)  # (batch, 256)
+        height_map_flat = height_map_2d.reshape(height_map_2d.shape[0], -1)  # (batch, 256)
+        
+        # Concatenate into dual-channel map
+        dual_channel_flat = torch.cat([cost_map_flat, height_map_flat], dim=1)  # (batch, 512)
         
         if pvcnn_features_with_cost_map._call_count % 100 == 1:
-            print(f"\n[CostMap DEBUG] Generated Cost Map:")
-            print(f"  - 2D shape: {cost_map_2d.shape}")
-            print(f"  - Flattened shape: {cost_map_flat.shape}")
-            print(f"  - Range: [{cost_map_flat.min():.6f}, {cost_map_flat.max():.6f}]")
-            print(f"  - Mean: {cost_map_flat.mean():.6f}, Std: {cost_map_flat.std():.6f}")
+            print(f"\n[DualChannel DEBUG] Generated Dual-Channel Map:")
+            print(f"  - cost_map_flat shape: {cost_map_flat.shape}")
+            print(f"  - height_map_flat shape: {height_map_flat.shape}")
+            print(f"  - dual_channel_flat shape: {dual_channel_flat.shape}")
+            print(f"  - Cost map range: [{cost_map_flat.min():.6f}, {cost_map_flat.max():.6f}]")
+            print(f"  - Height map range: [{height_map_flat.min():.6f}, {height_map_flat.max():.6f}]")
         
-        # Store point cloud and semantic labels for PPO training
+        # Store cost_map and height_map in env for reward calculation
+        env.unwrapped.last_cost_map_2d = cost_map_2d.detach()  # (batch, H, W)
+        env.unwrapped.last_height_map_2d = height_map_2d.detach()  # (batch, H, W)
         env.unwrapped.last_point_cloud = point_cloud.detach()
         env.unwrapped.last_semantic_labels = semantic_labels.detach() if semantic_labels is not None else None
         
-        # Return only the cost map (not PVCNN features)
-        return cost_map_flat
+        # Return dual-channel map
+        return dual_channel_flat
     else:
         # PVCNN wrapper not found - this should not happen if wrapper is properly injected
         print(f"[ERROR] PVCNN wrapper not found in env.unwrapped.pvcnn_wrapper!")
         
-        # Fallback: return zeros for cost_map only
-        cost_map_dim = 16 * 16  # Single channel * 16 * 16 grid = 256
+        # Fallback: return zeros for dual-channel map
+        dual_channel_dim = 2 * 16 * 16  # 2 channels × 16 × 16 grid = 512
         
+        env.unwrapped.last_cost_map_2d = None
+        env.unwrapped.last_height_map_2d = None
         env.unwrapped.last_point_cloud = None
         env.unwrapped.last_semantic_labels = None
         
-        return torch.zeros(env.num_envs, cost_map_dim, device=env.device)
+        return torch.zeros(env.num_envs, dual_channel_dim, device=env.device)
+
+
+def goal_based_velocity_commands(
+    env: ManagerBasedRLEnv, 
+    goal_distance: float = 5.0,
+    max_speed: float = 1.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Generate velocity commands based on goal position.
+    
+    Instead of random sampling, this function calculates velocity commands
+    that guide the robot towards a goal position ahead.
+    
+    Args:
+        env: The environment instance.
+        goal_distance: Distance to the goal in X direction (meters). Default: 5.0m
+        max_speed: Maximum linear velocity (m/s). Default: 1.0
+        asset_cfg: The scene entity configuration for the robot.
+    
+    Returns:
+        vel_commands: (num_envs, 3) - [vx, vy, omega_z]
+            - vx, vy: Linear velocity to reach goal
+            - omega_z: Always 0 (point directly at goal)
+    
+    Note: 
+        - Goal position is stored in env.unwrapped.goal_positions if it exists
+        - Otherwise, goal is set to current_pos + [goal_distance, 0, 0]
+        - When robot reaches goal (distance < 0.5m), a new goal is set
+    """
+    # Get robot asset
+    robot: Articulation = env.scene[asset_cfg.name]
+    robot_pos = robot.data.root_pos_w[:, :2]  # (num_envs, 2) - [x, y]
+    
+    # Initialize goal positions if not exists
+    if not hasattr(env.unwrapped, 'goal_positions'):
+        env.unwrapped.goal_positions = robot_pos.clone()
+        env.unwrapped.goal_positions[:, 0] += goal_distance  # X + goal_distance
+        env.unwrapped.goal_distance = goal_distance
+    
+    goal_pos = env.unwrapped.goal_positions  # (num_envs, 2)
+    
+    # Calculate direction vector to goal
+    direction = goal_pos - robot_pos  # (num_envs, 2)
+    distance = torch.norm(direction, dim=1, keepdim=True)  # (num_envs, 1)
+    
+    # Check if any environment reached the goal
+    goal_threshold = 0.5  # meters
+    reached_goal = (distance.squeeze(1) < goal_threshold)
+    
+    # Reset goal for environments that reached it
+    if reached_goal.any():
+        reset_ids = torch.where(reached_goal)[0]
+        new_pos = robot_pos[reset_ids]
+        env.unwrapped.goal_positions[reset_ids, 0] = new_pos[:, 0] + goal_distance
+        env.unwrapped.goal_positions[reset_ids, 1] = new_pos[:, 1]
+        
+        # Recalculate direction for reset environments
+        direction = env.unwrapped.goal_positions - robot_pos
+        distance = torch.norm(direction, dim=1, keepdim=True)
+    
+    # Normalize direction and scale to max_speed
+    # Use distance-based speed scaling: slower when close to goal
+    speed_scale = torch.clamp(distance / 2.0, 0.1, 1.0)  # Slow down within 2m, shape: (num_envs, 1)
+    normalized_direction = direction / (distance + 1e-6)  # Avoid division by zero, shape: (num_envs, 2)
+    
+    # Calculate velocity commands in world frame
+    vel_commands = torch.zeros(env.num_envs, 3, device=env.device)
+    vel_commands[:, :2] = normalized_direction * max_speed * speed_scale  # Broadcasting: (num_envs, 2) * scalar * (num_envs, 1)
+    vel_commands[:, 2] = 0.0  # No angular velocity (point directly at goal)
+    
+    return vel_commands
 
 
 

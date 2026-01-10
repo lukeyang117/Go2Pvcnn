@@ -50,7 +50,7 @@ class ActorCriticCNN(nn.Module):
         num_actor_obs,
         num_critic_obs,
         num_actions,
-        cost_map_channels=1,
+        cost_map_channels=2,  # 双通道: cost_map + height_map
         cost_map_size=16,
         cnn_channels=[32, 64, 128],
         cnn_feature_dim=256,
@@ -65,11 +65,11 @@ class ActorCriticCNN(nn.Module):
         初始化Actor-Critic CNN网络
         
         Args:
-            num_actor_obs: 总观测维度 (包含cost_map的扁平化维度)
+            num_actor_obs: 总观测维度 (包含双通道map的扁平化维度)
             num_critic_obs: Critic观测维度
             num_actions: 动作维度
-            cost_map_channels: 代价地图通道数 (默认3)
-            cost_map_size: 代价地图尺寸 (默认64×64)
+            cost_map_channels: 代价地图通道数 (默认2: cost_map + height_map)
+            cost_map_size: 代价地图尺寸 (默认16×16)
             cnn_channels: CNN编码器通道数列表
             cnn_feature_dim: CNN特征降维后的维度
             actor_hidden_dims: Actor MLP隐藏层维度
@@ -211,8 +211,8 @@ class ActorCriticCNN(nn.Module):
         
         Args:
             observations: (batch, num_obs) - 扁平化观测
-                格式: [proprio_obs..., cost_map_flat...]
-                其中cost_map_flat占最后12288维 (3*64*64)
+                格式: [dual_channel_map_flat..., proprio_obs...]
+                其中dual_channel_map_flat占前512维 (2*16*16)
         
         Returns:
             combined_features: (batch, proprio_dim + cnn_feature_dim)
@@ -220,18 +220,19 @@ class ActorCriticCNN(nn.Module):
         batch_size = observations.shape[0]
         
         if self.use_cost_map:
-            # 分离cost_map和proprio观测
-            # observations = [proprio..., cost_map_flat...]
-            cost_map_flat = observations[:, :self.cost_map_dim]
+            # 分离dual_channel_map和proprio观测
+            # observations = [dual_channel_map_flat..., proprio_obs...]
+            # dual_channel_map_flat在前面，因为在ObservationsCfg中pvcnn_with_costmap是第一个
+            dual_channel_flat = observations[:, :self.cost_map_dim]
             proprio_obs = observations[:, self.cost_map_dim:] 
             
-            # Reshape cost_map: (batch, 256) -> (batch, 3, 64, 64)
-            cost_map = cost_map_flat.reshape(
+            # Reshape dual_channel_map: (batch, 512) -> (batch, 2, 16, 16)
+            dual_channel_map = dual_channel_flat.reshape(
                 batch_size, self.cost_map_channels, self.cost_map_size, self.cost_map_size
             )
             
             # 提取CNN特征
-            cnn_features = self.cnn_encoder(cost_map)  # (batch, cnn_feature_dim)
+            cnn_features = self.cnn_encoder(dual_channel_map)  # (batch, cnn_feature_dim)
             
             # 拼接
             combined = torch.cat([proprio_obs, cnn_features], dim=-1)
