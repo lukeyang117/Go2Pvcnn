@@ -30,10 +30,6 @@ from isaaclab.envs import mdp as isaac_mdp
 import go2_pvcnn.mdp as custom_mdp
 from go2_pvcnn.mdp import create_dynamic_objects_collection_cfg
 
-# Import LiDAR sensor
-from isaaclab.sensors import LidarSensorCfg
-from isaaclab.sensors.ray_caster.patterns import LivoxPatternCfg
-
 # Import usd root
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -55,7 +51,7 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
     vertical_scale=0.005,
     slope_threshold=0.75,
     difficulty_range=(0.0, 1.0),
-    use_cache=False,
+    curriculum=True,
     sub_terrains={
         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
         #Other terrain types commented out for simpler flat terrain
@@ -88,6 +84,10 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
             holes=False,
         ),
     },
+    ##
+    #每个sub-terrain的原点世界坐标生成公式（（row+0.5）*size-num_rows*size[0]*0.5，(col+0.5)*size-num_cols*size[1]*0.5）
+    #每个subtarrain的platform_width是指地形中平坦区域的尺寸（长和宽），单位是米
+    ##
 )
 
 
@@ -168,7 +168,7 @@ class Go2SceneCfg(InteractiveSceneCfg):
     height_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        ray_alignment="yaw",
+        attach_yaw_only=True,
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.5, 1.5]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
@@ -217,39 +217,9 @@ class Go2SceneCfg(InteractiveSceneCfg):
         filter_prim_paths_expr=_ROBOT_BODY_FILTER,
     )
 
-    # LiDAR sensor for PVCNN - Updated to include dynamic objects
-    lidar_sensor = LidarSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base",
-        offset=LidarSensorCfg.OffsetCfg(pos=(0.3, 0.0, 0.2)),  # Forward and up from base
-        ray_alignment="yaw",
-        pattern_cfg=LivoxPatternCfg(
-            sensor_type="mid360",
-            use_simple_grid=True,  # Use simple grid pattern
-            vertical_line_num=50,  # 50 vertical lines (was 100)
-            horizontal_line_num=50,  # 50 horizontal lines = 2500 rays (was 10000)
-        ),
-        mesh_prim_paths=[
-            "/World/ground"                      # 地形
-        ],
-        dynamic_env_mesh_prim_paths=[
-            # 精确的mesh路径（不支持通配符）
-            # Exact mesh paths (wildcards not supported)
-            # Object_0: CrackerBox
-            "{ENV_REGEX_NS}/Object_0/_03_cracker_box",
-            # Object_1: SugarBox  
-            "{ENV_REGEX_NS}/Object_1/_04_sugar_box",
-            # Object_2: TomatoSoupCan
-            "{ENV_REGEX_NS}/Object_2/_05_tomato_soup_can",
-        ],
-        max_distance=10.0,  # Reduce max distance for better ground coverage
-        min_range=0.1,  # Allow closer points
-        return_pointcloud=True,  # Use Isaac Lab's pointcloud (respects ray_alignment)
-        pointcloud_in_world_frame=False,  # Use sensor local frame (yaw-aligned)
-        enable_sensor_noise=False,  # Disable noise for now
-        random_distance_noise=0.0,
-        update_frequency=10.0,  # 10 Hz
-        debug_vis=False,  # Disable viz for performance
-    )
+    # NOTE: LiDAR sensor configuration has been moved to go2_lidar_env_cfg.py
+    # This old configuration is commented out to avoid import errors
+    # lidar_sensor = RayCasterCfg(...)
 
     # Lighting
     sky_light = AssetBaseCfg(
@@ -315,16 +285,17 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
+        # NOTE: PVCNN observation commented out due to lidar_sensor migration
         # Cost map from PVCNN semantic segmentation + Height Scanner
         # Returns cost_map tensor: (batch, 256) = single channel × 16 × 16 grid
         # Uses height_scanner for ground truth height information
-        pvcnn_with_costmap = ObsTerm(
-            func=custom_mdp.pvcnn_features_with_cost_map, 
-            params={
-                "sensor_cfg": SceneEntityCfg("lidar_sensor"),
-                "height_scanner_cfg": SceneEntityCfg("height_scanner"),
-            }
-        )
+        # pvcnn_with_costmap = ObsTerm(
+        #     func=custom_mdp.pvcnn_features_with_cost_map, 
+        #     params={
+        #         "sensor_cfg": SceneEntityCfg("lidar_sensor"),
+        #         "height_scanner_cfg": SceneEntityCfg("height_scanner"),
+        #     }
+        # )
 
         # Base velocity in base frame
         base_lin_vel = ObsTerm(func=isaac_mdp.base_lin_vel, noise=Unoise(n_min=-0.1, n_max=0.1))
@@ -351,14 +322,15 @@ class ObservationsCfg:
     class CriticCfg(ObsGroup):
         """Observations for critic group (privileged information)."""
 
+        # NOTE: PVCNN observation commented out due to lidar_sensor migration
         # Cost map from PVCNN semantic segmentation + Height Scanner (critic uses same observation)
-        pvcnn_with_costmap = ObsTerm(
-            func=custom_mdp.pvcnn_features_with_cost_map, 
-            params={
-                "sensor_cfg": SceneEntityCfg("lidar_sensor"),
-                "height_scanner_cfg": SceneEntityCfg("height_scanner"),
-            }
-        )
+        # pvcnn_with_costmap = ObsTerm(
+        #     func=custom_mdp.pvcnn_features_with_cost_map, 
+        #     params={
+        #         "sensor_cfg": SceneEntityCfg("lidar_sensor"),
+        #         "height_scanner_cfg": SceneEntityCfg("height_scanner"),
+        #     }
+        # )
 
         # Base velocity in base frame
         base_lin_vel = ObsTerm(func=isaac_mdp.base_lin_vel, noise=Unoise(n_min=-0.1, n_max=0.1))

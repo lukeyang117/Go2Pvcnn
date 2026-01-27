@@ -149,7 +149,6 @@ def object_contact_penalty(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("object_0_contact"),
     threshold: float = 0.1,
-    exclude_foot: bool = True,
 ) -> torch.Tensor:
     """检测动态物体与机器人的碰撞惩罚（可选排除足端）。
     
@@ -167,32 +166,29 @@ def object_contact_penalty(
     # 获取物体的接触传感器
     contact_sensor = env.scene.sensors[sensor_cfg.name]
     
-    # 获取 force_matrix_w: [num_envs, 1, num_robot_bodies, 3]
+    # 获取 force_matrix_w
+    # 原始形状: [1, 1, num_envs * num_robot_bodies, 3]
+    # 数据按环境顺序排列: (env_0的19个body, env_1的19个body, ..., env_255的19个body)
     force_matrix = contact_sensor.data.force_matrix_w
     
     if force_matrix is None:
         return torch.zeros(env.num_envs, device=env.device)
     
-    # 计算每个body的接触力
-    contact_force_norm = torch.norm(force_matrix, dim=-1)  # [num_envs, 1, num_robot_bodies]
+    # 获取环境数量和机器人body数量
+    num_envs = env.num_envs
+    total_bodies = force_matrix.shape[2]  # 应该是 num_envs * num_robot_bodies
+    num_robot_bodies = total_bodies // num_envs
     
-    if exclude_foot:
-        # 足端索引（在 filter list 中的位置）
-        # 根据实际的body顺序：
-        # FL_foot: 索引4, FR_foot: 索引8, RL_foot: 索引12, RR_foot: 索引16
-        foot_indices = [4, 8, 12, 16]
-        
-        # 创建mask排除足端
-        mask = torch.ones(contact_force_norm.shape[-1], device=env.device, dtype=torch.bool)
-        for idx in foot_indices:
-            if idx < contact_force_norm.shape[-1]:
-                mask[idx] = False
-        
-        # 只检查非足端的碰撞
-        contact_force_norm = contact_force_norm[..., mask]  # [num_envs, 1, num_non_foot_bodies]
+    # Reshape 成正确的形状: [num_envs, num_robot_bodies, 3]
+    force_reshaped = force_matrix.view(num_envs, num_robot_bodies, 3)
+    
+    # 计算每个body的接触力范数
+    contact_force_norm = torch.norm(force_reshaped, dim=-1)  # [num_envs, num_robot_bodies]
+    
+   
     
     # 检测是否有任何body的接触力超过阈值
-    has_collision = torch.any(contact_force_norm > threshold, dim=(-2, -1))  # [num_envs]
+    has_collision = torch.any(contact_force_norm > threshold, dim=-1)  # [num_envs]
     
     return has_collision.float()
 

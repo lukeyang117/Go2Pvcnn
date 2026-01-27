@@ -98,7 +98,6 @@ def main():
     print("-" * 70)
     
     distances_history = []
-    pointcloud_samples = []
     
     for step in range(args_cli.num_steps):
         # Get random actions
@@ -108,85 +107,61 @@ def main():
         obs, _, terminated, truncated, info = env.step(actions)
         
         # Access LiDAR data through environment
-        try:
-            # Get LiDAR sensor from scene.sensors dict
-            if hasattr(env.scene, 'sensors') and isinstance(env.scene.sensors, dict):
-                if 'lidar' in env.scene.sensors:
-                    lidar_sensor = env.scene.sensors['lidar']
+        if hasattr(env.scene, 'sensors') and isinstance(env.scene.sensors, dict):
+            if 'lidar' in env.scene.sensors:
+                lidar_sensor = env.scene.sensors['lidar']
+                
+                # Get LiDAR data
+                lidar_data = lidar_sensor.data
+                print(f"\nStep {step}: LiDAR Data")
+                print(f"  Distances shape: {lidar_data.distances.shape}")
+                print(f"  Distances range: [{lidar_data.distances.min():.3f}, {lidar_data.distances.max():.3f}]")
+                
+                # 获取语义分类数据
+                if hasattr(lidar_data, 'semantic_labels') and lidar_data.semantic_labels is not None:
+                    semantic_labels = lidar_data.semantic_labels
+                    print(f"  Semantic labels shape: {semantic_labels.shape}")
+                    print(f"  Unique classes: {torch.unique(semantic_labels).cpu().tolist()}")
+                
+                # 获取语义分类统计
+                if hasattr(lidar_data, 'semantic_class_counts') and lidar_data.semantic_class_counts is not None:
+                    class_counts = lidar_data.semantic_class_counts
+                    print(f"  Semantic class counts shape: {class_counts.shape}")
                     
-                    # Get LiDAR data
-                    try:
-                        lidar_data = lidar_sensor.data
-                        
-                        if hasattr(lidar_data, 'ray_hits_w'):
-                            ray_hits = lidar_data.ray_hits_w  # Shape: (num_envs, num_rays, 3)
-                            if ray_hits is not None and ray_hits.numel() > 0:
-                                # Calculate distances from ray start positions
-                                ray_origins = ray_hits[..., 0:1, :]  # First hit as origin
-                                ray_displacements = ray_hits - ray_origins
-                                distances = torch.norm(ray_displacements, dim=-1)  # (num_envs, num_rays)
-                                
-                                # Record statistics
-                                distances_history.append({
-                                    'step': step,
-                                    'mean': distances.mean().item(),
-                                    'min': distances.min().item(),
-                                    'max': distances.max().item(),
-                                    'std': distances.std().item(),
-                                    'num_rays': ray_hits.shape[1],
-                                    'num_envs': ray_hits.shape[0],
-                                })
-                    except Exception as inner_e:
-                        if step == 0:
-                            print(f"[ERROR] Failed to access LiDAR data: {inner_e}", flush=True)
-        except Exception as e:
-            if step == 0:
-                print(f"[ERROR] Step {step}: {e}", flush=True)
-        
-        # Progress reporting with flush
-        report_interval = max(1, args_cli.num_steps // 10)  # Report 10 times total
-        if (step + 1) % report_interval == 0 or step == 0:
-            print(f"  Step {step + 1}/{args_cli.num_steps}", flush=True)
-            if len(distances_history) > 0:
-                last_stats = distances_history[-1]
-                print(f"    Ray hits - Mean dist: {last_stats['mean']:.3f}m, "
-                      f"Range: [{last_stats['min']:.3f}, {last_stats['max']:.3f}]m, "
-                      f"Std: {last_stats['std']:.3f}m", flush=True)
-            else:
-                if (step + 1) % report_interval == 0:
-                    print(f"    [INFO] distances_history: {len(distances_history)} records", flush=True)
+                    # 打印每个环境的分类统计
+                    print(f"\n  Semantic Classification Statistics:")
+                    print(f"  {'Env':<5} {'No-hit (0)':<12} {'Terrain (1)':<12} {'Obstacle (2)':<12} {'Valuable (3)':<12}")
+                    print(f"  {'-'*60}")
+                    for env_id in range(min(5, env.num_envs)):  # 只显示前5个环境
+                        counts = class_counts[env_id].cpu().numpy()
+                        print(f"  {env_id:<5} {int(counts[0]):<12} {int(counts[1]):<12} {int(counts[2]):<12} {int(counts[3]):<12}")
+                    
+                    # 打印平均统计
+                    avg_counts = class_counts.float().mean(dim=0).cpu().numpy()
+                    print(f"  {'AVG':<5} {avg_counts[0]:<12.1f} {avg_counts[1]:<12.1f} {avg_counts[2]:<12.1f} {avg_counts[3]:<12.1f}")
+                    print()
+                
+                # 获取高程图数据
+                if hasattr(lidar_data, 'height_map') and lidar_data.height_map is not None:
+                    height_map = lidar_data.height_map
+                    print(f"  Height map shape: {height_map.shape}")
+                    # 统计每个环境的高程图
+                    for env_id in range(min(3, env.num_envs)):  # 只显示前3个环境
+                        env_height_map = height_map[env_id]
+                        # 统计有效(非NaN)的网格单元
+                        valid_cells = torch.isfinite(env_height_map).sum().item()
+                        total_cells = env_height_map.numel()
+                        if valid_cells > 0:
+                            valid_heights = env_height_map[torch.isfinite(env_height_map)]
+                            print(f"    Env {env_id}: {valid_cells}/{total_cells} cells ({100*valid_cells/total_cells:.1f}%) "
+                                  f"Z range=[{valid_heights.min().item():.3f}, {valid_heights.max().item():.3f}]m")
+                        else:
+                            print(f"    Env {env_id}: No valid height data")
     
+    print("\n" + "=" * 70)
+    print("Test completed successfully!")
+    print("=" * 70)
     
-    print("-" * 70)
-    print("✓ Simulation completed successfully")
-    
-    # Print statistics
-    if distances_history:
-        print("\n" + "=" * 70)
-        print("LiDAR Data Statistics")
-        print("=" * 70)
-        
-        mean_distances = np.array([d['mean'] for d in distances_history])
-        min_distances = np.array([d['min'] for d in distances_history])
-        max_distances = np.array([d['max'] for d in distances_history])
-        std_distances = np.array([d['std'] for d in distances_history])
-        
-        print(f"\nRay Casting Results ({len(distances_history)} steps):")
-        print(f"  Rays per environment:    {distances_history[0]['num_rays']}")
-        print(f"  Parallel environments:   {distances_history[0]['num_envs']}")
-        print(f"  Total rays per step:     {distances_history[0]['num_rays'] * distances_history[0]['num_envs']:,}")
-        
-        print(f"\nDistance Statistics (Ray Hit Measurements):")
-        print(f"  Mean distance:      {mean_distances.mean():.3f} ± {mean_distances.std():.3f} m")
-        print(f"  Min range (avg):    {min_distances.mean():.3f} ± {min_distances.std():.3f} m")
-        print(f"  Max range (avg):    {max_distances.mean():.3f} ± {max_distances.std():.3f} m")
-        print(f"  Std dev (avg):      {std_distances.mean():.3f} ± {std_distances.std():.3f} m")
-        
-        
-        
-       
-    
-   
     env.close()
     simulation_app.close()
     

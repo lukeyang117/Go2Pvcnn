@@ -88,9 +88,3 @@ def create_dynamic_objects_collection_cfg(num_objects: int = 3) -> RigidObjectCo
             ),
         )
     return RigidObjectCollectionCfg(rigid_objects=rigid_objects)
-
-
-
-
-
-

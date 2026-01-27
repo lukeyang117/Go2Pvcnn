@@ -31,10 +31,6 @@ from isaaclab.envs import mdp as isaac_mdp
 import go2_pvcnn.mdp as custom_mdp
 from go2_pvcnn.mdp import create_dynamic_objects_collection_cfg
 
-# Import LiDAR sensor
-from isaaclab.sensors import LidarSensorCfg
-from isaaclab.sensors.ray_caster.patterns import LivoxPatternCfg
-
 # Import usd root
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -127,14 +123,7 @@ class Go2TestSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING
 
     # Height scanner
-    height_scanner = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.5, 1.5]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
-    )
+    
 
     # Contact sensors for collision detection
     contact_forces = ContactSensorCfg(
@@ -194,33 +183,8 @@ class Go2TestSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # LiDAR sensor
-    lidar_sensor = LidarSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base",
-        offset=LidarSensorCfg.OffsetCfg(pos=(0.3, 0.0, 0.2)),
-        ray_alignment="yaw",
-        pattern_cfg=LivoxPatternCfg(
-            sensor_type="mid360",
-            use_simple_grid=True,
-            vertical_line_num=50,
-            horizontal_line_num=50,
-            samples=24000,
-        ),
-        mesh_prim_paths=["/World/ground"],
-        dynamic_env_mesh_prim_paths=[
-            "{ENV_REGEX_NS}/Object_0/_03_cracker_box",
-            "{ENV_REGEX_NS}/Object_1/_04_sugar_box",
-            "{ENV_REGEX_NS}/Object_2/_05_tomato_soup_can",
-        ],
-        max_distance=10.0,
-        min_range=0.1,
-        return_pointcloud=True,
-        pointcloud_in_world_frame=False,
-        enable_sensor_noise=False,
-        random_distance_noise=0.0,
-        update_frequency=10.0,
-        debug_vis=True,  # Enable visualization for testing
-    )
+    # NOTE: LiDAR sensor configuration removed - use go2_lidar_env_cfg.py instead
+    # lidar_sensor = ...
 
     # Lighting
     sky_light = AssetBaseCfg(

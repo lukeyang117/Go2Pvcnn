@@ -22,6 +22,7 @@ def reset_dynamic_objects_position(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("dynamic_objects"),
     position_range: tuple[float, float, float, float] = (-5.0, 5.0, -5.0, 5.0),
     height_offset: float = 0.5,
+    terrain_levels: tuple[int, int] = (1, 5),  # Only spawn objects in terrain levels 1-5
 ) -> None:
     """Reset dynamic objects to random positions based on terrain origins.
     

@@ -31,10 +31,6 @@ from isaaclab.envs import mdp as isaac_mdp
 # Import custom PVCNN MDP components
 import go2_pvcnn.mdp as custom_mdp
 
-# Import LiDAR sensor
-from isaaclab.sensors import LidarSensorCfg
-from isaaclab.sensors.ray_caster.patterns import LivoxPatternCfg
-
 # Import usd root
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -121,7 +117,7 @@ class Go2FurnitureTestSceneCfg(InteractiveSceneCfg):
     height_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        ray_alignment="yaw",
+        attach_yaw_only=True,
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.5, 1.5]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
@@ -164,33 +160,8 @@ class Go2FurnitureTestSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # LiDAR sensor - configured for furniture detection
-    lidar_sensor = LidarSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base",
-        offset=LidarSensorCfg.OffsetCfg(pos=(0.3, 0.0, 0.2)),
-        ray_alignment="yaw",
-        pattern_cfg=LivoxPatternCfg(
-            sensor_type="mid360",
-            use_simple_grid=True,
-            vertical_line_num=80,
-            horizontal_line_num=80,
-            samples=24000,
-        ),
-        mesh_prim_paths=["/World/ground"],
-        dynamic_env_mesh_prim_paths=[
-            "{ENV_REGEX_NS}/Furniture_Sofa/SM_Sofa",
-            "{ENV_REGEX_NS}/Furniture_Armchair/SM_Armchair",
-            "{ENV_REGEX_NS}/Furniture_Table/SM_TableA",
-        ],
-        max_distance=5.0,
-        min_range=0.05,
-        return_pointcloud=True,
-        pointcloud_in_world_frame=False,
-        enable_sensor_noise=False,
-        random_distance_noise=0.0,
-        update_frequency=10.0,
-        debug_vis=True,
-    )
+    # NOTE: LiDAR sensor configuration removed - use go2_lidar_env_cfg.py instead
+    # lidar_sensor = ...
 
     # Lighting
     sky_light = AssetBaseCfg(

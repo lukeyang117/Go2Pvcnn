@@ -96,13 +96,7 @@ class CostMapGenerator:
         assert semantic_confidence.shape[0] == batch_size, f"Batch size mismatch in confidence: {semantic_confidence.shape[0]} != {batch_size}"
         assert semantic_confidence.shape[1] == num_points, f"Point count mismatch in confidence: {semantic_confidence.shape[1]} != {num_points}"
         
-        # Debug info (每100次调用打印一次)
-        if self._call_count % 100 == 1:
-            print(f"\n[CostMapGenerator] Call {self._call_count}")
-            print(f"  - Input: point_xyz {point_xyz.shape}, pred_classes {pred_classes.shape}, confidence {semantic_confidence.shape}")
-            print(f"  - Grid: {H}×{W}, resolution {self.grid_resolution}m")
-            print(f"  - Coordinate range: X=[{self.x_min}, {self.x_max}]m, Y=[{self.y_min}, {self.y_max}]m")
-            print(f"  - Validated: batch_size={batch_size}, num_points={num_points}")
+        # Debug info removed
         
         # 1. 将XY坐标映射到网格索引（使用与height_scanner相同的物理坐标系）
         # point_xyz: (batch, num_points, 3) -> x, y, z
@@ -118,10 +112,7 @@ class CostMapGenerator:
         # 创建有效点mask：只处理在高程图范围内的点
         valid_mask = (x_indices >= 0) & (x_indices < W) & (y_indices >= 0) & (y_indices < H)
         
-        if self._call_count % 100 == 1:
-            valid_count = valid_mask.sum()
-            total_count = valid_mask.numel()
-            print(f"  - Points in height map range: {valid_count}/{total_count} ({100*valid_count/total_count:.1f}%)")
+        # Points-in-range debug removed
         
         # 2. 初始化代价地图（高度图直接使用传入的height_map）
         confidence_map = torch.ones((batch_size, H, W), device=self.device)
@@ -139,9 +130,7 @@ class CostMapGenerator:
         # 只保留在有效范围内的障碍物点
         is_obstacle = is_obstacle & valid_mask
         
-        if self._call_count % 100 == 1:
-            obstacle_count = is_obstacle.sum()
-            print(f"  - Obstacle points in range: {obstacle_count}")
+        # Obstacle count debug removed
         
         # 使用scatter操作进行向量化更新（只更新有效范围内的点）
         for b in range(batch_size):
@@ -199,14 +188,7 @@ class CostMapGenerator:
             self.weight_gradient * gradient_cost_abs +
             self.weight_abs_height * abs_height_cost
         )  # (batch, H, W)
-        if self._call_count % 100 == 1:
-            print(f"  - Output: cost_map {cost_map.shape}")
-            print(f"  - Obstacle cost range: [{obstacle_cost_abs.min():.3f}, {obstacle_cost_abs.max():.3f}]")
-            print(f"  - Distance cost range: [{distance_cost_abs.min():.3f}, {distance_cost_abs.max():.3f}]")
-            print(f"  - Gradient cost range: [{gradient_cost_abs.min():.3f}, {gradient_cost_abs.max():.3f}]")
-            print(f"  - Abs height cost range: [{abs_height_cost.min():.3f}, {abs_height_cost.max():.3f}]")
-            print(f"  - Final cost range: [{cost_map.min():.3f}, {cost_map.max():.3f}]")
-            print(f"  - Weights: obstacle={self.weight_obstacle}, distance={self.weight_distance}, gradient={self.weight_gradient}, abs_height={self.weight_abs_height}")
+        # Output statistics debug removed
         
         return cost_map
     
