@@ -161,15 +161,15 @@ class Go2LidarSceneCfg(InteractiveSceneCfg):
         ray_alignment="yaw",  # Only track yaw rotation
         mesh_prim_paths=[
             "/World/ground",  # Static ground
-            "/world/SM_sofa_1",
-            "/world/SM_armchair_1",
-            "/world/SM_table_1",
-            "/world/SM_sofa_2",
-            "/world/SM_armchair_2",
-            "/world/SM_table_2",
-            "/world/SM_sofa_3",
-            "/world/SM_armchair_3",
-            "/world/SM_table_3",
+            "/World/SM_sofa_1",
+            "/World/SM_armchair_1",
+            "/World/SM_table_1",
+            "/World/SM_sofa_2",
+            "/World/SM_armchair_2",
+            "/World/SM_table_2",
+            "/World/SM_sofa_3",
+            "/World/SM_armchair_3",
+            "/World/SM_table_3",
             #dynamic YCB objects
             "{ENV_REGEX_NS}/cracker_box_0/_03_cracker_box",
             "{ENV_REGEX_NS}/cracker_box_1/_03_cracker_box",
@@ -204,7 +204,7 @@ class Go2LidarSceneCfg(InteractiveSceneCfg):
         ),
         update_frequency=10.0,
         drift_range=(-0.0, 0.0),  # No sensor drift for testing
-        max_distance=1.5,  # Reduced from 100.0 to allow more no-hit rays (upward rays won't reach far terrain)
+        max_distance=15.0,  # Reduced from 100.0 to allow more no-hit rays (upward rays won't reach far terrain)
         min_range=0.1,
         return_pointcloud=True,
         pointcloud_in_world_frame=False,
@@ -212,11 +212,74 @@ class Go2LidarSceneCfg(InteractiveSceneCfg):
         debug_vis=True,  # 启用可视化
         # Height map configuration
         return_height_map=True,  # Enable height map generation
-        height_map_size=(1.5, 1.5),  # 1.5m x 1.5m grid around robot
-        height_map_resolution=0.1,  # 0.1m grid resolution (15x15 grid)
+        height_map_size=(3.2, 3.2),  # 3.2m x 3.2m grid around robot
+        height_map_resolution=0.1,  # 0.1m grid resolution (32x32 grid)
     )
 
-    # Contact sensor for foot contact detection
+    # ========================================
+    # Contact Sensors - Categorized by object types
+    # ========================================
+    
+    # Contact sensor for GROUND/TERRAIN detection
+    # Detects contact with ground plane and terrain
+    # Note: No filter needed - feet mainly contact ground, so we monitor all contacts
+    contact_forces_ground: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*_foot",  # All four feet
+        update_period=0.0,  # Update every simulation step
+        history_length=3,
+        track_air_time=True,
+        debug_vis=True,
+        # No filter - monitor all contacts for feet (primarily ground contact)
+    )
+    
+    # Contact sensor for SMALL OBJECTS (dynamic YCB objects)
+    # Detects contact with small movable objects like boxes and cans
+    # Note: Filter only works with single body sensor (not .* pattern) per Isaac Lab limitation
+    contact_forces_small_objects: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base",  # Monitor only base for small object collisions
+        update_period=0.0,
+        history_length=3,
+        track_air_time=False,
+        debug_vis=True,
+        filter_prim_paths_expr=[
+            # YCB dynamic objects - filter requires specific paths without wildcards
+            "{ENV_REGEX_NS}/cracker_box_0",
+            "{ENV_REGEX_NS}/cracker_box_1",
+            "{ENV_REGEX_NS}/cracker_box_2",
+            "{ENV_REGEX_NS}/sugar_box_0",
+            "{ENV_REGEX_NS}/sugar_box_1",
+            "{ENV_REGEX_NS}/sugar_box_2",
+            "{ENV_REGEX_NS}/tomato_soup_can_0",
+            "{ENV_REGEX_NS}/tomato_soup_can_1",
+            "{ENV_REGEX_NS}/tomato_soup_can_2",
+        ],
+    )
+    
+    # Contact sensor for FURNITURE/VALUABLE OBJECTS
+    # Detects contact with large furniture items that should be avoided
+    # Note: Filter only works with single body sensor (not .* pattern) per Isaac Lab limitation
+    contact_forces_furniture: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base",  # Monitor only base for furniture collisions
+        update_period=0.0,
+        history_length=3,
+        track_air_time=False,
+        debug_vis=True,
+        filter_prim_paths_expr=[
+            # Global furniture objects - cannot use wildcards with filter
+            "/World/SM_sofa_1",
+            "/World/SM_armchair_1",
+            "/World/SM_table_1",
+            "/World/SM_sofa_2",
+            "/World/SM_armchair_2",
+            "/World/SM_table_2",
+            "/World/SM_sofa_3",
+            "/World/SM_armchair_3",
+            "/World/SM_table_3",
+        ],
+    )
+    
+    # Legacy contact sensor (for backward compatibility)
+    # This monitors all contacts without filtering
     contact_forces: ContactSensorCfg = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*",
         history_length=2,
@@ -391,55 +454,55 @@ class Go2LidarSceneCfg(InteractiveSceneCfg):
     # Explicit furniture assets placed at the precomputed positions
     # (inserted directly into the config; no intermediate lists)
     furniture_1 = AssetBaseCfg(
-        prim_path="/world/SM_sofa_1",
+        prim_path="W/World/SM_sofa_1",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Sofa.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-26.0, -76.0, 0.0)),
     )
 
     furniture_2 = AssetBaseCfg(
-        prim_path="/world/SM_armchair_1",
+        prim_path="/World/SM_armchair_1",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Armchair.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-18.0, -76.0, 0.0)),
     )
 
     furniture_3 = AssetBaseCfg(
-        prim_path="/world/SM_table_1",
+        prim_path="/World/SM_table_1",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_TableA.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-10.0, -76.0, 0.0)),
     )
 
     furniture_4 = AssetBaseCfg(
-        prim_path="/world/SM_sofa_2",
+        prim_path="/World/SM_sofa_2",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Sofa.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-2.0, -76.0, 0.0)),
     )
 
     furniture_5 = AssetBaseCfg(
-        prim_path="/world/SM_armchair_2",
+        prim_path="/World/SM_armchair_2",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Armchair.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(6.0, -76.0, 0.0)),
     )
 
     furniture_6 = AssetBaseCfg(
-        prim_path="/world/SM_table_2",
+        prim_path="/World/SM_table_2",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_TableA.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(14.0, -76.0, 0.0)),
     )
 
     furniture_7 = AssetBaseCfg(
-        prim_path="/world/SM_sofa_3",
+        prim_path="/World/SM_sofa_3",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Sofa.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(22.0, -76.0, 0.0)),
     )
 
     furniture_8 = AssetBaseCfg(
-        prim_path="/world/SM_armchair_3",
+        prim_path="/World/SM_armchair_3",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Armchair.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(30.0, -76.0, 0.0)),
     )
 
     furniture_9 = AssetBaseCfg(
-        prim_path="/world/SM_table_3",
+        prim_path="/World/SM_table_3",
         spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_TableA.usd"),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(38.0, -76.0, 0.0)),
     )

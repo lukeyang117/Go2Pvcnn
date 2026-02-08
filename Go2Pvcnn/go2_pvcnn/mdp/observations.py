@@ -13,8 +13,9 @@ from isaaclab.envs import mdp as isaac_mdp
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-# Import cost map generator
+# Import cost map generators
 from go2_pvcnn.mdp.cost_map import CostMapGenerator
+from go2_pvcnn.mdp.cost_map_new import TeacherCostMapGenerator
 
 
 def binary_contact_state(
@@ -534,6 +535,122 @@ def goal_based_velocity_commands(
     vel_commands[:, 2] = 0.0  # No angular velocity (point directly at goal)
     
     return vel_commands
+
+
+def teacher_semantic_cost_map(
+    env: ManagerBasedRLEnv,
+    lidar_cfg: SceneEntityCfg,
+    height_scanner_cfg: SceneEntityCfg | None = None,  # Optional: LiDAR now provides height map
+    command_name: str = "robot_velocity_command",
+    asset_cfg: SceneEntityCfg | None = None,
+) -> torch.Tensor:
+    """Generate cost map from ground truth semantic labels (teacher mode).
+    
+    This observation function uses ground truth semantic labels from LiDAR
+    instead of PVCNN inference. It's designed for training a teacher policy
+    that has access to perfect semantic information.
+    
+    Args:
+        env: The environment instance.
+        lidar_cfg: Configuration for the semantic LiDAR sensor.
+        height_scanner_cfg: Configuration for the height scanner sensor (optional, deprecated).
+            LiDAR now provides height map directly via return_height_map=True.
+        command_name: Name of the velocity command in env.command_manager.
+        asset_cfg: Robot asset configuration (optional, for future use).
+    
+    Returns:
+        Flattened cost map tensor: (num_envs, 32*32)
+    """
+    # Initialize cost map generator (singleton pattern)
+    # Note: grid_size should match LiDAR's height_map_size/resolution
+    # LiDAR config: height_map_size=(1.5, 1.5), resolution=0.1 -> 15x15 grid
+    if not hasattr(teacher_semantic_cost_map, 'generator') or teacher_semantic_cost_map.generator is None:
+        teacher_semantic_cost_map.generator = TeacherCostMapGenerator(
+            device=env.device,
+            grid_size=(15, 15),  # Match LiDAR height_map output: 1.5m / 0.1m = 15
+            grid_resolution=0.1,
+            x_range=(-0.75, 0.75),  # 1.5m / 2 = 0.75m
+            y_range=(-0.75, 0.75),
+        )
+    
+    # Get semantic LiDAR sensor
+    from go2_pvcnn.sensor.lidar.semantic_lidar_sensor import SemanticLidarSensor
+    lidar_sensor: SemanticLidarSensor = env.scene.sensors[lidar_cfg.name]
+    
+    # Get velocity command from command manager
+    command_velocity = env.command_manager.get_command(command_name)  # (num_envs, 3)
+    
+    # Get LiDAR data
+    # pointcloud: (num_envs, num_rays, 3) - [x, y, z] in robot frame (only yaw)
+    # semantic_labels: (num_envs, num_rays) - semantic class IDs
+    point_cloud = lidar_sensor.data.pointcloud  # (num_envs, num_rays, 3)
+    semantic_labels = lidar_sensor.data.semantic_labels  # (num_envs, num_rays)
+    
+    # Ensure correct shapes
+    assert point_cloud is not None, "LiDAR pointcloud is None. Set return_pointcloud=True in config."
+    assert semantic_labels is not None, "Semantic labels is None. Set return_semantic_labels=True in config."
+    
+    # Handle semantic_labels format if needed
+    if semantic_labels.dim() == 3:
+        semantic_labels = semantic_labels.squeeze(-1)
+    
+    assert point_cloud.shape[:2] == semantic_labels.shape, \
+        f"Shape mismatch: point_cloud {point_cloud.shape} vs semantic_labels {semantic_labels.shape}"
+    
+    # Get height map from LiDAR (not from separate height scanner)
+    # LiDAR provides height_map via return_height_map=True
+    if hasattr(lidar_sensor.data, 'height_map') and lidar_sensor.data.height_map is not None:
+        height_map = lidar_sensor.data.height_map  # (num_envs, H, W)
+        if not hasattr(teacher_semantic_cost_map, '_debug_printed'):
+            print(f"[teacher_semantic_cost_map] height_map shape: {height_map.shape}")
+            print(f"[teacher_semantic_cost_map] generator.grid_size: {teacher_semantic_cost_map.generator.grid_size}")
+            teacher_semantic_cost_map._debug_printed = True
+    else:
+        # Fallback: use deprecated height_scanner if provided
+        if height_scanner_cfg is not None:
+            height_scanner: RayCaster = env.scene.sensors[height_scanner_cfg.name]
+            height_data = height_scanner.data.ray_hits_w[..., -1]  # Extract Z coordinate
+            # Use grid_size from generator
+            h, w = teacher_semantic_cost_map.generator.grid_size
+            height_map = height_data.reshape(-1, h, w)
+        else:
+            # No height map available, create zero height map
+            num_envs = point_cloud.shape[0]
+            h, w = teacher_semantic_cost_map.generator.grid_size
+            height_map = torch.zeros(num_envs, h, w, 
+                                    device=env.device, dtype=torch.float32)
+    
+    # Generate cost map using ground truth semantic labels
+    cost_map = teacher_semantic_cost_map.generator.generate_cost_map(
+        point_xyz=point_cloud,
+        semantic_labels=semantic_labels,
+        height_map=height_map,
+        command_velocity=command_velocity,
+    )
+    
+    # Debug: print shapes before combining
+    if not hasattr(teacher_semantic_cost_map, '_shape_debug_printed'):
+        print(f"[teacher_semantic_cost_map] Before unsqueeze:")
+        print(f"  - cost_map shape: {cost_map.shape}")
+        print(f"  - height_map shape: {height_map.shape}")
+        teacher_semantic_cost_map._shape_debug_printed = True
+    
+    # Combine cost_map and height_map as 2-channel input for CNN
+    # ActorCriticCNN expects [B, C, H, W] format
+    # Channel 0: cost_map, Channel 1: height_map
+    cost_map = cost_map.unsqueeze(1)  # (num_envs, 1, H, W)
+    height_map = height_map.unsqueeze(1)  # (num_envs, 1, H, W)
+    
+    # Debug: verify shapes after unsqueeze
+    if not hasattr(teacher_semantic_cost_map, '_concat_debug_printed'):
+        print(f"[teacher_semantic_cost_map] After unsqueeze:")
+        print(f"  - cost_map shape: {cost_map.shape}")
+        print(f"  - height_map shape: {height_map.shape}")
+        teacher_semantic_cost_map._concat_debug_printed = True
+    
+    dual_channel_input = torch.cat([cost_map, height_map], dim=1)  # (num_envs, 2, H, W)
+    
+    return dual_channel_input
 
 
 

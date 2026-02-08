@@ -143,12 +143,13 @@ class LidarSensor(LidarRayCaster):
             # Calculate grid dimensions from size and resolution
             size_x, size_y = self.cfg.height_map_size
             resolution = self.cfg.height_map_resolution
-            self.height_map_grid_h = int(size_y / resolution) + 1  # Height (Y direction)
-            self.height_map_grid_w = int(size_x / resolution) + 1  # Width (X direction)
+            self.height_map_grid_h = int(size_y / resolution)  # Height (Y direction): 1.5/0.1=15
+            self.height_map_grid_w = int(size_x / resolution)  # Width (X direction): 1.5/0.1=15
             self._data.height_map = torch.zeros(
                 self._view.count, self.height_map_grid_h, self.height_map_grid_w, 
                 device=self._device
             )
+            print(f"[SemanticLidarSensor] Height map grid: {self.height_map_grid_h}×{self.height_map_grid_w} (size={size_x}×{size_y}m, res={resolution}m)")
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         """Update sensor buffers with LiDAR-specific processing.
@@ -343,7 +344,7 @@ class LidarSensor(LidarRayCaster):
         # Initialize height map for this batch (NaN for empty cells)
         height_map_batch = torch.full(
             (len(env_ids), grid_h, grid_w), 
-            float('nan'), 
+            -10, 
             device=self._device, 
             dtype=torch.float32
         )
@@ -363,8 +364,8 @@ class LidarSensor(LidarRayCaster):
             
             # Convert world coordinates to grid indices
             # Grid is centered on robot: X range [-size_x/2, size_x/2], Y range [-size_y/2, size_y/2]
-            grid_x_indices = ((x_coords + size_x / 2) / resolution).long()  # X axis
-            grid_y_indices = ((y_coords + size_y / 2) / resolution).long()  # Y axis
+            grid_x_indices = ((x_coords + size_x / 2) / resolution).long()  
+            grid_y_indices = ((y_coords + size_y / 2) / resolution).long()  
             
             # Filter points outside the grid
             in_bounds_mask = (

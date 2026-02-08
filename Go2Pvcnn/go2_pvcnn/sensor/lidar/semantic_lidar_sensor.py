@@ -144,6 +144,15 @@ class SemanticLidarSensor(LidarSensor):
                 mesh_id = wp_mesh.id
                 self.mesh_id_to_semantic_class[mesh_id] = semantic_class
                 self.mesh_prim_path_to_semantic_class[mesh_prim_path_pattern] = semantic_class
+        
+        # Build vectorized lookup tensor for fast semantic classification (only once during initialization)
+        max_mesh_id = len(self.mesh_prototype_ids)
+        self.mesh_id_to_class_tensor = torch.zeros(max_mesh_id, dtype=torch.int32, device=self._device)
+        
+        for mesh_idx in range(max_mesh_id):
+            mesh_id = int(self.mesh_prototype_ids[mesh_idx])
+            semantic_class = self.mesh_id_to_semantic_class.get(mesh_id, 0)
+            self.mesh_id_to_class_tensor[mesh_idx] = semantic_class
                 
         
         
@@ -216,19 +225,9 @@ class SemanticLidarSensor(LidarSensor):
             (len(env_ids), self.num_rays), dtype=torch.int32, device=self._device
         )
         
-        # Map mesh IDs to semantic classes using precomputed mapping
-        # Build lookup tensor for fast vectorized mapping
-        max_mesh_id = len(self.mesh_prototype_ids)
-        mesh_id_to_class = torch.zeros(max_mesh_id, dtype=torch.int32, device=self._device)
-        
-        for mesh_idx in range(max_mesh_id):
-            mesh_id = int(self.mesh_prototype_ids[mesh_idx])
-            semantic_class = self.mesh_id_to_semantic_class.get(mesh_id, 0)
-            mesh_id_to_class[mesh_idx] = semantic_class
-        
-        # Vectorized lookup: for each ray, get semantic class from mesh_idx
+        # Vectorized lookup: use pre-built tensor from initialization
         hit_mask = ray_mesh_ids >= 0
-        semantic_labels[hit_mask] = mesh_id_to_class[ray_mesh_ids[hit_mask]]
+        semantic_labels[hit_mask] = self.mesh_id_to_class_tensor[ray_mesh_ids[hit_mask]]
         
         # No-hit rays stay at class 0
         semantic_labels[nohit_mask] = 0
