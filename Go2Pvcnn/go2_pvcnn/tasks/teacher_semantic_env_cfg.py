@@ -225,19 +225,63 @@ class TeacherSceneCfg(InteractiveSceneCfg):
     # ========================================
     # Contact Sensors
     # ========================================
-    
-    # Ground contact (feet only)
-    contact_forces_ground: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*_foot",
+    # Small objects contact (base only, with filter)
+    contact_forces_small_objects_fl: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FL_foot",
         update_period=0.0,
         history_length=3,
-        track_air_time=True,
+        track_air_time=False,
         debug_vis=False,
+        filter_prim_paths_expr=[
+            "{ENV_REGEX_NS}/cracker_box_0",
+            "{ENV_REGEX_NS}/cracker_box_1",
+            "{ENV_REGEX_NS}/cracker_box_2",
+            "{ENV_REGEX_NS}/sugar_box_0",
+            "{ENV_REGEX_NS}/sugar_box_1",
+            "{ENV_REGEX_NS}/sugar_box_2",
+            "{ENV_REGEX_NS}/tomato_soup_can_0",
+            "{ENV_REGEX_NS}/tomato_soup_can_1",
+            "{ENV_REGEX_NS}/tomato_soup_can_2",
+        ],
     )
-    
-    # Small objects contact (base only, with filter)
-    contact_forces_small_objects: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base",
+    contact_forces_small_objects_fr: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FR_foot",
+        update_period=0.0,
+        history_length=3,
+        track_air_time=False,
+        debug_vis=False,
+        filter_prim_paths_expr=[
+            "{ENV_REGEX_NS}/cracker_box_0",
+            "{ENV_REGEX_NS}/cracker_box_1",
+            "{ENV_REGEX_NS}/cracker_box_2",
+            "{ENV_REGEX_NS}/sugar_box_0",
+            "{ENV_REGEX_NS}/sugar_box_1",
+            "{ENV_REGEX_NS}/sugar_box_2",
+            "{ENV_REGEX_NS}/tomato_soup_can_0",
+            "{ENV_REGEX_NS}/tomato_soup_can_1",
+            "{ENV_REGEX_NS}/tomato_soup_can_2",
+        ],
+    )
+    contact_forces_small_objects_rl: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/RL_foot",
+        update_period=0.0,
+        history_length=3,
+        track_air_time=False,
+        debug_vis=False,
+        filter_prim_paths_expr=[
+            "{ENV_REGEX_NS}/cracker_box_0",
+            "{ENV_REGEX_NS}/cracker_box_1",
+            "{ENV_REGEX_NS}/cracker_box_2",
+            "{ENV_REGEX_NS}/sugar_box_0",
+            "{ENV_REGEX_NS}/sugar_box_1",
+            "{ENV_REGEX_NS}/sugar_box_2",
+            "{ENV_REGEX_NS}/tomato_soup_can_0",
+            "{ENV_REGEX_NS}/tomato_soup_can_1",
+            "{ENV_REGEX_NS}/tomato_soup_can_2",
+        ],
+    )
+    contact_forces_small_objects_rr: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/RR_foot",
         update_period=0.0,
         history_length=3,
         track_air_time=False,
@@ -490,16 +534,32 @@ class CommandsCfg:
     base_velocity = isaac_mdp.UniformVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        heading_command=True,
-        heading_control_stiffness=1.0,
-        rel_standing_envs=0.02,
-        rel_heading_envs=0.8,
+        rel_standing_envs=0.25,  # 25% standing: 先学会站立，再学走路
         debug_vis=True,
         ranges=isaac_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.1),
-            lin_vel_y=(-0.1, 0.1),
-            ang_vel_z=(-1, 1),
-            heading=(-math.pi, math.pi),
+            lin_vel_x=(-0.5, 0.5),   # 小速度起步，学会后再提高
+            lin_vel_y=(-0.3, 0.3),
+            ang_vel_z=(-1.0, 1.0),
+        ),
+    )
+
+
+@configclass
+class CommandsCfg_PLAY:
+    """Command specifications for play/evaluation mode - forward motion only."""
+    base_velocity = isaac_mdp.UniformVelocityCommandCfg(
+        asset_name="robot",
+        resampling_time_range=(10.0, 10.0),
+        heading_command=False,  # Disable heading command for forward motion
+        heading_control_stiffness=0.0,
+        rel_standing_envs=0.0,  # No standing
+        rel_heading_envs=0.0,
+        debug_vis=True,
+        ranges=isaac_mdp.UniformVelocityCommandCfg.Ranges(
+            lin_vel_x=(0.5, 1.0),  # Forward velocity only
+            lin_vel_y=(0.0, 0.0),  # No lateral velocity
+            ang_vel_z=(0.0, 0.0),  # No angular velocity
+            heading=(0.0, 0.0),  # No heading change
         ),
     )
 
@@ -540,11 +600,7 @@ class ObservationsCfg:
     class PolicyStateCfg(ObsGroup):
         """State observations for MLP (1D)."""
 
-        # Base velocity
-        base_lin_vel = ObsTerm(func=isaac_mdp.base_lin_vel, noise=Unoise(n_min=-0.1, n_max=0.1))
         base_ang_vel = ObsTerm(func=isaac_mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
-        
-        # Projected gravity
         projected_gravity = ObsTerm(func=isaac_mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
 
         # Joint state
@@ -610,12 +666,12 @@ class EventCfg:
         params={
             "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
             "velocity_range": {
-                "x": (-0.5, 0.5),
-                "y": (-0.5, 0.5),
-                "z": (-0.5, 0.5),
-                "roll": (-0.5, 0.5),
-                "pitch": (-0.5, 0.5),
-                "yaw": (-0.5, 0.5),
+                "x": (0.0, 0.0),  # 零初速度: 避免 spawn 时已运动导致立即倒地
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
             },
         },
     )
@@ -625,7 +681,7 @@ class EventCfg:
         func=isaac_mdp.reset_joints_by_scale,
         mode="reset",
         params={
-            "position_range": (0.5, 1.5),
+            "position_range": (1.0, 1.0),  # 严格默认姿态，避免随机 spawn 导致倒地
             "velocity_range": (0.0, 0.0),
         },
     )
@@ -723,79 +779,102 @@ class EventCfg:
         },
     )
 
-    # Push robot
-    push_robot = EventTerm(
-        func=isaac_mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(10.0, 15.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
-    )
+    # # Push robot
+    # push_robot = EventTerm(
+    #     func=isaac_mdp.push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(10.0, 15.0),
+    #     params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+    # )
 
 
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # Task rewards
-    track_lin_vel_xy_exp = RewTerm(
-        func=teacher_rewards.track_lin_vel_xy_exp,
-        weight=10.0,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+    # -- task
+    track_lin_vel_xy = RewTerm(
+        func=isaac_mdp.track_lin_vel_xy_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
     )
-    track_ang_vel_z_exp = RewTerm(
-        func=teacher_rewards.track_ang_vel_z_exp,
-        weight=0.5,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
-    )
-    
-    # Command alignment reward
-    command_alignment = RewTerm(
-        func=teacher_rewards.command_alignment_reward,
-        weight=2.0,
-        params={"command_name": "base_velocity"},
+    track_ang_vel_z = RewTerm(
+        func=isaac_mdp.track_ang_vel_z_exp, weight=0.5, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
     )
 
-    # Regularization penalties
-    lin_vel_z_l2 = RewTerm(func=custom_mdp.lin_vel_z_l2, weight=-2.0)
-    ang_vel_xy_l2 = RewTerm(func=custom_mdp.ang_vel_xy_l2, weight=-0.05)
-    flat_orientation_l2 = RewTerm(func=teacher_rewards.flat_orientation_l2, weight=-0.5)
-    joint_torques_l2 = RewTerm(func=teacher_rewards.joint_torques_l2, weight=-1.0e-5)
-    joint_acc_l2 = RewTerm(func=teacher_rewards.joint_acc_l2, weight=-2.5e-7)
-    joint_vel_l2 = RewTerm(func=teacher_rewards.joint_vel_l2, weight=-1.0e-4)
-    action_rate_l2 = RewTerm(func=teacher_rewards.action_rate_l2, weight=-0.01)
-    joint_power = RewTerm(func=teacher_rewards.joint_power, weight=-2.0e-5)
-    joint_pos_limits = RewTerm(func=teacher_rewards.joint_pos_limits, weight=-1.0)
-    
-    # Collision penalties
-    non_foot_ground_contact = RewTerm(
-        func=teacher_rewards.non_foot_ground_contact_penalty,
-        weight=-2.0,
+    # -- base
+    base_linear_velocity = RewTerm(func=isaac_mdp.lin_vel_z_l2, weight=-2.0)
+    base_angular_velocity = RewTerm(func=isaac_mdp.ang_vel_xy_l2, weight=-0.05)
+    base_contact_penalty = RewTerm(
+        func=isaac_mdp.undesired_contacts,
+        weight=-5.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces"),
             "threshold": 1.0,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"),
         },
     )
+    joint_vel = RewTerm(func=isaac_mdp.joint_vel_l2, weight=-0.001)
+    joint_acc = RewTerm(func=isaac_mdp.joint_acc_l2, weight=-2.5e-7)
+    joint_torques = RewTerm(func=isaac_mdp.joint_torques_l2, weight=-1.0e-5)
+    action_rate = RewTerm(func=isaac_mdp.action_rate_l2, weight=-0.01)
+    dof_pos_limits = RewTerm(func=isaac_mdp.joint_pos_limits, weight=0)
+
+    # -- robot
+    flat_orientation_l2 = RewTerm(func=isaac_mdp.flat_orientation_l2, weight=0.0)
+
     
-    obstacle_collision = RewTerm(
+    air_time_variance = RewTerm(
+        func=custom_mdp.air_time_variance_penalty,
+        weight=-1.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+    )
+    feet_air_time = RewTerm(
+        func=custom_mdp.feet_air_time_positive_reward,
+        weight=0.1,
+        params={
+            "command_name": "base_velocity",
+            "threshold": 0.5,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+        },
+    )
+
+
+    
+    
+    obstacle_collision_fl = RewTerm(
         func=teacher_rewards.obstacle_collision_penalty,
         weight=-5.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects"),
-            "threshold": 0.1,
+            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_fl"),
+            "threshold": 0.5,
+        },
+    )
+    obstacle_collision_fr = RewTerm(
+        func=teacher_rewards.obstacle_collision_penalty,
+        weight=-5.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_fr"),
+            "threshold": 0.5,
+        },
+    )
+    obstacle_collision_rl = RewTerm(
+        func=teacher_rewards.obstacle_collision_penalty,
+        weight=-5.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_rl"),
+            "threshold": 0.5,
+        },
+    )
+    obstacle_collision_rr = RewTerm(
+        func=teacher_rewards.obstacle_collision_penalty,
+        weight=-5.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_rr"),
+            "threshold": 0.5,
         },
     )
     
-    # Furniture collision penalty (disabled - furniture are now static AssetBaseCfg without physics)
-    # furniture_collision = RewTerm(
-    #     func=teacher_rewards.furniture_collision_penalty,
-    #     weight=-10.0,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("contact_forces_furniture"),
-    #         "threshold": 0.1,
-    #     },
-    # )
     
-    # TODO: Add semantic cost map penalty
+    
+    # # TODO: Add semantic cost map penalty
     # semantic_cost_penalty = RewTerm(
     #     func=teacher_rewards.semantic_cost_map_penalty,
     #     weight=-2.0,
@@ -810,6 +889,11 @@ class RewardsCfg:
 class TerminationsCfg:
     """Termination terms for the MDP."""
     time_out = DoneTerm(func=isaac_mdp.time_out, time_out=True)
+    base_contact = DoneTerm(
+        func=isaac_mdp.illegal_contact,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 2.0},
+    )
+    bad_orientation = DoneTerm(func=isaac_mdp.bad_orientation, params={"limit_angle": 0.8})  # 放宽至 ~57°，避免步态学习时过早终止
 
 
 @configclass
@@ -860,19 +944,33 @@ class TeacherSemanticEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class TeacherSemanticEnvCfg_PLAY(TeacherSemanticEnvCfg):
-    """Play/evaluation configuration."""
+    """Play/evaluation configuration - forward motion only."""
     
     def __post_init__(self):
+        # Call parent initialization first
         super().__post_init__()
+        
+        # Override commands with play configuration (forward motion only)
+        self.commands = CommandsCfg_PLAY()
         
         # Smaller scene for play
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         
-        # Disable randomization
-        self.observations.policy.enable_corruption = False
+        # Disable observation corruption/noise
+        self.observations.policy_cost_map.enable_corruption = False
+        self.observations.policy_state.enable_corruption = False
+        self.observations.critic_cost_map.enable_corruption = False
+        self.observations.critic_state.enable_corruption = False
         
         # Remove random pushing
         self.events.push_robot = None
         
-        print(f"[TeacherSemanticEnvCfg_PLAY] Play mode with {self.scene.num_envs} environments")
+        # Reduce episode length for faster evaluation
+        self.episode_length_s = 30.0
+        
+        print(f"[TeacherSemanticEnvCfg_PLAY] Play mode configured:")
+        print(f"  - Environments: {self.scene.num_envs}")
+        print(f"  - Velocity command: X=[0.5, 1.0] m/s (forward only)")
+        print(f"  - Episode length: {self.episode_length_s}s")
+        print(f"  - Observation noise: Disabled")

@@ -228,7 +228,7 @@ class TeacherCostMapGenerator:
         # 使用padding避免边界效应
         height_padded = F.pad(
             height_map.unsqueeze(1), (1, 1, 1, 1), mode='replicate'
-        )  # (batch, 1, H+2, W+2)
+        )  # (batch, 1, H+2, W+2) 填边缘值
         
         # 计算与8个邻居的高度差绝对值之和
         neighbor_diff = torch.zeros((batch_size, H, W), device=self.device)

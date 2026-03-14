@@ -44,23 +44,22 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
 # ========================================
-# GPU MAPPING FOR MULTI-GPU
+# GPU MAPPING FOR MULTI-GPU (must be before AppLauncher)
 # ========================================
 if args_cli.distributed and "GPU_IDS" in os.environ:
     gpu_ids = [int(x.strip()) for x in os.environ["GPU_IDS"].split(",") if x.strip()]
-    original_local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    
-    if original_local_rank >= len(gpu_ids):
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    if local_rank >= len(gpu_ids):
         raise RuntimeError(
-            f"LOCAL_RANK={original_local_rank} but GPU_IDS only has {len(gpu_ids)} GPUs: {os.environ['GPU_IDS']}"
+            f"LOCAL_RANK={local_rank} but GPU_IDS only has {len(gpu_ids)} GPUs: {os.environ['GPU_IDS']}"
         )
-    
-    target_gpu_id = gpu_ids[original_local_rank]
-    required_offset = target_gpu_id - original_local_rank
-    os.environ["GPU_OFFSET"] = str(required_offset)
-    
-    print(f"\n[GPU Mapping] LOCAL_RANK={original_local_rank} -> GPU {target_gpu_id}")
-    print(f"[GPU Mapping] Set GPU_OFFSET={required_offset}")
+
+    target_gpu_id = gpu_ids[local_rank]
+    args_cli.device = f"cuda:{target_gpu_id}"
+
+    print(f"\n[GPU Mapping] LOCAL_RANK={local_rank} -> GPU {target_gpu_id}")
+    print(f"[GPU Mapping] Set device to: {args_cli.device}")
 
 # Launch Isaac Sim
 app_launcher = AppLauncher(args_cli)
@@ -274,9 +273,15 @@ def main():
         def get_observations(self):
             from tensordict import TensorDict
             obs_dict = self.env.unwrapped.observation_manager.compute()
-            # Convert to TensorDict if it's a plain dict
             if isinstance(obs_dict, dict) and not isinstance(obs_dict, TensorDict):
-                return TensorDict(obs_dict, batch_size=[self.env.unwrapped.num_envs])
+                td = TensorDict(obs_dict, batch_size=[self.env.unwrapped.num_envs])
+                # print(f"[Debug][get_observations] converted to TensorDict, keys: {list(td.keys())}")
+                # for k in td.keys():
+                #     v = td[k]
+                #     shape = tuple(v.shape) if hasattr(v, "shape") else "N/A"
+                #     dtype = getattr(v, "dtype", type(v))
+                #     print(f"  - td key={k}, shape={shape}, dtype={dtype}")
+                return td
             return obs_dict
         
         def reset(self):
@@ -290,17 +295,33 @@ def main():
         def step(self, actions):
             if self.clip_actions is not None:
                 actions = torch.clamp(actions, -self.clip_actions, self.clip_actions)
-            
+
             obs_dict, rewards, dones, truncated, extras = self.env.step(actions)
-            
-            # Combine dones and truncated
-            dones = dones | truncated
-            
-            # Return TensorDict directly
+
+
+            # Convert to TensorDict if it's a plain dict
             from tensordict import TensorDict
             if isinstance(obs_dict, dict) and not isinstance(obs_dict, TensorDict):
+                # print(f"[Debug][step] Converting plain dict to TensorDict...")
                 obs_dict = TensorDict(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-            
+                # print(f"[Debug][step] AFTER conversion - type: {type(obs_dict)}")
+                # print(f"[Debug][step] keys: {list(obs_dict.keys())}")
+
+            # # Debug: verify TensorDict
+            # if isinstance(obs_dict, TensorDict):
+            #     print(f"[Debug][step] ✅ obs is TensorDict, keys: {list(obs_dict.keys())}")
+            #     for k in obs_dict.keys():
+            #         v = obs_dict[k]
+            #         shape = tuple(v.shape) if hasattr(v, "shape") else "N/A"
+            #         dtype = getattr(v, "dtype", type(v))
+            #         print(f"  - key={k}, shape={shape}, dtype={dtype}")
+
+            # Combine dones and truncated
+            dones = dones | truncated
+
+            # PPO bootstrap on timeout (for correct value estimation)
+            extras["time_outs"] = truncated
+
             return obs_dict, rewards, dones, extras
     
     # Create wrapper
@@ -317,7 +338,7 @@ def main():
     # Training configuration (dict-based for rsl_rl_2_01)
     train_cfg = {
         # Rollout settings
-        "num_steps_per_env": 24,
+        "num_steps_per_env": 40,  # 降低到40（512×40=20,480样本，适合大环境数）
         "save_interval": 100,  # Save checkpoint every 100 iterations
         
         # Algorithm configuration

@@ -40,8 +40,38 @@ class OnPolicyRunner:
 
         # Query observations from environment for algorithm construction
         obs = self.env.get_observations()
+        
+        # # Debug: Print raw observations before resolve
+        # print(f"\n[Debug][OnPolicyRunner] Raw obs type: {type(obs)}")
+        # if isinstance(obs, TensorDict):
+        #     print(f"[Debug][OnPolicyRunner] Raw obs keys: {list(obs.keys())}")
+        #     for key in obs.keys():
+        #         val = obs[key]
+        #         shape = tuple(val.shape) if hasattr(val, "shape") else "N/A"
+        #         dtype = getattr(val, "dtype", type(val))
+        #         print(f"  - obs[{key}]: shape={shape}, dtype={dtype}")
+        
+        # # Debug: Print obs_groups config before resolve
+        # print(f"\n[Debug][OnPolicyRunner] cfg['obs_groups'] before resolve: {self.cfg['obs_groups']}")
+        # print(f"[Debug][OnPolicyRunner] default_obs_sets: {self._get_default_obs_sets()}")
+        
         self.cfg["obs_groups"] = resolve_obs_groups(obs, self.cfg["obs_groups"], self._get_default_obs_sets())
-
+        
+        # # Debug: Print resolved obs_groups after resolve
+        # print(f"\n[Debug][OnPolicyRunner] cfg['obs_groups'] AFTER resolve:")
+        # for set_name, group_list in self.cfg["obs_groups"].items():
+        #     print(f"  - set_name='{set_name}': groups={group_list}")
+        #     # Try to get shape info for each group
+        #     for group_name in group_list:
+        #         if group_name in obs:
+        #             val = obs[group_name]
+        #             shape = tuple(val.shape) if hasattr(val, "shape") else "N/A"
+        #             dtype = getattr(val, "dtype", type(val))
+        #             print(f"      -> obs['{group_name}']: shape={shape}, dtype={dtype}")
+        #         else:
+        #             print(f"      -> obs['{group_name}']: NOT FOUND in obs")
+        print()
+        
         # Create the algorithm
         self.alg = self._construct_algorithm(obs)
 
@@ -240,9 +270,6 @@ class OnPolicyRunner:
             raise ValueError(
                 f"Global rank '{self.gpu_global_rank}' is greater than or equal to world size '{self.gpu_world_size}'."
             )
-
-        # Initialize torch distributed
-        torch.distributed.init_process_group(backend="nccl", rank=self.gpu_global_rank, world_size=self.gpu_world_size)
         # Set device to the local rank
         torch.cuda.set_device(self.gpu_local_rank)
 
