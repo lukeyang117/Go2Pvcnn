@@ -1,4 +1,12 @@
-"""Script to play a trained teacher policy."""
+"""Script to play a trained teacher policy.
+
+Usage:
+    # teacher_semantic (default)
+    python play.py --run_dir 2026-03-15_12-00-00 --checkpoint model_1600.pt
+
+    # teacher_without_semantic (state-only)
+    python play.py --experiment teacher_without_semantic --run_dir 2026-03-15_12-00-00
+"""
 
 import argparse
 import os
@@ -21,7 +29,13 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate")
 parser.add_argument("--checkpoint", type=str, default="model_1600.pt", help="Checkpoint file name")
 parser.add_argument("--run_dir", type=str, default=None, help="Run directory name (required)")
-parser.add_argument("--task", type=str, default="Isaac-Teacher-Semantic-Go2-v0", help="Task environment name")
+parser.add_argument(
+    "--experiment",
+    type=str,
+    default="teacher_semantic",
+    choices=["teacher_semantic", "teacher_without_semantic"],
+    help="Experiment/task: teacher_semantic (CNN+state) or teacher_without_semantic (state-only)",
+)
 parser.add_argument("--sample", action="store_true", default=False, help="Sample actions instead of using policy")
 
 # Append AppLauncher CLI args
@@ -45,8 +59,10 @@ from rsl_rl_2_01.runners import OnPolicyRunner
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.utils.dict import print_dict
 
-# Import the task environment configuration
+# Import env configs and agent
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg_PLAY
+from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg_PLAY
+from agent import get_train_cfg
 
 # Import VecEnv for creating wrapper
 from rsl_rl_2_01.env import VecEnv
@@ -133,37 +149,46 @@ class SimpleRslRlEnvWrapper(VecEnv):
         return obs_dict, rewards, dones, extras
 
 
+# Experiment -> (env_cfg_cls, gym_task_id)
+EXPERIMENT_PLAY_MAP = {
+    "teacher_semantic": (TeacherSemanticEnvCfg_PLAY, "Isaac-Teacher-Semantic-Go2-Play-v0"),
+    "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg_PLAY, "Isaac-Teacher-Without-Semantic-Go2-Play-v0"),
+}
+
+
 def main():
     """Play with trained policy."""
-    
+    experiment_name = args_cli.experiment
+    env_cfg_cls, task_id = EXPERIMENT_PLAY_MAP[experiment_name]
+
     # Setup logging directory and checkpoint path
-    log_root_path = os.path.abspath("logs/rsl_rl/teacher_semantic")
+    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", experiment_name))
     log_dir = os.path.join(log_root_path, args_cli.run_dir)
     checkpoint_path = os.path.join(log_dir, args_cli.checkpoint)
-    
+
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
+
     print(f"\n{'='*80}")
-    print(f"Playing Teacher Policy")
+    print(f"Playing - {experiment_name}")
     print(f"{'='*80}")
-    print(f"Task: {args_cli.task}")
+    print(f"Task: {task_id}")
     print(f"Checkpoint: {checkpoint_path}")
     print(f"Number of environments: {args_cli.num_envs}")
     print(f"{'='*80}\n")
-    
+
     # Create environment configuration
-    env_cfg = TeacherSemanticEnvCfg_PLAY()
+    env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
-    
+
     # Enable video recording if requested
     if args_cli.video:
         env_cfg.sim.enable_cameras = True
         print(f"[Video] Recording enabled (length={args_cli.video_length})")
-    
+
     # Create environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     
     # Wrap for video recording
     if args_cli.video:
@@ -192,60 +217,9 @@ def main():
     print(f"  - Action space: {wrapped_env.action_space}")
     print(f"  - Device: {wrapped_env.device}")
     
-    # Create training configuration (needed for runner initialization)
-    train_cfg = {
-        "num_steps_per_env": 24,
-        "save_interval": 100,
-        "algorithm": {
-            "class_name": "PPO",
-            "num_learning_epochs": 5,
-            "num_mini_batches": 4,
-            "learning_rate": 1e-3,
-            "clip_param": 0.2,
-            "gamma": 0.99,
-            "lam": 0.95,
-            "value_loss_coef": 1.0,
-            "entropy_coef": 0.01,
-            "max_grad_norm": 1.0,
-            "use_clipped_value_loss": True,
-            "schedule": "adaptive",
-            "desired_kl": 0.01,
-            "rnd_cfg": None,
-            "symmetry_cfg": None,
-        },
-        "policy": {
-            "class_name": "ActorCriticCNN",
-            "init_noise_std": 1.0,
-            "noise_std_type": "log",
-            "state_dependent_std": False,
-            "actor_cnn_cfg": {
-                "output_channels": [32, 64],
-                "kernel_size": [3, 3],
-                "stride": [1, 1],
-                "padding": "zeros",
-                "max_pool": [True, True],
-                "activation": "elu",
-                "flatten": True,
-            },
-            "critic_cnn_cfg": {
-                "output_channels": [32, 64],
-                "kernel_size": [3, 3],
-                "stride": [1, 1],
-                "padding": "zeros",
-                "max_pool": [True, True],
-                "activation": "elu",
-                "flatten": True,
-            },
-            "actor_hidden_dims": [256, 128],
-            "critic_hidden_dims": [256, 128],
-            "activation": "elu",
-        },
-        "obs_groups": {
-            "policy": ["policy_cost_map", "policy_state"],
-            "critic": ["critic_cost_map", "critic_state"],
-        },
-    }
-    
+    # Training config from agent (must match training experiment)
+    train_cfg = get_train_cfg(experiment_name)
+
     # Create runner
     print(f"\n[Runner] Creating OnPolicyRunner...")
     runner = OnPolicyRunner(wrapped_env, train_cfg, log_dir=None, device=env_cfg.sim.device)

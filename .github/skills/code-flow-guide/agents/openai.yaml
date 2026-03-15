@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Flow Guide"
+  short_description: "Trace code flow and explain projects"
+  default_prompt: "Use $code-flow-guide to inspect this repository, trace the execution flow, and explain the relevant code paths."

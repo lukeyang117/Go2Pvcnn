@@ -891,9 +891,9 @@ class TerminationsCfg:
     time_out = DoneTerm(func=isaac_mdp.time_out, time_out=True)
     base_contact = DoneTerm(
         func=isaac_mdp.illegal_contact,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 2.0},
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 1.0},
     )
-    bad_orientation = DoneTerm(func=isaac_mdp.bad_orientation, params={"limit_angle": 0.8})  # 放宽至 ~57°，避免步态学习时过早终止
+    bad_orientation = DoneTerm(func=isaac_mdp.bad_orientation, params={"limit_angle": 0.8})  \
 
 
 @configclass

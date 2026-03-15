@@ -118,6 +118,7 @@ class ActorCritic(nn.Module):
 
     @property
     def entropy(self) -> torch.Tensor:
+        #只和std有关系，衡量动作的随机程度，std越大，熵越大，动作越随机
         return self.distribution.entropy().sum(dim=-1)
 
     def _update_distribution(self, obs: torch.Tensor) -> None:

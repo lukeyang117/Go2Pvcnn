@@ -38,6 +38,9 @@ parser.add_argument("--load_run", type=str, default=None, help="Name of run to l
 parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
 parser.add_argument("--distributed", action="store_true", default=False,
                     help="Enable multi-GPU training with PyTorch distributed.")
+parser.add_argument("--experiment", type=str, default="teacher_semantic",
+                    choices=["teacher_semantic", "teacher_without_semantic"],
+                    help="Experiment: teacher_semantic (CNN+state) or teacher_without_semantic (state-only, no CNN).")
 
 # Append AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
@@ -77,8 +80,10 @@ go2_pvcnn_root = Path(__file__).resolve().parent.parent
 if str(go2_pvcnn_root) not in sys.path:
     sys.path.insert(0, str(go2_pvcnn_root))
 
-# Import Teacher environment
+# Import environments and agent config
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
+from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
+from agent import get_train_cfg
 
 # Import wrapper from local directory
 from go2_pvcnn.wrapper.pvcnn_env_wrapper import RslRlPvcnnEnvWrapper
@@ -152,7 +157,12 @@ def main():
     # ========================================
     # Create Environment Configuration
     # ========================================
-    env_cfg = TeacherSemanticEnvCfg()
+    EXPERIMENT_ENV_MAP = {
+        "teacher_semantic": (TeacherSemanticEnvCfg, "Isaac-Teacher-Semantic-Go2-v0"),
+        "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg, "Isaac-Teacher-Without-Semantic-Go2-v0"),
+    }
+    env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
+    env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = f"cuda:{app_launcher.device_id}"
     
@@ -164,7 +174,7 @@ def main():
     # ========================================
     # Setup Logging Directory
     # ========================================
-    experiment_name = "teacher_semantic"
+    experiment_name = args_cli.experiment
     log_root_path = os.path.join("logs", "rsl_rl", experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     
@@ -190,13 +200,13 @@ def main():
     # ========================================
     # Create Environment
     # ========================================
-    print(f"\n[Env] Creating Teacher Semantic Environment...")
+    print(f"\n[Env] Creating {experiment_name} Environment...")
     print(f"  - num_envs: {env_cfg.scene.num_envs}")
     print(f"  - device: {env_cfg.sim.device}")
     print(f"  - seed: {env_cfg.seed}")
     
     # Create gym environment
-    env = gym.make("Isaac-Teacher-Semantic-Go2-v0", cfg=env_cfg)
+    env = gym.make(env_id, cfg=env_cfg)
     
     # Cast to ManagerBasedRLEnv for type safety
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
@@ -335,70 +345,8 @@ def main():
     
     from rsl_rl_2_01.runners import OnPolicyRunner
     
-    # Training configuration (dict-based for rsl_rl_2_01)
-    train_cfg = {
-        # Rollout settings
-        "num_steps_per_env": 40,  # 降低到40（512×40=20,480样本，适合大环境数）
-        "save_interval": 100,  # Save checkpoint every 100 iterations
-        
-        # Algorithm configuration
-        "algorithm": {
-            "class_name": "PPO",  # PPO algorithm class
-            "num_learning_epochs": 5,
-            "num_mini_batches": 4,
-            "learning_rate": 1e-3,
-            "clip_param": 0.2,
-            "gamma": 0.99,
-            "lam": 0.95,
-            "value_loss_coef": 1.0,
-            "entropy_coef": 0.01,
-            "max_grad_norm": 1.0,
-            "use_clipped_value_loss": True,
-            "schedule": "adaptive",
-            "desired_kl": 0.01,
-            "rnd_cfg": None,
-            "symmetry_cfg": None,
-            # Note: multi_gpu_cfg is passed separately by runner
-        },
-        
-        # Policy configuration (use ActorCriticCNN for cost map + state)
-        "policy": {
-            "class_name": "ActorCriticCNN",  # CNN for cost map, MLP for state
-            "init_noise_std": 1.0,  # Initial noise std for exploration
-            "noise_std_type": "log",  # Use log std to ensure std > 0
-            "state_dependent_std": False,  # Use fixed std, not state-dependent
-            # Actor CNN config for processing cost map (15x15 input, 2 channels)
-            "actor_cnn_cfg": {
-                "output_channels": [32, 64],  # Conv layer output channels: 减少层数适应15x15
-                "kernel_size": [3, 3],  # Kernel sizes: 使用较小的kernel
-                "stride": [1, 1],  # Strides: stride=1避免过快缩小
-                "padding": "zeros",  # 自动padding保持尺寸
-                "max_pool": [True, True],  # MaxPool after each conv: 15->7->3
-                "activation": "elu",
-                "flatten": True,  # Flatten before passing to MLP
-            },
-            # Critic CNN config (same as actor)
-            "critic_cnn_cfg": {
-                "output_channels": [32, 64],
-                "kernel_size": [3, 3],
-                "stride": [1, 1],
-                "padding": "zeros",
-                "max_pool": [True, True],
-                "activation": "elu",
-                "flatten": True,
-            },
-            # MLP config for combined features (CNN output + state)
-            "actor_hidden_dims": [256, 128],
-            "critic_hidden_dims": [256, 128],
-            "activation": "elu",
-        },
-        
-        # Observation groups (dict mapping set_name to list of groups)
-        "obs_groups": {
-            "policy": ["policy_cost_map", "policy_state"],  # Cost map + state for actor
-            "critic": ["critic_cost_map", "critic_state"],  # Cost map + state for critic
-        },
-    }
+    # Training configuration from agent module
+    train_cfg = get_train_cfg(experiment_name)
     
     # Print configuration
     if rank == 0:
@@ -466,7 +414,7 @@ def main():
     # Start Training
     # ========================================
     print(f"\n{'='*80}")
-    print(f"Starting Training - Teacher Semantic Mode")
+    print(f"Starting Training - {experiment_name}")
     print(f"{'='*80}\n")
     
     runner.learn(num_learning_iterations=args_cli.max_iterations, init_at_random_ep_len=True)
