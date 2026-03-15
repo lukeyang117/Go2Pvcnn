@@ -85,8 +85,7 @@ from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
 from agent import get_train_cfg
 
-# Import wrapper from local directory
-from go2_pvcnn.wrapper.pvcnn_env_wrapper import RslRlPvcnnEnvWrapper
+
 
 # RSL-RL-2.01 imports (from rsl-rl-2-01 package)
 from rsl_rl_2_01.runners import OnPolicyRunner
