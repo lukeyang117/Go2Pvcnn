@@ -40,7 +40,6 @@ from isaaclab.envs import mdp as isaac_mdp
 
 # Import custom MDP components
 import go2_pvcnn.mdp as custom_mdp
-from go2_pvcnn.mdp import rewards_new as teacher_rewards
 
 # Import Go2 asset
 from go2_pvcnn.assets import UNITREE_GO2_CFG
@@ -319,10 +318,11 @@ class TeacherSceneCfg(InteractiveSceneCfg):
     #     ],
     # )
     
-    # Legacy contact sensor (for backward compatibility)
+    # Contact sensor for rewards (feet_air_time, undesired_contacts, base_contact)
+    # Aligned with teacher_without_semantic: history_length=3 for feet_air_time
     contact_forces: ContactSensorCfg = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*",
-        history_length=2,
+        history_length=3,
         track_air_time=True,
     )
 
@@ -530,16 +530,20 @@ class TeacherSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class CommandsCfg:
-    """Command specifications for the MDP."""
+    """Command specifications aligned with teacher_without_semantic (Isaac Lab velocity)."""
     base_velocity = isaac_mdp.UniformVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.25,  # 25% standing: 先学会站立，再学走路
+        rel_standing_envs=0.02,
+        rel_heading_envs=1.0,
+        heading_command=True,
+        heading_control_stiffness=0.5,
         debug_vis=True,
         ranges=isaac_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 0.5),   # 小速度起步，学会后再提高
-            lin_vel_y=(-0.3, 0.3),
+            lin_vel_x=(-1.0, 1.0),
+            lin_vel_y=(-1.0, 1.0),
             ang_vel_z=(-1.0, 1.0),
+            heading=(-math.pi, math.pi),
         ),
     )
 
@@ -657,36 +661,71 @@ class ObservationsCfg:
 
 @configclass
 class EventCfg:
-    """Configuration for randomization events."""
+    """Configuration for randomization events, aligned with teacher_without_semantic (Go2 reset) + YCB resets."""
 
-    # Reset robot base
+    # Startup (aligned with teacher_without_semantic)
+    physics_material = EventTerm(
+        func=isaac_mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.8, 0.8),
+            "dynamic_friction_range": (0.6, 0.6),
+            "restitution_range": (0.0, 0.0),
+            "num_buckets": 64,
+        },
+    )
+    add_base_mass = EventTerm(
+        func=isaac_mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "mass_distribution_params": (-5.0, 5.0),
+            "operation": "add",
+        },
+    )
+    base_external_force_torque = EventTerm(
+        func=isaac_mdp.apply_external_force_torque,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "force_range": (0.0, 0.0),
+            "torque_range": (-0.0, 0.0),
+        },
+    )
+
+    # Reset Go2 (aligned with teacher_without_semantic)
     reset_base = EventTerm(
         func=isaac_mdp.reset_root_state_uniform,
         mode="reset",
         params={
             "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
             "velocity_range": {
-                "x": (0.0, 0.0),  # 零初速度: 避免 spawn 时已运动导致立即倒地
-                "y": (0.0, 0.0),
-                "z": (0.0, 0.0),
-                "roll": (0.0, 0.0),
-                "pitch": (0.0, 0.0),
-                "yaw": (0.0, 0.0),
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
+                "z": (-0.5, 0.5),
+                "roll": (-0.5, 0.5),
+                "pitch": (-0.5, 0.5),
+                "yaw": (-0.5, 0.5),
             },
         },
     )
-
-    # Reset robot joints
     reset_robot_joints = EventTerm(
         func=isaac_mdp.reset_joints_by_scale,
         mode="reset",
         params={
-            "position_range": (1.0, 1.0),  # 严格默认姿态，避免随机 spawn 导致倒地
+            "position_range": (0.5, 1.5),
             "velocity_range": (0.0, 0.0),
         },
     )
-    
-    # Reset YCB objects positions (using isaac_mdp.reset_root_state_uniform)
+    push_robot = EventTerm(
+        func=isaac_mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(10.0, 15.0),
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+    )
+
+    # Reset YCB objects positions (keep for teacher_semantic scene)
     # Note: Furniture is global/static and doesn't need reset
     
     reset_cracker_box_0 = EventTerm(
@@ -779,121 +818,58 @@ class EventCfg:
         },
     )
 
-    # # Push robot
-    # push_robot = EventTerm(
-    #     func=isaac_mdp.push_by_setting_velocity,
-    #     mode="interval",
-    #     interval_range_s=(10.0, 15.0),
-    #     params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
-    # )
-
 
 @configclass
 class RewardsCfg:
-    """Reward terms for the MDP."""
+    """Reward terms aligned with teacher_without_semantic (Isaac Lab velocity)."""
 
     # -- task
-    track_lin_vel_xy = RewTerm(
-        func=isaac_mdp.track_lin_vel_xy_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    track_lin_vel_xy_exp = RewTerm(
+        func=isaac_mdp.track_lin_vel_xy_exp,
+        weight=1.0,
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
-    track_ang_vel_z = RewTerm(
-        func=isaac_mdp.track_ang_vel_z_exp, weight=0.5, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    track_ang_vel_z_exp = RewTerm(
+        func=isaac_mdp.track_ang_vel_z_exp,
+        weight=0.5,
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
-
-    # -- base
-    base_linear_velocity = RewTerm(func=isaac_mdp.lin_vel_z_l2, weight=-2.0)
-    base_angular_velocity = RewTerm(func=isaac_mdp.ang_vel_xy_l2, weight=-0.05)
-    base_contact_penalty = RewTerm(
-        func=isaac_mdp.undesired_contacts,
-        weight=-5.0,
-        params={
-            "threshold": 1.0,
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"),
-        },
-    )
-    joint_vel = RewTerm(func=isaac_mdp.joint_vel_l2, weight=-0.001)
-    joint_acc = RewTerm(func=isaac_mdp.joint_acc_l2, weight=-2.5e-7)
-    joint_torques = RewTerm(func=isaac_mdp.joint_torques_l2, weight=-1.0e-5)
-    action_rate = RewTerm(func=isaac_mdp.action_rate_l2, weight=-0.01)
-    dof_pos_limits = RewTerm(func=isaac_mdp.joint_pos_limits, weight=0)
-
-    # -- robot
-    flat_orientation_l2 = RewTerm(func=isaac_mdp.flat_orientation_l2, weight=0.0)
-
-    
-    air_time_variance = RewTerm(
-        func=custom_mdp.air_time_variance_penalty,
-        weight=-1.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
-    )
+    # -- penalties
+    lin_vel_z_l2 = RewTerm(func=isaac_mdp.lin_vel_z_l2, weight=-2.0)
+    ang_vel_xy_l2 = RewTerm(func=isaac_mdp.ang_vel_xy_l2, weight=-0.05)
+    dof_torques_l2 = RewTerm(func=isaac_mdp.joint_torques_l2, weight=-1.0e-5)
+    dof_acc_l2 = RewTerm(func=isaac_mdp.joint_acc_l2, weight=-2.5e-7)
+    action_rate_l2 = RewTerm(func=isaac_mdp.action_rate_l2, weight=-0.01)
     feet_air_time = RewTerm(
-        func=custom_mdp.feet_air_time_positive_reward,
-        weight=0.1,
+        func=custom_mdp.feet_air_time,
+        weight=0.125,
         params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
             "command_name": "base_velocity",
             "threshold": 0.5,
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
         },
     )
-
-
-    
-    
-    obstacle_collision_fl = RewTerm(
-        func=teacher_rewards.obstacle_collision_penalty,
-        weight=-5.0,
+    undesired_contacts = RewTerm(
+        func=isaac_mdp.undesired_contacts,
+        weight=-1.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_fl"),
-            "threshold": 0.5,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_thigh"),
+            "threshold": 1.0,
         },
     )
-    obstacle_collision_fr = RewTerm(
-        func=teacher_rewards.obstacle_collision_penalty,
-        weight=-5.0,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_fr"),
-            "threshold": 0.5,
-        },
-    )
-    obstacle_collision_rl = RewTerm(
-        func=teacher_rewards.obstacle_collision_penalty,
-        weight=-5.0,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_rl"),
-            "threshold": 0.5,
-        },
-    )
-    obstacle_collision_rr = RewTerm(
-        func=teacher_rewards.obstacle_collision_penalty,
-        weight=-5.0,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces_small_objects_rr"),
-            "threshold": 0.5,
-        },
-    )
-    
-    
-    
-    # # TODO: Add semantic cost map penalty
-    # semantic_cost_penalty = RewTerm(
-    #     func=teacher_rewards.semantic_cost_map_penalty,
-    #     weight=-2.0,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("contact_forces_ground"),
-    #         "force_threshold": 10.0,
-    #     },
-    # )
+    # -- optional
+    flat_orientation_l2 = RewTerm(func=isaac_mdp.flat_orientation_l2, weight=0.0)
+    dof_pos_limits = RewTerm(func=isaac_mdp.joint_pos_limits, weight=0.0)
 
 
 @configclass
 class TerminationsCfg:
-    """Termination terms for the MDP."""
+    """Termination terms aligned with teacher_without_semantic (no bad_orientation)."""
     time_out = DoneTerm(func=isaac_mdp.time_out, time_out=True)
     base_contact = DoneTerm(
         func=isaac_mdp.illegal_contact,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 1.0},
     )
-    bad_orientation = DoneTerm(func=isaac_mdp.bad_orientation, params={"limit_angle": 0.8})  \
 
 
 @configclass
@@ -937,7 +913,9 @@ class TeacherSemanticEnvCfg(ManagerBasedRLEnvCfg):
         
         # Update scene
         self.scene.robot = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-        
+        if self.scene.contact_forces is not None:
+            self.scene.contact_forces.update_period = self.sim.dt
+
         print(f"[TeacherSemanticEnvCfg] Configured with {self.scene.num_envs} environments")
         print(f"[TeacherSemanticEnvCfg] Total YCB objects: {9 * self.scene.num_envs}")
 
