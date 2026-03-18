@@ -23,6 +23,7 @@ import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -538,20 +539,17 @@ class TeacherSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class CommandsCfg:
-    """Command specifications aligned with teacher_without_semantic (Isaac Lab velocity)."""
-    base_velocity = isaac_mdp.UniformVelocityCommandCfg(
+    """Command specifications with curriculum (aligned with unitree go2 velocity_env_cfg)."""
+    base_velocity = custom_mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.02,
-        rel_heading_envs=1.0,
-        heading_command=True,
-        heading_control_stiffness=0.5,
+        rel_standing_envs=0.1,
         debug_vis=True,
-        ranges=isaac_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0),
-            lin_vel_y=(-1.0, 1.0),
-            ang_vel_z=(-1.0, 1.0),
-            heading=(-math.pi, math.pi),
+        ranges=custom_mdp.UniformLevelVelocityCommandCfg.Ranges(
+            lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
+        ),
+        limit_ranges=custom_mdp.UniformLevelVelocityCommandCfg.Ranges(
+            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
         ),
     )
 
@@ -882,7 +880,17 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    """Curriculum terms for the MDP."""
+    """Curriculum terms: velocity command range expansion only (aligned with unitree)."""
+
+    lin_vel_cmd_levels = CurrTerm(
+        func=custom_mdp.lin_vel_cmd_levels,
+        params={"reward_term_name": "track_lin_vel_xy_exp"},
+    )
+
+
+@configclass
+class CurriculumCfg_Empty:
+    """Empty curriculum for play/eval (no curriculum)."""
     pass
 
 
@@ -943,7 +951,10 @@ class TeacherSemanticEnvCfg_PLAY(TeacherSemanticEnvCfg):
         
         # Override commands with play configuration (forward motion only)
         self.commands = CommandsCfg_PLAY()
-        
+
+        # Disable curriculum in play mode
+        self.curriculum = CurriculumCfg_Empty()
+
         # Smaller scene for play
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5

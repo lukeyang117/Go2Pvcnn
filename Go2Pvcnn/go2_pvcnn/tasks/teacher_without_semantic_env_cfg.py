@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import MISSING
+from pathlib import Path
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
@@ -24,7 +25,6 @@ from isaaclab.sensors import ContactSensorCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
 from isaaclab.envs import mdp as isaac_mdp
 import go2_pvcnn.mdp as custom_mdp
@@ -34,6 +34,9 @@ from .teacher_semantic_env_cfg import (
     CommandsCfg_PLAY,
     COBBLESTONE_ROAD_CFG,
 )
+
+# 本地 teacher 物体目录（运行 assets/download_teacher_objects.py 下载）
+_TEACHER_OBJECTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "teacher_object"
 
 
 ##
@@ -59,7 +62,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
             dynamic_friction=1.0,
         ),
         visual_material=sim_utils.MdlFileCfg(
-            mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
+            mdl_path=str(_TEACHER_OBJECTS_DIR / "Materials" / "TilesMarbleSpiderWhiteBrickBondHoned" / "TilesMarbleSpiderWhiteBrickBondHoned.mdl"),
             project_uvw=True,
             texture_scale=(0.25, 0.25),
         ),
@@ -151,7 +154,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     cracker_box_0: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/cracker_box_0",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/003_cracker_box.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "003_cracker_box.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -163,7 +166,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     cracker_box_1: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/cracker_box_1",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/003_cracker_box.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "003_cracker_box.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -175,7 +178,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     cracker_box_2: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/cracker_box_2",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/003_cracker_box.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "003_cracker_box.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -187,7 +190,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     sugar_box_0: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/sugar_box_0",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/004_sugar_box.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "004_sugar_box.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -199,7 +202,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     sugar_box_1: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/sugar_box_1",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/004_sugar_box.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "004_sugar_box.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -211,7 +214,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     sugar_box_2: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/sugar_box_2",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/004_sugar_box.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "004_sugar_box.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -223,7 +226,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     tomato_soup_can_0: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/tomato_soup_can_0",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "005_tomato_soup_can.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -235,7 +238,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     tomato_soup_can_1: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/tomato_soup_can_1",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "005_tomato_soup_can.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -247,7 +250,7 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     tomato_soup_can_2: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/tomato_soup_can_2",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/005_tomato_soup_can.usd",
+            usd_path=str(_TEACHER_OBJECTS_DIR / "005_tomato_soup_can.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=1.0,
                 max_angular_velocity=1.0,
@@ -260,55 +263,63 @@ class TeacherSceneCfg_NoLidar(InteractiveSceneCfg):
     # Furniture
     furniture_1 = AssetBaseCfg(
         prim_path="/World/SM_sofa_1",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Sofa.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_Sofa.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-2.0, -2.0, 0.0)),
     )
     furniture_2 = AssetBaseCfg(
         prim_path="/World/SM_armchair_1",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Armchair.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_Armchair.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(2.0, -2.0, 0.0)),
     )
     furniture_3 = AssetBaseCfg(
         prim_path="/World/SM_table_1",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_TableA.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_TableA.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 2.0, 0.0)),
     )
     furniture_4 = AssetBaseCfg(
         prim_path="/World/SM_sofa_2",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Sofa.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_Sofa.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-4.0, 0.0, 0.0)),
     )
     furniture_5 = AssetBaseCfg(
         prim_path="/World/SM_armchair_2",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Armchair.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_Armchair.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(4.0, 0.0, 0.0)),
     )
     furniture_6 = AssetBaseCfg(
         prim_path="/World/SM_table_2",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_TableA.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_TableA.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, -4.0, 0.0)),
     )
     furniture_7 = AssetBaseCfg(
         prim_path="/World/SM_sofa_3",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Sofa.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_Sofa.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(6.0, -2.0, 0.0)),
     )
     furniture_8 = AssetBaseCfg(
         prim_path="/World/SM_armchair_3",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_Armchair.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_Armchair.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(6.0, 2.0, 0.0)),
     )
     furniture_9 = AssetBaseCfg(
         prim_path="/World/SM_table_3",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Office/Props/SM_TableA.usd"),
+        spawn=sim_utils.UsdFileCfg(usd_path=str(_TEACHER_OBJECTS_DIR / "SM_TableA.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-6.0, 2.0, 0.0)),
     )
 
+    # Lighting（使用本地天空光纹理）
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
             intensity=750.0,
-            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+            texture_file=str(
+                _TEACHER_OBJECTS_DIR
+                / "Materials"
+                / "Textures"
+                / "Skies"
+                / "PolyHaven"
+                / "kloofendal_43d_clear_puresky_4k.hdr"
+            ),
         ),
     )
 
@@ -546,7 +557,12 @@ class TeacherWithoutSemanticEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
-        self.scene.robot = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        # 使用本地 Go2 资产（运行 assets/download_teacher_objects.py 下载）
+        go2_usd = str(_TEACHER_OBJECTS_DIR / "Robots" / "Unitree" / "Go2" / "go2.usd")
+        self.scene.robot = UNITREE_GO2_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Robot",
+            spawn=UNITREE_GO2_CFG.spawn.replace(usd_path=go2_usd),
+        )
         if self.scene.contact_forces is not None:
             self.scene.contact_forces.update_period = self.sim.dt
         print("[TeacherWithoutSemanticEnvCfg] Aligned with Isaac Lab velocity_env_cfg (except terrain)")
