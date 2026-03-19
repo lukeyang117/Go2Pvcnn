@@ -537,6 +537,29 @@ def goal_based_velocity_commands(
     return vel_commands
 
 
+def elevation_map(
+    env: "ManagerBasedRLEnv",
+    lidar_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Read height map from semantic LiDAR and format for CNN input.
+
+    Args:
+        env: The environment instance.
+        lidar_cfg: Configuration for the semantic LiDAR sensor.
+
+    Returns:
+        Elevation map tensor: (num_envs, 1, H, W), clipped to (-1.0, 5.0).
+    """
+    lidar_sensor = env.scene.sensors[lidar_cfg.name]
+    height_map = lidar_sensor.data.height_map  # (num_envs, H, W)
+    if height_map is None:
+        raise ValueError(
+            "LiDAR height_map is None. Set return_height_map=True and height_map_size/resolution in sensor config."
+        )
+    height_map = height_map.clamp(-1.0, 5.0)
+    return height_map.unsqueeze(1)  # (num_envs, 1, H, W)
+
+
 def teacher_semantic_cost_map(
     env: ManagerBasedRLEnv,
     lidar_cfg: SceneEntityCfg,

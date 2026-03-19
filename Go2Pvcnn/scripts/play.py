@@ -33,10 +33,10 @@ parser.add_argument(
     "--experiment",
     type=str,
     default="teacher_semantic",
-    choices=["teacher_semantic", "teacher_without_semantic"],
-    help="Experiment/task: teacher_semantic (CNN+state) or teacher_without_semantic (state-only)",
+    choices=["teacher_semantic", "teacher_without_semantic", "teacher_elevation"],
+    help="Experiment/task: teacher_semantic (CNN+state), teacher_without_semantic (state-only), teacher_elevation (elevation map CNN)",
 )
-parser.add_argument("--sample", action="store_true", default=False, help="Sample actions instead of using policy")
+parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
 
 # Append AppLauncher CLI args
 AppLauncher.add_app_launcher_args(parser)
@@ -62,6 +62,7 @@ from isaaclab.utils.dict import print_dict
 # Import env configs and agent
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg_PLAY
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg_PLAY
+from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg_PLAY
 from agent import get_train_cfg
 
 # Import VecEnv for creating wrapper
@@ -153,6 +154,7 @@ class SimpleRslRlEnvWrapper(VecEnv):
 EXPERIMENT_PLAY_MAP = {
     "teacher_semantic": (TeacherSemanticEnvCfg_PLAY, "Isaac-Teacher-Semantic-Go2-Play-v0"),
     "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg_PLAY, "Isaac-Teacher-Without-Semantic-Go2-Play-v0"),
+    "teacher_elevation": (TeacherElevationEnvCfg_PLAY, "Isaac-Teacher-Elevation-Go2-Play-v0"),
 }
 
 

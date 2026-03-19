@@ -39,8 +39,8 @@ parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoin
 parser.add_argument("--distributed", action="store_true", default=False,
                     help="Enable multi-GPU training with PyTorch distributed.")
 parser.add_argument("--experiment", type=str, default="teacher_semantic",
-                    choices=["teacher_semantic", "teacher_without_semantic"],
-                    help="Experiment: teacher_semantic (CNN+state) or teacher_without_semantic (state-only, no CNN).")
+                    choices=["teacher_semantic", "teacher_without_semantic", "teacher_elevation"],
+                    help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), teacher_elevation (elevation map CNN).")
 
 # Append AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
@@ -83,6 +83,7 @@ if str(go2_pvcnn_root) not in sys.path:
 # Import environments and agent config
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
+from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
 from agent import get_train_cfg
 
 
@@ -159,6 +160,7 @@ def main():
     EXPERIMENT_ENV_MAP = {
         "teacher_semantic": (TeacherSemanticEnvCfg, "Isaac-Teacher-Semantic-Go2-v0"),
         "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg, "Isaac-Teacher-Without-Semantic-Go2-v0"),
+        "teacher_elevation": (TeacherElevationEnvCfg, "Isaac-Teacher-Elevation-Go2-v0"),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
     env_cfg = env_cfg_cls()

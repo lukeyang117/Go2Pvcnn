@@ -560,16 +560,11 @@ class CommandsCfg_PLAY:
     base_velocity = isaac_mdp.UniformVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        heading_command=False,  # Disable heading command for forward motion
-        heading_control_stiffness=0.0,
-        rel_standing_envs=0.0,  # No standing
-        rel_heading_envs=0.0,
         debug_vis=True,
         ranges=isaac_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.5, 1.0),  # Forward velocity only
-            lin_vel_y=(0.0, 0.0),  # No lateral velocity
-            ang_vel_z=(0.0, 0.0),  # No angular velocity
-            heading=(0.0, 0.0),  # No heading change
+            lin_vel_x=(-0.1, 0.1),  # Forward velocity only
+            lin_vel_y=(-0.1, 0.1),  # No lateral velocity
+            ang_vel_z=(-0.1, 0.1),  # No angular velocity
         ),
     )
 
