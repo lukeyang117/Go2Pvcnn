@@ -875,8 +875,9 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    """Curriculum terms: velocity command range expansion only (aligned with unitree)."""
+    """Curriculum terms: terrain levels + velocity command range expansion (aligned with unitree)."""
 
+    terrain_levels = CurrTerm(func=custom_mdp.terrain_levels_vel_unitree_rl_lab)
     lin_vel_cmd_levels = CurrTerm(
         func=custom_mdp.lin_vel_cmd_levels,
         params={"reward_term_name": "track_lin_vel_xy_exp"},
@@ -932,6 +933,14 @@ class TeacherSemanticEnvCfg(ManagerBasedRLEnvCfg):
         if self.scene.contact_forces is not None:
             self.scene.contact_forces.update_period = self.sim.dt
 
+        # Terrain curriculum: enable/disable based on curriculum.terrain_levels
+        if getattr(self.curriculum, "terrain_levels", None) is not None:
+            if self.scene.terrain.terrain_generator is not None:
+                self.scene.terrain.terrain_generator.curriculum = True
+        else:
+            if self.scene.terrain.terrain_generator is not None:
+                self.scene.terrain.terrain_generator.curriculum = False
+
         print(f"[TeacherSemanticEnvCfg] Configured with {self.scene.num_envs} environments")
         print(f"[TeacherSemanticEnvCfg] Total YCB objects: {9 * self.scene.num_envs}")
 
@@ -949,6 +958,10 @@ class TeacherSemanticEnvCfg_PLAY(TeacherSemanticEnvCfg):
 
         # Disable curriculum in play mode
         self.curriculum = CurriculumCfg_Empty()
+
+        # Disable terrain curriculum when using CurriculumCfg_Empty
+        if self.scene.terrain.terrain_generator is not None:
+            self.scene.terrain.terrain_generator.curriculum = False
 
         # Smaller scene for play
         self.scene.num_envs = 50
