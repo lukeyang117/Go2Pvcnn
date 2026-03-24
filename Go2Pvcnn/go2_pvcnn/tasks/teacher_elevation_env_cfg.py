@@ -187,9 +187,21 @@ class TeacherElevationEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
 
     scene: TeacherElevationSceneCfg = TeacherElevationSceneCfg(num_envs=32, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
-
+    
     def __post_init__(self):
         super().__post_init__()
+        # Restore training terrain grid (parent PLAY uses 2×1 for fast debug)
+        tg = self.scene.terrain.terrain_generator
+        if tg is not None:
+            tg.num_rows = SEMANTIC_TERRAIN_CFG.num_rows
+            tg.num_cols = SEMANTIC_TERRAIN_CFG.num_cols
+            tg.curriculum = SEMANTIC_TERRAIN_CFG.curriculum
+        # Play: constant velocity command +x = 1 m/s (no lateral / yaw)
+        self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
+            lin_vel_x=(1.0, 1.0),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(0.0, 0.0),
+        )
         self.observations.policy_elevation_map.enable_corruption = False
         self.observations.policy_state.enable_corruption = False
         self.observations.critic_elevation_map.enable_corruption = False
