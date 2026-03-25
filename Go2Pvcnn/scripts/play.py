@@ -6,6 +6,10 @@ Usage:
 
     # teacher_without_semantic (state-only)
     python play.py --experiment teacher_without_semantic --run_dir 2026-03-15_12-00-00
+
+    # Remote WebRTC (no X11 on server): --livestream 1 or 2; this script turns on
+    # AppLauncher --enable_cameras so Isaac Lab loads a rendering experience instead
+    # of the GUI kit (which needs a display and can hang on headless SSH).
 """
 
 import argparse
@@ -45,6 +49,17 @@ args_cli = parser.parse_args()
 # Validate required arguments
 if args_cli.run_dir is None:
     raise ValueError("--run_dir is required. Specify the training run directory to load checkpoint from.")
+
+# Isaac Lab AppLauncher: with livestream on but enable_cameras off, the resolved experience
+# file is isaaclab.python.kit (GUI), which needs X11. On headless SSH / no DISPLAY that can
+# hang after "app ready". Enabling cameras selects isaaclab.python.rendering.kit instead.
+# See isaaclab.app.AppLauncher._resolve_experience_file.
+if getattr(args_cli, "livestream", -1) in (1, 2) and not args_cli.enable_cameras:
+    args_cli.enable_cameras = True
+    print(
+        "[INFO][play.py] livestream: enabled AppLauncher --enable_cameras so the simulator "
+        "uses a rendering experience (works without X11; WebRTC client on another machine)."
+    )
 
 # Launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -184,9 +199,10 @@ def main():
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
-    # Enable video recording if requested
-    if args_cli.video:
+    # Enable rendering pipeline for video or WebRTC livestream (matches AppLauncher enable_cameras)
+    if args_cli.video or getattr(args_cli, "livestream", -1) in (1, 2):
         env_cfg.sim.enable_cameras = True
+    if args_cli.video:
         print(f"[Video] Recording enabled (length={args_cli.video_length})")
 
     # Create environment
