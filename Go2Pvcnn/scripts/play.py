@@ -37,8 +37,14 @@ parser.add_argument(
     "--experiment",
     type=str,
     default="teacher_semantic",
-    choices=["teacher_semantic", "teacher_without_semantic", "teacher_elevation"],
-    help="Experiment/task: teacher_semantic (CNN+state), teacher_without_semantic (state-only), teacher_elevation (elevation map CNN)",
+    choices=[
+        "teacher_semantic",
+        "teacher_without_semantic",
+        "teacher_elevation",
+        "teacher_elevation_semantic_map",
+    ],
+    help="Experiment/task: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
+    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN)",
 )
 parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
 
@@ -78,7 +84,11 @@ from isaaclab.utils.dict import print_dict
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg_PLAY
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg_PLAY
 from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg_PLAY
+from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg_PLAY
+import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
 from agent import get_train_cfg
+
+print("[INFO][play.py] Imports ready; entering main()...", flush=True)
 
 # Import VecEnv for creating wrapper
 from rsl_rl_2_01.env import VecEnv
@@ -170,6 +180,10 @@ EXPERIMENT_PLAY_MAP = {
     "teacher_semantic": (TeacherSemanticEnvCfg_PLAY, "Isaac-Teacher-Semantic-Go2-Play-v0"),
     "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg_PLAY, "Isaac-Teacher-Without-Semantic-Go2-Play-v0"),
     "teacher_elevation": (TeacherElevationEnvCfg_PLAY, "Isaac-Teacher-Elevation-Go2-Play-v0"),
+    "teacher_elevation_semantic_map": (
+        TeacherElevationSemanticMapEnvCfg_PLAY,
+        "Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0",
+    ),
 }
 
 
@@ -206,7 +220,9 @@ def main():
         print(f"[Video] Recording enabled (length={args_cli.video_length})")
 
     # Create environment
+    print(f"[INFO][play.py] gym.make({task_id!r}) ... (scene build can take several minutes)", flush=True)
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    print("[INFO][play.py] gym.make done.", flush=True)
     
     # Wrap for video recording
     if args_cli.video:

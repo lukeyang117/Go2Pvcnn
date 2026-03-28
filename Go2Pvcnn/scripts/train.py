@@ -39,8 +39,14 @@ parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoin
 parser.add_argument("--distributed", action="store_true", default=False,
                     help="Enable multi-GPU training with PyTorch distributed.")
 parser.add_argument("--experiment", type=str, default="teacher_semantic",
-                    choices=["teacher_semantic", "teacher_without_semantic", "teacher_elevation"],
-                    help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), teacher_elevation (elevation map CNN).")
+                    choices=[
+                        "teacher_semantic",
+                        "teacher_without_semantic",
+                        "teacher_elevation",
+                        "teacher_elevation_semantic_map",
+                    ],
+                    help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
+                    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN).")
 
 # Append AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
@@ -65,6 +71,12 @@ if args_cli.distributed and "GPU_IDS" in os.environ:
     print(f"[GPU Mapping] Set device to: {args_cli.device}")
 
 # Launch Isaac Sim
+if getattr(args_cli, "livestream", -1) in (1, 2) and not args_cli.enable_cameras:
+    args_cli.enable_cameras = True
+    print(
+        "[INFO][play.py] livestream: enabled AppLauncher --enable_cameras so the simulator "
+        "uses a rendering experience (works without X11; WebRTC client on another machine)."
+    )
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -84,6 +96,8 @@ if str(go2_pvcnn_root) not in sys.path:
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
 from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
+from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg
+import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
 from agent import get_train_cfg
 
 
@@ -161,6 +175,10 @@ def main():
         "teacher_semantic": (TeacherSemanticEnvCfg, "Isaac-Teacher-Semantic-Go2-v0"),
         "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg, "Isaac-Teacher-Without-Semantic-Go2-v0"),
         "teacher_elevation": (TeacherElevationEnvCfg, "Isaac-Teacher-Elevation-Go2-v0"),
+        "teacher_elevation_semantic_map": (
+            TeacherElevationSemanticMapEnvCfg,
+            "Isaac-Teacher-Elevation-Semantic-Map-Go2-v0",
+        ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
     env_cfg = env_cfg_cls()

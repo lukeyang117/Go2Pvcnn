@@ -1,19 +1,19 @@
-"""Teacher elevation experiment: elevation map (height map) + CNN + PPO.
+"""Teacher elevation + semantic grid: Isaac Lab multi-mesh ray caster, dual-channel CNN + PPO.
 
-Inherits from teacher_without_semantic. Uses Isaac Lab velocity task height_scanner
-(``isaaclab_tasks/.../locomotion/velocity/velocity_env_cfg.py``): same RayCasterCfg
-layout with ``GridPatternCfg(resolution=0.1, size=[1.5, 1.5])`` (1.5 m footprint).
-Observation: :func:`go2_pvcnn.mdp.elevation_map_height_scan` wrapping
-``isaaclab.envs.mdp.height_scan``.
+Uses :class:`~go2_pvcnn.sensor.semantic_raycaster.semantic_ray_caster.SemanticGridRayCaster` (extends Isaac
+Lab ``RayCaster``) with the same grid pattern / ``height_scan`` offset as native height scanners.
+Static cuboids use ``/World/...`` prim paths (same namespace as ``/World/ground`` terrain).
+Semantic ids: terrain=0, small cube=1, big cube=2.
 """
 
 from __future__ import annotations
 
 import isaaclab.sim as sim_utils
+from isaaclab.assets import AssetBaseCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import RayCasterCfg, patterns
+from isaaclab.sensors import patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
@@ -21,6 +21,7 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.envs import mdp as isaac_mdp
 
 import go2_pvcnn.mdp as mdp
+from go2_pvcnn.sensor.semantic_raycaster import SemanticGridRayCasterCfg
 
 from go2_pvcnn.tasks.teacher_semantic_env_cfg import (
     COBBLESTONE_ROAD_CFG as SEMANTIC_TERRAIN_CFG,
@@ -33,13 +34,16 @@ from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import (
 )
 
 
-@configclass
-class TeacherElevationSceneCfg(RobotSceneCfg):
-    """Scene with official velocity-env height_scanner (RayCaster + grid), 1.5×1.5 m @ 0.1 m.
+# Shared world space (same pattern as terrain prim_path="/World/ground").
+# Use AssetBaseCfg (scene ``_extras``), not RigidObjectCfg: a single /World prim has
+# num_instances=1 while scene.reset passes env_ids 0..num_envs-1, which breaks RigidObject buffers.
+_SEM_SMALL = "/World/semantic_map_small_cube"
+_SEM_BIG = "/World/semantic_map_big_cube"
 
-    ``height_scanner`` matches ``velocity_env_cfg.MySceneCfg.height_scanner`` except
-    ``pattern_cfg.size`` is ``[1.5, 1.5]`` (same footprint as former LiDAR height map).
-    """
+
+@configclass
+class TeacherElevationSemanticMapSceneCfg(RobotSceneCfg):
+    """Terrain (teacher_semantic style) + static cuboids + semantic grid ray caster."""
 
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
@@ -66,30 +70,55 @@ class TeacherElevationSceneCfg(RobotSceneCfg):
         debug_vis=False,
     )
 
-    # Same structure as isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg.MySceneCfg
-    height_scanner = RayCasterCfg(
+    static_obstacle_small: AssetBaseCfg = AssetBaseCfg(
+        prim_path=_SEM_SMALL,
+        spawn=sim_utils.CuboidCfg(
+            size=(0.12, 0.12, 0.22),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(1.4, 0.25, 0.14)),
+        collision_group=-1,
+    )
+
+    static_obstacle_big: AssetBaseCfg = AssetBaseCfg(
+        prim_path=_SEM_BIG,
+        spawn=sim_utils.CuboidCfg(
+            size=(0.45, 0.45, 0.55),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(2.2, -0.35, 0.32)),
+        collision_group=-1,
+    )
+
+    semantic_height_scanner: SemanticGridRayCasterCfg = SemanticGridRayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        offset=SemanticGridRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
         attach_yaw_only=True,
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.5, 1.5]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
+        debug_vis=True,
+        mesh_prim_paths=["/World/ground", _SEM_SMALL, _SEM_BIG],
+        mesh_semantic_ids={
+            "/World/ground": 0,
+            _SEM_SMALL: 1,
+            _SEM_BIG: 2,
+        },
+        height_scan_offset=0.5,
     )
 
 
 @configclass
-class ObservationsCfg:
-    """Observation specifications for teacher elevation (elevation map + state)."""
+class TeacherElevationSemanticMapObservationsCfg:
+    """Dual-channel grid (elevation + semantic) for actor/critic CNN stacks."""
 
     @configclass
-    class PolicyElevationMapCfg(ObsGroup):
-        """Elevation map observations for CNN."""
-
-        elevation_map = ObsTerm(
-            func=mdp.elevation_map_height_scan,
-            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
-            noise=Unoise(n_min=-0.1, n_max=0.1),
-            clip=(-1.0, 1.0),
+    class PolicyGridCfg(ObsGroup):
+        elevation_semantic = ObsTerm(
+            func=mdp.elevation_semantic_dual_map,
+            params={"sensor_cfg": SceneEntityCfg("semantic_height_scanner")},
         )
 
         def __post_init__(self):
@@ -98,8 +127,6 @@ class ObservationsCfg:
 
     @configclass
     class PolicyStateCfg(ObsGroup):
-        """State observations for MLP (aligned with teacher_semantic)."""
-
         base_ang_vel = ObsTerm(func=isaac_mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=isaac_mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos = ObsTerm(func=isaac_mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
@@ -115,14 +142,10 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     @configclass
-    class CriticElevationMapCfg(ObsGroup):
-        """Elevation map observations for critic CNN."""
-
-        elevation_map = ObsTerm(
-            func=mdp.elevation_map_height_scan,
-            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
-            noise=Unoise(n_min=-0.1, n_max=0.1),
-            clip=(-1.0, 1.0),
+    class CriticGridCfg(ObsGroup):
+        elevation_semantic = ObsTerm(
+            func=mdp.elevation_semantic_dual_map,
+            params={"sensor_cfg": SceneEntityCfg("semantic_height_scanner")},
         )
 
         def __post_init__(self):
@@ -131,8 +154,6 @@ class ObservationsCfg:
 
     @configclass
     class CriticStateCfg(ObsGroup):
-        """State observations for critic MLP (aligned with teacher_semantic)."""
-
         base_lin_vel = ObsTerm(func=isaac_mdp.base_lin_vel, noise=Unoise(n_min=-0.1, n_max=0.1))
         base_ang_vel = ObsTerm(func=isaac_mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=isaac_mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
@@ -148,50 +169,46 @@ class ObservationsCfg:
             self.enable_corruption = True
             self.concatenate_terms = True
 
-    policy_elevation_map: PolicyElevationMapCfg = PolicyElevationMapCfg()
+    policy_elevation_semantic_map: PolicyGridCfg = PolicyGridCfg()
     policy_state: PolicyStateCfg = PolicyStateCfg()
-    critic_elevation_map: CriticElevationMapCfg = CriticElevationMapCfg()
+    critic_elevation_semantic_map: CriticGridCfg = CriticGridCfg()
     critic_state: CriticStateCfg = CriticStateCfg()
 
 
 @configclass
-class TeacherElevationEnvCfg(TeacherWithoutSemanticEnvCfg):
-    """Teacher elevation: elevation map + CNN + PPO, inherits teacher_without_semantic."""
+class TeacherElevationSemanticMapEnvCfg(TeacherWithoutSemanticEnvCfg):
+    """Elevation + semantic grid teacher (Isaac native ray cast, no project LiDAR)."""
 
-    scene: TeacherElevationSceneCfg = TeacherElevationSceneCfg(num_envs=4096, env_spacing=2.5)
-    observations: ObservationsCfg = ObservationsCfg()
+    scene: TeacherElevationSemanticMapSceneCfg = TeacherElevationSemanticMapSceneCfg(num_envs=4096, env_spacing=2.5)
+    observations: TeacherElevationSemanticMapObservationsCfg = TeacherElevationSemanticMapObservationsCfg()
 
     def __post_init__(self):
         super().__post_init__()
-        if self.scene.height_scanner is not None:
-            self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        self.scene.semantic_height_scanner.update_period = self.decimation * self.sim.dt
 
 
 @configclass
-class TeacherElevationEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
-    """Play config for teacher elevation."""
+class TeacherElevationSemanticMapEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
+    """Play config for elevation + semantic grid."""
 
-    scene: TeacherElevationSceneCfg = TeacherElevationSceneCfg(num_envs=32, env_spacing=2.5)
-    observations: ObservationsCfg = ObservationsCfg()
-    
+    scene: TeacherElevationSemanticMapSceneCfg = TeacherElevationSemanticMapSceneCfg(num_envs=32, env_spacing=2.5)
+    observations: TeacherElevationSemanticMapObservationsCfg = TeacherElevationSemanticMapObservationsCfg()
+
     def __post_init__(self):
         super().__post_init__()
-        # Restore training terrain grid (parent PLAY uses 2×1 for fast debug)
         tg = self.scene.terrain.terrain_generator
         if tg is not None:
             tg.num_rows = SEMANTIC_TERRAIN_CFG.num_rows
             tg.num_cols = SEMANTIC_TERRAIN_CFG.num_cols
             tg.curriculum = SEMANTIC_TERRAIN_CFG.curriculum
-        # Play: constant velocity command +x = 1 m/s (no lateral / yaw)
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(1.0, 1.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0),
         )
-        self.observations.policy_elevation_map.enable_corruption = False
+        self.observations.policy_elevation_semantic_map.enable_corruption = False
         self.observations.policy_state.enable_corruption = False
-        self.observations.critic_elevation_map.enable_corruption = False
+        self.observations.critic_elevation_semantic_map.enable_corruption = False
         self.observations.critic_state.enable_corruption = False
-        if self.scene.height_scanner is not None:
-            self.scene.height_scanner.update_period = self.decimation * self.sim.dt
-        print("[TeacherElevationEnvCfg_PLAY] Play mode (elevation map)")
+        self.scene.semantic_height_scanner.update_period = self.decimation * self.sim.dt
+        print("[TeacherElevationSemanticMapEnvCfg_PLAY] Play mode (elevation + semantic grid)")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import torch
 from typing import TYPE_CHECKING, Dict
 
@@ -558,6 +559,53 @@ def elevation_map(
         )
     height_map = height_map.clamp(-1.0, 5.0)
     return height_map.unsqueeze(1)  # (num_envs, 1, H, W)
+
+
+def elevation_map_height_scan(
+    env: "ManagerBasedRLEnv",
+    sensor_cfg: SceneEntityCfg,
+    offset: float = 0.5,
+) -> torch.Tensor:
+    """Elevation grid from Isaac Lab ``RayCaster`` + :func:`isaaclab.envs.mdp.height_scan`.
+
+    Matches ``isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg`` height_scanner
+    pattern; reshape flat scan to ``(num_envs, 1, H, W)`` for :class:`ActorCriticCNN`.
+
+    Grid side length is ``sqrt(num_rays)`` (e.g. ``GridPatternCfg(resolution=0.1, size=[1.5, 1.5])``
+    → 16×16 rays in current Isaac Lab grid sampling).
+    """
+    flat = isaac_mdp.height_scan(env, sensor_cfg=sensor_cfg, offset=offset)
+    n_rays = flat.shape[1]
+    side = math.isqrt(n_rays)
+    if side * side != n_rays:
+        raise ValueError(f"height_scan length {n_rays} is not a perfect square (grid reshape failed)")
+    return flat.reshape(env.num_envs, 1, side, side)
+
+
+def elevation_semantic_dual_map(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    semantic_scale: float = 1.0,
+) -> torch.Tensor:
+    """Stack Isaac-style elevation grid and semantic class grid for a :class:`SemanticGridRayCaster`.
+
+    Channel 0: same construction as ``isaaclab.envs.mdp.height_scan`` (stored per cell by the sensor).
+    Channel 1: semantic id (0 terrain, 1 small, 2 big) times ``semantic_scale`` (default 1.0 keeps raw ids).
+
+    Returns:
+        Tensor of shape ``(num_envs, 2, H, W)`` for :class:`ActorCriticCNN` with ``cost_map_channels=2``.
+    """
+    from go2_pvcnn.sensor.semantic_raycaster.semantic_ray_caster import SemanticGridRayCaster
+
+    sensor = env.scene.sensors[sensor_cfg.name]
+    if not isinstance(sensor, SemanticGridRayCaster):
+        raise TypeError(f"Expected SemanticGridRayCaster at {sensor_cfg.name!r}, got {type(sensor).__name__}")
+    data = sensor.data
+    if data.elevation_map is None or data.semantic_map is None:
+        raise RuntimeError("SemanticGridRayCaster elevation_map/semantic_map not initialized.")
+    elev = data.elevation_map.clamp(-1.0, 5.0)
+    sem = data.semantic_map * semantic_scale
+    return torch.stack([elev, sem], dim=1)
 
 
 def teacher_semantic_cost_map(
