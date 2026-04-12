@@ -84,7 +84,17 @@ go2_pvcnn/tasks/
 
 ## 2. 核心算法（忠实移植）
 
-核心原则：**逻辑不动，只加 batch 维**。raw 的每一步——螺旋搜索顺序、候选迭代顺序、scoring 公式、EMA 系数、Raibert 公式、body clearance 采样——全部保持一致。
+核心原则：**逻辑不动，只加 batch 维**。raw 的每一步——螺旋搜索顺序、候选迭代顺序、scoring 公式、EMA 系数、Raibert 公式、body clearance 采样——全部保持一致。所有 raw 中的 Python `if/else` 分支在 batched 版本中改为 `torch.where` / mask 操作，不使用 per-env Python 分支。
+
+### 2.0 关键对齐约束
+
+以下 raw 行为必须在 batched 版本中精确复现：
+
+- **Horizon 截断**：raw 将 `n_frames` 截断为一个步态周期 `min(requested_n_frames, max(1, round(1/(step_freq*dt))))`。batched 版本必须执行相同截断，`BatchedTrajectoryManager` 的 `gather_at_phase` 使用 cache 中的实际 `T`，而非 config 的 `horizon`。
+- **两个 standstill 阈值**：raw 用 `_STANDSTILL_CMD_EPS`（硬编码 1e-5）做初始 command 检测，用 `cfg.replan_stop_speed` 做候选跳过和赢家检测。batched 版本保留两个独立阈值。
+- **`stance_time` 和 `legs_requiring_touchdown`**：raw 用 `gait.stance_time(step_freq, duty_factor)` 传给 `compute_footholds`，用 `legs_requiring_touchdown(contact_seq)` 生成 `touchdown_mask` 传给 `evaluate_touchdown_set`。batched 版本在 `gait.py` 中提供 `batched_stance_time` 和 `batched_legs_requiring_touchdown`。
+- **Raibert 中的 `_predict_planar_base_xy`**：当 `|yaw_rate| < 1e-9` 时走直线公式，否则走圆弧公式。batched 版本用 `torch.where(abs(yaw_rate) < 1e-9, straight, arc)` 实现无分支。
+- **不在 `generate_trajectory` 路径上的 raw 文件**：`support_patches.py`、`traces.py` 不在主链中，不做移植。
 
 ### 2.1 `convention.py`
 
@@ -113,20 +123,38 @@ class BatchedTerrain:
     @classmethod
     def from_ray_hits(cls, ray_hits_w, root_pos, root_quat, grid_size, resolution):
         """从 Isaac Lab ray caster 输出构建 batched 高程图。
-        (N, num_rays, 3) → reshape (N, H, W, 3) → 取 z → (N, 1, H, W)。"""
+        (N, num_rays, 3) → reshape (N, H, W, 3) → 取 z → (N, 1, H, W)。
+        
+        坐标约定：
+        - Isaac RayCaster GridPattern 按 (row, col) = (y, x) 排列
+        - H 轴对应世界 y（前后），W 轴对应世界 x（左右）
+        - F.grid_sample 的 normalized coords: (-1,-1) = 左上 = (min_x, min_y)
+        - origins_xy = root_pos[:, :2]（高程图中心跟随机器人）
+        - yaw 用于把世界坐标查询点旋转到 grid-aligned frame
+        
+        必须与当前 extension/planner/adapters/isaac_heightmap.py 的
+        LocalGridTerrain.from_world_ray_hits 语义对齐，作为回归基准。"""
 
     def height_at(self, xy: Tensor) -> Tensor:
         """(N, M, 2) 世界坐标 → (N, M) 高度值，F.grid_sample 双线性插值。"""
 
     def roughness_at(self, xy: Tensor) -> Tensor:
-        """(N, M, 2) → (N, M) 粗糙度，Sobel 梯度幅值。"""
+        """(N, M, 2) → (N, M) 粗糙度。
+        与 raw 一致：4-neighbor central differences（上下左右各偏移一个 cell），
+        dzdx = (h_right - h_left) / (2*res), dzdy = (h_up - h_down) / (2*res),
+        roughness = hypot(dzdx, dzdy)。
+        实现：对 (N,1,H,W) 用固定 3x3 卷积核（非 Sobel，而是 raw 的中心差分等价核），
+        得到梯度场后在查询点处插值。"""
 
-    def max_height_along_segment(self, p0, p1, n_samples=8) -> Tensor:
+    def max_height_along_segment(self, p0, p1) -> Tensor:
         """(N, 4, 2), (N, 4, 2) → (N, 4) 线段最大高度。
-        p0→p1 间均匀采 n_samples 点，取 max(height_at(...))。"""
+        与 raw 一致：采样数 = max(3, ceil(||p1-p0|| / cell_step) * 4 + 1)（per-segment 自适应），
+        在 p0→p1 间均匀采样后取 max(height_at(...))。
+        batched 实现：计算所有 (N, 4) 条线段的采样数，取 max 作为统一 S，
+        短线段用 clamp 重复末端点，保证 shape 对齐。"""
 ```
 
-`roughness_at` 用 `F.conv2d` Sobel kernel 在 `(N,1,H,W)` 上算梯度幅值，与 raw 用高程差近似斜率语义一致。
+`roughness_at` 使用与 raw `_metric_slope_magnitude` / `_slope_magnitude` 相同的 4-neighbor 中心差分，不使用 Sobel 核，确保数值一致。
 
 ### 2.3 `gait.py`
 
@@ -140,6 +168,16 @@ def batched_gait_schedule(n_frames, dt, step_freq, duty_factor, phase_offsets) -
 
 def batched_next_touchdown_times(step_freq, phase_offsets) -> Tensor:
     """(N,) → (N, 4) 每条腿距下次触地的时间。"""
+
+def batched_stance_time(step_freq, duty_factor) -> Tensor:
+    """(N,) → (N,) stance duration。与 raw gait.stance_time 一致。"""
+
+def batched_detect_swing_events(contact_seq) -> dict:
+    """(N, T, 4) → {'lift_off': (N, 4) frame indices, 'touch_down': (N, 4) frame indices}。
+    用 diff + threshold 检测接触状态变化，与 raw gait.detect_swing_events 一致。"""
+
+def batched_legs_requiring_touchdown(contact_seq) -> Tensor:
+    """(N, T, 4) → (N, 4) bool，哪些腿在当前段需要着地。"""
 ```
 
 ### 2.4 `foothold.py` — 保留螺旋搜索
@@ -194,11 +232,22 @@ def batched_compute_swing_targets(contact_seq, lift_off_pos, touchdown_pos,
 ### 2.6 `terrain_estimator.py`
 
 ```python
-def batched_estimate_terrain(foot_positions, base_positions, base_yaw, alpha=0.05):
-    """(N, T, 4, 3) → roll (N,T), pitch (N,T), height (N,T)。
-    raw values 计算全 batch 向量化。
-    EMA 滤波：time 维串行循环（T ≤ 50），每步 N 个环境并行。
-    数值与 raw 完全一致。"""
+def batched_estimate_terrain(
+    foot_positions: Tensor,    # (N, T, 4, 3)
+    base_positions: Tensor,    # (N, T, 3)
+    base_yaw: Tensor,          # (N, T) — per-frame yaw from integrate_base_planar
+    alpha: float = 0.05,
+    initial_roll: Tensor = None,    # (N,) — 从 initial state 取，default 0
+    initial_pitch: Tensor = None,   # (N,) — 同上
+    initial_height: Tensor = None,  # (N,) — 同上，default = mean(foot_z[0])
+) -> tuple[Tensor, Tensor, Tensor]:  # roll (N,T), pitch (N,T), height (N,T)
+    """与 raw estimate_terrain_batch 完全一致：
+    1. rel = foot_positions - base_positions[:, :, None, :]
+    2. 在 yaw-horizontal frame 下算 pitch_raw/roll_raw（atan2）
+    3. EMA: time 维串行循环（T ≤ 50），每步 N 个环境并行
+       state[t] = (1-alpha) * state[t-1] + alpha * raw[t]
+       state[0] 初始化为 initial_roll/pitch/height
+    4. height: 0.8 * mean(foot_z[t]) + 0.2 * height_prev"""
 ```
 
 ### 2.7 `base_solver.py`
@@ -221,27 +270,58 @@ raw IK/FK 已在 time 维向量化。改为 `(N, T, 4, ...)` tensor 操作，用
 ### 2.9 `trajectory.py` — 主入口
 
 ```python
-def batched_generate_trajectory(terrain, states, commands, n_frames, dt, cfg):
-    """完全复刻 raw generate_trajectory 的 10 步流程：
-    1. standstill mask: |cmd| < eps → (N,) bool
-    2. gait_schedule → (N, T, 4)
-    3. hip positions（HIP_OFFSETS 常量 tensor）
+def batched_generate_trajectory(terrain, states, commands, requested_n_frames, dt, cfg):
+    """完全复刻 raw generate_trajectory 流程：
+
+    0. Horizon 截断: cycle_frames = max(1, round(1/(step_freq*dt))),
+       n_frames = min(requested_n_frames, cycle_frames) — 与 raw 一致
+    1. standstill mask: |cmd| < _STANDSTILL_CMD_EPS → (N,) bool
+    2. gait_schedule → (N, T, 4) contact_seq; detect_swing_events → liftoff/touchdown frames
+       batched_stance_time, batched_legs_requiring_touchdown → touchdown_mask (N, 4)
+    3. hip positions from initial base + HIP_OFFSETS 常量 tensor
+       liftoff positions from initial foot_pos
     4. 候选搜索:
        a. generate_replan_candidates → (N, K, 3)
-       b. expand → (N*K, ...)
-       c. batched_compute_footholds → (N*K, 4, 3)
-       d. batched_evaluate_touchdowns → (N*K,)
-       e. batched_candidate_total_score → (N, K)
-       f. per-env argmin → best_command, best_footholds
-       g. 全部 infeasible → merge standstill mask
-       h. best_cmd is standstill → merge standstill mask
-    5. max_height_along_segment → (N, 4)
-    6. compute_swing_targets → (N, T, 4, 3)
-    7. integrate_base_planar → estimate_terrain
-    8. solve_base_trajectory
-    9. batch IK/FK
-    10. torch.where(standstill_mask, standstill_result, motion_result)"""
+       b. 跳过 standstill 候选: |candidate| < cfg.replan_stop_speed → mask out
+       c. expand states → (N*K, ...)
+       d. batched_compute_footholds → (N*K, 4, 3)
+       e. batched_evaluate_touchdowns → feasible (N*K,), td_score (N*K,)
+       f. batched_candidate_total_score → total_score (N, K)
+       g. infeasible 候选 score = inf
+       h. per-env argmin → best_command (N, 3), best_footholds (N, 4, 3)
+       i. 全部 infeasible → merge 进 standstill mask
+       j. best_cmd is standstill (< cfg.replan_stop_speed) → merge 进 standstill mask
+    5. terrain.max_height_along_segment(liftoff_xy, touchdown_xy) → (N, 4)
+    6. batched_compute_swing_targets → foot_targets (N, T, 4, 3)
+    7. batched_integrate_base_planar → pos_xy_approx (N, T, 2), yaw_approx (N, T)
+       batched_estimate_terrain(foot_targets, base_approx, yaw_approx, initial_*) → roll, pitch, height
+    8. batched_solve_base_trajectory → root_pos (N, T, 3), root_quat (N, T, 4)
+    9. batched_inverse_kinematics → joint_angles (N, T, 12)
+       batched_forward_kinematics → body_links (N, T, 12, 3) world
+       batch_body_pos_root_relative → body_pos_root (N, T, 12, 3)
+       foot_pos_root = body_pos_root[:, :, 8:12, :]  (feet are links 8-11)
+    10. finite-diff velocities:
+        root_lin_vel_w = diff(root_pos) / dt
+        root_ang_vel_w = [roll_rate, pitch_rate, yaw_rate] from diff + constant yaw_rate
+    11. 组装 BatchedTrajectoryResult（包含所有 raw TrajectoryResult 字段）
+    12. torch.where(standstill_mask, _batched_standstill_trajectory, motion_result)
+    """
 ```
+
+**`BatchedTrajectoryResult` 完整字段**（与 raw `TrajectoryResult` 一一对应）：
+
+| 字段 | shape | 说明 |
+|------|-------|------|
+| `root_pos_w` | `(N, T, 3)` | 世界坐标根位置 |
+| `root_quat_w` | `(N, T, 4)` | 世界坐标根四元数（wxyz） |
+| `root_lin_vel_w` | `(N, T, 3)` | 根线速度 |
+| `root_ang_vel_w` | `(N, T, 3)` | 根角速度 |
+| `joint_angles` | `(N, T, 12)` | 关节角 |
+| `foot_pos_w` | `(N, T, 4, 3)` | 世界坐标足端位置 |
+| `foot_pos_root` | `(N, T, 4, 3)` | 根坐标系足端位置 |
+| `contact_state` | `(N, T, 4)` | 接触状态 0/1 |
+| `body_pos_root` | `(N, T, 12, 3)` | 根坐标系 body link 位置 |
+| `planned_touchdown_w` | `(N, 4, 3)` | 规划落脚点世界坐标 |
 
 ## 3. Isaac Lab 集成
 
@@ -276,6 +356,8 @@ class BatchedTrajectoryManager:
 
 env reset 时不触发额外 replan，只重置 `phase_counter`。下次固定间隔到来时统一 replan。
 
+**与旧 runtime 的行为差异**：`human-10-extension-planner-runtime.md` 列出了 4 种 replan 触发条件（reset、horizon 末尾、command 变化、状态偏离）。新方案简化为仅固定间隔触发。这是有意为之——GPU 上 replan 足够快（毫秒级），不需要精细的按需触发来节省 CPU 时间。实现者不应"恢复"旧的按需触发逻辑。
+
 ### 3.2 Env Config
 
 迁移到 `go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py`：
@@ -291,21 +373,23 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     reference_trajectory_horizon: int = 50
     reference_replan_interval_steps: int = 250
 
-    # 候选搜索（与 raw TrajectoryConfig 对齐）
+    # 候选搜索（teacher 覆盖值；raw 默认值可能不同，以此处为准）
     replan_velocity_scales: list[float] = [1.0, 0.8, 0.6]
     replan_yaw_biases: list[float] = [0.0, 0.15, -0.15]
     replan_vy_biases: list[float] = [0.0, 0.05, -0.05]
+    replan_stop_speed: float = 0.05  # 候选 standstill 检测阈值（raw cfg 同名字段）
 
-    # 步态
+    # 步态（teacher 覆盖值）
     gait_name: str = "trot"
     step_freq: float = 2.0
     duty_factor: float = 0.6
     step_height: float = 0.08
 
-    # 落脚点搜索
+    # 落脚点搜索（teacher 覆盖值）
     foothold_search_radius: float = 0.15
     foothold_search_step: float = 0.03
     max_step_down: float = float("inf")
+    max_roughness: float = 0.5  # 螺旋搜索粗糙度阈值
 
     def __post_init__(self):
         super().__post_init__()
