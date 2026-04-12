@@ -312,6 +312,7 @@ def batched_generate_trajectory(terrain, states, commands, requested_n_frames, d
 
 | 字段 | shape | 说明 |
 |------|-------|------|
+| `num_frames` | `int` | 实际帧数 T（经 horizon 截断后），**不是** config 的 `reference_trajectory_horizon` |
 | `root_pos_w` | `(N, T, 3)` | 世界坐标根位置 |
 | `root_quat_w` | `(N, T, 4)` | 世界坐标根四元数（wxyz） |
 | `root_lin_vel_w` | `(N, T, 3)` | 根线速度 |
@@ -322,6 +323,8 @@ def batched_generate_trajectory(terrain, states, commands, requested_n_frames, d
 | `contact_state` | `(N, T, 4)` | 接触状态 0/1 |
 | `body_pos_root` | `(N, T, 12, 3)` | 根坐标系 body link 位置 |
 | `planned_touchdown_w` | `(N, 4, 3)` | 规划落脚点世界坐标 |
+
+**Body link 顺序**（与 raw `batch_forward_kinematics` 输出一致）：indices 0-3 = hips (FL, FR, RL, RR)，4-7 = knees，8-11 = feet。`foot_pos_root` / `foot_pos_w` 中的 4 条腿顺序为 FL=0, FR=1, RL=2, RR=3，必须与 raw `types.py` 的 `LEG_ORDER` 对齐。
 
 ## 3. Isaac Lab 集成
 
@@ -350,11 +353,11 @@ class BatchedTrajectoryManager:
 
     def current_reference(self) -> dict[str, Tensor]:
         """返回当前 phase 对应的参考帧。phase 超出 horizon 时 clamp。"""
-        idx = self._phase_counter.clamp(max=self._cache.horizon - 1)
+        idx = self._phase_counter.clamp(max=self._cache.num_frames - 1)
         return self._cache.gather_at_phase(idx)
 ```
 
-env reset 时不触发额外 replan，只重置 `phase_counter`。下次固定间隔到来时统一 replan。
+env reset 时不触发额外 replan，只重置该环境的 `phase_counter`。`_step_counter` 是**全局**的（不随单个 env reset 重置），控制全量 replan 的节奏。下次固定间隔到来时统一 replan。
 
 **与旧 runtime 的行为差异**：`human-10-extension-planner-runtime.md` 列出了 4 种 replan 触发条件（reset、horizon 末尾、command 变化、状态偏离）。新方案简化为仅固定间隔触发。这是有意为之——GPU 上 replan 足够快（毫秒级），不需要精细的按需触发来节省 CPU 时间。实现者不应"恢复"旧的按需触发逻辑。
 
