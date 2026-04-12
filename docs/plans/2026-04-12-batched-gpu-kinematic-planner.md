@@ -12,6 +12,8 @@
 
 **Conda envs:** `mujoco_env` for tests involving raw go2fp imports; `env_isaaclab` for Isaac Lab integration tests.
 
+**PYTHONPATH:** Tests import `extension.*` and `go2_pvcnn.*`. All test commands assume `cwd = Go2Pvcnn/` which must be on `PYTHONPATH`. If not already configured by `pyproject.toml` or `conftest.py`, prepend: `PYTHONPATH=/home/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:$PYTHONPATH` before pytest commands.
+
 ---
 
 ## File Structure
@@ -154,6 +156,24 @@ def extract_roll_pitch_batch(quat_wxyz: Tensor) -> tuple[Tensor, Tensor]:
     pitch = torch.asin(sinp)
     return roll, pitch
 
+def isaac_state_to_planner_state(
+    root_pos: Tensor, root_quat_xyzw: Tensor, joint_pos: Tensor, foot_pos: Tensor,
+) -> "BatchedRobotState":
+    """Convert Isaac Lab state tensors to planner's BatchedRobotState (wxyz quat)."""
+    from extension.batched_planner.types import BatchedRobotState
+    return BatchedRobotState(
+        root_pos=root_pos,
+        root_quat=quat_xyzw_to_wxyz(root_quat_xyzw),
+        joint_angles=joint_pos,
+        foot_pos=foot_pos,
+    )
+
+def planner_result_to_reference_cache(result: "BatchedTrajectoryResult") -> dict:
+    """Convert BatchedTrajectoryResult to the dict format consumed by rewards_reference.py."""
+    return result.gather_at_phase(
+        torch.zeros(result.root_pos_w.shape[0], dtype=torch.long, device=result.root_pos_w.device)
+    )
+
 def euler_to_quat_batch(roll: Tensor, pitch: Tensor, yaw: Tensor) -> Tensor:
     """(...,) roll, pitch, yaw → (..., 4) wxyz quaternion (ZYX convention)."""
     cr, sr = torch.cos(roll * 0.5), torch.sin(roll * 0.5)
@@ -273,7 +293,7 @@ class BatchedTrajectoryConfig:
     foothold_search_radius: float = 0.15
     foothold_search_step: float = 0.03
     max_foothold_step_down: float = float("inf")
-    max_roughness: float = 1.0
+    max_roughness: float = 0.5  # teacher override; raw default is 1.0
     max_touchdown_xy_reach: float = 0.15
     replan_stop_speed: float = 0.05
     replan_velocity_scales: list[float] = field(default_factory=lambda: [1.0, 0.8, 0.6])
@@ -286,9 +306,9 @@ class BatchedTrajectoryConfig:
 Run: `cd /home/lhy/testPvcnnWithIsaacsim/Go2Pvcnn && conda run -n mujoco_env python -m pytest tests/test_batched_convention.py -v`
 Expected: 3 passed
 
-- [ ] **Step 5: Verify types.py constants match raw**
+- [ ] **Step 5: Verify types.py constants match raw and test convention bridges**
 
-Write a quick check in the test that `HIP_OFFSETS_ARRAY` values match raw:
+Add tests for `HIP_OFFSETS_ARRAY`, `isaac_state_to_planner_state`, `planner_result_to_reference_cache`:
 ```python
 def test_hip_offsets_match_raw(self):
     from extension.batched_planner.types import HIP_OFFSETS_ARRAY
@@ -300,10 +320,19 @@ def test_hip_offsets_match_raw(self):
     from scripts.go2fp.types import HIP_OFFSETS_ARRAY as RAW_HIP_OFFSETS
     import numpy as np
     np.testing.assert_allclose(HIP_OFFSETS_ARRAY.numpy(), RAW_HIP_OFFSETS, atol=1e-6)
+
+def test_isaac_state_to_planner_state(self):
+    from extension.convention import isaac_state_to_planner_state
+    pos = torch.zeros(2, 3)
+    quat_xyzw = torch.tensor([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]])
+    joints = torch.zeros(2, 12)
+    feet = torch.zeros(2, 4, 3)
+    state = isaac_state_to_planner_state(pos, quat_xyzw, joints, feet)
+    self.assertAlmostEqual(state.root_quat[0, 0].item(), 1.0, places=5)  # w first in wxyz
 ```
 
 Run: same pytest command
-Expected: 4 passed
+Expected: 5+ passed
 
 - [ ] **Step 6: Commit**
 
@@ -578,15 +607,19 @@ git commit -m "feat: add batched swing target computation"
 
 Reference: `raw/kinematic_footsteps/scripts/go2fp/trajectory.py`
 
-- [ ] **Step 1: Write failing test for standstill**
+- [ ] **Step 1: Write failing tests for standstill and horizon truncation**
 
-Test that zero command produces standstill trajectory matching raw.
+Test cases:
+- `test_standstill_zero_command`: zero command → all-stance trajectory, N=1 matches raw
+- `test_standstill_below_stop_speed`: command with |v| < `replan_stop_speed` but > `_STANDSTILL_CMD_EPS` → should enter candidate loop, all candidates filtered, fallback to standstill
+- `test_horizon_truncation`: `requested_n_frames=100`, `step_freq=2.0`, `dt=0.02` → `cycle_frames=25`, actual T should be 25, not 100
+- `test_dual_standstill_thresholds`: verify `_STANDSTILL_CMD_EPS` (1e-5) and `cfg.replan_stop_speed` (0.05) are applied at the correct points
 
 - [ ] **Step 2: Run to verify failure**
 
-- [ ] **Step 3: Implement `batched_generate_trajectory` with standstill handling**
+- [ ] **Step 3: Implement `batched_generate_trajectory` with standstill handling and horizon truncation**
 
-Wire all modules: horizon clamp, gait schedule, candidate expansion `(N*K,...)`, foothold search, swing, terrain estimator, base solver, IK/FK, velocities, standstill merge with `torch.where`.
+Wire all modules: horizon clamp (`min(requested, cycle_frames)`), gait schedule, candidate expansion `(N*K,...)`, foothold search (skip standstill candidates), swing, terrain estimator, base solver, IK/FK, velocities, standstill merge with `torch.where`.
 
 - [ ] **Step 4: Run test to verify pass**
 
@@ -624,19 +657,44 @@ git commit -m "feat: add batched_generate_trajectory main entry with end-to-end 
 - Modify: `Go2Pvcnn/extension/mdp/rewards_reference.py`
 - Modify: `Go2Pvcnn/extension/__init__.py`
 
-- [ ] **Step 1: Implement BatchedTrajectoryManager**
+- [ ] **Step 1: Write failing test for BatchedTrajectoryManager**
+
+```python
+# Go2Pvcnn/tests/test_batched_manager.py
+class TestBatchedTrajectoryManager(unittest.TestCase):
+    def test_replan_at_interval(self):
+        """Verify replan fires at step 0, interval, 2*interval, etc."""
+        ...
+    def test_phase_counter_advances(self):
+        """Verify phase_counter increments each step, clamps at num_frames-1."""
+        ...
+    def test_reset_resets_phase_only(self):
+        """Env reset resets phase_counter but not _step_counter."""
+        ...
+    def test_current_reference_shape(self):
+        """Output dict has correct keys and shapes."""
+        ...
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+- [ ] **Step 3: Implement BatchedTrajectoryManager**
 
 ```python
 # Go2Pvcnn/extension/batched_planner/manager.py
 class BatchedTrajectoryManager:
-    def __init__(self, cfg, num_envs, device): ...
+    def __init__(self, cfg, device): ...  # num_envs inferred from first step() call
     def step(self, terrain, states, commands): ...
     def current_reference(self) -> dict[str, Tensor]: ...
+    def reset_envs(self, env_mask: Tensor): ...  # reset phase_counter for masked envs
 ```
 
-Fixed interval global replan, `_step_counter` global, `_phase_counter` per-env.
+Fixed interval global replan, `_step_counter` global (not per-env), `_phase_counter` per-env.
+Writes to `env.unwrapped._trajectory_reference_cache` on each `step()`.
 
-- [ ] **Step 2: Move and rewrite env config**
+- [ ] **Step 4: Run test to verify pass**
+
+- [ ] **Step 5: Move and rewrite env config**
 
 Move `extension/tasks/teacher_elevation_trajectory_env_cfg.py` → `go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py`. Remove EventTerm registrations, add batched planner config fields.
 
@@ -689,9 +747,10 @@ root_pos     max_err: X.Xe-XX  PASS (< 1e-5)
 - [ ] **Step 3: Remove old extension code**
 
 ```bash
+cd /home/lhy/testPvcnnWithIsaacsim
 rm -rf Go2Pvcnn/extension/planner/
 rm -rf Go2Pvcnn/extension/tasks/
-rm Go2Pvcnn/extension/mdp/reference_trajectory_events.py
+rm -f Go2Pvcnn/extension/mdp/reference_trajectory_events.py
 ```
 
 - [ ] **Step 4: Run all tests to verify nothing broke**
@@ -717,16 +776,19 @@ git commit -m "feat: add comparison tool, remove old extension planner code"
 - Modify: `notes/human/human-09-extension-planner-mapping.md`
 - Modify: `notes/human/human-10-extension-planner-runtime.md`
 - Modify: `notes/human/human-11-extension-trajectory-reward.md`
+- Modify: `notes/ai/ai-09-extension-planner-mapping.md`
+- Modify: `notes/ai/ai-10-extension-planner-runtime.md`
+- Modify: `notes/ai/ai-11-extension-trajectory-reward.md`
 
-- [ ] **Step 1: Update human-09 mapping document**
+- [ ] **Step 1: Update human-09 and ai-09 mapping documents**
 
-Replace the old module mapping table with `raw ↔ batched_planner` mapping.
+Replace the old module mapping table with `raw ↔ batched_planner` mapping. Keep human/ai pair synchronized.
 
-- [ ] **Step 2: Update human-10 runtime document**
+- [ ] **Step 2: Update human-10 and ai-10 runtime documents**
 
 Replace process pool / EventTerm description with `BatchedTrajectoryManager` GPU description.
 
-- [ ] **Step 3: Update human-11 trajectory reward document**
+- [ ] **Step 3: Update human-11 and ai-11 trajectory reward documents**
 
 Remove "raw 参考重规划与并行" section, add note about fixed-interval GPU replan.
 
@@ -734,7 +796,7 @@ Remove "raw 参考重规划与并行" section, add note about fixed-interval GPU
 
 ```bash
 git add notes/
-git commit -m "docs: update planner notes for batched GPU architecture"
+git commit -m "docs: update planner notes (human + ai pairs) for batched GPU architecture"
 ```
 
 ---
