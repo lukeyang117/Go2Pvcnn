@@ -135,6 +135,14 @@ Planned changes:
 - formalize accepted terrain query shapes
 - remove assumptions that only work for tests or standstill branches
 - align motion-branch logic to raw behavior where tests show drift
+- remove or replace the current `batch_size > 1` recursive fallback so the
+  training path remains viable at large env counts
+
+Performance constraint:
+
+- the shared train-time planner path must be designed for `num_envs=4096`
+  teacher runs and must not rely on a Python-level per-env recursion loop as
+  the normal execution path
 
 ### 2. Planner boundary adapter
 
@@ -148,13 +156,45 @@ Responsibilities:
   object expected by the core planner
 - guarantee shape, device, and dtype consistency
 
+Canonical boundary contract:
+
+- input robot state arrives batched as `(N, ...)`
+- input scanner ray hits arrive batched per env from Isaac Lab as `(N, R, 3)` or
+  `(N, H, W, 3)` depending on scanner layout
+- invalid hits (`nan`/`inf`) must be filtered in a deterministic way
+- terrain query world ranges must be derived by one canonical rule shared by
+  train and viewer
+- single-terrain and multi-terrain query semantics must be explicit rather than
+  inferred by caller-specific adapters
+- the planner boundary must define exactly what shapes are accepted by:
+  - `height_at`
+  - `roughness_at`
+  - `max_height_along_segment`
+
+Formal input object decision:
+
+- the only external terrain input accepted by planner entry points must be a
+  planner-owned `PlannerTerrain` object
+- internal tensor storage may remain implementation-defined, but train and
+  viewer must not pass raw heightmap tensors directly into planner entry points
+- `PlannerTerrain` is the formal ABI for terrain input to
+  `batched_generate_trajectory(...)`
+
+Ownership decision:
+
+- this adapter must live in planner-owned code and be imported by both train and
+  viewer
+- viewer-local terrain adapters are not allowed in the final design
+- training-local terrain adapters are not allowed in the final design
+
 This can live either in:
 
 - `extension/batched_planner/terrain.py` and related planner helpers, or
 - a small planner-owned adapter module beside the planner package
 
 The important design rule is ownership: training and viewer both call the same
-boundary implementation.
+boundary implementation, and that implementation defines the only accepted
+terrain-query contract.
 
 ### 3. Training integration
 
@@ -172,6 +212,15 @@ Responsibilities:
 - ensure `teacher_elevation_trajectory` always populates reference cache from
   batched planner output
 
+Training-side ownership:
+
+- a planner-owned runtime manager must own trajectory-cache build/update for
+  training
+- reward code must consume an already-managed cache rather than lazily inventing
+  a placeholder when the cache is missing
+- the design must define where this manager is called in the env lifecycle
+  relative to reset, step, and replanning cadence
+
 Design decision:
 
 - `scripts/train.py` must delete the `--use-raw-reference-trajectory` CLI
@@ -180,6 +229,25 @@ Design decision:
   `teacher_elevation_trajectory`
 - if the batched planner cannot be built, training should fail clearly rather
   than silently substituting placeholder drift
+
+Reference-cache lifecycle requirements:
+
+- cache build must happen on first valid trajectory step of each env
+- cache rebuild must happen on env reset
+- cache rebuild must happen when the planner replan interval is reached
+- cache invalidation rules must explicitly handle terrain changes and command
+  changes
+- the spec implementation must state whether command changes trigger immediate
+  replanning or only interval-based replanning, and that same rule must be used
+  by training and viewer
+
+Resolved replan policy:
+
+- command changes trigger immediate replanning
+- env reset triggers immediate replanning
+- interval-based replanning remains in place as a fallback cadence even without
+  command changes
+- training and viewer must share this exact policy
 
 ### 4. Viewer integration
 
@@ -221,10 +289,23 @@ will still be documented.
 ### Training
 
 1. Isaac Lab env produces robot state and `height_scanner` data.
-2. Shared planner boundary converts these into planner inputs.
-3. `batched_planner` generates the trajectory batch.
-4. The result is converted into the reference cache format.
-5. Reference-tracking rewards consume that cache.
+2. A planner-owned runtime manager receives state, scanner data, and current
+   commands.
+3. Shared planner boundary converts these into planner inputs.
+4. `batched_planner` generates the trajectory batch on the configured replanning
+   cadence.
+5. The result is converted into the reference cache format and stored on the env
+   runtime state.
+6. Reference-tracking rewards consume that managed cache.
+
+Training cadence requirement:
+
+- the design must explicitly preserve or replace
+  `reference_replan_interval_steps`
+- the same cadence must govern cache refresh in train and expected phase advance
+  semantics in viewer comparisons
+- the chosen policy is: immediate replan on reset, immediate replan on command
+  change, otherwise interval-based replan on the configured cadence
 
 ### Viewer
 
@@ -240,6 +321,14 @@ will still be documented.
 For aligned test cases, the same logical state, command, and terrain queries are
 fed to `raw` and `batched_planner`, then compared numerically.
 
+Parity rule:
+
+- candidate enumeration order must be deterministic
+- candidate tie-break behavior must be specified explicitly
+- stop-speed boundary behavior must be checked explicitly
+- parity is not considered sufficient unless near-tie candidate cases are
+  included in fixtures
+
 ## Error Handling
 
 ### Hard failures
@@ -250,6 +339,7 @@ Training should fail loudly when:
 - terrain query data is invalid
 - reference cache generation fails
 - viewer/training inputs violate planner contract
+- planner output/device normalization is violated
 
 This is preferable to falling back to placeholder drift in a trajectory
 experiment.
@@ -276,6 +366,8 @@ Extend or add tests that compare `batched_planner` against `raw` for:
 - turning motion
 - lateral motion
 - representative stair-like local terrain queries
+- representative near-tie replanning cases
+- reset-and-replan lifecycle cases
 
 Compare at minimum:
 
@@ -284,6 +376,15 @@ Compare at minimum:
 - `foot_pos_w`
 - `contact_state`
 - `planned_touchdown_w`
+- effective replanning command choice when multiple candidates are close
+
+Raw reproduction checks:
+
+- keep a dedicated check for “does batched reproduce raw behavior” separate from
+  generic planner contract tests
+- include deterministic fixture inputs for raw-comparison runs
+- include terrain-boundary outputs in the oracle for at least selected fixtures
+  so parity is not judged only by final trajectory tensors
 
 ### Contract tests
 
@@ -294,14 +395,56 @@ Add planner boundary tests for:
 - single-env and multi-env parity
 - single-terrain multi-query semantics
 - body-clearance terrain sampling behavior
+- output cache dtype/device normalization
+- invalid-ray handling
+- canonical world-range derivation from scanner hits
+
+Formal contract rules to validate:
+
+- planner internal math may use a chosen canonical dtype, but output dtype/device
+  normalization must be explicit
+- reference cache dtype/device must be explicitly defined
+- viewer visualization casts must happen only after planner outputs leave the
+  shared runtime path
+- the shared runtime path must avoid accidental `.item()`, CPU materialization,
+  or Python loops that introduce hidden GPU/CPU synchronization
+
+ABI decisions to validate:
+
+- planner entry points accept `PlannerTerrain`, planner state tensors, and
+  command tensors as the only formal runtime inputs
+- planner outputs must preserve a single explicit runtime device rule and a
+  single explicit normalized dtype rule before cache conversion
+- reference cache layout and placement must be explicitly defined rather than
+  inferred from caller behavior
+
+### Performance checks
+
+Add explicit training-efficiency checks for:
+
+- planner invocation cost at realistic env counts
+- whether `batch_size > 1` still falls back to per-env recursion
+- whether terrain-query conversion introduces Python loops on the hot path
+- whether cache rebuild cadence is amortized rather than recomputed every step
+
+Minimum efficiency acceptance:
+
+- no normal `teacher_elevation_trajectory` training run should rely on a
+  Python-level per-env planner recursion path at `num_envs=4096`
+- the implementation must include at least one measured or asserted check that
+  the shared runtime path scales beyond `num_envs=1`
 
 ### Runtime smoke tests
 
 After implementation:
 
 - run minimal `train.py --headless --num_envs 1 --max_iterations 1 --experiment teacher_elevation_trajectory`
+- run a larger train-side smoke/perf check at a higher env count chosen to
+  expose recursion or synchronization problems
 - run viewer with livestream-compatible startup
 - confirm viewer motion branch no longer crashes under teleop commands
+- confirm viewer and train use the same planner-owned boundary module rather
+  than separate adapters
 
 ## Implementation Approach Options
 
@@ -354,12 +497,19 @@ Recommendation: no
 ## Recommended Plan
 
 1. Normalize planner input contracts in `extension/batched_planner`.
-2. Align planner motion behavior to raw where tests show differences.
-3. Wire training reference-cache generation to batched planner only.
-4. Simplify viewer so it uses the same runtime path with no private planner
+2. Define a planner-owned terrain-query boundary with explicit shape, dtype,
+   device, and invalid-hit rules.
+3. Replace lazy reward-side placeholder ownership with a planner-owned
+   training-time cache manager tied to reset and replanning cadence.
+4. Align planner motion behavior to raw where tests show differences,
+   including near-tie replanning cases.
+5. Remove per-env recursive normal-path behavior that would block large-env
+   training.
+6. Wire training reference-cache generation to batched planner only.
+7. Simplify viewer so it uses the same runtime path with no private planner
    semantics.
-5. Add or update raw-alignment and contract tests.
-6. Write notes for `train`, `viewer`, and `play` commands and parameter meaning.
+8. Add or update raw-alignment, contract, lifecycle, and performance tests.
+9. Write notes for `train`, `viewer`, and `play` commands and parameter meaning.
 
 ## Acceptance Criteria
 
@@ -373,10 +523,16 @@ This work is complete when all of the following are true:
 4. The current viewer crash on planner motion branches is eliminated.
 5. Batched planner outputs are numerically aligned with raw for representative
    test cases.
-6. Minimal headless train smoke test reaches the trajectory path without falling
+6. Raw-reproduction checks cover near-tie replanning and lifecycle-sensitive
+   cases, not only generic motion cases.
+7. Training cache ownership, invalidation, and replanning cadence are explicit
+   and no longer depend on reward-side placeholder generation.
+8. Minimal headless train smoke test reaches the trajectory path without falling
    back to placeholder logic.
-7. Notes document launch commands and parameter meanings for `train`, `viewer`,
-   and `play`.
+9. The shared train-time path is not relying on Python-level per-env recursion
+   as the normal execution model for large env counts.
+10. Notes document launch commands and parameter meanings for `train`, `viewer`,
+    and `play`.
 
 ## Open Decisions Settled in This Spec
 
@@ -386,3 +542,6 @@ This work is complete when all of the following are true:
 - Play code changes this iteration: no
 - Heightmap footprint parity with raw: not required
 - Trajectory behavior parity with raw: required
+- Replan policy: immediate on reset, immediate on command change, interval-based
+  otherwise
+- Terrain input ABI: planner-owned `PlannerTerrain` object only
