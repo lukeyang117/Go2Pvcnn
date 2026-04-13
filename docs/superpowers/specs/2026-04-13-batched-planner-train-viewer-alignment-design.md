@@ -174,8 +174,10 @@ Responsibilities:
 
 Design decision:
 
-- `--use-raw-reference-trajectory` should be removed or rejected for the
-  `teacher_elevation_trajectory` runtime path
+- `scripts/train.py` must delete the `--use-raw-reference-trajectory` CLI
+  argument entirely
+- raw reference generation must not remain as a train-time CLI path for
+  `teacher_elevation_trajectory`
 - if the batched planner cannot be built, training should fail clearly rather
   than silently substituting placeholder drift
 
