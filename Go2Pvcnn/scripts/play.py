@@ -42,11 +42,19 @@ parser.add_argument(
         "teacher_without_semantic",
         "teacher_elevation",
         "teacher_elevation_semantic_map",
+        "teacher_elevation_trajectory",
     ],
     help="Experiment/task: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
-    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN)",
+    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
+    "teacher_elevation_trajectory (high-res elevation + trajectory reward)",
 )
 parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
+parser.add_argument(
+    "--use-raw-reference-trajectory",
+    action="store_true",
+    default=False,
+    help="For teacher_elevation_trajectory: fill reference cache from raw go2fp on reset.",
+)
 
 # Append AppLauncher CLI args
 AppLauncher.add_app_launcher_args(parser)
@@ -85,6 +93,7 @@ from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg_PLAY
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg_PLAY
 from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg_PLAY
 from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg_PLAY
+from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg_PLAY
 import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
 from agent import get_train_cfg
 
@@ -175,6 +184,22 @@ class SimpleRslRlEnvWrapper(VecEnv):
         return obs_dict, rewards, dones, extras
 
 
+def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bool) -> None:
+    """Apply reference-trajectory CLI settings without assuming legacy/raw fields exist."""
+    if hasattr(env_cfg, "use_batched_reference_trajectory"):
+        env_cfg.use_batched_reference_trajectory = True
+        if use_raw_reference_trajectory:
+            print(
+                "[play.py] Warning: --use-raw-reference-trajectory is legacy-only and is ignored "
+                "for the batched GPU teacher_elevation_trajectory env.",
+                flush=True,
+            )
+        return
+
+    if hasattr(env_cfg, "use_raw_reference_trajectory"):
+        env_cfg.use_raw_reference_trajectory = bool(use_raw_reference_trajectory)
+
+
 # Experiment -> (env_cfg_cls, gym_task_id)
 EXPERIMENT_PLAY_MAP = {
     "teacher_semantic": (TeacherSemanticEnvCfg_PLAY, "Isaac-Teacher-Semantic-Go2-Play-v0"),
@@ -183,6 +208,10 @@ EXPERIMENT_PLAY_MAP = {
     "teacher_elevation_semantic_map": (
         TeacherElevationSemanticMapEnvCfg_PLAY,
         "Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0",
+    ),
+    "teacher_elevation_trajectory": (
+        TeacherElevationTrajectoryEnvCfg_PLAY,
+        "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
     ),
 }
 
@@ -212,6 +241,11 @@ def main():
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
+    if experiment_name == "teacher_elevation_trajectory":
+        _configure_reference_trajectory(
+            env_cfg,
+            use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),
+        )
 
     # Enable rendering pipeline for video or WebRTC livestream (matches AppLauncher enable_cameras)
     if args_cli.video or getattr(args_cli, "livestream", -1) in (1, 2):

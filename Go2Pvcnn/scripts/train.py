@@ -44,9 +44,18 @@ parser.add_argument("--experiment", type=str, default="teacher_semantic",
                         "teacher_without_semantic",
                         "teacher_elevation",
                         "teacher_elevation_semantic_map",
+                        "teacher_elevation_trajectory",
                     ],
                     help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
-                    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN).")
+                    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
+                    "teacher_elevation_trajectory (high-res elevation + trajectory reward).")
+parser.add_argument(
+    "--use-raw-reference-trajectory",
+    action="store_true",
+    default=False,
+    help="For teacher_elevation_trajectory: on each reset, fill the reference cache from "
+    "raw/kinematic_footsteps go2fp (requires raw tree present). Default is placeholder drift.",
+)
 
 # Append AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
@@ -70,11 +79,21 @@ if args_cli.distributed and "GPU_IDS" in os.environ:
     print(f"\n[GPU Mapping] LOCAL_RANK={local_rank} -> GPU {target_gpu_id}")
     print(f"[GPU Mapping] Set device to: {args_cli.device}")
 
+# Distributed training runs one Kit process per rank.
+if args_cli.distributed:
+    _ls = getattr(args_cli, "livestream", 0)
+    if _ls in (1, 2):
+        print(
+            "[train.py] Distributed mode: ignoring --livestream "
+            f"(was {_ls}); use single-GPU training for WebRTC visualization."
+        )
+        args_cli.livestream = 0
+
 # Launch Isaac Sim
 if getattr(args_cli, "livestream", -1) in (1, 2) and not args_cli.enable_cameras:
     args_cli.enable_cameras = True
     print(
-        "[INFO][play.py] livestream: enabled AppLauncher --enable_cameras so the simulator "
+        "[INFO][train.py] livestream: enabled AppLauncher --enable_cameras so the simulator "
         "uses a rendering experience (works without X11; WebRTC client on another machine)."
     )
 app_launcher = AppLauncher(args_cli)
@@ -97,6 +116,7 @@ from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
 from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
 from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg
+from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg
 import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
 from agent import get_train_cfg
 
@@ -118,6 +138,22 @@ torch.backends.cudnn.benchmark = False
 
 # CRITICAL: Set memory allocator
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+
+def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bool) -> None:
+    """Apply reference-trajectory CLI settings without assuming legacy/raw fields exist."""
+    if hasattr(env_cfg, "use_batched_reference_trajectory"):
+        env_cfg.use_batched_reference_trajectory = True
+        if use_raw_reference_trajectory:
+            print(
+                "[train.py] Warning: --use-raw-reference-trajectory is legacy-only and is ignored "
+                "for the batched GPU teacher_elevation_trajectory env.",
+                flush=True,
+            )
+        return
+
+    if hasattr(env_cfg, "use_raw_reference_trajectory"):
+        env_cfg.use_raw_reference_trajectory = bool(use_raw_reference_trajectory)
 
 
 def main():
@@ -179,11 +215,20 @@ def main():
             TeacherElevationSemanticMapEnvCfg,
             "Isaac-Teacher-Elevation-Semantic-Map-Go2-v0",
         ),
+        "teacher_elevation_trajectory": (
+            TeacherElevationTrajectoryEnvCfg,
+            "Isaac-Teacher-Elevation-Trajectory-Go2-v0",
+        ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = f"cuda:{app_launcher.device_id}"
+    if args_cli.experiment == "teacher_elevation_trajectory":
+        _configure_reference_trajectory(
+            env_cfg,
+            use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),
+        )
     
     if args_cli.distributed:
         env_cfg.seed = args_cli.seed + app_launcher.local_rank
@@ -238,7 +283,12 @@ def main():
     # ========================================
     # Wrap Environment for RSL-RL
     # ========================================
-    print(f"\n[Wrapper] Creating RSL-RL environment wrapper...")
+    print(
+        "\n[Wrapper] Creating RSL-RL environment wrapper... "
+        "(next: initial env.reset(); batched reference replans on startup + "
+        "cfg.reference_replan_interval_steps)",
+        flush=True,
+    )
     
     # Note: For teacher mode, we don't need PVCNN wrapper
     # We create a simple wrapper that doesn't require pvcnn_wrapper parameter
