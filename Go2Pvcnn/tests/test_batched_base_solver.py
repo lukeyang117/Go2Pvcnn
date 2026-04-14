@@ -1,6 +1,8 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -8,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
 
 ensure_kinematic_footsteps_on_syspath()
@@ -79,6 +81,49 @@ def _sample_base_inputs(num_frames: int = 12):
 
 
 class BatchedBaseSolverTest(unittest.TestCase):
+    def test_integrate_base_planar_rejects_mixed_device_inputs_with_clear_error(self):
+        from extension.batched_planner import base_solver
+
+        initial_pos_xy = torch.tensor([[0.1, -0.2]], dtype=torch.float64)
+        initial_yaw = torch.tensor([0.25], dtype=torch.float64, device="meta")
+        vx = torch.tensor([0.4], dtype=torch.float64)
+        vy = torch.tensor([-0.1], dtype=torch.float64)
+        yaw_rate = torch.tensor([0.2], dtype=torch.float64)
+
+        def fail_if_coerced(*args, **kwargs):
+            raise AssertionError("mixed-device inputs should be rejected before coercion")
+
+        with patch.object(base_solver, "_coerce_tensor", side_effect=fail_if_coerced):
+            with self.assertRaisesRegex(ValueError, "mixed-device.*cpu.*meta"):
+                base_solver.batched_integrate_base_planar(initial_pos_xy, initial_yaw, vx, vy, yaw_rate, n_frames=15, dt=0.02)
+
+    def test_solve_base_trajectory_rejects_terrain_device_mismatch_without_sync(self):
+        from extension.batched_planner import base_solver
+
+        foot_targets, contact_seq, terrain_roll, terrain_pitch, terrain_height = _sample_base_inputs()
+
+        terrain = SimpleNamespace(
+            heightmaps=torch.empty((1, 1, 2, 2), dtype=torch.float64, device="meta"),
+            height_at=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("terrain should not be sampled after a device mismatch")),
+        )
+
+        with self.assertRaisesRegex(ValueError, "terrain and tensor inputs on the same device"):
+            base_solver.batched_solve_base_trajectory(
+                initial_pos=torch.tensor([[0.0, 0.0, 0.34]], dtype=torch.float64),
+                initial_yaw=torch.tensor([0.1], dtype=torch.float64),
+                vx=torch.tensor([0.35], dtype=torch.float64),
+                vy=torch.tensor([-0.05], dtype=torch.float64),
+                yaw_rate=torch.tensor([0.12], dtype=torch.float64),
+                n_frames=foot_targets.shape[1],
+                dt=0.02,
+                terrain=terrain,
+                foot_targets=foot_targets,
+                contact_seq=contact_seq,
+                terrain_roll=terrain_roll,
+                terrain_pitch=terrain_pitch,
+                terrain_height=terrain_height,
+            )
+
     def test_integrate_base_planar_matches_raw(self):
         from extension.batched_planner.base_solver import batched_integrate_base_planar
         from scripts.go2fp.base_solver import integrate_base_planar as raw_integrate_base_planar
@@ -104,6 +149,33 @@ class BatchedBaseSolverTest(unittest.TestCase):
         self.assertEqual(tuple(yaw.shape), (1, 15))
         torch.testing.assert_close(pos_xy[0], torch.as_tensor(expected_pos_xy, dtype=pos_xy.dtype), atol=1e-7, rtol=1e-7)
         torch.testing.assert_close(yaw[0], torch.as_tensor(expected_yaw, dtype=yaw.dtype), atol=1e-7, rtol=1e-7)
+
+    def test_solve_base_trajectory_outputs_canonical_float64_tensors(self):
+        from extension.batched_planner.base_solver import batched_solve_base_trajectory
+
+        foot_targets, contact_seq, terrain_roll, terrain_pitch, terrain_height = _sample_base_inputs()
+        batched_terrain = BatchedPlaneTerrain(ax=0.02, ay=-0.01, bias=-0.33, batch_size=1)
+
+        root_pos, root_quat = batched_solve_base_trajectory(
+            initial_pos=torch.tensor([[0.0, 0.0, 0.34]], dtype=torch.float64),
+            initial_yaw=torch.tensor([0.1], dtype=torch.float64),
+            vx=torch.tensor([0.35], dtype=torch.float64),
+            vy=torch.tensor([-0.05], dtype=torch.float64),
+            yaw_rate=torch.tensor([0.12], dtype=torch.float64),
+            n_frames=foot_targets.shape[1],
+            dt=0.02,
+            terrain=batched_terrain,
+            foot_targets=foot_targets,
+            contact_seq=contact_seq,
+            terrain_roll=terrain_roll,
+            terrain_pitch=terrain_pitch,
+            terrain_height=terrain_height,
+        )
+
+        self.assertEqual(root_pos.dtype, torch.float64)
+        self.assertEqual(root_quat.dtype, torch.float64)
+        self.assertEqual(root_pos.device.type, "cpu")
+        self.assertEqual(root_quat.device.type, "cpu")
 
     def test_solve_base_trajectory_matches_raw(self):
         from extension.batched_planner.base_solver import batched_solve_base_trajectory

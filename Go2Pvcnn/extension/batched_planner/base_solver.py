@@ -23,15 +23,34 @@ BODY_COLLISION_SAMPLES = torch.tensor(
 )
 
 
-def _resolve_input_device(*values) -> torch.device:
+def _resolve_input_device(*values, context: str = "batched base solver") -> torch.device:
     devices = [value.device for value in values if isinstance(value, Tensor)]
     if not devices:
         return torch.device("cpu")
     first = devices[0]
-    for device in devices[1:]:
-        if device != first:
-            raise ValueError("batched base solver does not accept tensor inputs on multiple devices")
+    if any(device != first for device in devices[1:]):
+        device_list = ", ".join(dict.fromkeys(str(device) for device in devices))
+        raise ValueError(f"{context} requires all tensor inputs to live on one device; mixed-device inputs: {device_list}")
     return first
+
+
+def _terrain_device(terrain) -> torch.device | None:
+    heightmaps = getattr(terrain, "heightmaps", None)
+    if isinstance(heightmaps, Tensor):
+        return heightmaps.device
+    device = getattr(terrain, "device", None)
+    if device is None:
+        return None
+    return torch.device(device)
+
+
+def _require_terrain_device(terrain, device: torch.device, *, context: str = "batched base solver") -> None:
+    terrain_device = _terrain_device(terrain)
+    if terrain_device is not None and terrain_device != device:
+        raise ValueError(
+            f"{context} requires terrain and tensor inputs on the same device; "
+            f"got terrain on {terrain_device} and tensor inputs on {device}"
+        )
 
 
 def _coerce_tensor(value, *, device: torch.device) -> Tensor:
@@ -134,6 +153,7 @@ def batched_solve_base_orientation(terrain_roll, terrain_pitch, yaw, max_roll: f
 
 def batched_body_clearance_adjustment(base_pos, base_quat, terrain, body_samples: Tensor = BODY_COLLISION_SAMPLES, margin: float = 0.012) -> Tensor:
     device = _resolve_input_device(base_pos, base_quat, body_samples)
+    _require_terrain_device(terrain, device)
     base_pos_t = _as_shape("base_pos", base_pos, device=device, shape=(base_quat.shape[1] if isinstance(base_quat, Tensor) and base_quat.ndim == 3 else _coerce_tensor(base_quat, device=device).shape[1], 3))
     base_quat_t = _as_shape("base_quat", base_quat, device=device, shape=(base_pos_t.shape[1], 4))
     samples_t = _coerce_tensor(body_samples, device=device)
@@ -167,6 +187,7 @@ def batched_solve_base_trajectory(
     body_clearance_margin: float = 0.012,
 ) -> tuple[Tensor, Tensor]:
     device = _resolve_input_device(initial_pos, initial_yaw, vx, vy, yaw_rate, foot_targets, contact_seq, terrain_roll, terrain_pitch, terrain_height)
+    _require_terrain_device(terrain, device)
     initial_pos_t = _as_shape("initial_pos", initial_pos, device=device, shape=(3,))
     initial_yaw_t = _as_batch_vector("initial_yaw", initial_yaw, device=device)
     vx_t = _as_batch_vector("vx", vx, device=device)

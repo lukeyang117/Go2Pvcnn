@@ -90,11 +90,10 @@ def isaac_state_to_planner_state(
     )
 
 
-def planner_result_to_reference_cache(result):
-    """Convert a batched planner result into the reference cache shape."""
+def _normalize_planner_result_for_reference_cache(result):
+    """Canonicalize planner output tensors for the reference cache ABI."""
     from .reference.cache import (
         CANONICAL_REFERENCE_CACHE_DEVICE,
-        ReferenceTrajectoryCache,
         canonical_reference_cache_bool_tensor,
         canonical_reference_cache_float_tensor,
         canonical_reference_cache_index_tensor,
@@ -152,15 +151,34 @@ def planner_result_to_reference_cache(result):
             )
     else:
         raise ValueError(f"planned_touchdown_w must have shape (N,4,3), (N,H,4,3), or (4,3); got {tuple(planned_touchdown_w.shape)}")
+    return {
+        "root_pos_w": root_pos_w,
+        "root_quat_w": root_quat_w,
+        "root_lin_vel_w": root_lin_vel_w,
+        "root_ang_vel_w": root_ang_vel_w,
+        "joint_angles": joint_angles,
+        "foot_pos_root": foot_pos_root,
+        "contact_state": contact_state,
+        "planned_touchdown_w": planned_touchdown_w,
+        "phase_index": phase_index,
+        "valid_mask": valid_mask,
+    }
+
+
+def planner_result_to_reference_cache(result):
+    """Convert planner output into the canonical reference cache ABI."""
+    from .reference.cache import ReferenceTrajectoryCache
+
+    normalized = _normalize_planner_result_for_reference_cache(result)
     return ReferenceTrajectoryCache(
-        root_pos_w=root_pos_w,
-        root_quat_w=root_quat_w,
-        joint_angles=joint_angles,
-        foot_pos_root=foot_pos_root,
-        contact_state=contact_state,
-        planned_touchdown_w=planned_touchdown_w,
-        phase_index=phase_index,
-        valid_mask=valid_mask,
+        root_pos_w=normalized["root_pos_w"],
+        root_quat_w=normalized["root_quat_w"],
+        joint_angles=normalized["joint_angles"],
+        foot_pos_root=normalized["foot_pos_root"],
+        contact_state=normalized["contact_state"],
+        planned_touchdown_w=normalized["planned_touchdown_w"],
+        phase_index=normalized["phase_index"],
+        valid_mask=normalized["valid_mask"],
     )
 
 
