@@ -190,6 +190,98 @@ class BatchedTrajectoryTest(unittest.TestCase):
         torch.testing.assert_close(actual.contact_state[0], torch.as_tensor(expected.contact_state, dtype=actual.contact_state.dtype))
         torch.testing.assert_close(actual.planned_touchdown_w[0], torch.as_tensor(expected.planned_touchdown_w, dtype=actual.planned_touchdown_w.dtype), atol=1e-5, rtol=1e-5)
 
+    def test_lateral_motion_matches_raw_single_env(self):
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+        from scripts.go2fp.config import TrajectoryConfig
+        from scripts.go2fp.trajectory import generate_trajectory
+        from scripts.go2fp.types import Command
+
+        state, raw_state = self._default_batched_state()
+        cmd = torch.tensor([[0.0, 0.32, 0.08]], dtype=torch.float64)
+        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.55)
+
+        actual = batched_generate_trajectory(FlatTerrain(), state, cmd, requested_n_frames=20, dt=0.02, cfg=cfg)
+        expected = generate_trajectory(
+            FlatTerrain(),
+            raw_state,
+            Command(0.0, 0.32, 0.08),
+            20,
+            dt=0.02,
+            config=TrajectoryConfig(
+                gait_name=cfg.gait_name,
+                step_freq=cfg.step_freq,
+                duty_factor=cfg.duty_factor,
+                step_height=cfg.step_height,
+                hip_height=cfg.hip_height,
+                body_clearance_margin=cfg.body_clearance_margin,
+                foothold_search_radius=cfg.foothold_search_radius,
+                foothold_search_step=cfg.foothold_search_step,
+                max_foothold_step_down=cfg.max_foothold_step_down,
+                max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
+                replan_stop_speed=cfg.replan_stop_speed,
+                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
+                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
+                replan_vy_biases=tuple(cfg.replan_vy_biases),
+            ),
+        )
+
+        self.assertEqual(actual.num_frames, expected.root_pos_w.shape[0])
+        torch.testing.assert_close(actual.root_pos_w[0], torch.as_tensor(expected.root_pos_w, dtype=actual.root_pos_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.root_quat_w[0], torch.as_tensor(expected.root_quat_w, dtype=actual.root_quat_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.joint_angles[0], torch.as_tensor(expected.joint_angles, dtype=actual.joint_angles.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.foot_pos_w[0], torch.as_tensor(expected.foot_pos_w, dtype=actual.foot_pos_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.contact_state[0], torch.as_tensor(expected.contact_state, dtype=actual.contact_state.dtype))
+        torch.testing.assert_close(actual.planned_touchdown_w[0], torch.as_tensor(expected.planned_touchdown_w, dtype=actual.planned_touchdown_w.dtype), atol=1e-5, rtol=1e-5)
+
+    def test_sequential_trajectory_calls_from_same_state_match_raw_reset_boundary(self):
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+        from scripts.go2fp.config import TrajectoryConfig
+        from scripts.go2fp.trajectory import generate_trajectory
+        from scripts.go2fp.types import Command
+
+        state, _ = self._default_batched_state()
+        _, raw_state = self._default_batched_state()
+        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.55)
+
+        first_cmd = torch.tensor([[0.35, 0.0, 0.1]], dtype=torch.float64)
+        second_cmd = torch.tensor([[0.0, 0.28, 0.06]], dtype=torch.float64)
+
+        batched_generate_trajectory(FlatTerrain(), state, first_cmd, requested_n_frames=20, dt=0.02, cfg=cfg)
+        actual = batched_generate_trajectory(FlatTerrain(), state, second_cmd, requested_n_frames=20, dt=0.02, cfg=cfg)
+        expected = generate_trajectory(
+            FlatTerrain(),
+            raw_state,
+            Command(0.0, 0.28, 0.06),
+            20,
+            dt=0.02,
+            config=TrajectoryConfig(
+                gait_name=cfg.gait_name,
+                step_freq=cfg.step_freq,
+                duty_factor=cfg.duty_factor,
+                step_height=cfg.step_height,
+                hip_height=cfg.hip_height,
+                body_clearance_margin=cfg.body_clearance_margin,
+                foothold_search_radius=cfg.foothold_search_radius,
+                foothold_search_step=cfg.foothold_search_step,
+                max_foothold_step_down=cfg.max_foothold_step_down,
+                max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
+                replan_stop_speed=cfg.replan_stop_speed,
+                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
+                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
+                replan_vy_biases=tuple(cfg.replan_vy_biases),
+            ),
+        )
+
+        self.assertEqual(actual.num_frames, expected.root_pos_w.shape[0])
+        torch.testing.assert_close(actual.root_pos_w[0], torch.as_tensor(expected.root_pos_w, dtype=actual.root_pos_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.root_quat_w[0], torch.as_tensor(expected.root_quat_w, dtype=actual.root_quat_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.joint_angles[0], torch.as_tensor(expected.joint_angles, dtype=actual.joint_angles.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.foot_pos_w[0], torch.as_tensor(expected.foot_pos_w, dtype=actual.foot_pos_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.contact_state[0], torch.as_tensor(expected.contact_state, dtype=actual.contact_state.dtype))
+        torch.testing.assert_close(actual.planned_touchdown_w[0], torch.as_tensor(expected.planned_touchdown_w, dtype=actual.planned_touchdown_w.dtype), atol=1e-5, rtol=1e-5)
+
 
 if __name__ == "__main__":
     unittest.main()
