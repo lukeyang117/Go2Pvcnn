@@ -1,8 +1,10 @@
 import math
+import importlib
 import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -31,6 +33,18 @@ class BatchedConventionTest(unittest.TestCase):
 
         self.assertEqual(raw_cfg.replan_stop_speed, batched_cfg.replan_stop_speed)
         self.assertFalse(hasattr(batched_cfg, "replan_velocity_scales"))
+
+    def test_compare_trajectories_import_is_lazy_about_raw_bridge_setup(self):
+        module_name = "Go2Pvcnn.extension.viz.compare_trajectories"
+        go2_root = REPO_ROOT / "Go2Pvcnn"
+        if str(go2_root) not in sys.path:
+            sys.path.insert(0, str(go2_root))
+        sys.modules.pop(module_name, None)
+
+        with patch("extension.reference.raw_bridge.ensure_kinematic_footsteps_on_syspath", side_effect=AssertionError("eager raw bridge setup")):
+            module = importlib.import_module(module_name)
+
+        self.assertIsNotNone(module)
 
     def test_viewer_planner_config_builder_uses_single_shot_fields(self):
         from Go2Pvcnn.extension.viz.go2_foostep_planner import _build_planner_cfg

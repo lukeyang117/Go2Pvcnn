@@ -16,10 +16,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
-
-ensure_kinematic_footsteps_on_syspath()
-
-
 class FlatTerrain:
     def height_at(self, x, y=None):
         if y is None:
@@ -55,6 +51,8 @@ def _parse_args() -> argparse.Namespace:
 
 def _build_matching_configs():
     from extension.batched_planner.config import BatchedTrajectoryConfig
+
+    ensure_kinematic_footsteps_on_syspath()
     from scripts.go2fp.config import TrajectoryConfig
 
     batched_cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.6)
@@ -76,6 +74,8 @@ def _build_matching_configs():
 
 def _default_batched_state():
     from extension.batched_planner.types import BatchedRobotState
+
+    ensure_kinematic_footsteps_on_syspath()
     from scripts.go2fp.trajectory import default_initial_state
 
     raw_state = default_initial_state(None, x=0.0, y=0.0)
@@ -97,6 +97,8 @@ def main() -> int:
     torch.manual_seed(int(args.seed))
 
     from extension.batched_planner.trajectory import batched_generate_trajectory
+
+    ensure_kinematic_footsteps_on_syspath()
     from scripts.go2fp.trajectory import generate_trajectory
     from scripts.go2fp.types import Command
 
