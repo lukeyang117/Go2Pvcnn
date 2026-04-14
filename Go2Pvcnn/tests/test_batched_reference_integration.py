@@ -88,6 +88,17 @@ class BatchedReferenceIntegrationTest(unittest.TestCase):
         self.assertIn("valid_mask:device=meta", issues)
         self.assertFalse(cache.is_ready())
 
+    def test_shape_issues_rejects_noncanonical_cache_device(self):
+        from extension.convention import planner_result_to_reference_cache
+
+        cache = planner_result_to_reference_cache(_fake_result(2, 5)).to(device="meta")
+
+        issues = cache.shape_issues()
+        self.assertIn("root_pos_w:device=meta", issues)
+        self.assertIn("phase_index:device=meta", issues)
+        self.assertIn("valid_mask:device=meta", issues)
+        self.assertFalse(cache.is_ready())
+
     def test_manager_cache_is_compatible_with_reference_gather(self):
         from extension.batched_planner.manager import BatchedTrajectoryManager
         from extension.mdp import rewards_reference

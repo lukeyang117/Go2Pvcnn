@@ -166,7 +166,7 @@ class ReferenceTrajectoryCache:
         assert self.valid_mask is not None
 
         rp = self.root_pos_w
-        canonical_device = rp.device
+        canonical_device = CANONICAL_REFERENCE_CACHE_DEVICE
         batched = rp.ndim == 3
         if rp.ndim not in (2, 3):
             issues.append(f"root_pos_w:ndim={rp.ndim}")
