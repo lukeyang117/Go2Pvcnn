@@ -336,11 +336,46 @@ def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> Batche
     )
 
 
+def _compute_stable_scan_ranges(scanner, *, env_id: int = 0) -> tuple[tuple[float, float], tuple[float, float]]:
+    from extension.convention import extract_yaw_batch
+
+    pattern_cfg = scanner.cfg.pattern_cfg
+    if not hasattr(pattern_cfg, "size"):
+        raise ValueError("scanner.cfg.pattern_cfg must expose a size for stable terrain windows")
+
+    sensor_pos = torch.as_tensor(scanner.data.pos_w[env_id], dtype=torch.float64)
+    sensor_quat = torch.as_tensor(scanner.data.quat_w[env_id], dtype=torch.float64).unsqueeze(0)
+    yaw = extract_yaw_batch(sensor_quat)[0]
+
+    half_x = 0.5 * float(pattern_cfg.size[0])
+    half_y = 0.5 * float(pattern_cfg.size[1])
+    local_corners = torch.tensor(
+        [
+            [-half_x, -half_y],
+            [-half_x, half_y],
+            [half_x, -half_y],
+            [half_x, half_y],
+        ],
+        dtype=torch.float64,
+        device=sensor_pos.device,
+    )
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    world_x = sensor_pos[0] + local_corners[:, 0] * cos_yaw - local_corners[:, 1] * sin_yaw
+    world_y = sensor_pos[1] + local_corners[:, 0] * sin_yaw + local_corners[:, 1] * cos_yaw
+    return (float(world_x.min().item()), float(world_x.max().item())), (float(world_y.min().item()), float(world_y.max().item()))
+
+
 def _compute_local_terrain(scanner, *, env_id: int = 0):
     from extension.batched_planner.terrain import PlannerTerrain
 
     ray_hits = scanner.data.ray_hits_w[env_id].to(dtype=torch.float64)
-    terrain = PlannerTerrain.from_ray_hits(ray_hits.unsqueeze(0))
+    world_x_range, world_y_range = _compute_stable_scan_ranges(scanner, env_id=env_id)
+    terrain = PlannerTerrain.from_ray_hits(
+        ray_hits.unsqueeze(0),
+        world_x_range=world_x_range,
+        world_y_range=world_y_range,
+    )
     return terrain, ray_hits
 
 
