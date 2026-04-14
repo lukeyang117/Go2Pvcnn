@@ -1,5 +1,6 @@
 import math
 import unittest
+from types import SimpleNamespace
 
 import torch
 
@@ -13,13 +14,36 @@ class BatchedConventionTest(unittest.TestCase):
         self.assertEqual(cfg.max_roughness, 0.5)
         self.assertEqual(cfg.max_touchdown_xy_reach, 0.15)
         self.assertEqual(cfg.replan_stop_speed, 0.05)
-        self.assertEqual(cfg.replan_velocity_scales, [1.0, 0.8, 0.6])
-        self.assertEqual(cfg.replan_yaw_biases, [0.0, 0.15, -0.15])
-        self.assertEqual(cfg.replan_vy_biases, [0.0, 0.05, -0.05])
-        cfg.replan_velocity_scales.append(0.4)
         cfg.replan_stop_speed = 0.07
-        self.assertEqual(cfg.replan_velocity_scales, [1.0, 0.8, 0.6, 0.4])
         self.assertEqual(cfg.replan_stop_speed, 0.07)
+
+    def test_compare_trajectories_builds_matching_configs_without_recovery_fields(self):
+        from Go2Pvcnn.extension.viz.compare_trajectories import _build_matching_configs
+
+        batched_cfg, raw_cfg = _build_matching_configs()
+
+        self.assertEqual(raw_cfg.replan_stop_speed, batched_cfg.replan_stop_speed)
+        self.assertFalse(hasattr(batched_cfg, "replan_velocity_scales"))
+
+    def test_viewer_planner_config_builder_uses_single_shot_fields(self):
+        from Go2Pvcnn.extension.viz.go2_foostep_planner import _build_planner_cfg
+
+        env_cfg = SimpleNamespace(
+            gait_name="trot",
+            step_freq=2.0,
+            duty_factor=0.6,
+            step_height=0.08,
+            foothold_search_radius=0.15,
+            foothold_search_step=0.03,
+            max_step_down=0.10,
+            max_roughness=0.5,
+            replan_stop_speed=0.05,
+        )
+
+        planner_cfg = _build_planner_cfg(env_cfg)
+
+        self.assertEqual(planner_cfg.replan_stop_speed, env_cfg.replan_stop_speed)
+        self.assertFalse(hasattr(planner_cfg, "replan_velocity_scales"))
 
     def test_hip_offsets_array_matches_raw(self):
         from Go2Pvcnn.extension.batched_planner.types import HIP_OFFSETS_ARRAY

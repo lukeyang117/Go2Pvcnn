@@ -105,7 +105,7 @@ class BatchedTrajectoryTest(unittest.TestCase):
         self.assertTrue(torch.allclose(actual.root_pos_w[0], actual.root_pos_w[0, :1].expand_as(actual.root_pos_w[0])))
         self.assertTrue(torch.allclose(actual.root_quat_w[0], actual.root_quat_w[0, :1].expand_as(actual.root_quat_w[0])))
 
-    def test_planner_does_not_iterate_recovery_commands(self):
+    def test_planner_uses_exactly_one_foothold_attempt_per_command(self):
         from extension.batched_planner import trajectory as trajectory_mod
         from extension.batched_planner.config import BatchedTrajectoryConfig
         from extension.batched_planner.trajectory import batched_generate_trajectory

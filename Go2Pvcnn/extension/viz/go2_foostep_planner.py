@@ -396,9 +396,6 @@ def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> Batche
         max_foothold_step_down=float(env_cfg.max_step_down),
         max_roughness=float(env_cfg.max_roughness),
         replan_stop_speed=float(env_cfg.replan_stop_speed),
-        replan_velocity_scales=list(env_cfg.replan_velocity_scales),
-        replan_yaw_biases=list(env_cfg.replan_yaw_biases),
-        replan_vy_biases=list(env_cfg.replan_vy_biases),
     )
 
 

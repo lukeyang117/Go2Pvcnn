@@ -70,9 +70,6 @@ def _build_matching_configs():
         max_foothold_step_down=batched_cfg.max_foothold_step_down,
         max_touchdown_xy_reach=batched_cfg.max_touchdown_xy_reach,
         replan_stop_speed=batched_cfg.replan_stop_speed,
-        replan_velocity_scales=tuple(batched_cfg.replan_velocity_scales),
-        replan_yaw_biases=tuple(batched_cfg.replan_yaw_biases),
-        replan_vy_biases=tuple(batched_cfg.replan_vy_biases),
     )
     return batched_cfg, raw_cfg
 

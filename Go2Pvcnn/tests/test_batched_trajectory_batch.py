@@ -133,6 +133,8 @@ class BatchedTrajectoryBatchTest(unittest.TestCase):
 
         mixed = batched_generate_trajectory(terrain, batched_state, batched_commands, requested_n_frames=20, dt=0.02, cfg=cfg)
 
+        self.assertTrue(torch.any(mixed.contact_state[0] == 0.0))
+        self.assertFalse(torch.allclose(mixed.root_pos_w[0], mixed.root_pos_w[0, :1].expand_as(mixed.root_pos_w[0])))
         self.assertTrue(torch.all(mixed.contact_state[1] == 1.0))
         self.assertTrue(torch.allclose(mixed.root_pos_w[1], mixed.root_pos_w[1, :1].expand_as(mixed.root_pos_w[1])))
         self.assertTrue(torch.allclose(mixed.root_quat_w[1], mixed.root_quat_w[1, :1].expand_as(mixed.root_quat_w[1])))
