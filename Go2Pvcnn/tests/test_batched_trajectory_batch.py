@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
@@ -8,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
 
 ensure_kinematic_footsteps_on_syspath()
@@ -40,7 +41,7 @@ class FlatTerrain:
 class BatchedTrajectoryBatchTest(unittest.TestCase):
     def test_batch_consistency_against_single_env_runs(self):
         from extension.batched_planner.config import BatchedTrajectoryConfig
-        from extension.batched_planner.trajectory import batched_generate_trajectory
+        from extension.batched_planner import trajectory as trajectory_mod
         from extension.batched_planner.types import BatchedRobotState
         from scripts.go2fp.trajectory import default_initial_state
 
@@ -71,7 +72,17 @@ class BatchedTrajectoryBatchTest(unittest.TestCase):
         )
         batched_commands = torch.tensor(commands, dtype=torch.float64)
 
-        batched = batched_generate_trajectory(terrain, batched_state, batched_commands, requested_n_frames=20, dt=0.02, cfg=cfg)
+        original = trajectory_mod.batched_generate_trajectory
+        call_count = {"value": 0}
+
+        def counting_wrapper(*args, **kwargs):
+            call_count["value"] += 1
+            return original(*args, **kwargs)
+
+        with patch.object(trajectory_mod, "batched_generate_trajectory", new=counting_wrapper):
+            batched = trajectory_mod.batched_generate_trajectory(terrain, batched_state, batched_commands, requested_n_frames=20, dt=0.02, cfg=cfg)
+
+        self.assertEqual(call_count["value"], 1)
 
         for idx in range(len(states)):
             single_state = BatchedRobotState(
@@ -80,7 +91,7 @@ class BatchedTrajectoryBatchTest(unittest.TestCase):
                 joint_angles=batched_state.joint_angles[idx : idx + 1],
                 foot_pos=batched_state.foot_pos[idx : idx + 1],
             )
-            single = batched_generate_trajectory(
+            single = original(
                 terrain,
                 single_state,
                 batched_commands[idx : idx + 1],

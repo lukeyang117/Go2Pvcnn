@@ -121,6 +121,28 @@ def _standstill_trajectory(initial_state: BatchedRobotState, n_frames: int, dt: 
     )
 
 
+def _mix_trajectory_results(
+    motion: BatchedTrajectoryResult,
+    standstill: BatchedTrajectoryResult,
+    standstill_mask: Tensor,
+) -> BatchedTrajectoryResult:
+    mask3 = standstill_mask[:, None, None]
+    mask4 = standstill_mask[:, None, None, None]
+    return BatchedTrajectoryResult(
+        num_frames=motion.num_frames,
+        root_pos_w=torch.where(mask3, standstill.root_pos_w, motion.root_pos_w),
+        root_quat_w=torch.where(mask3, standstill.root_quat_w, motion.root_quat_w),
+        root_lin_vel_w=torch.where(mask3, standstill.root_lin_vel_w, motion.root_lin_vel_w),
+        root_ang_vel_w=torch.where(mask3, standstill.root_ang_vel_w, motion.root_ang_vel_w),
+        joint_angles=torch.where(mask3, standstill.joint_angles, motion.joint_angles),
+        foot_pos_w=torch.where(mask4, standstill.foot_pos_w, motion.foot_pos_w),
+        foot_pos_root=torch.where(mask4, standstill.foot_pos_root, motion.foot_pos_root),
+        contact_state=torch.where(mask3, standstill.contact_state, motion.contact_state),
+        body_pos_root=torch.where(mask4, standstill.body_pos_root, motion.body_pos_root),
+        planned_touchdown_w=torch.where(mask3, standstill.planned_touchdown_w, motion.planned_touchdown_w),
+    )
+
+
 def batched_generate_trajectory(
     terrain,
     states: BatchedRobotState,
@@ -139,48 +161,12 @@ def batched_generate_trajectory(
     if commands_t.shape[0] != batch_size:
         raise ValueError("states and commands must share batch size")
 
-    if batch_size > 1:
-        parts = []
-        for idx in range(batch_size):
-            part_state = BatchedRobotState(
-                root_pos=states.root_pos[idx : idx + 1],
-                root_quat=states.root_quat[idx : idx + 1],
-                joint_angles=states.joint_angles[idx : idx + 1],
-                foot_pos=states.foot_pos[idx : idx + 1],
-                foot_vel=states.foot_vel[idx : idx + 1] if states.foot_vel is not None else None,
-            )
-            parts.append(
-                batched_generate_trajectory(
-                    terrain,
-                    part_state,
-                    commands_t[idx : idx + 1],
-                    requested_n_frames=requested_n_frames,
-                    dt=dt,
-                    cfg=cfg,
-                )
-            )
-        num_frames = parts[0].num_frames
-        return BatchedTrajectoryResult(
-            num_frames=num_frames,
-            root_pos_w=torch.cat([part.root_pos_w for part in parts], dim=0),
-            root_quat_w=torch.cat([part.root_quat_w for part in parts], dim=0),
-            root_lin_vel_w=torch.cat([part.root_lin_vel_w for part in parts], dim=0),
-            root_ang_vel_w=torch.cat([part.root_ang_vel_w for part in parts], dim=0),
-            joint_angles=torch.cat([part.joint_angles for part in parts], dim=0),
-            foot_pos_w=torch.cat([part.foot_pos_w for part in parts], dim=0),
-            foot_pos_root=torch.cat([part.foot_pos_root for part in parts], dim=0),
-            contact_state=torch.cat([part.contact_state for part in parts], dim=0),
-            body_pos_root=torch.cat([part.body_pos_root for part in parts], dim=0),
-            planned_touchdown_w=torch.cat([part.planned_touchdown_w for part in parts], dim=0),
-        )
-
     requested_n_frames = int(requested_n_frames)
     cycle_frames = max(1, round(1.0 / (cfg.step_freq * dt)))
     n_frames = min(requested_n_frames, cycle_frames)
+    standstill_mask = _command_is_standstill(commands_t) | (torch.linalg.norm(commands_t, dim=-1) < float(cfg.replan_stop_speed))
 
-    if torch.all(_command_is_standstill(commands_t)):
-        return _standstill_trajectory(states, requested_n_frames, dt)
-    if torch.all(torch.linalg.norm(commands_t, dim=-1) < float(cfg.replan_stop_speed)):
+    if torch.all(standstill_mask):
         return _standstill_trajectory(states, requested_n_frames, dt)
 
     phase_offsets = torch.as_tensor(GAIT_PARAMS[cfg.gait_name]["offsets"], dtype=torch.float64, device=device)
@@ -298,8 +284,7 @@ def batched_generate_trajectory(
     root_ang_vel[..., 0] = roll_rate
     root_ang_vel[..., 1] = pitch_rate
     root_ang_vel[..., 2] = best_plan.command[:, 2].unsqueeze(1)
-
-    return BatchedTrajectoryResult(
+    motion_result = BatchedTrajectoryResult(
         num_frames=n_frames,
         root_pos_w=root_pos,
         root_quat_w=root_quat,
@@ -312,6 +297,12 @@ def batched_generate_trajectory(
         body_pos_root=body_pos_root,
         planned_touchdown_w=touchdowns,
     )
+
+    if torch.any(standstill_mask):
+        standstill_result = _standstill_trajectory(states, n_frames, dt)
+        return _mix_trajectory_results(motion_result, standstill_result, standstill_mask)
+
+    return motion_result
 
 
 __all__ = ["batched_generate_trajectory"]
