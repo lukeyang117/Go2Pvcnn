@@ -39,6 +39,22 @@ def _fake_result(num_envs: int, num_frames: int):
 
 
 class BatchedReferenceIntegrationTest(unittest.TestCase):
+    def test_planner_result_is_normalized_into_canonical_reference_cache_layout(self):
+        from extension.convention import planner_result_to_reference_cache
+
+        cache = planner_result_to_reference_cache(_fake_result(2, 5))
+
+        self.assertEqual(tuple(cache.root_pos_w.shape), (2, 5, 3))
+        self.assertEqual(cache.root_pos_w.dtype, torch.float32)
+        self.assertEqual(cache.root_pos_w.device.type, "cpu")
+        self.assertEqual(tuple(cache.root_quat_w.shape), (2, 5, 4))
+        self.assertEqual(cache.root_quat_w.dtype, torch.float32)
+        self.assertEqual(cache.contact_state.dtype, torch.bool)
+        self.assertEqual(cache.phase_index.dtype, torch.long)
+        self.assertEqual(cache.valid_mask.dtype, torch.bool)
+        self.assertEqual(tuple(cache.planned_touchdown_w.shape), (2, 5, 4, 3))
+        self.assertEqual(cache.planned_touchdown_w.dtype, torch.float32)
+
     def test_manager_cache_is_compatible_with_reference_gather(self):
         from extension.batched_planner.manager import BatchedTrajectoryManager
         from extension.mdp import rewards_reference
