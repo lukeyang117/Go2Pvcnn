@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import torch
 
@@ -109,30 +109,42 @@ class BatchedReferenceIntegrationTest(unittest.TestCase):
         self.assertFalse(cache.is_canonical())
 
     def test_manager_cache_is_compatible_with_reference_gather(self):
-        from extension.batched_planner.manager import BatchedTrajectoryManager
         from extension.mdp import rewards_reference
+        from extension.convention import planner_result_to_reference_cache
 
-        cfg = SimpleNamespace(reference_replan_interval_steps=3, reference_trajectory_horizon=5, dt=0.02)
-        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
-        states = SimpleNamespace(root_pos=torch.zeros(2, 3, dtype=torch.float64))
-        commands = torch.zeros(2, 3, dtype=torch.float64)
-
-        with patch("extension.batched_planner.manager.batched_generate_trajectory", return_value=_fake_result(2, 5)):
-            cache = manager.step("terrain", states, commands)
+        cache = planner_result_to_reference_cache(_fake_result(2, 5))
+        manager = SimpleNamespace(refresh_from_env=Mock(return_value=cache))
 
         env = SimpleNamespace(
             device=torch.device("cpu"),
             num_envs=2,
             episode_length_buf=torch.tensor([0, 3], dtype=torch.long),
             cfg=SimpleNamespace(reference_trajectory_horizon=5),
-            unwrapped=SimpleNamespace(_trajectory_reference_cache=cache),
+            unwrapped=SimpleNamespace(_trajectory_manager=manager),
         )
-        _, frame_ids = rewards_reference._select_reference_frame(env)
+        ensured = rewards_reference.ensure_reference_cache(env)
+        self.assertIs(ensured, cache)
+        manager.refresh_from_env.assert_called_once_with(env)
+        frame_ids = rewards_reference._reference_indices(env, ensured.horizon_length())
         gathered = rewards_reference._gather_reference_field(cache, "root_pos_w", frame_ids, env)
 
         self.assertEqual(tuple(gathered.shape), (2, 3))
         torch.testing.assert_close(gathered[0], cache.root_pos_w[0, 0])
         torch.testing.assert_close(gathered[1], cache.root_pos_w[1, 3])
+
+    def test_ensure_reference_cache_requires_manager_owned_cache(self):
+        from extension.mdp import rewards_reference
+
+        env = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_envs=1,
+            episode_length_buf=torch.tensor([0], dtype=torch.long),
+            cfg=SimpleNamespace(reference_trajectory_horizon=5),
+            unwrapped=SimpleNamespace(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "planner-owned reference cache"):
+            rewards_reference.ensure_reference_cache(env)
 
 
 if __name__ == "__main__":

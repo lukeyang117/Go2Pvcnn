@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import torch
 
-from ..planner.runtime.reference_cache import expand_reference_cache_to_num_envs
-from ..planner.runtime.reference_generator import ReferenceGenerator, ReferenceGeneratorConfig
-
 
 def exponential_tracking_reward(error: torch.Tensor, sigma: float) -> torch.Tensor:
     """Convert a non-negative error tensor into an exponential reward."""
@@ -129,14 +126,15 @@ def _cache_matches_env(cache, env) -> bool:
 
 
 def ensure_reference_cache(env):
-    """Ensure a per-env batched reference cache exists (placeholder until raw reset fills it)."""
-    cache = getattr(env.unwrapped, "_trajectory_reference_cache", None)
-    if not _cache_matches_env(cache, env):
-        horizon = _reference_horizon_steps(env)
-        cache = ReferenceGenerator(ReferenceGeneratorConfig(horizon_steps=horizon)).generate()
-        cache = expand_reference_cache_to_num_envs(cache, env.num_envs)
-    cache = cache.to(device=env.device)
-    env.unwrapped._trajectory_reference_cache = cache
+    """Return the planner-owned reference cache for ``env``."""
+    root = env.unwrapped
+    manager = getattr(root, "_trajectory_manager", None)
+    if manager is None:
+        raise RuntimeError("planner-owned reference cache requires env.unwrapped._trajectory_manager")
+    cache = manager.refresh_from_env(env)
+    if cache is None or not cache.is_ready():
+        raise RuntimeError("planner-owned reference cache is missing or not ready")
+    root._trajectory_reference_cache = cache
     return cache
 
 

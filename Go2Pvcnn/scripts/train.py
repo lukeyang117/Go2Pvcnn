@@ -124,6 +124,19 @@ def _launch_app(args_cli: argparse.Namespace):
     return app_launcher, app_launcher.app
 
 
+def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> None:
+    if experiment_name != "teacher_elevation_trajectory":
+        return
+
+    from extension.batched_planner.manager import BatchedTrajectoryManager
+
+    manager_device = getattr(env, "device", env_cfg.sim.device)
+    manager = BatchedTrajectoryManager(env_cfg, device=manager_device)
+    env.unwrapped._trajectory_manager = manager
+    env.unwrapped._trajectory_reference_cache = None
+    print("[Planner] Attached planner-owned trajectory manager for teacher_elevation_trajectory")
+
+
 def main() -> int:
     """Main training function."""
 
@@ -265,6 +278,7 @@ def main() -> int:
     # Cast to ManagerBasedRLEnv for type safety
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env: ManagerBasedRLEnv = env.unwrapped
+    _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     
     print(f"[Env] Environment created successfully")
     print(f"  - observation_space: {env.observation_space}")
