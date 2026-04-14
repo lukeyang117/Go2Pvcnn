@@ -107,6 +107,38 @@ def _planner_state_from_reference_result(result, *, frame_idx: int):
     )
 
 
+def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
+    """Best-effort: write the planner frame pose/joints into the displayed robot.
+
+    Isaac Lab is not available in unit tests, so we keep this duck-typed and
+    only call common "write_*_to_sim" methods when present.
+    """
+    from extension.convention import quat_wxyz_to_xyzw
+
+    frame = int(frame_idx)
+    root_pos_w = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float32)
+    root_quat_wxyz = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float32)
+    root_pose_xyzw = torch.cat([root_pos_w, quat_wxyz_to_xyzw(root_quat_wxyz)], dim=-1)
+    joint_pos = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float32)
+    joint_vel = torch.zeros_like(joint_pos)
+
+    # Root pose
+    if hasattr(robot, "write_root_pose_to_sim"):
+        robot.write_root_pose_to_sim(root_pose_xyzw)
+    elif hasattr(robot, "write_root_state_to_sim"):
+        # Common Isaac Lab API: (pos, quat, linvel, angvel)
+        zeros = torch.zeros((root_pos_w.shape[0], 6), dtype=root_pos_w.dtype, device=root_pos_w.device)
+        robot.write_root_state_to_sim(torch.cat([root_pose_xyzw, zeros], dim=-1))
+
+    # Joint state
+    if hasattr(robot, "write_joint_state_to_sim"):
+        robot.write_joint_state_to_sim(joint_pos, joint_vel)
+    elif hasattr(robot, "write_joint_pos_to_sim"):
+        robot.write_joint_pos_to_sim(joint_pos)
+    elif hasattr(robot, "write_joint_position_to_sim"):
+        robot.write_joint_position_to_sim(joint_pos)
+
+
 def _get_viewer_planner_state(
     env: "ManagerBasedRLEnv",
     *,
@@ -673,6 +705,7 @@ def main() -> int:
                     # Keep stepping the sim so rendering and sensors update, but do not depend on physics to
                     # "execute" the plan. The viewer state (camera/status) comes from the planner cache.
                     env.step(zero_actions)
+                    _apply_direct_playback_to_robot(base_env.scene["robot"], result, frame_idx=playback_frame)
                 else:
                     # Physics/default: step the sim and read state from Isaac.
                     env.step(zero_actions)

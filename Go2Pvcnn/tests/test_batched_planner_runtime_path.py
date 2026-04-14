@@ -219,6 +219,38 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         torch.testing.assert_close(planner_state.root_pos, fake_result.root_pos_w[:, 1])
         torch.testing.assert_close(planner_state.root_quat, fake_result.root_quat_w[:, 1])
 
+    def test_viewer_direct_playback_can_drive_robot_pose_from_planner_result(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        self.assertTrue(hasattr(module, "_apply_direct_playback_to_robot"))
+
+        class FakeRobot:
+            def __init__(self):
+                self.root_pose_xyzw = None
+                self.joint_pos = None
+                self.joint_vel = None
+
+            def write_root_pose_to_sim(self, root_pose_xyzw, env_ids=None):
+                self.root_pose_xyzw = root_pose_xyzw.clone()
+
+            def write_joint_state_to_sim(self, joint_pos, joint_vel, env_ids=None):
+                self.joint_pos = joint_pos.clone()
+                self.joint_vel = joint_vel.clone()
+
+        robot = FakeRobot()
+        fake_result = SimpleNamespace(
+            root_pos_w=torch.tensor([[[1.0, 2.0, 3.0]]], dtype=torch.float64),
+            root_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0]]], dtype=torch.float64),  # wxyz identity
+            joint_angles=torch.ones((1, 1, 12), dtype=torch.float64),
+        )
+
+        module._apply_direct_playback_to_robot(robot, fake_result, frame_idx=0)
+
+        # root pose should be (x,y,z,qx,qy,qz,qw) == (pos, identity xyzw)
+        expected_root_pose = torch.tensor([[1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
+        torch.testing.assert_close(robot.root_pose_xyzw, expected_root_pose)
+        torch.testing.assert_close(robot.joint_pos, torch.ones((1, 12), dtype=torch.float32))
+        torch.testing.assert_close(robot.joint_vel, torch.zeros((1, 12), dtype=torch.float32))
+
     def test_viewer_uses_plannerterrain_with_stable_scan_window(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
 
