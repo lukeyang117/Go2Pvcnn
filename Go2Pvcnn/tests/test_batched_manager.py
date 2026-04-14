@@ -392,6 +392,47 @@ class BatchedManagerTest(unittest.TestCase):
         # Sanity: env1 never replanned after the initial call in this scenario.
         torch.testing.assert_close(cache3.root_pos_w[1], root_pos0[1])
 
+    def test_failed_interval_replan_does_not_retry_every_step_due_to_interval_bookkeeping(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = SimpleNamespace(reference_replan_interval_steps=3, reference_trajectory_horizon=5, dt=0.02)
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        num_envs = 2
+        ray_hits = torch.zeros(num_envs, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([0, 0], dtype=torch.long),
+            command=torch.zeros(num_envs, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+
+        def gen_side_effect(terrain, states, commands, requested_n_frames, dt):
+            n = int(commands.shape[0])
+            if n == 1:
+                raise RuntimeError("planner failed for interval subset")
+            return _fake_result(n, requested_n_frames)
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            side_effect=gen_side_effect,
+        ) as gen:
+            # Initial full plan.
+            manager.refresh_from_env(env)
+            self.assertEqual(gen.call_count, 1)
+
+            # Env0 hits the interval trigger (3 steps since last replan); env1 does not.
+            env.episode_length_buf = torch.tensor([3, 1], dtype=torch.long)
+            manager.refresh_from_env(env)
+            self.assertEqual(gen.call_count, 2)
+
+            # The failed env should record the attempted "replan time" so the interval trigger
+            # doesn't keep firing every subsequent step.
+            self.assertTrue(torch.equal(manager._last_replan_episode_length_buf, torch.tensor([3, 0], dtype=torch.long)))
+
+            # Next step: should not retry replanning env0 purely due to interval bookkeeping.
+            env.episode_length_buf = torch.tensor([4, 2], dtype=torch.long)
+            manager.refresh_from_env(env)
+            self.assertEqual(gen.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -253,6 +253,21 @@ class BatchedTrajectoryManager:
                 fill_reference_cache_standstill_rows(self._cache, env_ids_cpu)
                 # Clear pending resets so the env stays standstill until it hits a new trigger.
                 self._pending_reset_mask = torch.where(replan_mask, torch.zeros_like(self._pending_reset_mask), self._pending_reset_mask)
+                # Record the attempted "replan time" for the failed envs so interval-based replans
+                # don't immediately retrigger every subsequent step once the interval has elapsed.
+                if (
+                    self._last_replan_episode_length_buf is None
+                    or self._last_replan_episode_length_buf.shape != episode_length_buf.shape
+                ):
+                    # Without compatible history, fall back to a full overwrite. In this case,
+                    # _compute_replan_mask will already have requested replanning for all envs.
+                    self._last_replan_episode_length_buf = episode_length_buf.clone()
+                else:
+                    self._last_replan_episode_length_buf = torch.where(
+                        replan_mask,
+                        episode_length_buf,
+                        self._last_replan_episode_length_buf,
+                    )
 
                 # Reset phases for failed envs; advance others.
                 max_phase = int(self._cache.root_pos_w.shape[1]) - 1  # type: ignore[union-attr]
