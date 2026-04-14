@@ -21,123 +21,110 @@ import argparse
 import os
 import sys
 from datetime import datetime
-
-# Isaac Lab imports - MUST be before AppLauncher
-from isaaclab.app import AppLauncher
-
-# Add argparse arguments
-parser = argparse.ArgumentParser(description="Train Go2 robot with Teacher semantic labels using RSL-RL PPO.")
-parser.add_argument("--num_envs", type=int, default=4, help="Number of environments to simulate.")
-parser.add_argument("--seed", type=int, default=42, help="Seed for the environment.")
-parser.add_argument("--max_iterations", type=int, default=5000, help="Maximum training iterations.")
-parser.add_argument("--video", action="store_true", default=False, help="Record training videos.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of recorded videos (steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between recordings (steps).")
-parser.add_argument("--resume", action="store_true", default=False, help="Resume training from checkpoint.")
-parser.add_argument("--load_run", type=str, default=None, help="Name of run to load when resuming.")
-parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
-parser.add_argument("--distributed", action="store_true", default=False,
-                    help="Enable multi-GPU training with PyTorch distributed.")
-parser.add_argument("--experiment", type=str, default="teacher_semantic",
-                    choices=[
-                        "teacher_semantic",
-                        "teacher_without_semantic",
-                        "teacher_elevation",
-                        "teacher_elevation_semantic_map",
-                        "teacher_elevation_trajectory",
-                    ],
-                    help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
-                    "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
-                    "teacher_elevation_trajectory (high-res elevation + trajectory reward).")
-parser.add_argument(
-    "--use-raw-reference-trajectory",
-    action="store_true",
-    default=False,
-    help="For teacher_elevation_trajectory: on each reset, fill the reference cache from "
-    "raw/kinematic_footsteps go2fp (requires raw tree present). Default is placeholder drift.",
-)
-
-# Append AppLauncher arguments
-AppLauncher.add_app_launcher_args(parser)
-args_cli = parser.parse_args()
-
-# ========================================
-# GPU MAPPING FOR MULTI-GPU (must be before AppLauncher)
-# ========================================
-if args_cli.distributed and "GPU_IDS" in os.environ:
-    gpu_ids = [int(x.strip()) for x in os.environ["GPU_IDS"].split(",") if x.strip()]
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-
-    if local_rank >= len(gpu_ids):
-        raise RuntimeError(
-            f"LOCAL_RANK={local_rank} but GPU_IDS only has {len(gpu_ids)} GPUs: {os.environ['GPU_IDS']}"
-        )
-
-    target_gpu_id = gpu_ids[local_rank]
-    args_cli.device = f"cuda:{target_gpu_id}"
-
-    print(f"\n[GPU Mapping] LOCAL_RANK={local_rank} -> GPU {target_gpu_id}")
-    print(f"[GPU Mapping] Set device to: {args_cli.device}")
-
-# Distributed training runs one Kit process per rank.
-if args_cli.distributed:
-    _ls = getattr(args_cli, "livestream", 0)
-    if _ls in (1, 2):
-        print(
-            "[train.py] Distributed mode: ignoring --livestream "
-            f"(was {_ls}); use single-GPU training for WebRTC visualization."
-        )
-        args_cli.livestream = 0
-
-# Launch Isaac Sim
-if getattr(args_cli, "livestream", -1) in (1, 2) and not args_cli.enable_cameras:
-    args_cli.enable_cameras = True
-    print(
-        "[INFO][train.py] livestream: enabled AppLauncher --enable_cameras so the simulator "
-        "uses a rendering experience (works without X11; WebRTC client on another machine)."
-    )
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
-
-"""Rest everything follows after Isaac Sim is launched."""
+from pathlib import Path
 
 import torch
-import gymnasium as gym
-
-# Add Go2Pvcnn to Python path
-import sys
-from pathlib import Path
-go2_pvcnn_root = Path(__file__).resolve().parent.parent
-if str(go2_pvcnn_root) not in sys.path:
-    sys.path.insert(0, str(go2_pvcnn_root))
-
-# Import environments and agent config
-from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
-from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
-from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
-from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg
-from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg
-import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
-from agent import get_train_cfg
 
 
+THIS_FILE = Path(__file__).resolve()
+GO2PVCNN_ROOT = THIS_FILE.parent.parent
+if str(GO2PVCNN_ROOT) not in sys.path:
+    sys.path.insert(0, str(GO2PVCNN_ROOT))
 
-# RSL-RL-2.01 imports (from rsl-rl-2-01 package)
-from rsl_rl_2_01.runners import OnPolicyRunner
 
-# Isaac Lab utilities
-from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_yaml
+def build_arg_parser() -> argparse.ArgumentParser:
+    from isaaclab.app import AppLauncher
 
-# Configure PyTorch
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-torch.backends.cudnn.deterministic = False
-torch.backends.cudnn.benchmark = False
+    parser = argparse.ArgumentParser(description="Train Go2 robot with Teacher semantic labels using RSL-RL PPO.")
+    parser.add_argument("--num_envs", type=int, default=4, help="Number of environments to simulate.")
+    parser.add_argument("--seed", type=int, default=42, help="Seed for the environment.")
+    parser.add_argument("--max_iterations", type=int, default=5000, help="Maximum training iterations.")
+    parser.add_argument("--video", action="store_true", default=False, help="Record training videos.")
+    parser.add_argument("--video_length", type=int, default=200, help="Length of recorded videos (steps).")
+    parser.add_argument("--video_interval", type=int, default=2000, help="Interval between recordings (steps).")
+    parser.add_argument("--resume", action="store_true", default=False, help="Resume training from checkpoint.")
+    parser.add_argument("--load_run", type=str, default=None, help="Name of run to load when resuming.")
+    parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="Enable multi-GPU training with PyTorch distributed.",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="teacher_semantic",
+        choices=[
+            "teacher_semantic",
+            "teacher_without_semantic",
+            "teacher_elevation",
+            "teacher_elevation_semantic_map",
+            "teacher_elevation_trajectory",
+        ],
+        help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
+        "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
+        "teacher_elevation_trajectory (high-res elevation + trajectory reward).",
+    )
+    parser.add_argument(
+        "--use-raw-reference-trajectory",
+        action="store_true",
+        default=False,
+        help="For teacher_elevation_trajectory: on each reset, fill the reference cache from "
+        "raw/kinematic_footsteps go2fp (requires raw tree present). Default is placeholder drift.",
+    )
 
-# CRITICAL: Set memory allocator
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    AppLauncher.add_app_launcher_args(parser)
+    return parser
+
+
+def _parse_args() -> argparse.Namespace:
+    return build_arg_parser().parse_args()
+
+
+def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
+    # GPU MAPPING FOR MULTI-GPU (must be before AppLauncher)
+    if args_cli.distributed and "GPU_IDS" in os.environ:
+        gpu_ids = [int(x.strip()) for x in os.environ["GPU_IDS"].split(",") if x.strip()]
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        if local_rank >= len(gpu_ids):
+            raise RuntimeError(
+                f"LOCAL_RANK={local_rank} but GPU_IDS only has {len(gpu_ids)} GPUs: {os.environ['GPU_IDS']}"
+            )
+
+        target_gpu_id = gpu_ids[local_rank]
+        args_cli.device = f"cuda:{target_gpu_id}"
+
+        print(f"\n[GPU Mapping] LOCAL_RANK={local_rank} -> GPU {target_gpu_id}")
+        print(f"[GPU Mapping] Set device to: {args_cli.device}")
+
+    # Distributed training runs one Kit process per rank.
+    if args_cli.distributed:
+        _ls = getattr(args_cli, "livestream", 0)
+        if _ls in (1, 2):
+            print(
+                "[train.py] Distributed mode: ignoring --livestream "
+                f"(was {_ls}); use single-GPU training for WebRTC visualization."
+            )
+            args_cli.livestream = 0
+
+    # Launch Isaac Sim
+    if getattr(args_cli, "livestream", -1) in (1, 2) and not args_cli.enable_cameras:
+        args_cli.enable_cameras = True
+        print(
+            "[INFO][train.py] livestream: enabled AppLauncher --enable_cameras so the simulator "
+            "uses a rendering experience (works without X11; WebRTC client on another machine)."
+        )
+
+    return args_cli
+
+
+def _launch_app(args_cli: argparse.Namespace):
+    from isaaclab.app import AppLauncher
+
+    app_launcher = AppLauncher(args_cli)
+    return app_launcher, app_launcher.app
 
 
 def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bool) -> None:
@@ -156,33 +143,61 @@ def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bo
         env_cfg.use_raw_reference_trajectory = bool(use_raw_reference_trajectory)
 
 
-def main():
+def main() -> int:
     """Main training function."""
-    
+
+    args_cli = _prepare_runtime_args(_parse_args())
+    app_launcher, simulation_app = _launch_app(args_cli)
+
+    import gymnasium as gym
+
+    from agent import get_train_cfg
+    from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
+    from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg
+    from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
+    from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
+    import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
+    from isaaclab.envs import ManagerBasedRLEnv
+    from isaaclab.utils.dict import print_dict
+    from isaaclab.utils.io import dump_yaml
+    from rsl_rl_2_01.runners import OnPolicyRunner
+
+    # Configure PyTorch only when the script is actually running.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = False
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+    dist = None
+
     # ========================================
     # Multi-GPU Setup
     # ========================================
     if args_cli.distributed:
         import torch.distributed as dist
-        
+
         if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
-            raise RuntimeError("Distributed mode enabled but RANK/WORLD_SIZE not set. "
-                             "Use: python -m torch.distributed.run --nproc_per_node=N script.py --distributed")
-        
+            raise RuntimeError(
+                "Distributed mode enabled but RANK/WORLD_SIZE not set. "
+                "Use: python -m torch.distributed.run --nproc_per_node=N script.py --distributed"
+            )
+
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = app_launcher.local_rank
-        
+
         print(f"[Multi-GPU] Global Rank: {rank}/{world_size}, Local Rank: {local_rank}")
         print(f"[Multi-GPU] Device: {args_cli.device}")
-        
+
         # Initialize process group
         dist.init_process_group(backend="nccl", init_method="env://")
-        
+
         # Set CUDA device
         device_id = app_launcher.device_id
         torch.cuda.set_device(device_id)
-        
+
         # Divide environments across GPUs
         envs_per_gpu = args_cli.num_envs // world_size
         args_cli.num_envs = envs_per_gpu
@@ -491,18 +506,17 @@ def main():
     print(f"\n{'='*80}")
     print(f"Training Complete!")
     print(f"{'='*80}\n")
-    
+
     # ========================================
     # Cleanup
     # ========================================
     env.close()
-    if args_cli.distributed:
+    if args_cli.distributed and dist is not None and dist.is_initialized():
         dist.destroy_process_group()
+    simulation_app.close()
+
+    return 0
 
 
 if __name__ == "__main__":
-    # Run main training
-    main()
-    
-    # Close simulation app
-    simulation_app.close()
+    raise SystemExit(main())
