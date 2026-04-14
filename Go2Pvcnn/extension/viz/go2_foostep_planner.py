@@ -273,6 +273,45 @@ class PlannerVisualizer:
         )
 
 
+class _ViewerCommandManagerProxy:
+    """Expose teleop commands through the env's shared command manager interface."""
+
+    def __init__(self, command_manager, *, command_name: str, num_envs: int, device: torch.device):
+        self._command_manager = command_manager
+        self._command_name = str(command_name)
+        self._num_envs = int(num_envs)
+        self._device = torch.device(device)
+        self._command: torch.Tensor | None = None
+
+    def set_command(self, command: torch.Tensor) -> None:
+        command_t = torch.as_tensor(command, dtype=torch.float64, device=self._device)
+        if command_t.ndim == 1:
+            command_t = command_t.unsqueeze(0)
+        if command_t.ndim != 2 or int(command_t.shape[-1]) != 3:
+            raise ValueError(f"command must have shape (3,) or (num_envs, 3), got {tuple(command_t.shape)}")
+        if int(command_t.shape[0]) == 1 and self._num_envs > 1:
+            command_t = command_t.expand(self._num_envs, -1).clone()
+        elif int(command_t.shape[0]) != self._num_envs:
+            raise ValueError(f"command must have shape (1, 3) or ({self._num_envs}, 3), got {tuple(command_t.shape)}")
+        self._command = command_t
+
+    @property
+    def command(self) -> torch.Tensor | None:
+        return self._command
+
+    @command.setter
+    def command(self, value: torch.Tensor) -> None:
+        self.set_command(value)
+
+    def get_command(self, name: str):
+        if name == self._command_name and self._command is not None:
+            return self._command
+        return self._command_manager.get_command(name)
+
+    def __getattr__(self, name: str):
+        return getattr(self._command_manager, name)
+
+
 def _apply_terrain_mode(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY, terrain_mode: str) -> None:
     tg = env_cfg.scene.terrain.terrain_generator
     if tg is None:
@@ -334,6 +373,23 @@ def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> Batche
         replan_yaw_biases=list(env_cfg.replan_yaw_biases),
         replan_vy_biases=list(env_cfg.replan_vy_biases),
     )
+
+
+def _attach_viewer_reference_manager(base_env: ManagerBasedRLEnv, planner_cfg: BatchedTrajectoryConfig):
+    from extension.batched_planner.manager import BatchedTrajectoryManager
+
+    command_name = str(getattr(planner_cfg, "reference_command_name", "base_velocity"))
+    proxy = _ViewerCommandManagerProxy(
+        base_env.command_manager,
+        command_name=command_name,
+        num_envs=int(base_env.num_envs),
+        device=base_env.device,
+    )
+    base_env.command_manager = proxy
+    manager = BatchedTrajectoryManager(planner_cfg, device=base_env.device)
+    base_env._trajectory_manager = manager
+    base_env._trajectory_reference_cache = None
+    return manager, proxy
 
 
 def _compute_stable_scan_ranges(scanner, *, env_id: int = 0) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -445,12 +501,15 @@ def main() -> int:
     import gymnasium as gym
 
     import go2_pvcnn.tasks.register_envs  # noqa: F401,F403
-    from extension.batched_planner.trajectory import batched_generate_trajectory
     from extension.convention import extract_yaw_batch
+    from extension.mdp import rewards_reference
     from isaaclab.envs import ManagerBasedRLEnv
 
     env_cfg = _build_env_cfg(args_cli)
     planner_cfg = _build_planner_cfg(env_cfg)
+    planner_cfg.dt = float(args_cli.plan_dt)
+    planner_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
+    planner_cfg.reference_replan_interval_steps = int(env_cfg.reference_replan_interval_steps)
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
@@ -463,6 +522,7 @@ def main() -> int:
     foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
     scanner = base_env.scene.sensors["height_scanner"]
     visualizer = PlannerVisualizer()
+    _, command_proxy = _attach_viewer_reference_manager(base_env, planner_cfg)
 
     print(f"[Viewer] Terrain mode: {args_cli.terrain}", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
@@ -483,6 +543,7 @@ def main() -> int:
         try:
             while simulation_app.is_running():
                 teleop_cmd = teleop.poll()
+                command_proxy.command = teleop_cmd.values
                 if teleop_cmd.reset_requested:
                     env.reset()
                     for _ in range(max(0, int(args_cli.warmup_steps))):
@@ -491,16 +552,9 @@ def main() -> int:
                 env.step(zero_actions)
 
                 planner_state = _planner_state_from_env(base_env, foot_ids)
-                terrain, ray_hits = _compute_local_terrain(scanner)
-                result = batched_generate_trajectory(
-                    terrain,
-                    planner_state,
-                    teleop_cmd.values,
-                    requested_n_frames=int(args_cli.n_frames),
-                    dt=float(args_cli.plan_dt),
-                    cfg=planner_cfg,
-                )
+                result = rewards_reference.ensure_reference_cache(base_env)
                 root_yaw = extract_yaw_batch(planner_state.root_quat)
+                ray_hits = scanner.data.ray_hits_w[0].to(dtype=torch.float64)
                 height_points = _subsample_height_points(ray_hits, int(args_cli.heightmap_viz_stride))
                 visualizer.update(
                     result=result,

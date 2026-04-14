@@ -39,6 +39,13 @@ def _fake_isaaclab_app(flag_name: str):
 
 
 class BatchedPlannerRuntimePathTest(unittest.TestCase):
+    class _FakeCommandManager:
+        def __init__(self, command: torch.Tensor):
+            self.command = command
+
+        def get_command(self, name: str):
+            return self.command
+
     def _make_fake_scanner(
         self,
         hits: torch.Tensor,
@@ -54,6 +61,34 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         )
         cfg = SimpleNamespace(pattern_cfg=SimpleNamespace(size=size))
         return SimpleNamespace(data=data, cfg=cfg)
+
+    def _make_fake_viewer_env(self, *, episode_length_buf: torch.Tensor, command: torch.Tensor, ray_hits: torch.Tensor):
+        num_envs = int(episode_length_buf.shape[0])
+        root_pos = torch.zeros((num_envs, 3), dtype=torch.float64)
+        root_quat = torch.zeros((num_envs, 4), dtype=torch.float64)
+        root_quat[..., 0] = 1.0
+        joint_pos = torch.zeros((num_envs, 12), dtype=torch.float64)
+        foot_pos = torch.zeros((num_envs, 4, 3), dtype=torch.float64)
+        robot = SimpleNamespace(
+            data=SimpleNamespace(
+                root_pos_w=root_pos,
+                root_quat_w=root_quat,
+                joint_pos=joint_pos,
+                body_pos_w=foot_pos,
+            ),
+            find_bodies=lambda pattern: (torch.tensor([0, 1, 2, 3], dtype=torch.long), ["FL", "FR", "RL", "RR"]),
+        )
+        scanner = self._make_fake_scanner(ray_hits)
+        scene = SimpleNamespace(robot=robot, sensors={"height_scanner": scanner})
+        env = SimpleNamespace(
+            scene=scene,
+            command_manager=self._FakeCommandManager(command),
+            episode_length_buf=episode_length_buf,
+            device=torch.device("cpu"),
+            num_envs=num_envs,
+        )
+        env.unwrapped = env
+        return env
 
     def test_train_module_is_import_safe(self):
         module = _fresh_import("Go2Pvcnn.scripts.train")
@@ -171,8 +206,9 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertEqual(captured["world_x_range"], (9.25, 10.75))
         self.assertEqual(captured["world_y_range"], (19.25, 20.75))
 
-    def test_viewer_local_terrain_can_feed_batched_generate_trajectory(self):
+    def test_viewer_shared_runtime_manager_replans_on_reset_and_command_change(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        from extension.mdp import rewards_reference
 
         raw_ray_hits = torch.tensor(
             [
@@ -190,68 +226,63 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
             ],
             dtype=torch.float32,
         )
-        scanner = self._make_fake_scanner(raw_ray_hits)
-        terrain, _ = module._compute_local_terrain(scanner, env_id=0)
-
-        planner_state = SimpleNamespace(
-            root_pos=torch.zeros((1, 3), dtype=torch.float64),
-            root_quat=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float64),
-            joint_angles=torch.zeros((1, 12), dtype=torch.float64),
-            foot_pos=torch.zeros((1, 4, 3), dtype=torch.float64),
-            foot_vel=torch.zeros((1, 4, 3), dtype=torch.float64),
+        env = self._make_fake_viewer_env(
+            episode_length_buf=torch.tensor([4], dtype=torch.long),
+            command=torch.zeros((1, 3), dtype=torch.float64),
+            ray_hits=raw_ray_hits,
         )
-        command = torch.zeros((1, 3), dtype=torch.float64)
-        planner_cfg = SimpleNamespace()
-        captured = {}
+        planner_cfg = SimpleNamespace(
+            reference_replan_interval_steps=50,
+            reference_trajectory_horizon=5,
+            dt=0.02,
+            reference_command_name="base_velocity",
+        )
+        module._attach_viewer_reference_manager(env, planner_cfg)
 
-        def fake_batched_generate_trajectory(terrain_arg, planner_state_arg, command_arg, *, requested_n_frames, dt, cfg):
-            captured["terrain"] = terrain_arg
-            captured["planner_state"] = planner_state_arg
-            captured["command"] = command_arg.clone()
-            captured["requested_n_frames"] = requested_n_frames
-            captured["dt"] = dt
-            captured["cfg"] = cfg
-            self.assertEqual(command_arg.shape, (1, 3))
-            self.assertEqual(requested_n_frames, 12)
-            self.assertAlmostEqual(dt, 0.02)
-            self.assertEqual(terrain_arg.world_x_range, (9.25, 10.75))
-            self.assertEqual(terrain_arg.world_y_range, (19.25, 20.75))
-            self.assertEqual(terrain_arg.height_at(torch.tensor([10.0, 20.0], dtype=torch.float64)).shape, (1,))
-            self.assertEqual(
-                terrain_arg.height_at(torch.tensor([[10.0, 20.0]], dtype=torch.float64)).shape,
-                (1,),
-            )
-            self.assertEqual(
-                terrain_arg.max_height_along_segment(
-                    torch.tensor([9.25, 19.25], dtype=torch.float64),
-                    torch.tensor([10.75, 20.75], dtype=torch.float64),
-                ).shape,
-                (1,),
-            )
-            return SimpleNamespace(
-                root_pos_w=torch.zeros((1, 1, 3), dtype=torch.float64),
-                foot_pos_w=torch.zeros((1, 1, 4, 3), dtype=torch.float64),
-                planned_touchdown_w=torch.zeros((1, 1, 4, 3), dtype=torch.float64),
-            )
+        fake_cache = SimpleNamespace(
+            is_ready=lambda: True,
+            horizon_length=lambda: 5,
+            root_pos_w=torch.zeros((1, 5, 3), dtype=torch.float64),
+            root_quat_w=torch.zeros((1, 5, 4), dtype=torch.float64),
+            joint_angles=torch.zeros((1, 5, 12), dtype=torch.float64),
+            foot_pos_root=torch.zeros((1, 5, 4, 3), dtype=torch.float64),
+            foot_pos_w=torch.zeros((1, 5, 4, 3), dtype=torch.float64),
+            contact_state=torch.zeros((1, 5, 4), dtype=torch.bool),
+            body_pos_root=torch.zeros((1, 5, 12, 3), dtype=torch.float64),
+            planned_touchdown_w=torch.zeros((1, 4, 3), dtype=torch.float64),
+            phase_index=torch.zeros((1, 5), dtype=torch.int64),
+            valid_mask=torch.ones((1, 5), dtype=torch.bool),
+        )
+        fake_result = SimpleNamespace(
+            num_frames=5,
+            root_pos_w=fake_cache.root_pos_w,
+            root_quat_w=fake_cache.root_quat_w,
+            root_lin_vel_w=torch.zeros((1, 5, 3), dtype=torch.float64),
+            root_ang_vel_w=torch.zeros((1, 5, 3), dtype=torch.float64),
+            joint_angles=fake_cache.joint_angles,
+            foot_pos_w=fake_cache.foot_pos_w,
+            foot_pos_root=fake_cache.foot_pos_root,
+            contact_state=fake_cache.contact_state,
+            body_pos_root=fake_cache.body_pos_root,
+            planned_touchdown_w=fake_cache.planned_touchdown_w,
+        )
 
-        with patch("extension.batched_planner.trajectory.batched_generate_trajectory", side_effect=fake_batched_generate_trajectory):
-            from extension.batched_planner.trajectory import batched_generate_trajectory
+        with patch("extension.batched_planner.trajectory.batched_generate_trajectory", side_effect=AssertionError("viewer should not call the raw trajectory entrypoint")), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            return_value=fake_result,
+        ) as gen:
+            ensured_1 = rewards_reference.ensure_reference_cache(env)
+            ensured_2 = rewards_reference.ensure_reference_cache(env)
+            env.command_manager.command = torch.tensor([[0.25, 0.0, 0.0]], dtype=torch.float64)
+            ensured_3 = rewards_reference.ensure_reference_cache(env)
+            env.episode_length_buf = torch.tensor([0], dtype=torch.long)
+            ensured_4 = rewards_reference.ensure_reference_cache(env)
 
-            result = batched_generate_trajectory(
-                terrain,
-                planner_state,
-                command,
-                requested_n_frames=12,
-                dt=0.02,
-                cfg=planner_cfg,
-            )
-
-        self.assertIs(captured["terrain"], terrain)
-        self.assertIs(captured["planner_state"], planner_state)
-        self.assertEqual(result.root_pos_w.shape, (1, 1, 3))
-        self.assertEqual(result.foot_pos_w.shape, (1, 1, 4, 3))
-        self.assertEqual(result.planned_touchdown_w.shape, (1, 1, 4, 3))
-        self.assertEqual(captured["command"].shape, (1, 3))
+        self.assertIs(ensured_1, ensured_2)
+        self.assertIs(env.unwrapped._trajectory_reference_cache, ensured_4)
+        self.assertEqual(gen.call_count, 3)
+        self.assertTrue(torch.allclose(env.command_manager.get_command("base_velocity"), torch.tensor([[0.25, 0.0, 0.0]], dtype=torch.float64)))
+        self.assertTrue(ensured_4.is_ready())
 
     def test_reference_cache_requires_manager_owned_runtime_path(self):
         from extension.mdp import rewards_reference
