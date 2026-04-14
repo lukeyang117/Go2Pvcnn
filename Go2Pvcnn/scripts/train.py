@@ -66,13 +66,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
         "teacher_elevation_trajectory (high-res elevation + trajectory reward).",
     )
-    parser.add_argument(
-        "--use-raw-reference-trajectory",
-        action="store_true",
-        default=False,
-        help="For teacher_elevation_trajectory: on each reset, fill the reference cache from "
-        "raw/kinematic_footsteps go2fp (requires raw tree present). Default is placeholder drift.",
-    )
 
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -129,22 +122,6 @@ def _launch_app(args_cli: argparse.Namespace):
 
     app_launcher = AppLauncher(args_cli)
     return app_launcher, app_launcher.app
-
-
-def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bool) -> None:
-    """Apply reference-trajectory CLI settings without assuming legacy/raw fields exist."""
-    if hasattr(env_cfg, "use_batched_reference_trajectory"):
-        env_cfg.use_batched_reference_trajectory = True
-        if use_raw_reference_trajectory:
-            print(
-                "[train.py] Warning: --use-raw-reference-trajectory is legacy-only and is ignored "
-                "for the batched GPU teacher_elevation_trajectory env.",
-                flush=True,
-            )
-        return
-
-    if hasattr(env_cfg, "use_raw_reference_trajectory"):
-        env_cfg.use_raw_reference_trajectory = bool(use_raw_reference_trajectory)
 
 
 def main() -> int:
@@ -242,12 +219,7 @@ def main() -> int:
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = f"cuda:{app_launcher.device_id}"
-    if args_cli.experiment == "teacher_elevation_trajectory":
-        _configure_reference_trajectory(
-            env_cfg,
-            use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),
-        )
-    
+
     if args_cli.distributed:
         env_cfg.seed = args_cli.seed + app_launcher.local_rank
     else:
