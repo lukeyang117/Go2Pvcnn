@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
 
 ensure_kinematic_footsteps_on_syspath()
@@ -34,6 +34,39 @@ class BatchedSmoothTerrain:
     def roughness_at(self, points_xy):
         points = torch.as_tensor(points_xy)
         return torch.zeros(points.shape[:-1], dtype=torch.float64, device=points.device)
+
+
+class BatchedStairTerrain:
+    def __init__(self, step_x: float = 0.12, step_height: float = 0.06):
+        self.step_x = float(step_x)
+        self.step_height = float(step_height)
+
+    def _height(self, points_xy):
+        points = torch.as_tensor(points_xy, dtype=torch.float64)
+        return torch.where(points[..., 0] >= self.step_x, self.step_height, 0.0).to(dtype=torch.float64, device=points.device)
+
+    def height_at(self, x, y=None):
+        if y is None:
+            return self._height(x)
+        return self.step_height if float(x) >= self.step_x else 0.0
+
+    def roughness_at(self, x, y=None):
+        if y is None:
+            points = torch.as_tensor(x, dtype=torch.float64)
+            return torch.zeros(points.shape[:-1], dtype=torch.float64, device=points.device)
+        return 0.0
+
+    def max_height_along_segment(self, p0, p1=None):
+        if p1 is None:
+            points = torch.as_tensor(p0, dtype=torch.float64)
+            max_x = points[..., 0]
+            return torch.where(max_x >= self.step_x, self.step_height, 0.0).to(dtype=torch.float64, device=points.device)
+        if not isinstance(p0, tuple):
+            p0_t = torch.as_tensor(p0, dtype=torch.float64)
+            p1_t = torch.as_tensor(p1, dtype=torch.float64)
+            max_x = torch.maximum(p0_t[..., 0], p1_t[..., 0])
+            return torch.where(max_x >= self.step_x, self.step_height, 0.0).to(dtype=torch.float64, device=p0_t.device)
+        return self.step_height if max(float(p0[0]), float(p1[0])) >= self.step_x else 0.0
 
 
 class BatchedFootholdTest(unittest.TestCase):
@@ -166,6 +199,59 @@ class BatchedFootholdTest(unittest.TestCase):
         )
         self.assertEqual(tuple(total_score.shape), (1,))
         self.assertAlmostEqual(float(total_score[0].item()), float(expected_total), places=7)
+
+    def test_batched_compute_footholds_matches_raw_on_stairs(self):
+        from extension.batched_planner.foothold import batched_compute_footholds
+        from scripts.go2fp.foothold import compute_footholds as raw_compute_footholds
+        from scripts.go2fp.foothold import compute_hip_positions as raw_compute_hip_positions
+
+        terrain = BatchedStairTerrain(step_x=0.12, step_height=0.06)
+        raw_terrain = terrain
+        base_pos = torch.tensor([[0.0, 0.0, 0.32]], dtype=torch.float64)
+        base_yaw = torch.tensor([0.15], dtype=torch.float64)
+        base_lin_vel_xy = torch.tensor([[0.25, -0.05]], dtype=torch.float64)
+        ref_lin_vel_xy = torch.tensor([[0.3, -0.02]], dtype=torch.float64)
+        stance_time = torch.tensor([0.28], dtype=torch.float64)
+        com_height = torch.tensor([0.33], dtype=torch.float64)
+        touchdown_times = torch.tensor([[0.12, 0.18, 0.15, 0.2]], dtype=torch.float64)
+        previous_footholds = torch.tensor(
+            [[[0.20, 0.14, 0.06], [0.20, -0.14, 0.06], [-0.20, 0.14, 0.0], [-0.20, -0.14, 0.0]]],
+            dtype=torch.float64,
+        )
+        hip_positions = torch.as_tensor(
+            raw_compute_hip_positions(base_pos[0].cpu().numpy(), float(base_yaw[0].item())),
+            dtype=torch.float64,
+        ).unsqueeze(0)
+
+        actual = batched_compute_footholds(
+            base_pos=base_pos,
+            base_yaw=base_yaw,
+            base_lin_vel_xy=base_lin_vel_xy,
+            ref_lin_vel_xy=ref_lin_vel_xy,
+            hip_positions=hip_positions,
+            stance_time=stance_time,
+            com_height=com_height,
+            terrain=terrain,
+            previous_footholds=previous_footholds,
+            touchdown_times=touchdown_times,
+            yaw_rate=torch.tensor([0.1], dtype=torch.float64),
+        )
+        expected = raw_compute_footholds(
+            base_pos=base_pos[0].cpu().numpy(),
+            base_yaw=float(base_yaw[0].item()),
+            base_lin_vel_xy=base_lin_vel_xy[0].cpu().numpy(),
+            ref_lin_vel_xy=ref_lin_vel_xy[0].cpu().numpy(),
+            hip_positions=hip_positions[0].cpu().numpy(),
+            stance_time=float(stance_time[0].item()),
+            com_height=float(com_height[0].item()),
+            terrain=raw_terrain,
+            previous_footholds=previous_footholds[0].cpu().numpy(),
+            touchdown_times=touchdown_times[0].cpu().numpy(),
+            yaw_rate=0.1,
+        )
+
+        self.assertEqual(tuple(actual.shape), (1, 4, 3))
+        torch.testing.assert_close(actual[0], torch.as_tensor(expected, dtype=actual.dtype), atol=1e-7, rtol=1e-7)
 
 
 if __name__ == "__main__":

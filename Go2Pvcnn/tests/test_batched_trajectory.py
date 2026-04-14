@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
 
 ensure_kinematic_footsteps_on_syspath()
@@ -82,13 +82,63 @@ class BatchedTrajectoryTest(unittest.TestCase):
         self.assertTrue(torch.allclose(actual.root_pos_w[0], actual.root_pos_w[0, :1].expand_as(actual.root_pos_w[0])))
         self.assertTrue(torch.allclose(actual.root_quat_w[0], actual.root_quat_w[0, :1].expand_as(actual.root_quat_w[0])))
 
+    def test_replanning_prefers_first_yaw_bias_candidate_matches_raw(self):
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.types import BatchedRobotState
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+        from scripts.go2fp.config import TrajectoryConfig
+        from scripts.go2fp.trajectory import Command, generate_trajectory
+
+        state, raw_state = self._default_batched_state()
+        cfg = BatchedTrajectoryConfig(
+            duty_factor=0.55,
+            replan_velocity_scales=(1.0, 0.7),
+            replan_yaw_biases=(0.0, 0.20, -0.20),
+            replan_vy_biases=(0.0, 0.08, -0.08),
+            max_touchdown_xy_reach=0.094,
+        )
+        command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float64)
+
+        actual = batched_generate_trajectory(FlatTerrain(), state, command, requested_n_frames=25, dt=0.02, cfg=cfg)
+        expected = generate_trajectory(
+            FlatTerrain(),
+            raw_state,
+            Command(0.3, 0.0, 0.0),
+            25,
+            dt=0.02,
+            config=TrajectoryConfig(
+                gait_name=cfg.gait_name,
+                step_freq=cfg.step_freq,
+                duty_factor=cfg.duty_factor,
+                step_height=cfg.step_height,
+                hip_height=cfg.hip_height,
+                body_clearance_margin=cfg.body_clearance_margin,
+                foothold_search_radius=cfg.foothold_search_radius,
+                foothold_search_step=cfg.foothold_search_step,
+                max_foothold_step_down=cfg.max_foothold_step_down,
+                max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
+                replan_stop_speed=cfg.replan_stop_speed,
+                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
+                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
+                replan_vy_biases=tuple(cfg.replan_vy_biases),
+            ),
+        )
+
+        self.assertEqual(actual.num_frames, expected.root_pos_w.shape[0])
+        torch.testing.assert_close(actual.root_pos_w[0], torch.as_tensor(expected.root_pos_w, dtype=actual.root_pos_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.root_quat_w[0], torch.as_tensor(expected.root_quat_w, dtype=actual.root_quat_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.joint_angles[0], torch.as_tensor(expected.joint_angles, dtype=actual.joint_angles.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.foot_pos_w[0], torch.as_tensor(expected.foot_pos_w, dtype=actual.foot_pos_w.dtype), atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(actual.contact_state[0], torch.as_tensor(expected.contact_state, dtype=actual.contact_state.dtype))
+        torch.testing.assert_close(actual.planned_touchdown_w[0], torch.as_tensor(expected.planned_touchdown_w, dtype=actual.planned_touchdown_w.dtype), atol=1e-5, rtol=1e-5)
+
     def test_horizon_truncation_clamps_to_cycle_frames(self):
         from extension.batched_planner.config import BatchedTrajectoryConfig
         from extension.batched_planner.trajectory import batched_generate_trajectory
 
         state, _ = self._default_batched_state()
         cmd = torch.tensor([[0.4, 0.0, 0.2]], dtype=torch.float64)
-        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.6)
+        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.55)
 
         actual = batched_generate_trajectory(FlatTerrain(), state, cmd, requested_n_frames=100, dt=0.02, cfg=cfg)
 
@@ -105,7 +155,7 @@ class BatchedTrajectoryTest(unittest.TestCase):
 
         state, raw_state = self._default_batched_state()
         cmd = torch.tensor([[0.35, 0.0, 0.1]], dtype=torch.float64)
-        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.6)
+        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.55)
 
         actual = batched_generate_trajectory(FlatTerrain(), state, cmd, requested_n_frames=20, dt=0.02, cfg=cfg)
         expected = generate_trajectory(

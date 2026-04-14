@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from ..convention import euler_to_quat_batch, extract_roll_pitch_batch, extract_yaw_batch
+from ..convention import euler_to_quat_batch, extract_roll_pitch_batch, extract_yaw_batch, yaw_rotation_matrix_batch
 from .base_solver import batched_integrate_base_planar, batched_solve_base_trajectory
 from .config import BatchedTrajectoryConfig
 from .foothold import batched_candidate_total_score, batched_compute_footholds, batched_evaluate_touchdowns
@@ -15,7 +15,7 @@ from .gait import GAIT_PARAMS, batched_gait_schedule, batched_legs_requiring_tou
 from .ik import batch_forward_kinematics, batch_inverse_kinematics
 from .swing import batched_compute_swing_targets
 from .terrain_estimator import batched_estimate_terrain
-from .types import BatchedRobotState, BatchedTrajectoryResult
+from .types import BatchedRobotState, BatchedTrajectoryResult, HIP_OFFSETS_ARRAY
 
 _STANDSTILL_CMD_EPS = 1e-5
 
@@ -75,6 +75,18 @@ def _world_to_root_frame(root_pos: Tensor, root_quat: Tensor, points_w: Tensor) 
     row2 = torch.stack([2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)], dim=-1)
     rot = torch.stack([row0, row1, row2], dim=-2)
     return torch.einsum("ntji,ntmi->ntmj", rot, delta)
+
+
+def _compute_hip_positions(base_pos: Tensor, base_yaw: Tensor) -> Tensor:
+    base_pos_t = torch.as_tensor(base_pos, dtype=torch.float64)
+    base_yaw_t = torch.as_tensor(base_yaw, dtype=torch.float64)
+    if base_pos_t.ndim != 2 or base_pos_t.shape[-1] != 3:
+        raise ValueError(f"base_pos must have shape (N, 3); got {tuple(base_pos_t.shape)}")
+    if base_yaw_t.ndim != 1 or base_yaw_t.shape[0] != base_pos_t.shape[0]:
+        raise ValueError("base_pos and base_yaw must share batch size")
+    rot = yaw_rotation_matrix_batch(base_yaw_t).to(dtype=torch.float64)
+    hip_offsets = HIP_OFFSETS_ARRAY.to(device=base_pos_t.device, dtype=torch.float64)
+    return base_pos_t[:, None, :] + torch.einsum("nij,kj->nki", rot, hip_offsets)
 
 
 def _standstill_trajectory(initial_state: BatchedRobotState, n_frames: int, dt: float) -> BatchedTrajectoryResult:
@@ -189,6 +201,7 @@ def batched_generate_trajectory(
         torch.full((batch_size,), float(cfg.duty_factor), dtype=torch.float64, device=device),
     )
     initial_yaw = extract_yaw_batch(states.root_quat)
+    hip_positions = _compute_hip_positions(states.root_pos, initial_yaw)
     touchdown_mask = batched_legs_requiring_touchdown(contact_seq)
 
     candidates = _iter_replan_commands(commands_t, cfg)
@@ -200,7 +213,7 @@ def batched_generate_trajectory(
             base_yaw=initial_yaw,
             base_lin_vel_xy=candidate[:, :2],
             ref_lin_vel_xy=candidate[:, :2],
-            hip_positions=torch.zeros((batch_size, 4, 3), dtype=torch.float64, device=device),
+            hip_positions=hip_positions,
             stance_time=st,
             com_height=torch.full((batch_size,), float(cfg.hip_height), dtype=torch.float64, device=device),
             terrain=terrain,
