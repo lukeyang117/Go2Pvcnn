@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 
 from ..convention import planner_result_to_reference_cache
+from ..reference.cache import fill_reference_cache_standstill_rows, masked_write_reference_cache_rows
 from .terrain import PlannerTerrain
 from .types import BatchedRobotState
 from .trajectory import batched_generate_trajectory
@@ -129,6 +130,69 @@ class BatchedTrajectoryManager:
             return True
         return False
 
+    def _compute_replan_mask(self, episode_length_buf: Tensor, commands: Tensor) -> Tensor:
+        """Return a per-env boolean mask indicating which envs need replanning."""
+        episode_length_buf = torch.as_tensor(episode_length_buf, device=self._device, dtype=torch.long)
+        commands = torch.as_tensor(commands, device=self._device, dtype=torch.float64)
+        num_envs = int(episode_length_buf.shape[0])
+
+        # If we cannot reason about shape compatibility, fall back to a full replan.
+        if self._cache is None:
+            return torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        if self._last_episode_length_buf is None or self._last_commands is None or self._last_replan_episode_length_buf is None:
+            return torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        if episode_length_buf.shape != self._last_episode_length_buf.shape:
+            return torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        if commands.shape != self._last_commands.shape:
+            return torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        horizon = int(self._cfg.reference_trajectory_horizon)
+        if self._cache.horizon_length() != horizon:
+            return torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        if self._last_replan_episode_length_buf.shape != episode_length_buf.shape:
+            return torch.ones(num_envs, dtype=torch.bool, device=self._device)
+
+        replan_mask = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
+        replan_mask |= episode_length_buf < self._last_episode_length_buf
+
+        if self._pending_reset_mask is not None and self._pending_reset_mask.shape == replan_mask.shape:
+            replan_mask |= self._pending_reset_mask
+
+        # Per-env command delta (avoid a single any() turning this into a global trigger).
+        cmd_delta = torch.abs(commands - self._last_commands)
+        if cmd_delta.ndim == 2:
+            replan_mask |= torch.any(cmd_delta > 1e-6, dim=-1)
+        else:
+            replan_mask |= torch.any(cmd_delta.reshape(num_envs, -1) > 1e-6, dim=-1)
+
+        interval = int(self._cfg.reference_replan_interval_steps)
+        replan_mask |= (episode_length_buf - self._last_replan_episode_length_buf) >= interval
+        return replan_mask
+
+    @staticmethod
+    def _subset_state(states: BatchedRobotState, env_ids: Tensor) -> BatchedRobotState:
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=states.root_pos.device)
+        foot_vel = states.foot_vel
+        return BatchedRobotState(
+            root_pos=states.root_pos.index_select(0, env_ids),
+            root_quat=states.root_quat.index_select(0, env_ids),
+            joint_angles=states.joint_angles.index_select(0, env_ids),
+            foot_pos=states.foot_pos.index_select(0, env_ids),
+            foot_vel=None if foot_vel is None else foot_vel.index_select(0, env_ids),
+        )
+
+    @staticmethod
+    def _subset_terrain(terrain: PlannerTerrain, env_ids: Tensor) -> PlannerTerrain:
+        # Unit tests sometimes stub terrain construction; accept those objects by
+        # returning them unchanged. Real runtime uses PlannerTerrain instances.
+        if not hasattr(terrain, "heightmaps") or not hasattr(terrain, "world_x_range") or not hasattr(terrain, "world_y_range"):
+            return terrain
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=terrain.heightmaps.device)
+        return PlannerTerrain._from_heightmaps(
+            terrain.heightmaps.index_select(0, env_ids),
+            world_x_range=terrain.world_x_range,
+            world_y_range=terrain.world_y_range,
+        )
+
     def _run_replan(self, terrain, states, commands, episode_length_buf: Tensor) -> None:
         result = batched_generate_trajectory(
             terrain,
@@ -149,6 +213,7 @@ class BatchedTrajectoryManager:
         commands = self._commands_from_env(env)
         num_envs = int(episode_length_buf.shape[0])
         self._ensure_phase_counter(num_envs)
+        assert self._pending_reset_mask is not None
 
         same_step = (
             self._last_episode_length_buf is not None
@@ -158,27 +223,64 @@ class BatchedTrajectoryManager:
             and torch.equal(episode_length_buf, self._last_episode_length_buf)
             and torch.allclose(commands, self._last_commands, atol=1e-6, rtol=1e-6)
         )
-        if same_step and self._cache is not None and (self._pending_reset_mask is None or not torch.any(self._pending_reset_mask)):
+        if same_step and self._cache is not None and not torch.any(self._pending_reset_mask):
             return self._cache
 
         terrain = self._terrain_from_env(env)
         states = self._batched_state_from_env(env)
 
-        if self._needs_replan(episode_length_buf, commands):
-            result = batched_generate_trajectory(
-                terrain,
-                states,
-                commands,
-                requested_n_frames=int(self._cfg.reference_trajectory_horizon),
-                dt=self._planner_dt(env),
-            )
-            self._cache_from_result(result)
-            assert self._phase_counter is not None
-            self._phase_counter.zero_()
-            self._last_replan_episode_length_buf = episode_length_buf.clone()
-            self._pending_reset_mask = torch.zeros_like(episode_length_buf, dtype=torch.bool)
+        replan_mask = self._compute_replan_mask(episode_length_buf, commands)
+        assert self._phase_counter is not None
+
+        if torch.any(replan_mask):
+            env_ids = torch.nonzero(replan_mask, as_tuple=False).squeeze(-1)
+            sub_states = self._subset_state(states, env_ids)
+            sub_commands = commands.index_select(0, env_ids)
+            sub_terrain = self._subset_terrain(terrain, env_ids)
+
+            try:
+                result = batched_generate_trajectory(
+                    sub_terrain,
+                    sub_states,
+                    sub_commands,
+                    requested_n_frames=int(self._cfg.reference_trajectory_horizon),
+                    dt=self._planner_dt(env),
+                )
+            except Exception:  # noqa: BLE001 - replanning should degrade gracefully when a cache exists
+                if self._cache is None:
+                    raise
+                env_ids_cpu = env_ids.to(device=self._cache.root_pos_w.device, dtype=torch.long)  # type: ignore[union-attr]
+                fill_reference_cache_standstill_rows(self._cache, env_ids_cpu)
+                # Clear pending resets so the env stays standstill until it hits a new trigger.
+                self._pending_reset_mask = torch.where(replan_mask, torch.zeros_like(self._pending_reset_mask), self._pending_reset_mask)
+
+                # Reset phases for failed envs; advance others.
+                max_phase = int(self._cache.root_pos_w.shape[1]) - 1  # type: ignore[union-attr]
+                advanced = torch.clamp(self._phase_counter + 1, max=max_phase)
+                self._phase_counter = torch.where(replan_mask, torch.zeros_like(self._phase_counter), advanced)
+            else:
+                sub_cache = planner_result_to_reference_cache(result)
+                if self._cache is None or self._cache.root_pos_w is None:
+                    self._cache = sub_cache
+                else:
+                    env_ids_cpu = env_ids.to(device=self._cache.root_pos_w.device, dtype=torch.long)
+                    masked_write_reference_cache_rows(self._cache, sub_cache, env_ids_cpu)
+
+                # Reset phases for replanned envs; advance others.
+                max_phase = int(self._cache.root_pos_w.shape[1]) - 1  # type: ignore[union-attr]
+                advanced = torch.clamp(self._phase_counter + 1, max=max_phase)
+                self._phase_counter = torch.where(replan_mask, torch.zeros_like(self._phase_counter), advanced)
+
+                # Update interval accounting only for the envs we actually replanned.
+                if self._last_replan_episode_length_buf is None or self._last_replan_episode_length_buf.shape != episode_length_buf.shape:
+                    self._last_replan_episode_length_buf = episode_length_buf.clone()
+                else:
+                    self._last_replan_episode_length_buf = torch.where(replan_mask, episode_length_buf, self._last_replan_episode_length_buf)
+
+                # Clear pending reset flags for replanned envs.
+                self._pending_reset_mask = torch.where(replan_mask, torch.zeros_like(self._pending_reset_mask), self._pending_reset_mask)
         else:
-            assert self._phase_counter is not None
+            assert self._cache is not None
             self._phase_counter = torch.clamp(self._phase_counter + 1, max=int(self._cache.root_pos_w.shape[1]) - 1)
 
         self._last_episode_length_buf = episode_length_buf.clone()

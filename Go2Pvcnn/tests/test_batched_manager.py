@@ -38,6 +38,23 @@ def _fake_result(num_envs: int, num_frames: int):
         planned_touchdown_w=touchdown,
     )
 
+def _fake_result_with_offset(num_envs: int, num_frames: int, *, offset: float):
+    result = _fake_result(num_envs, num_frames)
+    # Make it easy to detect which env rows were replanned by shifting numeric fields.
+    return result.__class__(
+        num_frames=result.num_frames,
+        root_pos_w=result.root_pos_w + offset,
+        root_quat_w=result.root_quat_w,
+        root_lin_vel_w=result.root_lin_vel_w,
+        root_ang_vel_w=result.root_ang_vel_w,
+        joint_angles=result.joint_angles + offset,
+        foot_pos_w=result.foot_pos_w + offset,
+        foot_pos_root=result.foot_pos_root + offset,
+        contact_state=result.contact_state,
+        body_pos_root=result.body_pos_root + offset,
+        planned_touchdown_w=result.planned_touchdown_w + offset,
+    )
+
 
 class _FakeScene:
     def __init__(self, robot, sensors):
@@ -71,11 +88,12 @@ class _FakeCommandManager:
 
 class _FakeEnv:
     def __init__(self, *, episode_length_buf, command, ray_hits):
-        root_pos = torch.zeros(2, 3, dtype=torch.float64)
-        root_quat = torch.zeros(2, 4, dtype=torch.float64)
+        num_envs = int(episode_length_buf.shape[0])
+        root_pos = torch.zeros(num_envs, 3, dtype=torch.float64)
+        root_quat = torch.zeros(num_envs, 4, dtype=torch.float64)
         root_quat[..., 0] = 1.0
-        joint_pos = torch.zeros(2, 12, dtype=torch.float64)
-        foot_pos = torch.zeros(2, 4, 3, dtype=torch.float64)
+        joint_pos = torch.zeros(num_envs, 12, dtype=torch.float64)
+        foot_pos = torch.zeros(num_envs, 4, 3, dtype=torch.float64)
         robot = _FakeRobot(root_pos, root_quat, joint_pos, foot_pos)
         scanner = SimpleNamespace(data=SimpleNamespace(ray_hits_w=ray_hits))
         self.scene = _FakeScene(robot, {"height_scanner": scanner})
@@ -243,6 +261,136 @@ class BatchedManagerTest(unittest.TestCase):
             manager.refresh_from_env(env)
 
         self.assertEqual(gen.call_args.kwargs["dt"], 0.03)
+
+    def test_refresh_from_env_reset_replans_only_selected_env_rows(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = SimpleNamespace(reference_replan_interval_steps=50, reference_trajectory_horizon=5, dt=0.02)
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        num_envs = 3
+        ray_hits = torch.zeros(num_envs, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([5, 5, 5], dtype=torch.long),
+            command=torch.zeros(num_envs, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+
+        planner_batch_sizes = []
+
+        def gen_side_effect(terrain, states, commands, requested_n_frames, dt):
+            n = int(commands.shape[0])
+            planner_batch_sizes.append(n)
+            offset = 1000.0 if n == 1 else 0.0
+            return _fake_result_with_offset(n, requested_n_frames, offset=offset)
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            side_effect=gen_side_effect,
+        ):
+            cache0 = manager.refresh_from_env(env)
+            root_pos0 = cache0.root_pos_w.clone()
+            env.episode_length_buf = torch.tensor([6, 0, 6], dtype=torch.long)
+            cache1 = manager.refresh_from_env(env)
+
+        self.assertEqual(planner_batch_sizes, [3, 1])
+        self.assertTrue(cache1.is_ready())
+        self.assertTrue(cache1.is_canonical())
+        self.assertEqual(tuple(cache1.root_pos_w.shape), (num_envs, 5, 3))
+
+        torch.testing.assert_close(cache1.root_pos_w[0], root_pos0[0])
+        torch.testing.assert_close(cache1.root_pos_w[2], root_pos0[2])
+        self.assertFalse(torch.equal(cache1.root_pos_w[1], root_pos0[1]))
+        self.assertTrue(torch.equal(manager._phase_counter, torch.tensor([1, 0, 1], dtype=torch.long)))
+
+    def test_refresh_from_env_command_change_replans_only_changed_env_rows(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = SimpleNamespace(reference_replan_interval_steps=50, reference_trajectory_horizon=5, dt=0.02)
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        num_envs = 3
+        ray_hits = torch.zeros(num_envs, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([5, 5, 5], dtype=torch.long),
+            command=torch.zeros(num_envs, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+
+        planner_batch_sizes = []
+
+        def gen_side_effect(terrain, states, commands, requested_n_frames, dt):
+            n = int(commands.shape[0])
+            planner_batch_sizes.append(n)
+            offset = 2000.0 if n == 1 else 0.0
+            return _fake_result_with_offset(n, requested_n_frames, offset=offset)
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            side_effect=gen_side_effect,
+        ):
+            cache0 = manager.refresh_from_env(env)
+            root_pos0 = cache0.root_pos_w.clone()
+            env.episode_length_buf = torch.tensor([6, 6, 6], dtype=torch.long)
+            env.command_manager.command = torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float64)
+            cache1 = manager.refresh_from_env(env)
+
+        self.assertEqual(planner_batch_sizes, [3, 1])
+        torch.testing.assert_close(cache1.root_pos_w[1], root_pos0[1])
+        torch.testing.assert_close(cache1.root_pos_w[2], root_pos0[2])
+        self.assertFalse(torch.equal(cache1.root_pos_w[0], root_pos0[0]))
+
+    def test_failed_env_keeps_standstill_cache_until_its_own_next_replan(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = SimpleNamespace(reference_replan_interval_steps=50, reference_trajectory_horizon=5, dt=0.02)
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        num_envs = 3
+        ray_hits = torch.zeros(num_envs, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([5, 5, 5], dtype=torch.long),
+            command=torch.zeros(num_envs, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+
+        def gen_side_effect(terrain, states, commands, requested_n_frames, dt):
+            n = int(commands.shape[0])
+            if n == 1 and float(commands[0, 0].item()) == 0.0:
+                raise RuntimeError("planner failed for this env")
+            if n == 1 and float(commands[0, 0].item()) > 0.0:
+                return _fake_result_with_offset(n, requested_n_frames, offset=2000.0)
+            if n == 1 and float(commands[0, 0].item()) < 0.0:
+                return _fake_result_with_offset(n, requested_n_frames, offset=3000.0)
+            return _fake_result_with_offset(n, requested_n_frames, offset=0.0)
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            side_effect=gen_side_effect,
+        ):
+            cache0 = manager.refresh_from_env(env)
+            root_pos0 = cache0.root_pos_w.clone()
+
+            # Env2 resets; replanning that env fails. Manager should keep a standstill row for env2.
+            env.episode_length_buf = torch.tensor([6, 6, 0], dtype=torch.long)
+            cache1 = manager.refresh_from_env(env)
+            env2_row = cache1.root_pos_w[2]
+            env2_expected = env2_row[0].unsqueeze(0).expand_as(env2_row)
+            torch.testing.assert_close(env2_row, env2_expected)
+
+            # Env0 changes command; only env0 replans, env2 stays standstill.
+            env.episode_length_buf = torch.tensor([7, 7, 1], dtype=torch.long)
+            env.command_manager.command = torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float64)
+            cache2 = manager.refresh_from_env(env)
+            env2_row2 = cache2.root_pos_w[2]
+            env2_expected2 = env2_row2[0].unsqueeze(0).expand_as(env2_row2)
+            torch.testing.assert_close(env2_row2, env2_expected2)
+
+            # Env2 changes command; now env2 replans successfully and is no longer standstill.
+            env.episode_length_buf = torch.tensor([8, 8, 2], dtype=torch.long)
+            env.command_manager.command = torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0], [-0.5, 0.0, 0.0]], dtype=torch.float64)
+            cache3 = manager.refresh_from_env(env)
+            self.assertFalse(torch.equal(cache3.root_pos_w[2, 0], cache3.root_pos_w[2, 1]))
+
+        # Sanity: env1 never replanned after the initial call in this scenario.
+        torch.testing.assert_close(cache3.root_pos_w[1], root_pos0[1])
 
 
 if __name__ == "__main__":

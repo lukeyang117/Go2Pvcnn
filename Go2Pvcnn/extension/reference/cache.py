@@ -98,6 +98,97 @@ def expand_reference_cache_to_num_envs(cache: "ReferenceTrajectoryCache", num_en
     )
 
 
+def masked_write_reference_cache_rows(
+    dst: "ReferenceTrajectoryCache",
+    src: "ReferenceTrajectoryCache",
+    env_ids: torch.Tensor,
+) -> None:
+    """Write ``src`` rows into ``dst`` at the given env indices.
+
+    Both caches must be batched with a leading env dimension and share the same horizon.
+    ``env_ids`` is a 1D long tensor selecting destination rows.
+    """
+
+    env_ids = torch.as_tensor(env_ids, dtype=torch.long)
+    if env_ids.ndim != 1:
+        raise ValueError(f"env_ids must be 1D, got {tuple(env_ids.shape)}")
+
+    def _tensor(name: str) -> torch.Tensor:
+        t = getattr(dst, name)
+        if t is None:
+            raise ValueError(f"dst missing {name}")
+        return t
+
+    def _src(name: str) -> torch.Tensor:
+        t = getattr(src, name)
+        if t is None:
+            raise ValueError(f"src missing {name}")
+        return t
+
+    # Use the destination tensor devices for the index to satisfy index_copy_ requirements.
+    for name in (
+        "root_pos_w",
+        "root_quat_w",
+        "joint_angles",
+        "foot_pos_root",
+        "contact_state",
+        "planned_touchdown_w",
+        "phase_index",
+        "valid_mask",
+    ):
+        dst_t = _tensor(name)
+        src_t = _src(name)
+        if dst_t.ndim < 2 or src_t.ndim < 2:
+            raise ValueError(f"{name} must be batched, got dst {tuple(dst_t.shape)} src {tuple(src_t.shape)}")
+        if int(dst_t.shape[1]) != int(src_t.shape[1]):
+            raise ValueError(f"{name} horizon mismatch: dst {int(dst_t.shape[1])} src {int(src_t.shape[1])}")
+        if int(src_t.shape[0]) != int(env_ids.shape[0]):
+            raise ValueError(f"{name} batch mismatch: src {int(src_t.shape[0])} ids {int(env_ids.shape[0])}")
+        idx = env_ids.to(device=dst_t.device)
+        dst_t.index_copy_(0, idx, src_t.to(device=dst_t.device))
+
+
+def fill_reference_cache_standstill_rows(cache: "ReferenceTrajectoryCache", env_ids: torch.Tensor) -> None:
+    """Overwrite selected env rows with a standstill (time-constant) trajectory.
+
+    The standstill trajectory repeats the first cached frame across the horizon.
+    This keeps reward-facing cache contracts intact even if replanning fails.
+    """
+
+    env_ids = torch.as_tensor(env_ids, dtype=torch.long)
+    if env_ids.numel() == 0:
+        return
+    if env_ids.ndim != 1:
+        raise ValueError(f"env_ids must be 1D, got {tuple(env_ids.shape)}")
+
+    def _standstill(name: str) -> torch.Tensor:
+        t = getattr(cache, name)
+        if t is None:
+            raise ValueError(f"cache missing {name}")
+        if t.ndim < 2:
+            raise ValueError(f"{name} must be batched, got {tuple(t.shape)}")
+        h = int(t.shape[1])
+        idx = env_ids.to(device=t.device)
+        first = t.index_select(0, idx)[:, :1]
+        return first.expand(first.shape[0], h, *first.shape[2:]).clone()
+
+    for name in (
+        "root_pos_w",
+        "root_quat_w",
+        "joint_angles",
+        "foot_pos_root",
+        "contact_state",
+        "planned_touchdown_w",
+    ):
+        t = getattr(cache, name)
+        if t is None:
+            continue
+        idx = env_ids.to(device=t.device)
+        t.index_copy_(0, idx, _standstill(name))
+
+    # Preserve phase_index and valid_mask as-is; they are not interpreted as physical state.
+
+
 @dataclass
 class ReferenceTrajectoryCache:
     """Container for cached reference trajectory tensors."""
@@ -290,4 +381,6 @@ __all__ = [
     "canonical_reference_cache_float_tensor",
     "canonical_reference_cache_index_tensor",
     "expand_reference_cache_to_num_envs",
+    "fill_reference_cache_standstill_rows",
+    "masked_write_reference_cache_rows",
 ]
