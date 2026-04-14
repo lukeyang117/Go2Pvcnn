@@ -19,9 +19,6 @@ class BatchedTrajectoryConfig:
     max_roughness: float = 0.5
     max_touchdown_xy_reach: float = 0.15
     replan_stop_speed: float = 0.05
-    replan_velocity_scales: list[float] = field(default_factory=lambda: [1.0, 0.8, 0.6])
-    replan_yaw_biases: list[float] = field(default_factory=lambda: [0.0, 0.15, -0.15])
-    replan_vy_biases: list[float] = field(default_factory=lambda: [0.0, 0.05, -0.05])
 
 
 __all__ = ["BatchedTrajectoryConfig"]

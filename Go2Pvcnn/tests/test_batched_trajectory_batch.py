@@ -107,6 +107,37 @@ class BatchedTrajectoryBatchTest(unittest.TestCase):
             torch.testing.assert_close(batched.contact_state[idx], single.contact_state[0])
             torch.testing.assert_close(batched.planned_touchdown_w[idx], single.planned_touchdown_w[0], atol=1e-5, rtol=1e-5)
 
+    def test_mixed_batch_respects_standstill_mask(self):
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+        from extension.batched_planner.types import BatchedRobotState
+        from scripts.go2fp.trajectory import default_initial_state
+
+        terrain = FlatTerrain()
+        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.6)
+
+        states = []
+        commands = []
+        for cmd in [[0.35, 0.0, 0.05], [0.0, 0.0, 0.0]]:
+            raw_state = default_initial_state(None, x=0.0, y=0.0)
+            states.append(raw_state)
+            commands.append(cmd)
+
+        batched_state = BatchedRobotState(
+            root_pos=torch.stack([torch.as_tensor(s.root_pos, dtype=torch.float64) for s in states], dim=0),
+            root_quat=torch.stack([torch.as_tensor(s.root_quat, dtype=torch.float64) for s in states], dim=0),
+            joint_angles=torch.stack([torch.as_tensor(s.joint_angles, dtype=torch.float64) for s in states], dim=0),
+            foot_pos=torch.stack([torch.as_tensor(s.foot_pos, dtype=torch.float64) for s in states], dim=0),
+        )
+        batched_commands = torch.tensor(commands, dtype=torch.float64)
+
+        mixed = batched_generate_trajectory(terrain, batched_state, batched_commands, requested_n_frames=20, dt=0.02, cfg=cfg)
+
+        self.assertTrue(torch.all(mixed.contact_state[1] == 1.0))
+        self.assertTrue(torch.allclose(mixed.root_pos_w[1], mixed.root_pos_w[1, :1].expand_as(mixed.root_pos_w[1])))
+        self.assertTrue(torch.allclose(mixed.root_quat_w[1], mixed.root_quat_w[1, :1].expand_as(mixed.root_quat_w[1])))
+
+
 
 if __name__ == "__main__":
     unittest.main()

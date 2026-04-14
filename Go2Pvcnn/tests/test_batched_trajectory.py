@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
@@ -82,7 +83,44 @@ class BatchedTrajectoryTest(unittest.TestCase):
         self.assertTrue(torch.allclose(actual.root_pos_w[0], actual.root_pos_w[0, :1].expand_as(actual.root_pos_w[0])))
         self.assertTrue(torch.allclose(actual.root_quat_w[0], actual.root_quat_w[0, :1].expand_as(actual.root_quat_w[0])))
 
-    def test_replanning_prefers_first_yaw_bias_candidate_matches_raw(self):
+    def test_infeasible_command_returns_standstill(self):
+        from extension.batched_planner import trajectory as trajectory_mod
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+
+        state, _ = self._default_batched_state()
+        cmd = torch.tensor([[0.5, 0.0, 0.0]], dtype=torch.float64)
+        cfg = BatchedTrajectoryConfig()
+
+        with patch.object(trajectory_mod, "batched_evaluate_touchdowns", return_value=(
+            torch.zeros((1,), dtype=torch.bool),
+            torch.zeros((1,), dtype=torch.float64),
+            ["xy_reach"],
+        )):
+            with patch.object(trajectory_mod, "batched_compute_footholds", wraps=trajectory_mod.batched_compute_footholds) as patched_compute:
+                actual = batched_generate_trajectory(FlatTerrain(), state, cmd, requested_n_frames=12, dt=0.02, cfg=cfg)
+
+        self.assertEqual(patched_compute.call_count, 1)
+        self.assertTrue(torch.all(actual.contact_state[0] == 1.0))
+        self.assertTrue(torch.allclose(actual.root_pos_w[0], actual.root_pos_w[0, :1].expand_as(actual.root_pos_w[0])))
+        self.assertTrue(torch.allclose(actual.root_quat_w[0], actual.root_quat_w[0, :1].expand_as(actual.root_quat_w[0])))
+
+    def test_planner_does_not_iterate_recovery_commands(self):
+        from extension.batched_planner import trajectory as trajectory_mod
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+
+        state, _ = self._default_batched_state()
+        command = torch.tensor([[0.2, 0.0, 0.0]], dtype=torch.float64)
+        cfg = BatchedTrajectoryConfig()
+
+        original_fn = trajectory_mod.batched_compute_footholds
+        with patch.object(trajectory_mod, "batched_compute_footholds", wraps=original_fn) as patched_compute:
+            batched_generate_trajectory(FlatTerrain(), state, command, requested_n_frames=18, dt=0.02, cfg=cfg)
+
+        self.assertEqual(patched_compute.call_count, 1)
+
+    def test_motion_trajectory_matches_raw_for_standard_command(self):
         from extension.batched_planner.config import BatchedTrajectoryConfig
         from extension.batched_planner.types import BatchedRobotState
         from extension.batched_planner.trajectory import batched_generate_trajectory
@@ -92,9 +130,6 @@ class BatchedTrajectoryTest(unittest.TestCase):
         state, raw_state = self._default_batched_state()
         cfg = BatchedTrajectoryConfig(
             duty_factor=0.55,
-            replan_velocity_scales=(1.0, 0.7),
-            replan_yaw_biases=(0.0, 0.20, -0.20),
-            replan_vy_biases=(0.0, 0.08, -0.08),
             max_touchdown_xy_reach=0.094,
         )
         command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float64)
@@ -118,9 +153,6 @@ class BatchedTrajectoryTest(unittest.TestCase):
                 max_foothold_step_down=cfg.max_foothold_step_down,
                 max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
                 replan_stop_speed=cfg.replan_stop_speed,
-                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
-                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
-                replan_vy_biases=tuple(cfg.replan_vy_biases),
             ),
         )
 
@@ -138,7 +170,7 @@ class BatchedTrajectoryTest(unittest.TestCase):
 
         state, _ = self._default_batched_state()
         cmd = torch.tensor([[0.4, 0.0, 0.2]], dtype=torch.float64)
-        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.55)
+        cfg = BatchedTrajectoryConfig(step_freq=2.0, duty_factor=0.55, max_touchdown_xy_reach=0.22)
 
         actual = batched_generate_trajectory(FlatTerrain(), state, cmd, requested_n_frames=100, dt=0.02, cfg=cfg)
 
@@ -164,22 +196,19 @@ class BatchedTrajectoryTest(unittest.TestCase):
             Command(0.35, 0.0, 0.1),
             20,
             dt=0.02,
-            config=TrajectoryConfig(
-                gait_name=cfg.gait_name,
-                step_freq=cfg.step_freq,
-                duty_factor=cfg.duty_factor,
-                step_height=cfg.step_height,
-                hip_height=cfg.hip_height,
-                body_clearance_margin=cfg.body_clearance_margin,
-                foothold_search_radius=cfg.foothold_search_radius,
-                foothold_search_step=cfg.foothold_search_step,
-                max_foothold_step_down=cfg.max_foothold_step_down,
-                max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
-                replan_stop_speed=cfg.replan_stop_speed,
-                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
-                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
-                replan_vy_biases=tuple(cfg.replan_vy_biases),
-            ),
+                config=TrajectoryConfig(
+                    gait_name=cfg.gait_name,
+                    step_freq=cfg.step_freq,
+                    duty_factor=cfg.duty_factor,
+                    step_height=cfg.step_height,
+                    hip_height=cfg.hip_height,
+                    body_clearance_margin=cfg.body_clearance_margin,
+                    foothold_search_radius=cfg.foothold_search_radius,
+                    foothold_search_step=cfg.foothold_search_step,
+                    max_foothold_step_down=cfg.max_foothold_step_down,
+                    max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
+                    replan_stop_speed=cfg.replan_stop_speed,
+                ),
         )
 
         self.assertEqual(actual.num_frames, expected.root_pos_w.shape[0])
@@ -220,9 +249,6 @@ class BatchedTrajectoryTest(unittest.TestCase):
                 max_foothold_step_down=cfg.max_foothold_step_down,
                 max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
                 replan_stop_speed=cfg.replan_stop_speed,
-                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
-                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
-                replan_vy_biases=tuple(cfg.replan_vy_biases),
             ),
         )
 
@@ -268,9 +294,6 @@ class BatchedTrajectoryTest(unittest.TestCase):
                 max_foothold_step_down=cfg.max_foothold_step_down,
                 max_touchdown_xy_reach=cfg.max_touchdown_xy_reach,
                 replan_stop_speed=cfg.replan_stop_speed,
-                replan_velocity_scales=tuple(cfg.replan_velocity_scales),
-                replan_yaw_biases=tuple(cfg.replan_yaw_biases),
-                replan_vy_biases=tuple(cfg.replan_vy_biases),
             ),
         )
 
