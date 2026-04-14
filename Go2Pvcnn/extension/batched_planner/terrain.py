@@ -62,27 +62,44 @@ def _sanitize_ray_hits(ray_hits: Tensor) -> Tensor:
     return torch.nan_to_num(hits, nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def _heightmaps_from_ray_hits(ray_hits: Tensor) -> Tensor:
-    hits = _sanitize_ray_hits(ray_hits)
+def _reshape_ray_hits(ray_hits: Tensor) -> Tensor:
+    hits = torch.as_tensor(ray_hits)
     if hits.ndim == 4:
         if hits.shape[-1] != 3:
             raise ValueError("ray_hits must have shape (N, H, W, 3)")
-        return hits[..., 2].unsqueeze(1).contiguous()
+        return hits
     if hits.ndim == 3 and hits.shape[-1] == 3:
         ray_count = int(hits.shape[1])
         side = int(round(math.sqrt(ray_count)))
         if side * side != ray_count:
             raise ValueError(f"ray count {ray_count} is not a perfect square")
-        reshaped = hits.reshape(hits.shape[0], side, side, 3)
-        return reshaped[..., 2].unsqueeze(1).contiguous()
+        return hits.reshape(hits.shape[0], side, side, 3)
     if hits.ndim == 2 and hits.shape[-1] == 3:
         ray_count = int(hits.shape[0])
         side = int(round(math.sqrt(ray_count)))
         if side * side != ray_count:
             raise ValueError(f"ray count {ray_count} is not a perfect square")
-        reshaped = hits.reshape(1, side, side, 3)
-        return reshaped[..., 2].unsqueeze(1).contiguous()
+        return hits.reshape(1, side, side, 3)
     raise ValueError("ray_hits must have shape (N, H, W, 3), (N, H*W, 3), or (H*W, 3)")
+
+
+def _heightmaps_from_ray_hits(ray_hits: Tensor) -> Tensor:
+    hits = _sanitize_ray_hits(_reshape_ray_hits(ray_hits))
+    return hits[..., 2].unsqueeze(1).contiguous()
+
+
+def _canonical_world_ranges_from_ray_hits(ray_hits: Tensor) -> tuple[tuple[float, float], tuple[float, float]]:
+    hits = torch.as_tensor(_reshape_ray_hits(ray_hits), dtype=torch.float64)
+    xy = hits[..., :2]
+    finite_mask = torch.isfinite(xy).all(dim=-1)
+    if not torch.any(finite_mask):
+        raise ValueError("ray_hits must contain at least one finite x/y coordinate")
+
+    finite_xy = xy[finite_mask]
+    world_x_range = (float(finite_xy[:, 0].amin().item()), float(finite_xy[:, 0].amax().item()))
+    world_y_range = (float(finite_xy[:, 1].amin().item()), float(finite_xy[:, 1].amax().item()))
+    _validate_ranges(world_x_range, world_y_range)
+    return world_x_range, world_y_range
 
 
 def _reshape_points(points_xy: Tensor, batch_size: int) -> tuple[Tensor, bool]:
@@ -303,9 +320,16 @@ class PlannerTerrain(BatchedTerrain):
         cls,
         ray_hits: Tensor,
         *,
-        world_x_range: tuple[float, float],
-        world_y_range: tuple[float, float],
+        world_x_range: tuple[float, float] | None = None,
+        world_y_range: tuple[float, float] | None = None,
     ) -> "PlannerTerrain":
+        if (world_x_range is None) != (world_y_range is None):
+            raise ValueError("world_x_range and world_y_range must both be provided or both omitted")
+        if world_x_range is None or world_y_range is None:
+            world_x_range, world_y_range = _canonical_world_ranges_from_ray_hits(ray_hits)
+        else:
+            _validate_ranges(world_x_range, world_y_range)
+
         return cls._from_heightmaps(
             _heightmaps_from_ray_hits(ray_hits),
             world_x_range=world_x_range,

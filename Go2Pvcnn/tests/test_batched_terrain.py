@@ -61,6 +61,20 @@ class BatchedTerrainTest(unittest.TestCase):
                     idx += 1
         return hits
 
+    def _make_offset_ray_hits(self, heightmaps: torch.Tensor) -> torch.Tensor:
+        batch_size, _, height, width = heightmaps.shape
+        hits = torch.zeros((batch_size, height * width, 3), dtype=heightmaps.dtype)
+        for batch_idx in range(batch_size):
+            idx = 0
+            for row in range(height):
+                for col in range(width):
+                    hits[batch_idx, idx, 0] = float(col + 10.0)
+                    hits[batch_idx, idx, 1] = float(row + 20.0)
+                    hits[batch_idx, idx, 2] = float(heightmaps[batch_idx, 0, row, col])
+                    idx += 1
+            hits[batch_idx, -1] = torch.tensor([float("inf"), float("nan"), 999.0], dtype=heightmaps.dtype)
+        return hits
+
     def _make_non_square_heightmaps(self) -> torch.Tensor:
         base = torch.tensor(
             [
@@ -154,6 +168,36 @@ class BatchedTerrainTest(unittest.TestCase):
         sample = terrain.height_at(torch.tensor([0.5, 0.5], dtype=torch.float32))
         self.assertEqual(sample.shape, (1,))
         self.assertTrue(torch.isfinite(sample))
+
+    def test_plannerterrain_from_ray_hits_derives_canonical_ranges_from_xy_layout(self) -> None:
+        heightmaps = self._make_heightmaps()[:1]
+        ray_hits = self._make_offset_ray_hits(heightmaps)
+
+        terrain = self.PlannerTerrain.from_ray_hits(ray_hits)
+
+        self.assertEqual(terrain.world_x_range, (10.0, 12.0))
+        self.assertEqual(terrain.world_y_range, (20.0, 22.0))
+        torch.testing.assert_close(
+            terrain.heightmaps,
+            self.PlannerTerrain.from_ray_hits(
+                ray_hits,
+                world_x_range=(10.0, 12.0),
+                world_y_range=(20.0, 22.0),
+            ).heightmaps,
+        )
+
+    def test_plannerterrain_from_ray_hits_allows_explicit_range_override(self) -> None:
+        heightmaps = self._make_heightmaps()[:1]
+        ray_hits = self._make_offset_ray_hits(heightmaps)
+
+        terrain = self.PlannerTerrain.from_ray_hits(
+            ray_hits,
+            world_x_range=(0.0, 1.0),
+            world_y_range=(0.0, 1.0),
+        )
+
+        self.assertEqual(terrain.world_x_range, (0.0, 1.0))
+        self.assertEqual(terrain.world_y_range, (0.0, 1.0))
 
     def test_plannerterrain_query_shapes_follow_abi_rules(self) -> None:
         single_heightmaps = torch.tensor(
