@@ -55,6 +55,39 @@ class BatchedReferenceIntegrationTest(unittest.TestCase):
         self.assertEqual(tuple(cache.planned_touchdown_w.shape), (2, 5, 4, 3))
         self.assertEqual(cache.planned_touchdown_w.dtype, torch.float32)
 
+    def test_expand_reference_cache_preserves_canonical_layout_and_dtype(self):
+        from extension.reference.cache import expand_reference_cache_to_num_envs
+        from extension.reference.generator import ReferenceGenerator, ReferenceGeneratorConfig
+
+        cache = ReferenceGenerator(ReferenceGeneratorConfig(horizon_steps=4)).generate()
+        expanded = expand_reference_cache_to_num_envs(cache, 3)
+
+        self.assertEqual(tuple(expanded.root_pos_w.shape), (3, 4, 3))
+        self.assertEqual(expanded.root_pos_w.dtype, torch.float32)
+        self.assertEqual(expanded.root_pos_w.device.type, "cpu")
+        self.assertEqual(tuple(expanded.root_quat_w.shape), (3, 4, 4))
+        self.assertEqual(expanded.root_quat_w.dtype, torch.float32)
+        self.assertEqual(expanded.contact_state.dtype, torch.bool)
+        self.assertEqual(expanded.phase_index.dtype, torch.long)
+        self.assertEqual(expanded.valid_mask.dtype, torch.bool)
+        self.assertTrue(expanded.is_ready())
+
+    def test_shape_issues_rejects_noncanonical_dtype_and_device(self):
+        from extension.convention import planner_result_to_reference_cache
+
+        cache = planner_result_to_reference_cache(_fake_result(2, 5))
+        cache.root_pos_w = cache.root_pos_w.to(dtype=torch.float64)
+        cache.contact_state = cache.contact_state.to(dtype=torch.float32)
+        cache.phase_index = cache.phase_index.to(dtype=torch.float32)
+        cache.valid_mask = cache.valid_mask.to(device="meta")
+
+        issues = cache.shape_issues()
+        self.assertIn("root_pos_w:dtype=torch.float64", issues)
+        self.assertIn("contact_state:dtype=torch.float32", issues)
+        self.assertIn("phase_index:dtype=torch.float32", issues)
+        self.assertIn("valid_mask:device=meta", issues)
+        self.assertFalse(cache.is_ready())
+
     def test_manager_cache_is_compatible_with_reference_gather(self):
         from extension.batched_planner.manager import BatchedTrajectoryManager
         from extension.mdp import rewards_reference
