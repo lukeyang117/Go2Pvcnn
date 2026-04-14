@@ -5,7 +5,7 @@ import unittest
 
 import torch
 
-from extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
 
 ensure_kinematic_footsteps_on_syspath()
@@ -14,9 +14,10 @@ from scripts.go2fp.terrain import _metric_max_height_along_segment, _metric_slop
 
 class BatchedTerrainTest(unittest.TestCase):
     def setUp(self) -> None:
-        from extension.batched_planner.terrain import BatchedTerrain
+        from extension.batched_planner.terrain import BatchedTerrain, PlannerTerrain
 
         self.BatchedTerrain = BatchedTerrain
+        self.PlannerTerrain = PlannerTerrain
 
     def _make_heightmaps(self) -> torch.Tensor:
         base = torch.tensor(
@@ -40,6 +41,19 @@ class BatchedTerrainTest(unittest.TestCase):
         if heightmaps is None:
             heightmaps = self._make_heightmaps()
         return self.BatchedTerrain(heightmaps, world_x_range=(0.0, 2.0), world_y_range=(0.0, 2.0))
+
+    def _make_ray_hits(self, heightmaps: torch.Tensor) -> torch.Tensor:
+        batch_size, _, height, width = heightmaps.shape
+        hits = torch.zeros((batch_size, height * width, 3), dtype=heightmaps.dtype)
+        for batch_idx in range(batch_size):
+            idx = 0
+            for row in range(height):
+                for col in range(width):
+                    hits[batch_idx, idx, 0] = float(col)
+                    hits[batch_idx, idx, 1] = float(row)
+                    hits[batch_idx, idx, 2] = float(heightmaps[batch_idx, 0, row, col])
+                    idx += 1
+        return hits
 
     def _make_non_square_heightmaps(self) -> torch.Tensor:
         base = torch.tensor(
@@ -98,6 +112,86 @@ class BatchedTerrainTest(unittest.TestCase):
         )
 
         torch.testing.assert_close(actual, expected)
+
+    def test_plannerterrain_rejects_direct_heightmap_constructor(self) -> None:
+        heightmaps = self._make_heightmaps()
+
+        with self.assertRaisesRegex(TypeError, "from_ray_hits"):
+            self.PlannerTerrain(heightmaps, world_x_range=(0.0, 2.0), world_y_range=(0.0, 2.0))
+
+    def test_plannerterrain_from_ray_hits_sanitizes_invalid_hits_and_normalizes_dtype(self) -> None:
+        ray_hits = torch.tensor(
+            [
+                [
+                    [0.0, 0.0, 1.5],
+                    [1.0, 0.0, float("inf")],
+                    [0.0, 1.0, float("nan")],
+                    [1.0, 1.0, -2.5],
+                ]
+            ],
+            dtype=torch.float64,
+        )
+
+        terrain = self.PlannerTerrain.from_ray_hits(
+            ray_hits,
+            world_x_range=(0.0, 1.0),
+            world_y_range=(0.0, 1.0),
+        )
+
+        self.assertEqual(terrain.heightmaps.dtype, torch.float64)
+        self.assertTrue(torch.isfinite(terrain.heightmaps).all())
+        torch.testing.assert_close(
+            terrain.heightmaps,
+            torch.tensor([[[[1.5, 0.0], [0.0, -2.5]]]], dtype=torch.float64),
+        )
+
+        sample = terrain.height_at(torch.tensor([0.5, 0.5], dtype=torch.float32))
+        self.assertEqual(sample.shape, ())
+        self.assertTrue(torch.isfinite(sample))
+
+    def test_plannerterrain_query_shapes_follow_abi_rules(self) -> None:
+        single_heightmaps = torch.tensor(
+            [[[[0.0, 1.0], [2.0, 3.0]]]],
+            dtype=torch.float32,
+        )
+        batched_heightmaps = torch.stack([single_heightmaps[0], single_heightmaps[0] + 10.0])
+
+        single_terrain = self.PlannerTerrain.from_ray_hits(
+            self._make_ray_hits(single_heightmaps),
+            world_x_range=(0.0, 1.0),
+            world_y_range=(0.0, 1.0),
+        )
+        batched_terrain = self.PlannerTerrain.from_ray_hits(
+            self._make_ray_hits(batched_heightmaps),
+            world_x_range=(0.0, 1.0),
+            world_y_range=(0.0, 1.0),
+        )
+
+        single_point = torch.tensor([0.25, 0.75], dtype=torch.float32)
+        multi_points = torch.tensor([[0.25, 0.75], [0.75, 0.25]], dtype=torch.float32)
+        batched_points = torch.tensor(
+            [
+                [[0.25, 0.75], [0.75, 0.25]],
+                [[0.75, 0.75], [0.25, 0.25]],
+            ],
+            dtype=torch.float32,
+        )
+        single_segment_p0 = torch.tensor([0.0, 0.0], dtype=torch.float32)
+        single_segment_p1 = torch.tensor([1.0, 1.0], dtype=torch.float32)
+        batched_segment_p0 = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        batched_segment_p1 = torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=torch.float32)
+
+        self.assertEqual(single_terrain.height_at(single_point).shape, ())
+        self.assertEqual(single_terrain.height_at(multi_points).shape, (2,))
+        self.assertEqual(single_terrain.roughness_at(single_point).shape, ())
+        self.assertEqual(single_terrain.roughness_at(multi_points).shape, (2,))
+        self.assertEqual(single_terrain.max_height_along_segment(single_segment_p0, single_segment_p1).shape, ())
+
+        self.assertEqual(batched_terrain.height_at(single_point).shape, (2,))
+        self.assertEqual(batched_terrain.height_at(batched_points).shape, (2, 2))
+        self.assertEqual(batched_terrain.roughness_at(single_point).shape, (2,))
+        self.assertEqual(batched_terrain.roughness_at(batched_points).shape, (2, 2))
+        self.assertEqual(batched_terrain.max_height_along_segment(batched_segment_p0, batched_segment_p1).shape, (2,))
 
     def test_height_at_multiple_points_matches_raw(self) -> None:
         heightmaps = self._make_heightmaps()

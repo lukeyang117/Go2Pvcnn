@@ -55,6 +55,42 @@ def _ensure_heightmaps(heightmaps: Tensor) -> Tensor:
     return heightmaps.contiguous()
 
 
+def _sanitize_ray_hits(ray_hits: Tensor) -> Tensor:
+    hits = torch.as_tensor(ray_hits)
+    if not torch.is_floating_point(hits):
+        hits = hits.to(torch.float32)
+    return torch.nan_to_num(hits, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _heightmaps_from_ray_hits(ray_hits: Tensor) -> Tensor:
+    hits = _sanitize_ray_hits(ray_hits)
+    if hits.ndim == 4:
+        if hits.shape[-1] != 3:
+            raise ValueError("ray_hits must have shape (N, H, W, 3)")
+        return hits[..., 2].unsqueeze(1).contiguous()
+    if hits.ndim == 3 and hits.shape[-1] == 3:
+        ray_count = int(hits.shape[1])
+        side = int(round(math.sqrt(ray_count)))
+        if side * side != ray_count:
+            raise ValueError(f"ray count {ray_count} is not a perfect square")
+        reshaped = hits.reshape(hits.shape[0], side, side, 3)
+        return reshaped[..., 2].unsqueeze(1).contiguous()
+    if hits.ndim == 2 and hits.shape[-1] == 3:
+        ray_count = int(hits.shape[0])
+        side = int(round(math.sqrt(ray_count)))
+        if side * side != ray_count:
+            raise ValueError(f"ray count {ray_count} is not a perfect square")
+        reshaped = hits.reshape(1, side, side, 3)
+        return reshaped[..., 2].unsqueeze(1).contiguous()
+    raise ValueError("ray_hits must have shape (N, H, W, 3), (N, H*W, 3), or (H*W, 3)")
+
+
+def _value_ndim(value) -> int:
+    if isinstance(value, Tensor):
+        return int(value.ndim)
+    return int(torch.as_tensor(value).ndim)
+
+
 def _reshape_points(points_xy: Tensor, batch_size: int) -> tuple[Tensor, bool]:
     if points_xy.ndim == 1:
         if points_xy.shape[0] != 2:
@@ -115,26 +151,11 @@ class BatchedTerrain:
         world_x_range: tuple[float, float],
         world_y_range: tuple[float, float],
     ) -> "BatchedTerrain":
-        hits = torch.as_tensor(ray_hits)
-        if hits.ndim == 4:
-            if hits.shape[-1] != 3:
-                raise ValueError("ray_hits must have shape (N, H, W, 3)")
-            return cls(hits[..., 2].unsqueeze(1), world_x_range=world_x_range, world_y_range=world_y_range)
-        if hits.ndim == 3 and hits.shape[-1] == 3:
-            ray_count = int(hits.shape[1])
-            side = int(round(math.sqrt(ray_count)))
-            if side * side != ray_count:
-                raise ValueError(f"ray count {ray_count} is not a perfect square")
-            reshaped = hits.reshape(hits.shape[0], side, side, 3)
-            return cls(reshaped[..., 2].unsqueeze(1), world_x_range=world_x_range, world_y_range=world_y_range)
-        if hits.ndim == 2 and hits.shape[-1] == 3:
-            ray_count = int(hits.shape[0])
-            side = int(round(math.sqrt(ray_count)))
-            if side * side != ray_count:
-                raise ValueError(f"ray count {ray_count} is not a perfect square")
-            reshaped = hits.reshape(1, side, side, 3)
-            return cls(reshaped[..., 2].unsqueeze(1), world_x_range=world_x_range, world_y_range=world_y_range)
-        raise ValueError("ray_hits must have shape (N, H, W, 3), (N, H*W, 3), or (H*W, 3)")
+        return cls(
+            _heightmaps_from_ray_hits(ray_hits),
+            world_x_range=world_x_range,
+            world_y_range=world_y_range,
+        )
 
     @property
     def batch_size(self) -> int:
@@ -256,4 +277,63 @@ class BatchedTerrain:
         return torch.stack(outputs)
 
 
-__all__ = ["BatchedTerrain"]
+class PlannerTerrain(BatchedTerrain):
+    """Formal terrain ABI for planner code.
+
+    Use PlannerTerrain.from_ray_hits(...) to construct planner terrain instances.
+    Direct constructor calls are rejected so the ABI stays explicit.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        raise TypeError("PlannerTerrain must be constructed with PlannerTerrain.from_ray_hits(...)")
+
+    @classmethod
+    def _from_heightmaps(
+        cls,
+        heightmaps: Tensor,
+        *,
+        world_x_range: tuple[float, float],
+        world_y_range: tuple[float, float],
+    ) -> "PlannerTerrain":
+        self = object.__new__(cls)
+        BatchedTerrain.__init__(
+            self,
+            heightmaps,
+            world_x_range=world_x_range,
+            world_y_range=world_y_range,
+        )
+        return self
+
+    @classmethod
+    def from_ray_hits(
+        cls,
+        ray_hits: Tensor,
+        *,
+        world_x_range: tuple[float, float],
+        world_y_range: tuple[float, float],
+    ) -> "PlannerTerrain":
+        return cls._from_heightmaps(
+            _heightmaps_from_ray_hits(ray_hits),
+            world_x_range=world_x_range,
+            world_y_range=world_y_range,
+        )
+
+    def _normalize_single_terrain_query(self, query: Tensor, result: Tensor) -> Tensor:
+        query_ndim = _value_ndim(query)
+        if self.batch_size == 1 and query_ndim == 1:
+            return result[0]
+        if self.batch_size == 1 and query_ndim == 2:
+            return result[0]
+        return result
+
+    def height_at(self, points_xy: Tensor) -> Tensor:
+        return self._normalize_single_terrain_query(points_xy, super().height_at(points_xy))
+
+    def roughness_at(self, points_xy: Tensor) -> Tensor:
+        return self._normalize_single_terrain_query(points_xy, super().roughness_at(points_xy))
+
+    def max_height_along_segment(self, p0_xy: Tensor, p1_xy: Tensor) -> Tensor:
+        return self._normalize_single_terrain_query(p0_xy, super().max_height_along_segment(p0_xy, p1_xy))
+
+
+__all__ = ["PlannerTerrain", "BatchedTerrain"]
