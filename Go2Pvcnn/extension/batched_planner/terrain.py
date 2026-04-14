@@ -85,12 +85,6 @@ def _heightmaps_from_ray_hits(ray_hits: Tensor) -> Tensor:
     raise ValueError("ray_hits must have shape (N, H, W, 3), (N, H*W, 3), or (H*W, 3)")
 
 
-def _value_ndim(value) -> int:
-    if isinstance(value, Tensor):
-        return int(value.ndim)
-    return int(torch.as_tensor(value).ndim)
-
-
 def _reshape_points(points_xy: Tensor, batch_size: int) -> tuple[Tensor, bool]:
     if points_xy.ndim == 1:
         if points_xy.shape[0] != 2:
@@ -317,23 +311,6 @@ class PlannerTerrain(BatchedTerrain):
             world_x_range=world_x_range,
             world_y_range=world_y_range,
         )
-
-    def _normalize_single_terrain_query(self, query: Tensor, result: Tensor) -> Tensor:
-        query_ndim = _value_ndim(query)
-        if self.batch_size == 1 and query_ndim == 1:
-            return result[0]
-        if self.batch_size == 1 and query_ndim == 2:
-            return result[0]
-        return result
-
-    def height_at(self, points_xy: Tensor) -> Tensor:
-        return self._normalize_single_terrain_query(points_xy, super().height_at(points_xy))
-
-    def roughness_at(self, points_xy: Tensor) -> Tensor:
-        return self._normalize_single_terrain_query(points_xy, super().roughness_at(points_xy))
-
-    def max_height_along_segment(self, p0_xy: Tensor, p1_xy: Tensor) -> Tensor:
-        return self._normalize_single_terrain_query(p0_xy, super().max_height_along_segment(p0_xy, p1_xy))
 
 
 __all__ = ["PlannerTerrain", "BatchedTerrain"]

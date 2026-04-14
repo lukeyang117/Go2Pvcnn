@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import math
+import sys
 import unittest
+from pathlib import Path
 
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
@@ -146,7 +152,7 @@ class BatchedTerrainTest(unittest.TestCase):
         )
 
         sample = terrain.height_at(torch.tensor([0.5, 0.5], dtype=torch.float32))
-        self.assertEqual(sample.shape, ())
+        self.assertEqual(sample.shape, (1,))
         self.assertTrue(torch.isfinite(sample))
 
     def test_plannerterrain_query_shapes_follow_abi_rules(self) -> None:
@@ -168,6 +174,7 @@ class BatchedTerrainTest(unittest.TestCase):
         )
 
         single_point = torch.tensor([0.25, 0.75], dtype=torch.float32)
+        single_point_2d = torch.tensor([[0.25, 0.75]], dtype=torch.float32)
         multi_points = torch.tensor([[0.25, 0.75], [0.75, 0.25]], dtype=torch.float32)
         batched_points = torch.tensor(
             [
@@ -178,14 +185,28 @@ class BatchedTerrainTest(unittest.TestCase):
         )
         single_segment_p0 = torch.tensor([0.0, 0.0], dtype=torch.float32)
         single_segment_p1 = torch.tensor([1.0, 1.0], dtype=torch.float32)
+        single_segment_p0_2d = torch.tensor([[0.0, 0.0]], dtype=torch.float32)
+        single_segment_p1_2d = torch.tensor([[1.0, 1.0]], dtype=torch.float32)
         batched_segment_p0 = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
         batched_segment_p1 = torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=torch.float32)
 
-        self.assertEqual(single_terrain.height_at(single_point).shape, ())
-        self.assertEqual(single_terrain.height_at(multi_points).shape, (2,))
-        self.assertEqual(single_terrain.roughness_at(single_point).shape, ())
-        self.assertEqual(single_terrain.roughness_at(multi_points).shape, (2,))
-        self.assertEqual(single_terrain.max_height_along_segment(single_segment_p0, single_segment_p1).shape, ())
+        self.assertEqual(single_terrain.height_at(single_point).shape, (1,))
+        self.assertEqual(single_terrain.height_at(single_point_2d).shape, (1,))
+        torch.testing.assert_close(single_terrain.height_at(single_point), single_terrain.height_at(single_point_2d))
+        self.assertEqual(single_terrain.height_at(multi_points).shape, (1, 2))
+        self.assertEqual(single_terrain.roughness_at(single_point).shape, (1,))
+        self.assertEqual(single_terrain.roughness_at(single_point_2d).shape, (1,))
+        torch.testing.assert_close(single_terrain.roughness_at(single_point), single_terrain.roughness_at(single_point_2d))
+        self.assertEqual(single_terrain.roughness_at(multi_points).shape, (1, 2))
+        self.assertEqual(single_terrain.max_height_along_segment(single_segment_p0, single_segment_p1).shape, (1,))
+        self.assertEqual(
+            single_terrain.max_height_along_segment(single_segment_p0_2d, single_segment_p1_2d).shape,
+            (1,),
+        )
+        torch.testing.assert_close(
+            single_terrain.max_height_along_segment(single_segment_p0, single_segment_p1),
+            single_terrain.max_height_along_segment(single_segment_p0_2d, single_segment_p1_2d),
+        )
 
         self.assertEqual(batched_terrain.height_at(single_point).shape, (2,))
         self.assertEqual(batched_terrain.height_at(batched_points).shape, (2, 2))
