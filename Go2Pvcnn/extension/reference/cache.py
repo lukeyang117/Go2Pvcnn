@@ -140,7 +140,14 @@ class ReferenceTrajectoryCache:
             return None
 
     def shape_issues(self) -> tuple[str, ...]:
-        """Return a tuple describing any structural or ABI problems in the cache."""
+        """Return issues that would make the cache unsafe to consume."""
+        return self._issues(canonical=False)
+
+    def canonical_issues(self) -> tuple[str, ...]:
+        """Return issues that make the cache diverge from the canonical planner ABI."""
+        return self._issues(canonical=True)
+
+    def _issues(self, *, canonical: bool) -> tuple[str, ...]:
         issues: list[str] = []
         required = {
             "root_pos_w": self.root_pos_w,
@@ -166,12 +173,14 @@ class ReferenceTrajectoryCache:
         assert self.valid_mask is not None
 
         rp = self.root_pos_w
-        canonical_device = CANONICAL_REFERENCE_CACHE_DEVICE
+        canonical_device = CANONICAL_REFERENCE_CACHE_DEVICE if canonical else rp.device
         batched = rp.ndim == 3
         if rp.ndim not in (2, 3):
             issues.append(f"root_pos_w:ndim={rp.ndim}")
             return tuple(issues)
-        if rp.dtype != CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE:
+        if not rp.is_floating_point():
+            issues.append(f"root_pos_w:dtype={rp.dtype}")
+        elif canonical and rp.dtype != CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE:
             issues.append(f"root_pos_w:dtype={rp.dtype}")
         if rp.device != canonical_device:
             issues.append(f"root_pos_w:device={rp.device}")
@@ -184,8 +193,10 @@ class ReferenceTrajectoryCache:
             if last != 3:
                 issues.append(f"root_pos_w:last_dim={last}")
 
-        def check(name: str, t: torch.Tensor, tail: tuple[int | None, ...], *, dtype: torch.dtype) -> None:
-            if t.dtype != dtype:
+        def check_float(name: str, t: torch.Tensor, tail: tuple[int | None, ...]) -> None:
+            if not t.is_floating_point():
+                issues.append(f"{name}:dtype={t.dtype}")
+            elif canonical and t.dtype != CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE:
                 issues.append(f"{name}:dtype={t.dtype}")
             if t.device != canonical_device:
                 issues.append(f"{name}:device={t.device}")
@@ -207,18 +218,44 @@ class ReferenceTrajectoryCache:
                     if t.shape[dim_idx] != exp_d:
                         issues.append(f"{name}:dim{dim_idx}={t.shape[dim_idx]}")
 
-        check("root_quat_w", self.root_quat_w, (4,), dtype=CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE)
-        check("joint_angles", self.joint_angles, (12,), dtype=CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE)
-        check("foot_pos_root", self.foot_pos_root, (4, 3), dtype=CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE)
-        check("contact_state", self.contact_state, (4,), dtype=torch.bool)
-        check("planned_touchdown_w", self.planned_touchdown_w, (4, 3), dtype=CANONICAL_REFERENCE_CACHE_FLOAT_DTYPE)
+        def check_bool(name: str, t: torch.Tensor, tail: tuple[int | None, ...]) -> None:
+            if t.dtype != torch.bool:
+                issues.append(f"{name}:dtype={t.dtype}")
+            if t.device != canonical_device:
+                issues.append(f"{name}:device={t.device}")
+            if batched:
+                if t.ndim != len(tail) + 2:
+                    issues.append(f"{name}:ndim={t.ndim}")
+                    return
+                if t.shape[0] != n or t.shape[1] != horizon:
+                    issues.append(f"{name}:batch_horizon={t.shape[:2]}")
+            else:
+                if t.ndim != len(tail) + 1:
+                    issues.append(f"{name}:ndim={t.ndim}")
+                    return
+                if t.shape[0] != horizon:
+                    issues.append(f"{name}:horizon={t.shape[0]}")
+            for i, exp_d in enumerate(tail):
+                if exp_d is not None:
+                    dim_idx = -len(tail) + i
+                    if t.shape[dim_idx] != exp_d:
+                        issues.append(f"{name}:dim{dim_idx}={t.shape[dim_idx]}")
+
+        def check_long(name: str, t: torch.Tensor) -> None:
+            if t.dtype != torch.long:
+                issues.append(f"{name}:dtype={t.dtype}")
+            if t.device != canonical_device:
+                issues.append(f"{name}:device={t.device}")
+
+        check_float("root_quat_w", self.root_quat_w, (4,))
+        check_float("joint_angles", self.joint_angles, (12,))
+        check_float("foot_pos_root", self.foot_pos_root, (4, 3))
+        check_bool("contact_state", self.contact_state, (4,))
+        check_float("planned_touchdown_w", self.planned_touchdown_w, (4, 3))
 
         pi = self.phase_index
         vm = self.valid_mask
-        if pi.dtype != torch.long:
-            issues.append(f"phase_index:dtype={pi.dtype}")
-        if pi.device != canonical_device:
-            issues.append(f"phase_index:device={pi.device}")
+        check_long("phase_index", pi)
         if batched:
             if pi.ndim != 2 or pi.shape != (n, horizon):
                 issues.append(f"phase_index:shape={tuple(pi.shape)}")
@@ -237,8 +274,12 @@ class ReferenceTrajectoryCache:
         return tuple(issues)
 
     def is_ready(self) -> bool:
-        """Return True when the cache has a complete, shape-consistent trajectory."""
+        """Return True when the cache is structurally safe for consumer use."""
         return len(self.shape_issues()) == 0
+
+    def is_canonical(self) -> bool:
+        """Return True when the cache still matches the canonical planner ABI."""
+        return len(self.canonical_issues()) == 0
 
 
 __all__ = [

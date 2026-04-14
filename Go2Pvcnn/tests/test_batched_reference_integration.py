@@ -54,6 +54,8 @@ class BatchedReferenceIntegrationTest(unittest.TestCase):
         self.assertEqual(cache.valid_mask.dtype, torch.bool)
         self.assertEqual(tuple(cache.planned_touchdown_w.shape), (2, 5, 4, 3))
         self.assertEqual(cache.planned_touchdown_w.dtype, torch.float32)
+        self.assertEqual(cache.canonical_issues(), ())
+        self.assertTrue(cache.is_canonical())
 
     def test_expand_reference_cache_preserves_canonical_layout_and_dtype(self):
         from extension.reference.cache import expand_reference_cache_to_num_envs
@@ -82,22 +84,29 @@ class BatchedReferenceIntegrationTest(unittest.TestCase):
         cache.valid_mask = cache.valid_mask.to(device="meta")
 
         issues = cache.shape_issues()
-        self.assertIn("root_pos_w:dtype=torch.float64", issues)
         self.assertIn("contact_state:dtype=torch.float32", issues)
         self.assertIn("phase_index:dtype=torch.float32", issues)
         self.assertIn("valid_mask:device=meta", issues)
         self.assertFalse(cache.is_ready())
 
-    def test_shape_issues_rejects_noncanonical_cache_device(self):
+        canonical_issues = cache.canonical_issues()
+        self.assertIn("root_pos_w:dtype=torch.float64", canonical_issues)
+        self.assertIn("contact_state:dtype=torch.float32", canonical_issues)
+        self.assertIn("phase_index:dtype=torch.float32", canonical_issues)
+        self.assertIn("valid_mask:device=meta", canonical_issues)
+
+    def test_consumed_cache_stays_ready_after_device_migration_but_loses_canonical_status(self):
         from extension.convention import planner_result_to_reference_cache
 
         cache = planner_result_to_reference_cache(_fake_result(2, 5)).to(device="meta")
 
-        issues = cache.shape_issues()
+        self.assertEqual(cache.shape_issues(), ())
+        self.assertTrue(cache.is_ready())
+        issues = cache.canonical_issues()
         self.assertIn("root_pos_w:device=meta", issues)
         self.assertIn("phase_index:device=meta", issues)
         self.assertIn("valid_mask:device=meta", issues)
-        self.assertFalse(cache.is_ready())
+        self.assertFalse(cache.is_canonical())
 
     def test_manager_cache_is_compatible_with_reference_gather(self):
         from extension.batched_planner.manager import BatchedTrajectoryManager
