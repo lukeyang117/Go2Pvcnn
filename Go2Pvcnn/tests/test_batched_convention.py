@@ -23,7 +23,7 @@ class BatchedConventionTest(unittest.TestCase):
 
     def test_hip_offsets_array_matches_raw(self):
         from Go2Pvcnn.extension.batched_planner.types import HIP_OFFSETS_ARRAY
-        from Go2Pvcnn.extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+        from Go2Pvcnn.extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
         ensure_kinematic_footsteps_on_syspath()
         from scripts.go2fp.types import HIP_OFFSETS_ARRAY as RAW_HIP_OFFSETS_ARRAY

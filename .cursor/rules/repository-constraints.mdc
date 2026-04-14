@@ -1,0 +1,26 @@
+---
+description: 仓库硬约束：与 AGENT.md / .codex 对齐；新对话先读 notes/index 与 .codex
+alwaysApply: true
+---
+
+# 仓库硬约束（TestPvcnnWithIsaacsim）
+
+在进行分析、读代码、改代码、跑测试或脚本、训练、评测，或声称「已完成 / 已修复」之前，必须先阅读并遵循：
+
+- `notes/index.md` — 知识入口，**每个新对话必查**
+- `.codex` — 操作边界与验证要求
+
+除非用户在本对话中**明确覆盖**，否则以上视为本仓库的硬约束，不是可选背景。
+
+## 与 Codex 对齐
+
+内容与根目录 `AGENT.md`（Codex 入口）及 `.codex` 一致；两处冲突时以用户当轮指令为准，并**显式说明**覆盖项。
+
+## 必须遵守的约定
+
+- 笔记与文档链接使用**仓库相对路径**（服务器与本地 Obsidian `Z:` 共用）。
+- `raw/`、`onlyReference/` 默认可参考，**不是**默认实现目标。
+- 主线实现主要在 `Go2Pvcnn/`；除非用户改范围，否则不要动 `third_party/`。
+- 涉及 `Go2Pvcnn/extension/planner`、基于 planner 的轨迹奖励、或 `raw/kinematic_footsteps` 对齐时，改 planner 核心逻辑前先读：`notes/human/human-08-extension-planner-reading-guide.md` 与 `notes/human/human-09-extension-planner-mapping.md`（或对应 `notes/ai/` 成对文档）。
+- 对训练、仿真、观测接线、curriculum、LiDAR、PVCNN 集成声称「已修好」时，必须说明**验证过什么**（命令、现象、范围）。
+- 新知识优先落在 `notes/` 或 `docs/`，避免在仓库根散落临时文件。

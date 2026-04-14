@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 import torch
 
-from Go2Pvcnn.extension.planner.runtime.raw_go2fp_bridge import (
+from Go2Pvcnn.extension.reference.raw_bridge import (
     ensure_kinematic_footsteps_on_syspath,
     generate_reference_cache_with_raw,
     kinematic_footsteps_repo_root,

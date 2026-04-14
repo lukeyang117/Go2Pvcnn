@@ -90,6 +90,14 @@ class BatchedManagerTest(unittest.TestCase):
     def _cfg(self):
         return SimpleNamespace(reference_replan_interval_steps=3, reference_trajectory_horizon=5, dt=0.02)
 
+    def _cfg_from_sim(self):
+        return SimpleNamespace(
+            reference_replan_interval_steps=3,
+            reference_trajectory_horizon=5,
+            decimation=4,
+            sim=SimpleNamespace(dt=0.005),
+        )
+
     def test_replan_at_interval(self):
         from extension.batched_planner.manager import BatchedTrajectoryManager
 
@@ -201,6 +209,40 @@ class BatchedManagerTest(unittest.TestCase):
 
         self.assertEqual(gen.call_count, 2)
         self.assertTrue(torch.allclose(manager._last_commands, torch.tensor([[0.3, 0.0, 0.0], [0.3, 0.0, 0.0]], dtype=torch.float64)))
+
+    def test_step_uses_cfg_sim_dt_times_decimation_when_cfg_dt_is_missing(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = self._cfg_from_sim()
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        states = SimpleNamespace(root_pos=torch.zeros(2, 3, dtype=torch.float64))
+        commands = torch.zeros(2, 3, dtype=torch.float64)
+
+        with patch("extension.batched_planner.manager.batched_generate_trajectory", return_value=_fake_result(2, 5)) as gen:
+            manager.step("terrain", states, commands)
+
+        self.assertEqual(gen.call_args.kwargs["dt"], 0.02)
+
+    def test_refresh_from_env_prefers_runtime_step_dt(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = self._cfg_from_sim()
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        ray_hits = torch.zeros(2, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([2, 2], dtype=torch.long),
+            command=torch.zeros(2, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+        env.step_dt = 0.03
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            return_value=_fake_result(2, 5),
+        ) as gen:
+            manager.refresh_from_env(env)
+
+        self.assertEqual(gen.call_args.kwargs["dt"], 0.03)
 
 
 if __name__ == "__main__":

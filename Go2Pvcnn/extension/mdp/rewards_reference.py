@@ -149,7 +149,9 @@ def _gather_reference_field(cache, name: str, frame_ids: torch.Tensor, env) -> t
         raise RuntimeError(f"reference cache missing {name}")
     dev = env.device
     n = env.num_envs
-    env_idx = torch.arange(n, device=dev, dtype=torch.long)
+    idx_device = t.device
+    frame_ids = frame_ids.to(device=idx_device, dtype=torch.long)
+    env_idx = torch.arange(n, device=idx_device, dtype=torch.long)
     if t.ndim == 2:
         return t[frame_ids].to(device=dev)
     if t.ndim == 3:

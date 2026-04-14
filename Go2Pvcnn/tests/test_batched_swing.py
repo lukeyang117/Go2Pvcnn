@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from extension.planner.runtime.raw_go2fp_bridge import ensure_kinematic_footsteps_on_syspath
+from extension.reference.raw_bridge import ensure_kinematic_footsteps_on_syspath
 
 
 ensure_kinematic_footsteps_on_syspath()

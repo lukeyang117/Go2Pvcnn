@@ -132,6 +132,23 @@ class BatchedReferenceIntegrationTest(unittest.TestCase):
         torch.testing.assert_close(gathered[0], cache.root_pos_w[0, 0])
         torch.testing.assert_close(gathered[1], cache.root_pos_w[1, 3])
 
+    def test_reference_gather_accepts_gpu_frame_indices_for_cpu_canonical_cache(self):
+        from extension.mdp import rewards_reference
+        from extension.convention import planner_result_to_reference_cache
+
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is required to verify mixed CPU-cache/GPU-index gather")
+
+        cache = planner_result_to_reference_cache(_fake_result(2, 5))
+        env = SimpleNamespace(device=torch.device("cuda:0"), num_envs=2)
+        frame_ids = torch.tensor([1, 4], dtype=torch.long, device=env.device)
+
+        gathered = rewards_reference._gather_reference_field(cache, "root_pos_w", frame_ids, env)
+
+        self.assertEqual(gathered.device.type, "cuda")
+        torch.testing.assert_close(gathered.cpu()[0], cache.root_pos_w[0, 1])
+        torch.testing.assert_close(gathered.cpu()[1], cache.root_pos_w[1, 4])
+
     def test_ensure_reference_cache_requires_manager_owned_cache(self):
         from extension.mdp import rewards_reference
 

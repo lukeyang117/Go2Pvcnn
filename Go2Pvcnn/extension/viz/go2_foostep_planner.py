@@ -234,11 +234,38 @@ class PlannerVisualizer:
                 )
             )
 
+    @staticmethod
+    def _foot_positions_world(trajectory) -> torch.Tensor:
+        foot_pos_w = getattr(trajectory, "foot_pos_w", None)
+        if foot_pos_w is not None:
+            return foot_pos_w
+
+        from isaaclab.utils import math as math_utils
+
+        root_pos_w = trajectory.root_pos_w
+        root_quat_w = trajectory.root_quat_w
+        foot_pos_root = trajectory.foot_pos_root
+        num_envs, num_frames, num_legs, _ = foot_pos_root.shape
+        rotated = math_utils.quat_apply(
+            root_quat_w.unsqueeze(2).expand(-1, -1, num_legs, -1).reshape(-1, 4),
+            foot_pos_root.reshape(-1, 3),
+        ).reshape(num_envs, num_frames, num_legs, 3)
+        return rotated + root_pos_w.unsqueeze(2)
+
+    @staticmethod
+    def _touchdown_markers_world(trajectory) -> torch.Tensor:
+        touchdowns = trajectory.planned_touchdown_w
+        if touchdowns.ndim == 4:
+            return touchdowns[:, 0]
+        return touchdowns
+
     def update(self, *, result, command: torch.Tensor, root_yaw: torch.Tensor, height_points: torch.Tensor) -> None:
+        foot_pos_w = self._foot_positions_world(result)
+        touchdown_w = self._touchdown_markers_world(result)
         self.root_traj.visualize(translations=result.root_pos_w[0].to(torch.float32))
         for leg_idx in range(4):
-            self.foot_traj[leg_idx].visualize(translations=result.foot_pos_w[0, :, leg_idx].to(torch.float32))
-            self.touchdowns[leg_idx].visualize(translations=result.planned_touchdown_w[0, leg_idx : leg_idx + 1].to(torch.float32))
+            self.foot_traj[leg_idx].visualize(translations=foot_pos_w[0, :, leg_idx].to(torch.float32))
+            self.touchdowns[leg_idx].visualize(translations=touchdown_w[0, leg_idx : leg_idx + 1].to(torch.float32))
 
         if height_points.numel() > 0:
             self.heightmap.visualize(translations=height_points.to(torch.float32))

@@ -236,7 +236,13 @@ def batched_generate_trajectory(
         return _standstill_trajectory(states, requested_n_frames, dt)
 
     touchdowns = best_plan.touchdowns
-    terrain_max_heights = terrain.max_height_along_segment(states.foot_pos[..., :2].reshape(-1, 2), touchdowns[..., :2].reshape(-1, 2)).reshape(batch_size, 4)
+    terrain_max_heights = torch.stack(
+        [
+            terrain.max_height_along_segment(states.foot_pos[:, leg_idx, :2], touchdowns[:, leg_idx, :2])
+            for leg_idx in range(4)
+        ],
+        dim=1,
+    )
     foot_targets = batched_compute_swing_targets(contact_seq, states.foot_pos, touchdowns, cfg.step_height, terrain_max_heights=terrain_max_heights)
 
     pos_xy_approx, yaw_approx = batched_integrate_base_planar(states.root_pos[:, :2], initial_yaw, best_plan.command[:, 0], best_plan.command[:, 1], best_plan.command[:, 2], n_frames, dt)

@@ -133,26 +133,33 @@ def _spiral_search_safe_foothold(
     distance = torch.linalg.norm(offsets_xy, dim=-1)
     within_radius = distance <= float(search_radius) + 1e-9
 
-    candidate_xy = nominal[:, None, :2] + offsets_xy[None, :, :]
-    candidate_z = terrain.height_at(candidate_xy)
-    roughness = terrain.roughness_at(candidate_xy)
-    min_allowed_z = previous[:, 2:3] - float(max_step_down)
-    valid = within_radius.unsqueeze(0) & (roughness <= float(max_roughness)) & (candidate_z >= min_allowed_z)
+    if nominal.ndim != 3 or nominal.shape[-1] != 3:
+        raise ValueError(f"nominal must have shape (N, L, 3); got {tuple(nominal.shape)}")
+    if previous.shape != nominal.shape:
+        raise ValueError(f"previous must have shape {tuple(nominal.shape)}; got {tuple(previous.shape)}")
 
-    d_nom = torch.linalg.norm(offsets_xy, dim=-1).unsqueeze(0)
-    d_prev = torch.linalg.norm(candidate_xy - previous[:, None, :2], dim=-1)
+    batch_size, num_legs = nominal.shape[:2]
+    candidate_xy = nominal[:, :, None, :2] + offsets_xy[None, None, :, :]
+    flat_candidate_xy = candidate_xy.reshape(batch_size, num_legs * offsets_xy.shape[0], 2)
+    candidate_z = terrain.height_at(flat_candidate_xy).reshape(batch_size, num_legs, offsets_xy.shape[0])
+    roughness = terrain.roughness_at(flat_candidate_xy).reshape(batch_size, num_legs, offsets_xy.shape[0])
+    min_allowed_z = previous[..., 2:3] - float(max_step_down)
+    valid = within_radius.view(1, 1, -1) & (roughness <= float(max_roughness)) & (candidate_z >= min_allowed_z)
+
+    d_nom = torch.linalg.norm(offsets_xy, dim=-1).view(1, 1, -1)
+    d_prev = torch.linalg.norm(candidate_xy - previous[:, :, None, :2], dim=-1)
     score = d_nom + 0.5 * d_prev
     score = torch.where(valid, score, torch.full_like(score, float("inf")))
 
-    best_idx = score.argmin(dim=1)
-    best_score = score.gather(1, best_idx[:, None]).squeeze(1)
-    best_xy = candidate_xy[torch.arange(nominal.shape[0], device=nominal.device), best_idx]
-    best_z = candidate_z[torch.arange(nominal.shape[0], device=nominal.device), best_idx]
-    best = torch.cat([best_xy, best_z[:, None]], dim=-1)
+    best_idx = score.argmin(dim=-1)
+    best_score = score.gather(-1, best_idx.unsqueeze(-1)).squeeze(-1)
+    best_xy = candidate_xy.gather(-2, best_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, 2)).squeeze(-2)
+    best_z = candidate_z.gather(-1, best_idx.unsqueeze(-1)).squeeze(-1)
+    best = torch.cat([best_xy, best_z.unsqueeze(-1)], dim=-1)
 
-    nominal_z = terrain.height_at(nominal[:, :2])
-    fallback_nominal = torch.cat([nominal[:, :2], nominal_z[:, None]], dim=-1)
-    fallback = torch.where((nominal_z >= min_allowed_z[:, 0]).unsqueeze(-1), fallback_nominal, previous)
+    nominal_z = terrain.height_at(nominal[..., :2])
+    fallback_nominal = torch.cat([nominal[..., :2], nominal_z.unsqueeze(-1)], dim=-1)
+    fallback = torch.where(nominal_z.unsqueeze(-1) >= min_allowed_z, fallback_nominal, previous)
     return torch.where(torch.isfinite(best_score).unsqueeze(-1), best, fallback)
 
 
@@ -234,18 +241,19 @@ def batched_compute_footholds(
         side_sign,
         hip_offset=hip_offset,
     )
+    nominal_xy = nominal_xy.reshape(batch_size, 4, 2)
     nominal_z = terrain.height_at(nominal_xy)
-    nominal = torch.cat([nominal_xy, nominal_z[:, None]], dim=-1)
+    nominal = torch.cat([nominal_xy, nominal_z.unsqueeze(-1)], dim=-1)
     best = _spiral_search_safe_foothold(
         nominal,
         terrain,
-        previous_footholds_t.reshape(-1, 3),
+        previous_footholds_t,
         search_radius=search_radius,
         grid_step=search_step,
         max_roughness=1.0,
         max_step_down=max_step_down,
     )
-    return best.reshape(batch_size, 4, 3)
+    return best
 
 
 def batched_evaluate_touchdowns(

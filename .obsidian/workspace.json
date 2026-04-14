@@ -1,0 +1,224 @@
+{
+  "main": {
+    "id": "5e1ec372e008f851",
+    "type": "split",
+    "children": [
+      {
+        "id": "3ffbed9b35592c3e",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "a8d0ff14dcd70189",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "notes/human/human-10-extension-planner-runtime.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "human-10-extension-planner-runtime"
+            }
+          },
+          {
+            "id": "a6d1ae5eff8c9ff7",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "raw/kinematic_footsteps/notes/human/human-02-flow-terrain-input.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "human-02-flow-terrain-input"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "ee0a54112d073816",
+    "type": "split",
+    "children": [
+      {
+        "id": "a7044087e3892af1",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3d723ec4be9ab163",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "db8f324bf8d2ccd1",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "3ec9a97498b4bd70",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "08cd00680d8357a7",
+    "type": "split",
+    "children": [
+      {
+        "id": "54e5e5acf9cf31ec",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "85db3ebce046bbb2",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "notes/human/human-07-manual-tuning-guide.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for human-07-manual-tuning-guide"
+            }
+          },
+          {
+            "id": "0a8dee6651cd45ab",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "notes/human/human-07-manual-tuning-guide.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from human-07-manual-tuning-guide"
+            }
+          },
+          {
+            "id": "7f25d094d14581f9",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "30c6ab1520dab2ae",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "1cf51f44d24f602d",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "notes/human/human-07-manual-tuning-guide.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of human-07-manual-tuning-guide"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "a8d0ff14dcd70189",
+  "lastOpenFiles": [
+    "notes/human/human-09-extension-planner-mapping.md",
+    "notes/human/human-10-extension-planner-runtime.md",
+    "notes/human/human-08-extension-planner-reading-guide.md",
+    "notes/human/human-00-reading-guide.md",
+    "notes/human/human-02-training-and-entrypoints.md",
+    "notes/index.md",
+    "raw/kinematic_footsteps/notes/human/human-02-flow-terrain-input.md",
+    "raw/kinematic_footsteps/notes/human/human-01-overall-pipeline.md",
+    "raw/kinematic_footsteps/notes/index.md",
+    "notes/ai/ai-08-extension-planner-reading-guide.md",
+    "notes/human/human-11-extension-trajectory-reward.md",
+    "notes/human/human-07-manual-tuning-guide.md",
+    "raw/kinematic_footsteps/notes/human/human-06-flow-ik-and-trajectory-output.md",
+    "human/human-11-extension-trajectory-reward.md",
+    "raw/kinematic_footsteps/docs/superpowers/specs/2026-04-11-safe-command-replanning-design.md",
+    "human/human-10-extension-planner-runtime.md",
+    "human",
+    "ai/ai-11-extension-trajectory-reward.md",
+    "ai",
+    "notes/human/human-06-assets-paths-and-experiments.md",
+    "notes/ai/ai-04-lidar-and-pvcnn.md"
+  ]
+}

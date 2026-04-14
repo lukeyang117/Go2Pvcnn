@@ -24,6 +24,19 @@ class BatchedTrajectoryManager:
         self._pending_reset_mask: Tensor | None = None
         self._foot_body_ids: Tensor | None = None
 
+    @staticmethod
+    def _cfg_dt(cfg) -> float:
+        for attr in ("dt", "step_dt"):
+            value = getattr(cfg, attr, None)
+            if value is not None:
+                return float(value)
+        sim = getattr(cfg, "sim", None)
+        sim_dt = getattr(sim, "dt", None) if sim is not None else None
+        decimation = getattr(cfg, "decimation", None)
+        if sim_dt is not None and decimation is not None:
+            return float(sim_dt) * float(decimation)
+        raise AttributeError("planner dt is unavailable; expected env.step_dt, cfg.dt, cfg.step_dt, or cfg.decimation * cfg.sim.dt")
+
     def _ensure_phase_counter(self, num_envs: int) -> None:
         if self._phase_counter is None or int(self._phase_counter.shape[0]) != num_envs:
             self._phase_counter = torch.zeros(num_envs, dtype=torch.long, device=self._device)
@@ -85,6 +98,14 @@ class BatchedTrajectoryManager:
         self._cache = cache
         return cache
 
+    def _planner_dt(self, env=None) -> float:
+        if env is not None:
+            root = self._env_root(env)
+            step_dt = getattr(root, "step_dt", None)
+            if step_dt is not None:
+                return float(step_dt)
+        return self._cfg_dt(self._cfg)
+
     def _needs_replan(self, episode_length_buf: Tensor, commands: Tensor) -> bool:
         if self._cache is None:
             return True
@@ -114,7 +135,7 @@ class BatchedTrajectoryManager:
             states,
             commands,
             requested_n_frames=int(self._cfg.reference_trajectory_horizon),
-            dt=float(self._cfg.dt),
+            dt=self._planner_dt(),
         )
         self._cache_from_result(result)
         self._ensure_phase_counter(int(states.root_pos.shape[0]))
@@ -144,7 +165,18 @@ class BatchedTrajectoryManager:
         states = self._batched_state_from_env(env)
 
         if self._needs_replan(episode_length_buf, commands):
-            self._run_replan(terrain, states, commands, episode_length_buf)
+            result = batched_generate_trajectory(
+                terrain,
+                states,
+                commands,
+                requested_n_frames=int(self._cfg.reference_trajectory_horizon),
+                dt=self._planner_dt(env),
+            )
+            self._cache_from_result(result)
+            assert self._phase_counter is not None
+            self._phase_counter.zero_()
+            self._last_replan_episode_length_buf = episode_length_buf.clone()
+            self._pending_reset_mask = torch.zeros_like(episode_length_buf, dtype=torch.bool)
         else:
             assert self._phase_counter is not None
             self._phase_counter = torch.clamp(self._phase_counter + 1, max=int(self._cache.root_pos_w.shape[1]) - 1)
@@ -165,7 +197,7 @@ class BatchedTrajectoryManager:
                 states,
                 commands,
                 requested_n_frames=int(self._cfg.reference_trajectory_horizon),
-                dt=float(self._cfg.dt),
+                dt=self._planner_dt(),
             )
             self._cache = planner_result_to_reference_cache(result)
             self._phase_counter.zero_()

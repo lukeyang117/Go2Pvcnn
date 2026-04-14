@@ -316,6 +316,62 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertIs(ensured, cache)
         manager.refresh_from_env.assert_called_once_with(env)
 
+    def test_shared_runtime_manager_uses_single_batched_replan_for_multi_env(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        base_hits = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [3.0, 1.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [1.0, 2.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [3.0, 2.0, 0.0],
+                [0.0, 3.0, 0.0],
+                [1.0, 3.0, 0.0],
+                [2.0, 3.0, 0.0],
+                [3.0, 3.0, 0.0],
+            ],
+            dtype=torch.float64,
+        )
+        raw_ray_hits = torch.stack([base_hits, base_hits + torch.tensor([10.0, 20.0, 0.0], dtype=torch.float64)])
+        env = self._make_fake_viewer_env(
+            episode_length_buf=torch.tensor([0, 0], dtype=torch.long),
+            command=torch.tensor([[0.2, 0.0, 0.0], [0.2, 0.0, 0.0]], dtype=torch.float64),
+            ray_hits=raw_ray_hits,
+        )
+        cfg = SimpleNamespace(
+            reference_replan_interval_steps=50,
+            reference_trajectory_horizon=5,
+            dt=0.02,
+            reference_command_name="base_velocity",
+        )
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+
+        with patch("extension.batched_planner.manager.batched_generate_trajectory", return_value=SimpleNamespace(
+            num_frames=5,
+            root_pos_w=torch.zeros((2, 5, 3), dtype=torch.float64),
+            root_quat_w=torch.zeros((2, 5, 4), dtype=torch.float64),
+            root_lin_vel_w=torch.zeros((2, 5, 3), dtype=torch.float64),
+            root_ang_vel_w=torch.zeros((2, 5, 3), dtype=torch.float64),
+            joint_angles=torch.zeros((2, 5, 12), dtype=torch.float64),
+            foot_pos_w=torch.zeros((2, 5, 4, 3), dtype=torch.float64),
+            foot_pos_root=torch.zeros((2, 5, 4, 3), dtype=torch.float64),
+            contact_state=torch.zeros((2, 5, 4), dtype=torch.bool),
+            body_pos_root=torch.zeros((2, 5, 12, 3), dtype=torch.float64),
+            planned_touchdown_w=torch.zeros((2, 4, 3), dtype=torch.float64),
+        )) as gen:
+            cache = manager.refresh_from_env(env)
+
+        self.assertTrue(cache.is_ready())
+        gen.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
