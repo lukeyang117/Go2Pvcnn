@@ -83,6 +83,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
+    # Critical for Isaac Lab/CUDA startup ordering: the allocator must be configured
+    # before AppLauncher constructs the simulation app.
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
     # GPU MAPPING FOR MULTI-GPU (must be before AppLauncher)
     if args_cli.distributed and "GPU_IDS" in os.environ:
         gpu_ids = [int(x.strip()) for x in os.environ["GPU_IDS"].split(",") if x.strip()]
@@ -168,7 +172,6 @@ def main() -> int:
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = False
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     dist = None
 

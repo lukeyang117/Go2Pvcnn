@@ -379,6 +379,11 @@ def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> Batche
     )
 
 
+def _sanitize_ray_hits_for_terrain(ray_hits: torch.Tensor) -> torch.Tensor:
+    """Replace non-finite scanner samples with deterministic finite values."""
+    return torch.nan_to_num(torch.as_tensor(ray_hits, dtype=torch.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def _compute_local_terrain(scanner, *, env_id: int = 0) -> tuple[SingleTerrainAdapter, torch.Tensor]:
     from extension.batched_planner.terrain import BatchedTerrain
 
@@ -392,8 +397,9 @@ def _compute_local_terrain(scanner, *, env_id: int = 0) -> tuple[SingleTerrainAd
     x_max = float(valid_hits[:, 0].max().item())
     y_min = float(valid_hits[:, 1].min().item())
     y_max = float(valid_hits[:, 1].max().item())
+    terrain_hits = _sanitize_ray_hits_for_terrain(ray_hits)
     terrain = BatchedTerrain.from_ray_hits(
-        ray_hits.unsqueeze(0),
+        terrain_hits.unsqueeze(0),
         world_x_range=(x_min, x_max),
         world_y_range=(y_min, y_max),
     )
