@@ -97,6 +97,32 @@ class BatchedBaseSolverTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mixed-device.*cpu.*meta"):
                 base_solver.batched_integrate_base_planar(initial_pos_xy, initial_yaw, vx, vy, yaw_rate, n_frames=15, dt=0.02)
 
+    def test_body_clearance_default_samples_do_not_participate_in_device_resolution(self):
+        from extension.batched_planner import base_solver
+
+        base_pos = torch.tensor([[[0.0, 0.0, 0.34], [0.05, -0.02, 0.35]]], dtype=torch.float64)
+        base_quat = torch.tensor([[[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]], dtype=torch.float64)
+        terrain = SimpleNamespace(
+            heightmaps=torch.zeros((1, 1, 2, 2), dtype=torch.float64),
+            height_at=lambda sample_xy: torch.zeros(sample_xy.shape[:2], dtype=torch.float64, device=sample_xy.device),
+        )
+
+        calls = []
+
+        def spy_resolve_input_device(*values, context="batched base solver"):
+            calls.append(values)
+            return torch.device("cpu")
+
+        with patch.object(base_solver, "_resolve_input_device", side_effect=spy_resolve_input_device):
+            adjusted = base_solver.batched_body_clearance_adjustment(base_pos, base_quat, terrain)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls[0]), 2)
+        self.assertIs(calls[0][0], base_pos)
+        self.assertIs(calls[0][1], base_quat)
+        self.assertEqual(adjusted.shape, (1, 2))
+        self.assertEqual(adjusted.device.type, "cpu")
+
     def test_solve_base_trajectory_rejects_terrain_device_mismatch_without_sync(self):
         from extension.batched_planner import base_solver
 

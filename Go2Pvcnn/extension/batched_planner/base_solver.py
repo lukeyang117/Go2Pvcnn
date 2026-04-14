@@ -152,10 +152,12 @@ def batched_solve_base_orientation(terrain_roll, terrain_pitch, yaw, max_roll: f
 
 
 def batched_body_clearance_adjustment(base_pos, base_quat, terrain, body_samples: Tensor = BODY_COLLISION_SAMPLES, margin: float = 0.012) -> Tensor:
-    device = _resolve_input_device(base_pos, base_quat, body_samples)
+    device = _resolve_input_device(base_pos, base_quat)
     _require_terrain_device(terrain, device)
     base_pos_t = _as_shape("base_pos", base_pos, device=device, shape=(base_quat.shape[1] if isinstance(base_quat, Tensor) and base_quat.ndim == 3 else _coerce_tensor(base_quat, device=device).shape[1], 3))
     base_quat_t = _as_shape("base_quat", base_quat, device=device, shape=(base_pos_t.shape[1], 4))
+    # body_samples is an execution-time constant by default; move it only after the
+    # runtime device is known so the default CPU tensor does not affect device checks.
     samples_t = _coerce_tensor(body_samples, device=device)
     if samples_t.ndim != 2 or samples_t.shape[1] != 3:
         raise ValueError(f"body_samples must have shape (S, 3); got {tuple(samples_t.shape)}")
