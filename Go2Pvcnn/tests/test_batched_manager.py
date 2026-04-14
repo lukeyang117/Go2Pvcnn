@@ -179,6 +179,29 @@ class BatchedManagerTest(unittest.TestCase):
         self.assertTrue(torch.equal(manager._last_episode_length_buf, torch.tensor([1, 1], dtype=torch.long)))
         self.assertTrue(torch.allclose(manager._last_commands, torch.tensor([[0.25, 0.0, 0.0], [0.25, 0.0, 0.0]], dtype=torch.float64)))
 
+    def test_refresh_from_env_replans_when_command_changes_without_episode_progress(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = SimpleNamespace(reference_replan_interval_steps=50, reference_trajectory_horizon=5, dt=0.02)
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        ray_hits = torch.zeros(2, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([7, 7], dtype=torch.long),
+            command=torch.zeros(2, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            return_value=_fake_result(2, 5),
+        ) as gen:
+            manager.refresh_from_env(env)
+            env.command_manager.command = torch.tensor([[0.3, 0.0, 0.0], [0.3, 0.0, 0.0]], dtype=torch.float64)
+            manager.refresh_from_env(env)
+
+        self.assertEqual(gen.call_count, 2)
+        self.assertTrue(torch.allclose(manager._last_commands, torch.tensor([[0.3, 0.0, 0.0], [0.3, 0.0, 0.0]], dtype=torch.float64)))
+
 
 if __name__ == "__main__":
     unittest.main()

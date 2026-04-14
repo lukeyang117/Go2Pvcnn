@@ -125,16 +125,23 @@ class BatchedTrajectoryManager:
 
     def refresh_from_env(self, env):
         episode_length_buf = self._episode_length_buf_from_env(env)
+        commands = self._commands_from_env(env)
         num_envs = int(episode_length_buf.shape[0])
         self._ensure_phase_counter(num_envs)
 
-        same_step = self._last_episode_length_buf is not None and episode_length_buf.shape == self._last_episode_length_buf.shape and torch.equal(episode_length_buf, self._last_episode_length_buf)
+        same_step = (
+            self._last_episode_length_buf is not None
+            and self._last_commands is not None
+            and episode_length_buf.shape == self._last_episode_length_buf.shape
+            and commands.shape == self._last_commands.shape
+            and torch.equal(episode_length_buf, self._last_episode_length_buf)
+            and torch.allclose(commands, self._last_commands, atol=1e-6, rtol=1e-6)
+        )
         if same_step and self._cache is not None and (self._pending_reset_mask is None or not torch.any(self._pending_reset_mask)):
             return self._cache
 
         terrain = self._terrain_from_env(env)
         states = self._batched_state_from_env(env)
-        commands = self._commands_from_env(env)
 
         if self._needs_replan(episode_length_buf, commands):
             self._run_replan(terrain, states, commands, episode_length_buf)
