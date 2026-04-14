@@ -11,6 +11,9 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+GO2PVCNN_ROOT = REPO_ROOT / "Go2Pvcnn"
+if str(GO2PVCNN_ROOT) not in sys.path:
+    sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 
 def _fresh_import(module_name: str):
@@ -84,7 +87,7 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
 
         self.assertTrue(parsed.viewer_launcher_flag)
 
-    def test_viewer_sanitizes_invalid_ray_hits_before_terrain_construction(self):
+    def test_viewer_uses_plannerterrain_for_local_terrain(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
 
         raw_ray_hits = torch.tensor(
@@ -101,35 +104,31 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
             def __init__(self, hits):
                 self.data = SimpleNamespace(ray_hits_w=hits)
 
-        class DummyTerrain:
-            batch_size = 1
-            heightmaps = torch.zeros((1, 1, 2, 2), dtype=torch.float64)
-
         captured = {}
+        sentinel_terrain = object()
 
-        def fake_from_ray_hits(ray_hits, *, world_x_range, world_y_range):
+        def fake_from_ray_hits(ray_hits, *, world_x_range=None, world_y_range=None):
             captured["ray_hits"] = ray_hits.clone()
             captured["world_x_range"] = world_x_range
             captured["world_y_range"] = world_y_range
-            self.assertTrue(torch.isfinite(ray_hits).all())
-            return DummyTerrain()
+            self.assertTrue(torch.isnan(ray_hits[0, 2, 2]))
+            self.assertTrue(torch.isinf(ray_hits[0, 1, 2]))
+            return sentinel_terrain
 
-        with patch("extension.batched_planner.terrain.BatchedTerrain.from_ray_hits", side_effect=fake_from_ray_hits):
+        with patch("extension.batched_planner.terrain.PlannerTerrain.from_ray_hits", side_effect=fake_from_ray_hits):
             terrain, returned_hits = module._compute_local_terrain(FakeScanner(raw_ray_hits), env_id=0)
 
-        self.assertIsInstance(terrain, module.SingleTerrainAdapter)
+        self.assertFalse(hasattr(module, "SingleTerrainAdapter"))
+        self.assertIs(terrain, sentinel_terrain)
         self.assertEqual(returned_hits.shape, (4, 3))
         self.assertTrue(torch.isnan(returned_hits[2, 2]))
         self.assertTrue(torch.isinf(returned_hits[1, 2]))
-        self.assertTrue(torch.isfinite(captured["ray_hits"]).all())
-        self.assertEqual(captured["world_x_range"], (0.0, 1.0))
-        self.assertEqual(captured["world_y_range"], (0.0, 1.0))
-        self.assertTrue(
-            torch.allclose(
-                module._sanitize_ray_hits_for_terrain(raw_ray_hits[0])[1],
-                torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64),
-            )
-        )
+        expected_hits = raw_ray_hits.to(torch.float64)
+        finite_mask = torch.isfinite(expected_hits)
+        self.assertTrue(torch.equal(torch.isfinite(captured["ray_hits"]), finite_mask))
+        torch.testing.assert_close(captured["ray_hits"][finite_mask], expected_hits[finite_mask])
+        self.assertIsNone(captured["world_x_range"])
+        self.assertIsNone(captured["world_y_range"])
 
 
 if __name__ == "__main__":

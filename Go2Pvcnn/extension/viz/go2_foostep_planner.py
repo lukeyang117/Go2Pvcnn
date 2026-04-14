@@ -273,49 +273,6 @@ class PlannerVisualizer:
         )
 
 
-class SingleTerrainAdapter:
-    """Adapter that exposes scalar/vector terrain queries for a single local heightmap."""
-
-    def __init__(self, terrain: BatchedTerrain):
-        if terrain.batch_size != 1:
-            raise ValueError(f"SingleTerrainAdapter expects batch_size=1, got {terrain.batch_size}")
-        self._terrain = terrain
-
-    @staticmethod
-    def _restore_shape(values: torch.Tensor, prefix_shape: torch.Size) -> torch.Tensor:
-        squeezed = values
-        if squeezed.ndim >= 1 and squeezed.shape[0] == 1:
-            squeezed = squeezed.squeeze(0)
-        return squeezed.reshape(prefix_shape)
-
-    def height_at(self, points_xy: torch.Tensor) -> torch.Tensor:
-        points = torch.as_tensor(points_xy, dtype=self._terrain.heightmaps.dtype, device=self._terrain.heightmaps.device)
-        prefix_shape = points.shape[:-1]
-        flat_points = points.reshape(-1, 2)
-        heights = self._terrain.height_at(flat_points)
-        return self._restore_shape(torch.as_tensor(heights, device=flat_points.device), prefix_shape)
-
-    def roughness_at(self, points_xy: torch.Tensor) -> torch.Tensor:
-        points = torch.as_tensor(points_xy, dtype=self._terrain.heightmaps.dtype, device=self._terrain.heightmaps.device)
-        prefix_shape = points.shape[:-1]
-        flat_points = points.reshape(-1, 2)
-        roughness = self._terrain.roughness_at(flat_points)
-        return self._restore_shape(torch.as_tensor(roughness, device=flat_points.device), prefix_shape)
-
-    def max_height_along_segment(self, p0_xy: torch.Tensor, p1_xy: torch.Tensor) -> torch.Tensor:
-        p0 = torch.as_tensor(p0_xy, dtype=self._terrain.heightmaps.dtype, device=self._terrain.heightmaps.device)
-        p1 = torch.as_tensor(p1_xy, dtype=self._terrain.heightmaps.dtype, device=self._terrain.heightmaps.device)
-        if p0.shape != p1.shape or p0.shape[-1] != 2:
-            raise ValueError(f"segment endpoints must share shape (..., 2); got {tuple(p0.shape)} and {tuple(p1.shape)}")
-        prefix_shape = p0.shape[:-1]
-        flat_p0 = p0.reshape(-1, 2)
-        flat_p1 = p1.reshape(-1, 2)
-        outputs = []
-        for idx in range(flat_p0.shape[0]):
-            outputs.append(self._terrain.max_height_along_segment(flat_p0[idx], flat_p1[idx]))
-        return torch.stack(outputs).reshape(prefix_shape)
-
-
 def _apply_terrain_mode(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY, terrain_mode: str) -> None:
     tg = env_cfg.scene.terrain.terrain_generator
     if tg is None:
@@ -379,31 +336,12 @@ def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> Batche
     )
 
 
-def _sanitize_ray_hits_for_terrain(ray_hits: torch.Tensor) -> torch.Tensor:
-    """Replace non-finite scanner samples with deterministic finite values."""
-    return torch.nan_to_num(torch.as_tensor(ray_hits, dtype=torch.float64), nan=0.0, posinf=0.0, neginf=0.0)
-
-
-def _compute_local_terrain(scanner, *, env_id: int = 0) -> tuple[SingleTerrainAdapter, torch.Tensor]:
-    from extension.batched_planner.terrain import BatchedTerrain
+def _compute_local_terrain(scanner, *, env_id: int = 0):
+    from extension.batched_planner.terrain import PlannerTerrain
 
     ray_hits = scanner.data.ray_hits_w[env_id].to(dtype=torch.float64)
-    valid_mask = torch.isfinite(ray_hits).all(dim=-1)
-    if not bool(valid_mask.any()):
-        raise RuntimeError("height_scanner has no finite ray hits yet")
-
-    valid_hits = ray_hits[valid_mask]
-    x_min = float(valid_hits[:, 0].min().item())
-    x_max = float(valid_hits[:, 0].max().item())
-    y_min = float(valid_hits[:, 1].min().item())
-    y_max = float(valid_hits[:, 1].max().item())
-    terrain_hits = _sanitize_ray_hits_for_terrain(ray_hits)
-    terrain = BatchedTerrain.from_ray_hits(
-        terrain_hits.unsqueeze(0),
-        world_x_range=(x_min, x_max),
-        world_y_range=(y_min, y_max),
-    )
-    return SingleTerrainAdapter(terrain), ray_hits
+    terrain = PlannerTerrain.from_ray_hits(ray_hits.unsqueeze(0))
+    return terrain, ray_hits
 
 
 def _subsample_height_points(ray_hits: torch.Tensor, stride: int) -> torch.Tensor:
