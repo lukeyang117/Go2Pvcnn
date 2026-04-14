@@ -11,11 +11,13 @@ from .config import BatchedTrajectoryConfig
 from .foothold import batched_compute_footholds, batched_evaluate_touchdowns
 from .gait import GAIT_PARAMS, batched_gait_schedule, batched_legs_requiring_touchdown, batched_next_touchdown_times, batched_stance_time
 from .ik import batch_forward_kinematics, batch_inverse_kinematics
+from .instrumentation import PlannerInstrumentation
 from .swing import batched_compute_swing_targets
 from .terrain_estimator import batched_estimate_terrain
 from .types import BatchedRobotState, BatchedTrajectoryResult, HIP_OFFSETS_ARRAY
 
 _STANDSTILL_CMD_EPS = 1e-5
+_NOOP_PLANNER_INSTRUMENTATION = PlannerInstrumentation(enabled=False)
 
 
 def _resolve_input_device(*values) -> torch.device:
@@ -125,12 +127,15 @@ def batched_generate_trajectory(
     requested_n_frames: int,
     dt: float = 0.02,
     cfg: BatchedTrajectoryConfig | None = None,
+    instrumentation: PlannerInstrumentation | None = None,
 ) -> BatchedTrajectoryResult:
     cfg = cfg or BatchedTrajectoryConfig()
+    instr = instrumentation if instrumentation is not None else _NOOP_PLANNER_INSTRUMENTATION
     device = _resolve_input_device(states.root_pos, states.root_quat, states.joint_angles, states.foot_pos, commands)
-    commands_t = _coerce_tensor(commands, device=device)
-    if commands_t.ndim != 2 or commands_t.shape[1] != 3:
-        raise ValueError(f"commands must have shape (N, 3); got {tuple(commands_t.shape)}")
+    with instr.stage("input"):
+        commands_t = _coerce_tensor(commands, device=device)
+        if commands_t.ndim != 2 or commands_t.shape[1] != 3:
+            raise ValueError(f"commands must have shape (N, 3); got {tuple(commands_t.shape)}")
 
     batch_size = int(states.root_pos.shape[0])
     if commands_t.shape[0] != batch_size:
@@ -142,25 +147,27 @@ def batched_generate_trajectory(
     standstill_mask = _command_is_standstill(commands_t) | (torch.linalg.norm(commands_t, dim=-1) < float(cfg.replan_stop_speed))
 
     if torch.all(standstill_mask):
-        return _standstill_trajectory(states, n_frames, dt)
+        with instr.stage("standstill"):
+            return _standstill_trajectory(states, n_frames, dt)
 
-    phase_offsets = torch.as_tensor(GAIT_PARAMS[cfg.gait_name]["offsets"], dtype=torch.float64, device=device)
-    contact_seq = batched_gait_schedule(
-        torch.zeros(batch_size, dtype=torch.float64, device=device),
-        n_frames,
-        dt,
-        torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
-        torch.full((batch_size,), float(cfg.duty_factor), dtype=torch.float64, device=device),
-        phase_offsets,
-    )
-    touchdown_times = batched_next_touchdown_times(
-        torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
-        phase_offsets,
-    )
-    st = batched_stance_time(
-        torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
-        torch.full((batch_size,), float(cfg.duty_factor), dtype=torch.float64, device=device),
-    )
+    with instr.stage("gait"):
+        phase_offsets = torch.as_tensor(GAIT_PARAMS[cfg.gait_name]["offsets"], dtype=torch.float64, device=device)
+        contact_seq = batched_gait_schedule(
+            torch.zeros(batch_size, dtype=torch.float64, device=device),
+            n_frames,
+            dt,
+            torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
+            torch.full((batch_size,), float(cfg.duty_factor), dtype=torch.float64, device=device),
+            phase_offsets,
+        )
+        touchdown_times = batched_next_touchdown_times(
+            torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
+            phase_offsets,
+        )
+        st = batched_stance_time(
+            torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
+            torch.full((batch_size,), float(cfg.duty_factor), dtype=torch.float64, device=device),
+        )
     initial_yaw = extract_yaw_batch(states.root_quat)
     hip_positions = _compute_hip_positions(states.root_pos, initial_yaw)
     touchdown_mask = batched_legs_requiring_touchdown(contact_seq)
@@ -168,37 +175,41 @@ def batched_generate_trajectory(
     command_norm = torch.linalg.norm(commands_t, dim=-1)
     standstill_command_mask = _command_is_standstill(commands_t) | (command_norm < float(cfg.replan_stop_speed))
     if torch.all(standstill_command_mask):
-        return _standstill_trajectory(states, n_frames, dt)
+        with instr.stage("standstill"):
+            return _standstill_trajectory(states, n_frames, dt)
 
-    touchdowns = batched_compute_footholds(
-        base_pos=states.root_pos,
-        base_yaw=initial_yaw,
-        base_lin_vel_xy=commands_t[:, :2],
-        ref_lin_vel_xy=commands_t[:, :2],
-        hip_positions=hip_positions,
-        stance_time=st,
-        com_height=torch.full((batch_size,), float(cfg.hip_height), dtype=torch.float64, device=device),
-        terrain=terrain,
-        previous_footholds=states.foot_pos,
-        touchdown_times=touchdown_times,
-        yaw_rate=commands_t[:, 2],
-        search_radius=cfg.foothold_search_radius,
-        search_step=cfg.foothold_search_step,
-        max_step_down=cfg.max_foothold_step_down,
-    )
-    feasible, _, _ = batched_evaluate_touchdowns(
-        touchdowns,
-        states.foot_pos,
-        contact_seq,
-        touchdown_mask,
-        terrain,
-        states.foot_pos,
-        max_reach=cfg.max_touchdown_xy_reach,
-    )
+    with instr.stage("footholds"):
+        touchdowns = batched_compute_footholds(
+            base_pos=states.root_pos,
+            base_yaw=initial_yaw,
+            base_lin_vel_xy=commands_t[:, :2],
+            ref_lin_vel_xy=commands_t[:, :2],
+            hip_positions=hip_positions,
+            stance_time=st,
+            com_height=torch.full((batch_size,), float(cfg.hip_height), dtype=torch.float64, device=device),
+            terrain=terrain,
+            previous_footholds=states.foot_pos,
+            touchdown_times=touchdown_times,
+            yaw_rate=commands_t[:, 2],
+            search_radius=cfg.foothold_search_radius,
+            search_step=cfg.foothold_search_step,
+            max_step_down=cfg.max_foothold_step_down,
+        )
+    with instr.stage("touchdown_eval"):
+        feasible, _, _ = batched_evaluate_touchdowns(
+            touchdowns,
+            states.foot_pos,
+            contact_seq,
+            touchdown_mask,
+            terrain,
+            states.foot_pos,
+            max_reach=cfg.max_touchdown_xy_reach,
+        )
 
     standstill_mask = standstill_command_mask | ~feasible
     if torch.all(standstill_mask):
-        return _standstill_trajectory(states, n_frames, dt)
+        with instr.stage("standstill"):
+            return _standstill_trajectory(states, n_frames, dt)
     terrain_max_heights = torch.stack(
         [
             terrain.max_height_along_segment(states.foot_pos[:, leg_idx, :2], touchdowns[:, leg_idx, :2])
@@ -206,52 +217,68 @@ def batched_generate_trajectory(
         ],
         dim=1,
     )
-    foot_targets = batched_compute_swing_targets(contact_seq, states.foot_pos, touchdowns, cfg.step_height, terrain_max_heights=terrain_max_heights)
+    with instr.stage("swing_targets"):
+        foot_targets = batched_compute_swing_targets(
+            contact_seq,
+            states.foot_pos,
+            touchdowns,
+            cfg.step_height,
+            terrain_max_heights=terrain_max_heights,
+        )
 
-    pos_xy_approx, yaw_approx = batched_integrate_base_planar(
-        states.root_pos[:, :2],
-        initial_yaw,
-        commands_t[:, 0],
-        commands_t[:, 1],
-        commands_t[:, 2],
-        n_frames,
-        dt,
-    )
+    with instr.stage("base_approx"):
+        pos_xy_approx, yaw_approx = batched_integrate_base_planar(
+            states.root_pos[:, :2],
+            initial_yaw,
+            commands_t[:, 0],
+            commands_t[:, 1],
+            commands_t[:, 2],
+            n_frames,
+            dt,
+        )
     base_pos_approx = torch.cat([pos_xy_approx, states.root_pos[:, 2:3].unsqueeze(1).expand(-1, n_frames, -1)], dim=-1)
     initial_roll, initial_pitch = extract_roll_pitch_batch(states.root_quat)
     initial_height = states.foot_pos[..., 2].mean(dim=-1)
-    roll, pitch, height = batched_estimate_terrain(
-        foot_targets,
-        base_pos_approx,
-        yaw_approx,
-        alpha=0.05,
-        initial_roll=initial_roll,
-        initial_pitch=initial_pitch,
-        initial_height=initial_height,
-    )
-    root_pos, root_quat = batched_solve_base_trajectory(
-        states.root_pos,
-        initial_yaw,
-        commands_t[:, 0],
-        commands_t[:, 1],
-        commands_t[:, 2],
-        n_frames,
-        dt,
-        terrain,
-        foot_targets,
-        contact_seq,
-        roll,
-        pitch,
-        height,
-        hip_height=cfg.hip_height,
-        body_clearance_margin=cfg.body_clearance_margin,
-    )
+    with instr.stage("terrain_est"):
+        roll, pitch, height = batched_estimate_terrain(
+            foot_targets,
+            base_pos_approx,
+            yaw_approx,
+            alpha=0.05,
+            initial_roll=initial_roll,
+            initial_pitch=initial_pitch,
+            initial_height=initial_height,
+        )
+    with instr.stage("base_solve"):
+        root_pos, root_quat = batched_solve_base_trajectory(
+            states.root_pos,
+            initial_yaw,
+            commands_t[:, 0],
+            commands_t[:, 1],
+            commands_t[:, 2],
+            n_frames,
+            dt,
+            terrain,
+            foot_targets,
+            contact_seq,
+            roll,
+            pitch,
+            height,
+            hip_height=cfg.hip_height,
+            body_clearance_margin=cfg.body_clearance_margin,
+        )
 
     root_pos_flat = root_pos.reshape(batch_size * n_frames, 3)
     root_quat_flat = root_quat.reshape(batch_size * n_frames, 4)
     foot_targets_flat = foot_targets.reshape(batch_size * n_frames, 4, 3)
-    joint_angles = batch_inverse_kinematics(root_pos_flat, root_quat_flat, foot_targets_flat).reshape(batch_size, n_frames, 12)
-    body_pos_w = batch_forward_kinematics(root_pos_flat, root_quat_flat, joint_angles.reshape(batch_size * n_frames, 12)).reshape(batch_size, n_frames, 12, 3)
+    with instr.stage("ik"):
+        joint_angles = batch_inverse_kinematics(root_pos_flat, root_quat_flat, foot_targets_flat).reshape(batch_size, n_frames, 12)
+    with instr.stage("fk"):
+        body_pos_w = batch_forward_kinematics(
+            root_pos_flat,
+            root_quat_flat,
+            joint_angles.reshape(batch_size * n_frames, 12),
+        ).reshape(batch_size, n_frames, 12, 3)
     body_pos_root = _world_to_root_frame(root_pos, root_quat, body_pos_w)
     foot_pos_root = _world_to_root_frame(root_pos, root_quat, foot_targets)
     root_lin_vel = torch.diff(root_pos, dim=1, prepend=root_pos[:, :1]) / float(dt)
@@ -276,8 +303,9 @@ def batched_generate_trajectory(
     )
 
     if torch.any(standstill_mask):
-        standstill_result = _standstill_trajectory(states, n_frames, dt)
-        return _mix_trajectory_results(motion_result, standstill_result, standstill_mask)
+        with instr.stage("mix"):
+            standstill_result = _standstill_trajectory(states, n_frames, dt)
+            return _mix_trajectory_results(motion_result, standstill_result, standstill_mask)
 
     return motion_result
 

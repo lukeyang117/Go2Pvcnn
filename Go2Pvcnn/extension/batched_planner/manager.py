@@ -6,7 +6,8 @@ import torch
 from torch import Tensor
 
 from ..convention import planner_result_to_reference_cache
-from ..reference.cache import fill_reference_cache_standstill_rows, masked_write_reference_cache_rows
+from ..reference.cache import ReferenceTrajectoryCache, fill_reference_cache_standstill_rows, masked_write_reference_cache_rows
+from .instrumentation import PlannerInstrumentation, PlannerTimingSummary
 from .terrain import PlannerTerrain
 from .types import BatchedRobotState
 from .trajectory import batched_generate_trajectory
@@ -19,6 +20,11 @@ class BatchedTrajectoryManager:
         self._cache = None
         self._phase_counter: Tensor | None = None
         self._step_counter = 0
+        self._planner_instrumentation = PlannerInstrumentation(
+            enabled=bool(getattr(cfg, "planner_instrumentation", False) or getattr(cfg, "verbose_planner", False))
+        )
+        self._verbose_planner = bool(getattr(cfg, "verbose_planner", False))
+        self._verbose_planner_interval_steps = max(1, int(getattr(cfg, "verbose_planner_interval_steps", 250)))
         self._last_episode_length_buf: Tensor | None = None
         self._last_replan_episode_length_buf: Tensor | None = None
         self._last_commands: Tensor | None = None
@@ -98,6 +104,52 @@ class BatchedTrajectoryManager:
         cache = planner_result_to_reference_cache(result)
         self._cache = cache
         return cache
+
+    @staticmethod
+    def _clone_reference_cache(cache: ReferenceTrajectoryCache) -> ReferenceTrajectoryCache:
+        """Clone tensors to avoid aliasing issues during in-place masked writes."""
+
+        def _clone(t: Tensor | None) -> Tensor | None:
+            if t is None:
+                return None
+            return t.clone()
+
+        return ReferenceTrajectoryCache(
+            root_pos_w=_clone(cache.root_pos_w),
+            root_quat_w=_clone(cache.root_quat_w),
+            joint_angles=_clone(cache.joint_angles),
+            foot_pos_root=_clone(cache.foot_pos_root),
+            contact_state=_clone(cache.contact_state),
+            planned_touchdown_w=_clone(cache.planned_touchdown_w),
+            phase_index=_clone(cache.phase_index),
+            valid_mask=_clone(cache.valid_mask),
+        )
+
+    def planner_timing_summary(self, *, window: bool = True, reset_window: bool = False) -> PlannerTimingSummary:
+        """Return the planner-owned timing summary collected by this manager."""
+
+        return self._planner_instrumentation.summary(window=window, reset_window=reset_window)
+
+    def _maybe_print_planner_diagnostics(self, *, step: int | None) -> None:
+        if not self._verbose_planner:
+            return
+        if step is None:
+            return
+        if int(step) % int(self._verbose_planner_interval_steps) != 0:
+            return
+        summary = self.planner_timing_summary(window=True, reset_window=True)
+        print(summary.format_compact())
+
+    def _planner_call_kwargs(self, *, env) -> dict[str, object]:
+        """Extra kwargs for the planner entrypoint, only when enabled.
+
+        Important: avoid always passing the kwarg so unit tests that patch
+        `batched_generate_trajectory` with a strict signature keep working.
+        """
+
+        if not self._planner_instrumentation.enabled:
+            return {}
+        return {"instrumentation": self._planner_instrumentation}
 
     def _planner_dt(self, env=None) -> float:
         if env is not None:
@@ -209,6 +261,10 @@ class BatchedTrajectoryManager:
         self._pending_reset_mask = torch.zeros_like(episode_length_buf, dtype=torch.bool)
 
     def refresh_from_env(self, env):
+        # Reset the rolling window so each replan attempt reports its own timings.
+        if self._planner_instrumentation.enabled:
+            self._planner_instrumentation.summary(window=True, reset_window=True)
+
         episode_length_buf = self._episode_length_buf_from_env(env)
         commands = self._commands_from_env(env)
         num_envs = int(episode_length_buf.shape[0])
@@ -226,10 +282,13 @@ class BatchedTrajectoryManager:
         if same_step and self._cache is not None and not torch.any(self._pending_reset_mask):
             return self._cache
 
-        terrain = self._terrain_from_env(env)
-        states = self._batched_state_from_env(env)
+        with self._planner_instrumentation.stage("terrain"):
+            terrain = self._terrain_from_env(env)
+        with self._planner_instrumentation.stage("state"):
+            states = self._batched_state_from_env(env)
 
-        replan_mask = self._compute_replan_mask(episode_length_buf, commands)
+        with self._planner_instrumentation.stage("replan_mask"):
+            replan_mask = self._compute_replan_mask(episode_length_buf, commands)
         assert self._phase_counter is not None
 
         if torch.any(replan_mask):
@@ -239,18 +298,21 @@ class BatchedTrajectoryManager:
             sub_terrain = self._subset_terrain(terrain, env_ids)
 
             try:
-                result = batched_generate_trajectory(
-                    sub_terrain,
-                    sub_states,
-                    sub_commands,
-                    requested_n_frames=int(self._cfg.reference_trajectory_horizon),
-                    dt=self._planner_dt(env),
-                )
+                with self._planner_instrumentation.stage("plan"):
+                    result = batched_generate_trajectory(
+                        sub_terrain,
+                        sub_states,
+                        sub_commands,
+                        requested_n_frames=int(self._cfg.reference_trajectory_horizon),
+                        dt=self._planner_dt(env),
+                        **self._planner_call_kwargs(env=env),
+                    )
             except Exception:  # noqa: BLE001 - replanning should degrade gracefully when a cache exists
                 if self._cache is None:
                     raise
                 env_ids_cpu = env_ids.to(device=self._cache.root_pos_w.device, dtype=torch.long)  # type: ignore[union-attr]
-                fill_reference_cache_standstill_rows(self._cache, env_ids_cpu)
+                with self._planner_instrumentation.stage("standstill_fill"):
+                    fill_reference_cache_standstill_rows(self._cache, env_ids_cpu)
                 # Clear pending resets so the env stays standstill until it hits a new trigger.
                 self._pending_reset_mask = torch.where(replan_mask, torch.zeros_like(self._pending_reset_mask), self._pending_reset_mask)
                 # Record the attempted "replan time" for the failed envs so interval-based replans
@@ -273,13 +335,27 @@ class BatchedTrajectoryManager:
                 max_phase = int(self._cache.root_pos_w.shape[1]) - 1  # type: ignore[union-attr]
                 advanced = torch.clamp(self._phase_counter + 1, max=max_phase)
                 self._phase_counter = torch.where(replan_mask, torch.zeros_like(self._phase_counter), advanced)
+                self._maybe_print_planner_diagnostics(step=int(torch.max(episode_length_buf).item()))
             else:
-                sub_cache = planner_result_to_reference_cache(result)
+                with self._planner_instrumentation.stage("cache_convert"):
+                    sub_cache = planner_result_to_reference_cache(result)
                 if self._cache is None or self._cache.root_pos_w is None:
+                    self._cache = sub_cache
+                elif torch.all(replan_mask):
+                    # For a full replan, swapping the cache is simpler and avoids in-place masked
+                    # writes that can trigger aliasing errors with some tensor backends.
                     self._cache = sub_cache
                 else:
                     env_ids_cpu = env_ids.to(device=self._cache.root_pos_w.device, dtype=torch.long)
-                    masked_write_reference_cache_rows(self._cache, sub_cache, env_ids_cpu)
+                    with self._planner_instrumentation.stage("cache_write"):
+                        try:
+                            masked_write_reference_cache_rows(self._cache, sub_cache, env_ids_cpu)
+                        except RuntimeError as exc:
+                            # In tests (and some backend edge cases) index_copy_ may fail if
+                            # src/dst tensors alias. Clone the incoming cache and retry.
+                            if "single memory location" not in str(exc):
+                                raise
+                            masked_write_reference_cache_rows(self._cache, self._clone_reference_cache(sub_cache), env_ids_cpu)
 
                 # Reset phases for replanned envs; advance others.
                 max_phase = int(self._cache.root_pos_w.shape[1]) - 1  # type: ignore[union-attr]
@@ -294,6 +370,7 @@ class BatchedTrajectoryManager:
 
                 # Clear pending reset flags for replanned envs.
                 self._pending_reset_mask = torch.where(replan_mask, torch.zeros_like(self._pending_reset_mask), self._pending_reset_mask)
+                self._maybe_print_planner_diagnostics(step=int(torch.max(episode_length_buf).item()))
         else:
             assert self._cache is not None
             self._phase_counter = torch.clamp(self._phase_counter + 1, max=int(self._cache.root_pos_w.shape[1]) - 1)
@@ -309,15 +386,22 @@ class BatchedTrajectoryManager:
         self._ensure_phase_counter(num_envs)
 
         if self._step_counter % int(self._cfg.reference_replan_interval_steps) == 0:
-            result = batched_generate_trajectory(
-                terrain,
-                states,
-                commands,
-                requested_n_frames=int(self._cfg.reference_trajectory_horizon),
-                dt=self._planner_dt(),
-            )
-            self._cache = planner_result_to_reference_cache(result)
+            # Reset rolling window for each replan.
+            if self._planner_instrumentation.enabled:
+                self._planner_instrumentation.summary(window=True, reset_window=True)
+            with self._planner_instrumentation.stage("plan"):
+                result = batched_generate_trajectory(
+                    terrain,
+                    states,
+                    commands,
+                    requested_n_frames=int(self._cfg.reference_trajectory_horizon),
+                    dt=self._planner_dt(),
+                    **self._planner_call_kwargs(env=None),
+                )
+            with self._planner_instrumentation.stage("cache_convert"):
+                self._cache = planner_result_to_reference_cache(result)
             self._phase_counter.zero_()
+            self._maybe_print_planner_diagnostics(step=int(self._step_counter))
 
         assert self._cache is not None
         self._phase_counter = torch.clamp(self._phase_counter + 1, max=int(self._cache.root_pos_w.shape[1]) - 1)

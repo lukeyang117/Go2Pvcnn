@@ -66,6 +66,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
         "teacher_elevation_trajectory (high-res elevation + trajectory reward).",
     )
+    parser.add_argument(
+        "--verbose-planner",
+        action="store_true",
+        default=False,
+        help="Print compact planner timing diagnostics (quiet by default).",
+    )
 
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -239,7 +245,11 @@ def main() -> int:
         env_cfg.seed = args_cli.seed + app_launcher.local_rank
     else:
         env_cfg.seed = args_cli.seed
-    
+
+    # Planner verbosity is owned by the planner/manager path; the train CLI only toggles it.
+    if args_cli.experiment == "teacher_elevation_trajectory":
+        setattr(env_cfg, "verbose_planner", bool(getattr(args_cli, "verbose_planner", False)))
+
     # ========================================
     # Setup Logging Directory
     # ========================================

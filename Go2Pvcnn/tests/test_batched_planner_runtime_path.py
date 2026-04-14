@@ -110,6 +110,14 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 parser.parse_args(["--use-raw-reference-trajectory"])
 
+    def test_train_parser_accepts_verbose_planner_flag(self):
+        with _fake_isaaclab_app("--train-launcher-flag"):
+            module = _fresh_import("Go2Pvcnn.scripts.train")
+            parser = module.build_arg_parser()
+            parsed = parser.parse_args(["--verbose-planner", "--train-launcher-flag"])
+
+        self.assertTrue(parsed.verbose_planner)
+
     def test_train_runtime_prep_sets_allocator_and_disables_livestream_for_distributed(self):
         module = _fresh_import("Go2Pvcnn.scripts.train")
         with patch.dict(module.os.environ, {"PYTORCH_CUDA_ALLOC_CONF": "original"}, clear=False):
