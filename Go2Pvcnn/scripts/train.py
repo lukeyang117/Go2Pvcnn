@@ -127,6 +127,8 @@ def _launch_app(args_cli: argparse.Namespace):
 def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> None:
     if experiment_name != "teacher_elevation_trajectory":
         return
+    if not getattr(env_cfg, "planner_owned_reference_cache", False):
+        raise RuntimeError("teacher_elevation_trajectory requires planner_owned_reference_cache=True")
 
     from extension.batched_planner.manager import BatchedTrajectoryManager
 

@@ -4,7 +4,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import torch
 
@@ -90,6 +90,27 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertIs(prepared, args)
         self.assertEqual(prepared.livestream, 0)
         self.assertFalse(prepared.enable_cameras)
+
+    def test_train_attaches_planner_owned_manager_for_teacher_elevation_trajectory(self):
+        module = _fresh_import("Go2Pvcnn.scripts.train")
+        env = SimpleNamespace(device=torch.device("cpu"), unwrapped=SimpleNamespace())
+        env_cfg = SimpleNamespace(sim=SimpleNamespace(device="cpu"), planner_owned_reference_cache=True)
+        sentinel_manager = SimpleNamespace(refresh_from_env=SimpleNamespace())
+
+        with patch("extension.batched_planner.manager.BatchedTrajectoryManager", return_value=sentinel_manager) as ctor:
+            module._attach_reference_manager_if_enabled(env, env_cfg, "teacher_elevation_trajectory")
+
+        ctor.assert_called_once_with(env_cfg, device=torch.device("cpu"))
+        self.assertIs(env.unwrapped._trajectory_manager, sentinel_manager)
+        self.assertIsNone(env.unwrapped._trajectory_reference_cache)
+
+    def test_train_rejects_nonplanner_reference_mode(self):
+        module = _fresh_import("Go2Pvcnn.scripts.train")
+        env = SimpleNamespace(device=torch.device("cpu"), unwrapped=SimpleNamespace())
+        env_cfg = SimpleNamespace(sim=SimpleNamespace(device="cpu"), planner_owned_reference_cache=False)
+
+        with self.assertRaisesRegex(RuntimeError, "planner_owned_reference_cache"):
+            module._attach_reference_manager_if_enabled(env, env_cfg, "teacher_elevation_trajectory")
 
     def test_viewer_module_is_import_safe(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
@@ -231,6 +252,38 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertEqual(result.foot_pos_w.shape, (1, 1, 4, 3))
         self.assertEqual(result.planned_touchdown_w.shape, (1, 1, 4, 3))
         self.assertEqual(captured["command"].shape, (1, 3))
+
+    def test_reference_cache_requires_manager_owned_runtime_path(self):
+        from extension.mdp import rewards_reference
+
+        env = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_envs=1,
+            episode_length_buf=torch.tensor([0], dtype=torch.long),
+            cfg=SimpleNamespace(reference_trajectory_horizon=5),
+            unwrapped=SimpleNamespace(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "planner-owned reference cache"):
+            rewards_reference.ensure_reference_cache(env)
+
+    def test_reference_cache_is_filled_from_manager_not_placeholder_generator(self):
+        from extension.mdp import rewards_reference
+
+        cache = SimpleNamespace(is_ready=lambda: True)
+        manager = SimpleNamespace(refresh_from_env=Mock(return_value=cache))
+        env = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_envs=1,
+            episode_length_buf=torch.tensor([0], dtype=torch.long),
+            cfg=SimpleNamespace(reference_trajectory_horizon=5),
+            unwrapped=SimpleNamespace(_trajectory_manager=manager),
+        )
+
+        ensured = rewards_reference.ensure_reference_cache(env)
+
+        self.assertIs(ensured, cache)
+        manager.refresh_from_env.assert_called_once_with(env)
 
 
 if __name__ == "__main__":

@@ -131,6 +131,9 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     observations: TeacherElevationTrajectoryObservationsCfg = TeacherElevationTrajectoryObservationsCfg()
     rewards: TeacherElevationTrajectoryRewardsCfg = TeacherElevationTrajectoryRewardsCfg()
 
+    # Planner-only runtime: training must attach BatchedTrajectoryManager and must not
+    # fall back to placeholder/reference-generator cache creation.
+    planner_owned_reference_cache: bool = True
     use_batched_reference_trajectory: bool = True
     reference_trajectory_horizon: int = 50
     reference_replan_interval_steps: int = 250
@@ -159,6 +162,8 @@ class TeacherElevationTrajectoryEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
     observations: TeacherElevationTrajectoryObservationsCfg = TeacherElevationTrajectoryObservationsCfg()
     rewards: TeacherElevationTrajectoryRewardsCfg = TeacherElevationTrajectoryRewardsCfg()
 
+    # Planner-only runtime: the play path also consumes the planner-owned manager/cache.
+    planner_owned_reference_cache: bool = True
     use_batched_reference_trajectory: bool = True
     reference_trajectory_horizon: int = 50
     reference_replan_interval_steps: int = 250
