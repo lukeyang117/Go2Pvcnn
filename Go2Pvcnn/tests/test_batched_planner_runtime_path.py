@@ -167,6 +167,58 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
 
         self.assertTrue(parsed.viewer_launcher_flag)
 
+    def test_viewer_parser_accepts_explicit_planner_playback_mode_flag(self):
+        with _fake_isaaclab_app("--viewer-launcher-flag"):
+            module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+            parser = module.build_arg_parser()
+            try:
+                parsed = parser.parse_args(
+                    ["--planner-playback-mode", "direct", "--viewer-launcher-flag"]
+                )
+            except SystemExit as exc:  # argparse uses SystemExit for parse errors
+                self.fail(f"viewer parser rejected --planner-playback-mode direct: {exc}")
+
+        self.assertEqual(parsed.planner_playback_mode, "direct")
+
+    def test_viewer_planner_playback_mode_resolves_distinctly_from_physics_default(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        self.assertTrue(hasattr(module, "_resolve_planner_playback_mode"))
+
+        direct = module._resolve_planner_playback_mode(SimpleNamespace(planner_playback_mode="direct"))
+        physics = module._resolve_planner_playback_mode(SimpleNamespace(planner_playback_mode="physics"))
+        default = module._resolve_planner_playback_mode(SimpleNamespace())
+
+        self.assertEqual(direct, "direct")
+        self.assertEqual(physics, "physics")
+        self.assertEqual(default, "physics")
+
+    def test_viewer_direct_playback_uses_reference_cache_state_not_env_state(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        self.assertTrue(hasattr(module, "_get_viewer_planner_state"))
+
+        fake_result = SimpleNamespace(
+            root_pos_w=torch.tensor([[[0.0, 0.0, 0.25], [1.0, 2.0, 3.0]]], dtype=torch.float64),
+            root_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]], dtype=torch.float64),
+            joint_angles=torch.zeros((1, 2, 12), dtype=torch.float64),
+            foot_pos_w=torch.zeros((1, 2, 4, 3), dtype=torch.float64),
+        )
+
+        with patch.object(
+            module,
+            "_planner_state_from_env",
+            side_effect=AssertionError("direct playback should not read env state"),
+        ):
+            planner_state = module._get_viewer_planner_state(
+                SimpleNamespace(),
+                foot_ids=[0, 1, 2, 3],
+                playback_mode="direct",
+                result=fake_result,
+                frame_idx=1,
+            )
+
+        torch.testing.assert_close(planner_state.root_pos, fake_result.root_pos_w[:, 1])
+        torch.testing.assert_close(planner_state.root_quat, fake_result.root_quat_w[:, 1])
+
     def test_viewer_uses_plannerterrain_with_stable_scan_window(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
 

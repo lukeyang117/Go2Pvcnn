@@ -40,6 +40,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
     parser.add_argument("--warmup-steps", type=int, default=6, help="Number of zero-action warmup steps before visualization.")
+    parser.add_argument(
+        "--planner-playback-mode",
+        type=str,
+        default="physics",
+        choices=["physics", "direct"],
+        help=(
+            "How to drive the displayed robot state. "
+            "'physics' steps Isaac normally (default). "
+            "'direct' plays back planner-generated pose/joint state for inspection."
+        ),
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -57,6 +68,66 @@ def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
             flush=True,
         )
     return args_cli
+
+
+def _resolve_planner_playback_mode(args_cli: argparse.Namespace) -> str:
+    """Normalize the CLI flag into an explicit playback mode string.
+
+    This helper exists so viewer-mode behavior is testable without Isaac runtime.
+    """
+    mode = getattr(args_cli, "planner_playback_mode", None)
+    if mode is None:
+        return "physics"
+    mode_str = str(mode).strip().lower()
+    if mode_str in ("physics", ""):
+        return "physics"
+    if mode_str == "direct":
+        return "direct"
+    raise ValueError(f"unsupported planner playback mode: {mode!r}")
+
+
+def _planner_state_from_reference_result(result, *, frame_idx: int):
+    """Build a planner-facing state snapshot from the reference-cache result.
+
+    The planner uses wxyz convention; reference cache stores wxyz quaternions.
+    """
+    from extension.batched_planner.types import BatchedRobotState
+
+    frame = int(frame_idx)
+    root_pos = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float64)
+    root_quat = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float64)
+    joint_angles = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float64)
+    foot_pos = torch.as_tensor(result.foot_pos_w[:, frame], dtype=torch.float64)
+    return BatchedRobotState(
+        root_pos=root_pos,
+        root_quat=root_quat,
+        joint_angles=joint_angles,
+        foot_pos=foot_pos,
+        foot_vel=torch.zeros_like(foot_pos),
+    )
+
+
+def _get_viewer_planner_state(
+    env: "ManagerBasedRLEnv",
+    *,
+    foot_ids: list[int],
+    playback_mode: str,
+    result=None,
+    frame_idx: int = 0,
+):
+    """Return the state used for camera/status in the viewer.
+
+    - physics: read from Isaac (physics constrained)
+    - direct: read from planner cache/result (physics independent)
+    """
+    mode = str(playback_mode).strip().lower()
+    if mode == "direct":
+        if result is None:
+            raise ValueError("direct planner playback requires a reference-cache result")
+        return _planner_state_from_reference_result(result, frame_idx=int(frame_idx))
+    if mode == "physics":
+        return _planner_state_from_env(env, foot_ids)
+    raise ValueError(f"unsupported planner playback mode: {playback_mode!r}")
 
 
 def _launch_app(args_cli: argparse.Namespace):
@@ -260,6 +331,8 @@ class PlannerVisualizer:
         return touchdowns
 
     def update(self, *, result, command: torch.Tensor, root_yaw: torch.Tensor, height_points: torch.Tensor) -> None:
+        from extension.convention import quat_wxyz_to_xyzw
+
         foot_pos_w = self._foot_positions_world(result)
         touchdown_w = self._touchdown_markers_world(result)
         self.root_traj.visualize(translations=result.root_pos_w[0].to(torch.float32))
@@ -547,15 +620,19 @@ def main() -> int:
     scanner = base_env.scene.sensors["height_scanner"]
     visualizer = PlannerVisualizer()
     _, command_proxy = _attach_viewer_reference_manager(base_env, planner_cfg)
+    playback_mode = _resolve_planner_playback_mode(args_cli)
 
     print(f"[Viewer] Terrain mode: {args_cli.terrain}", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
+    print(f"[Viewer] Planner playback mode: {playback_mode}", flush=True)
     _print_help()
 
     env.reset()
     for _ in range(max(0, int(args_cli.warmup_steps))):
         env.step(zero_actions)
 
+    playback_frame = 0
+    last_result_id = None
     with TerminalTeleop(
         device=base_env.device,
         vx_scale=float(args_cli.vx_scale),
@@ -572,11 +649,39 @@ def main() -> int:
                     env.reset()
                     for _ in range(max(0, int(args_cli.warmup_steps))):
                         env.step(zero_actions)
+                    playback_frame = 0
+                    last_result_id = None
 
-                env.step(zero_actions)
-
-                planner_state = _planner_state_from_env(base_env, foot_ids)
                 result = rewards_reference.ensure_reference_cache(base_env)
+                if playback_mode == "direct":
+                    # Direct planner playback: animate across the cached horizon.
+                    result_id = id(result)
+                    if result_id != last_result_id:
+                        playback_frame = 0
+                        last_result_id = result_id
+                    else:
+                        horizon = int(getattr(result, "num_frames", result.root_pos_w.shape[1]))
+                        playback_frame = (playback_frame + 1) % max(1, horizon)
+
+                    planner_state = _get_viewer_planner_state(
+                        base_env,
+                        foot_ids=foot_ids,
+                        playback_mode="direct",
+                        result=result,
+                        frame_idx=playback_frame,
+                    )
+                    # Keep stepping the sim so rendering and sensors update, but do not depend on physics to
+                    # "execute" the plan. The viewer state (camera/status) comes from the planner cache.
+                    env.step(zero_actions)
+                else:
+                    # Physics/default: step the sim and read state from Isaac.
+                    env.step(zero_actions)
+                    planner_state = _get_viewer_planner_state(
+                        base_env,
+                        foot_ids=foot_ids,
+                        playback_mode="physics",
+                    )
+
                 root_yaw = extract_yaw_batch(planner_state.root_quat)
                 ray_hits = scanner.data.ray_hits_w[0].to(dtype=torch.float64)
                 height_points = _subsample_height_points(ray_hits, int(args_cli.heightmap_viz_stride))
