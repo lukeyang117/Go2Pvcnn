@@ -684,8 +684,12 @@ def main() -> int:
                     playback_frame = 0
                     last_result_id = None
 
-                result = rewards_reference.ensure_reference_cache(base_env)
                 if playback_mode == "direct":
+                    # Direct planner playback: step sim normally, then drive the displayed robot state from
+                    # the planner cache for inspection (physics-independent playback).
+                    env.step(zero_actions)
+                    result = rewards_reference.ensure_reference_cache(base_env)
+
                     # Direct planner playback: animate across the cached horizon.
                     result_id = id(result)
                     if result_id != last_result_id:
@@ -702,13 +706,11 @@ def main() -> int:
                         result=result,
                         frame_idx=playback_frame,
                     )
-                    # Keep stepping the sim so rendering and sensors update, but do not depend on physics to
-                    # "execute" the plan. The viewer state (camera/status) comes from the planner cache.
-                    env.step(zero_actions)
                     _apply_direct_playback_to_robot(base_env.scene["robot"], result, frame_idx=playback_frame)
                 else:
                     # Physics/default: step the sim and read state from Isaac.
                     env.step(zero_actions)
+                    result = rewards_reference.ensure_reference_cache(base_env)
                     planner_state = _get_viewer_planner_state(
                         base_env,
                         foot_ids=foot_ids,
