@@ -1,0 +1,277 @@
+# Batched Planner：向量化提速 + 可视化对齐 + TDD 测试体系
+
+## 元信息
+
+- **日期**：2026-04-15
+- **范围**：`Go2Pvcnn/extension/batched_planner/`、`Go2Pvcnn/extension/viz/go2_foostep_planner.py`、`Go2Pvcnn/tests/`
+- **金标准**：`raw/kinematic_footsteps/scripts/go2fp/` 的输出
+- **目标设备**：CUDA GPU only
+- **目标环境数**：N=2048
+- **允许手段**：PyTorch 向量化 + Triton custom kernel
+
+## 1. 背景与问题
+
+### 1.1 性能瓶颈
+
+训练输出（N=1, `--verbose-planner`）：
+
+```
+PlannerTiming[plan=696.95ms/1 swing_targets=637.29ms/1 terrain=28.04ms/1
+              footholds=9.05ms/1 ik=8.30ms/1 terrain_est=5.46ms/1
+              fk=5.35ms/1 base_solve=4.41ms/1 +7 more]
+```
+
+`swing_targets` 占 plan 耗时 91%。根因：`swing.py` 中 `batched_compute_swing_targets` 的双层 Python `for batch_idx × for leg` 循环，内部 `_leg_swing_progress_and_stance_anchor` 还有 `for i in range(T)` + `.item()` 的逐帧 GPU→CPU 同步。时间复杂度 **O(N·T)** 全部是 Python 串行。
+
+N=2048 时线性外推：swing_targets ≈ 1300 秒，完全不可用。
+
+### 1.2 可视化未对齐
+
+当前 `go2_foostep_planner.py` 通过 Isaac Lab 物理引擎驱动 robot，未实现 raw viewer 的纯 kinematic 回放逻辑。
+
+### 1.3 测试缺乏 raw 交叉验证
+
+现有 14 个 `test_batched_*.py` 仅自对比，缺少与 raw/kinematic_footsteps 的输出一致性验证。
+
+## 2. 提速改造设计
+
+### 2.1 swing.py — 核心瓶颈（91% 耗时）
+
+#### 2.1.1 `_leg_swing_progress_and_stance_anchor` 向量化
+
+当前两个 `for i in range(n)` + `.item()` 循环的语义：给定 stance 布尔序列，找连续 swing 区间起止点，算归一化 progress。
+
+向量化算法：
+
+1. **边界检测**：`diff` 检测 stance→swing（lift-off）和 swing→stance（touch-down）事件
+2. **区间 ID 分配**：`cumsum(lift_off_events)` × `is_swing` 给每段连续 swing 唯一 ID
+3. **区间内序号**：`frame_idx - scatter_min(frame_idx, run_id)`
+4. **区间长度**：`scatter_add(ones, run_id)` → `gather` 广播回每帧
+5. **归一化**：`progress = idx_in_run / max(run_length - 1, 1)`
+
+全部在 `(N, T, 4)` 上并行，消除所有 Python 循环和 `.item()` 同步。
+
+#### 2.1.2 `batched_compute_swing_targets` 全张量化
+
+消除 `for batch_idx in range(batch_size): for leg in range(4):` 外层循环：
+
+- `_compute_swing_apex`：已 element-wise，直接支持 `(N, 4)` 输入
+- `_swing_phase_targets`（Hermite 插值）：在 `(N, T, 4)` swing_progress 上操作，输出 `(N, T, 4, 3)`
+- `torch.where(stance, anchor, arc)` 合并
+
+#### 2.1.3 Triton 增强（第二阶段）
+
+N=2048 时如 bench 显示 kernel launch overhead 显著，写 fused Triton kernel：一个 block 处理一个 `(env, leg)` 的全 T 帧，融合 swing progress + Hermite + merge。
+
+### 2.2 terrain.py — `max_height_along_segment`
+
+当前：`for idx in range(self.batch_size)` + `.item()` 逐 env 取端点，逐个 `torch.linspace` + `_sample_map`。在 `trajectory.py` 被调用 4 次（per leg）。
+
+改造：
+
+1. 端点保持 tensor `(N, 2)`，不调 `.item()`
+2. Batch 插值：`t = linspace(0, 1, n_samples).view(1, -1, 1)` → `points = lerp(p0, p1, t)` 得 `(N, n_samples, 2)`
+3. 一次 `F.grid_sample` 采样所有 env × sample
+4. `torch.amax(sampled, dim=1)` 得 `(N,)` 结果
+5. `trajectory.py` 的 4 次 per-leg 调用合并为一次：stack `(N×4, 2)` → 采样 → reshape `(N, 4)`
+
+采样点数固定上界（按 resolution 对应的最大合理步数，如 32），短段多余的采样结果 mask 掉。
+
+### 2.3 foothold.py
+
+#### `_precompute_spiral_offsets`
+
+Python 嵌套循环 → `torch.meshgrid` 规则网格 + 按距中心距离排序。搜索结果最终取全局 argmin score，螺旋顺序无影响。仅初始化时调一次，不是热路径，但改了更干净。
+
+#### `batched_evaluate_touchdowns`
+
+`reasons` 列表的 `.item()` 调用改为 lazy（仅 verbose 时取）或改为整型 reason code tensor。
+
+### 2.4 base_solver.py — `batched_solve_base_height` EMA
+
+`for t in range(num_frames)` 串行但 batch 维并行。T 通常 <30 帧，N=2048 时每帧内已让 GPU 满载。
+
+**策略：** bench 后决定。如果 `base_solve` 阶段 <5ms（N=2048），保持现状；否则用 parallel scan 重写。
+
+### 2.5 terrain_estimator.py — `batched_estimate_terrain` EMA
+
+同 2.4 逻辑。bench 后决定。
+
+### 2.6 ik.py
+
+已向量化，保持现状。可选优化：float64 → float32 降精度提速（需验证 IK 解稳定性）。
+
+### 2.7 预期性能目标
+
+| N | 当前估计 | 目标 |
+|---|---------|------|
+| 1 | ~700ms | <10ms |
+| 64 | ~45s | <10ms |
+| 256 | ~180s | <15ms |
+| 1024 | ~720s | <30ms |
+| 2048 | ~1300s | <50ms |
+
+## 3. 可视化对齐设计
+
+### 3.1 核心改造：纯 kinematic 回放
+
+当前 `go2_foostep_planner.py` 依赖 Isaac Lab 物理步进。改为 raw `viewer.py` 的逻辑：
+
+1. 接收 teleop 命令
+2. 调 planner `batched_generate_trajectory` 生成完整轨迹
+3. 立即显示 touchdown 标记和足端轨迹弧线
+4. 逐帧 kinematic 回放：`write_root_pose_to_sim` + `write_joint_state_to_sim`
+5. 播完后用末帧状态作为下次规划的初始状态
+6. 循环
+
+无物理约束、无 `env.step`。机器人忠实按 planner 输出表演。
+
+### 3.2 具体改动
+
+| 项目 | 当前 | 改后 |
+|------|------|------|
+| 播放驱动 | `env.step(zero_actions)` 物理步进 | 逐帧 kinematic write |
+| 规划触发 | 每帧走物理再读 cache | 一次性生成 → 逐帧回放 → 播完重规划 |
+| touchdown 显示时机 | 和轨迹同时更新 | 规划完成后立即显示 |
+| 触地标记颜色 | 已按 `LEG_COLORS` 四色区分 | 保持（红/绿/蓝/黄） |
+| 状态链 | env 物理状态 → planner | planner 末帧 → 下次 planner 输入 |
+
+### 3.3 不改的部分
+
+- 地形点云可视化（当前 subsampled ray_hits 球）
+- 命令箭头（单绿箭头）
+- 相机跟随逻辑
+- teleop 键位
+- 根轨迹橙色球链（保留，加 `--show-root-traj` 开关）
+
+### 3.4 数据验证覆盖层（`--debug-overlay`）
+
+可选 debug 模式：
+
+- stance/swing 状态颜色标记
+- IK 关节角度超限位黄色警告
+- infeasible touchdown X 标记
+
+## 4. 测试体系设计
+
+### 4.1 架构
+
+```
+Go2Pvcnn/tests/
+├── conftest.py                            # 共享 fixtures
+├── fixtures/
+│   └── terrain_adapter.py                 # 桥接 raw terrain 和 batched terrain
+├── test_cross_validation_raw.py           # L1: raw ↔ batched 交叉验证
+├── test_swing_vectorized.py               # L2: swing 向量化回归
+├── test_terrain_vectorized.py             # L2: terrain 向量化回归
+├── test_foothold_vectorized.py            # L2: foothold 向量化回归
+├── test_base_solver.py                    # L2: base solver 回归
+├── test_trajectory_integration.py         # L2: 端到端轨迹回归
+├── test_ik.py                             # L2: IK/FK
+├── test_gait.py                           # L2: gait
+├── test_viz_playback.py                   # L4: 可视化回放逻辑
+├── test_manager.py                        # L2: manager 集成
+└── benchmarks/
+    └── bench_planner_scaling.py           # L3: 性能基准
+```
+
+### 4.2 L1：raw ↔ batched 交叉验证（核心）
+
+金标准是 `raw/kinematic_footsteps/scripts/go2fp/` 的输出。
+
+#### 前置条件：参数对齐
+
+```python
+@pytest.fixture
+def aligned_configs():
+    """raw TrajectoryConfig 和 BatchedTrajectoryConfig 所有共享参数完全一致。"""
+    raw_cfg = TrajectoryConfig()
+    batched_cfg = BatchedTrajectoryConfig(
+        gait_name=raw_cfg.gait_name,
+        step_freq=raw_cfg.step_freq,
+        duty_factor=raw_cfg.duty_factor,
+        step_height=raw_cfg.step_height,
+        hip_height=raw_cfg.hip_height,
+        foothold_search_radius=raw_cfg.foothold_search_radius,
+        foothold_search_step=raw_cfg.foothold_search_step,
+        max_foothold_step_down=raw_cfg.max_foothold_step_down,
+        max_touchdown_xy_reach=raw_cfg.max_touchdown_xy_reach,
+        replan_stop_speed=raw_cfg.replan_stop_speed,
+    )
+    return raw_cfg, batched_cfg
+```
+
+#### 前置条件：terrain 桥接
+
+`fixtures/terrain_adapter.py` 从同一 heightmap 数据构造 raw `GlobalElevationTerrain` 和 batched `PlannerTerrain`，先验证两边 `height_at` 一致。
+
+#### 逐模块交叉验证
+
+| 测试类 | 对比什么 | 精度 |
+|--------|---------|------|
+| `TestGaitCrossValidation` | contact_seq, touchdown_times, stance_time | exact float64 |
+| `TestFootholdCrossValidation` | touchdown XYZ | atol=1e-8 |
+| `TestSwingCrossValidation` | foot_targets `(T, 4, 3)` | atol=1e-8 |
+| `TestBaseSolverCrossValidation` | root_pos_w, root_quat_w | atol=1e-8 |
+| `TestIKCrossValidation` | joint_angles, body_pos_w | atol=1e-8 |
+| `TestTrajectoryEndToEnd` | 所有输出字段 | atol=1e-8, rtol=1e-6 |
+
+端到端覆盖场景：
+
+- flat terrain + trot gait + forward (vx=0.3)
+- flat terrain + trot gait + lateral (vy=0.2)
+- flat terrain + trot gait + turn (yaw_rate=0.5)
+- stairs terrain + trot gait + forward (vx=0.5)
+- standstill (cmd=0)
+
+### 4.3 L2：向量化回归
+
+在 L1 基础上，额外覆盖 raw 不方便测试的 edge case：
+
+- N>1 的 broadcast 行为
+- batch 内混合 standstill 和 motion 的 env
+- 全 stance / 全 swing / 单帧 swing 的 contact_seq
+- Hermite 插值连续性（swing 起止点 z 无跳变）
+
+### 4.4 L3：性能基准
+
+复用 `bench_batched_planner.py` 框架，扫描 N=[1, 64, 256, 1024, 2048]，输出 per-stage JSONL + 性能门限断言。
+
+### 4.5 L4：可视化回放逻辑
+
+不依赖 Isaac Lab 渲染：
+
+- `test_kinematic_playback_state_chain`：轨迹末帧 → 下次规划初始状态
+- `test_touchdown_visible_before_playback`：touchdown 标记在回放帧 0 已设置
+- `test_teleop_command_integration`：命令更新后下次规划使用新命令
+
+### 4.6 TDD 执行流程
+
+1. 写 L1 交叉验证测试（调 raw + 当前串行 batched，确认基线一致或记录差异）
+2. 写 L2 回归测试（串行版 golden reference）
+3. 向量化改造代码，L1 + L2 红→绿
+4. 跑 L3 bench 确认性能
+5. 改造可视化，L4 绿
+6. 全量 `pytest Go2Pvcnn/tests/ -x`
+
+## 5. 实现顺序
+
+1. **Phase 0 — 基线建立**：写 L1 交叉验证，确认 raw 与当前串行 batched 的基线差异
+2. **Phase 1 — swing 向量化**：最高优先级，消除 91% 瓶颈
+3. **Phase 2 — terrain + foothold 向量化**
+4. **Phase 3 — base_solver / terrain_estimator 评估**：bench 后决定
+5. **Phase 4 — Triton kernel**（如需）：bench N=2048 后对瓶颈热点补 Triton
+6. **Phase 5 — 可视化改造**：纯 kinematic 回放
+7. **Phase 6 — 全量验证**：L1-L4 全绿 + bench 达标
+
+## 6. 相关代码入口
+
+- `Go2Pvcnn/extension/batched_planner/swing.py` — 核心瓶颈
+- `Go2Pvcnn/extension/batched_planner/terrain.py` — `max_height_along_segment`
+- `Go2Pvcnn/extension/batched_planner/foothold.py` — 螺旋偏移 + evaluate
+- `Go2Pvcnn/extension/batched_planner/base_solver.py` — EMA 高度平滑
+- `Go2Pvcnn/extension/batched_planner/terrain_estimator.py` — EMA 地形估计
+- `Go2Pvcnn/extension/batched_planner/trajectory.py` — 组装调用链
+- `Go2Pvcnn/extension/viz/go2_foostep_planner.py` — 可视化入口
+- `raw/kinematic_footsteps/scripts/go2fp/` — 金标准参考
+- `notes/human/human-13-batched-planner-swing-stance-ik-complexity.md` — 复杂度分析
