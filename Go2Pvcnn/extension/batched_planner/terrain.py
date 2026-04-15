@@ -248,6 +248,8 @@ class BatchedTerrain:
             return roughness[:, 0]
         return roughness
 
+    _SEGMENT_SAMPLES: int = 32
+
     def max_height_along_segment(self, p0_xy: Tensor, p1_xy: Tensor) -> Tensor:
         p0_xy = torch.as_tensor(p0_xy, device=self.heightmaps.device, dtype=self.heightmaps.dtype)
         p1_xy = torch.as_tensor(p1_xy, device=self.heightmaps.device, dtype=self.heightmaps.dtype)
@@ -261,31 +263,64 @@ class BatchedTerrain:
         if p0_xy.shape[0] != self.batch_size or p1_xy.shape[0] != self.batch_size:
             raise ValueError("segment batch size must match terrain batch size")
 
-        outputs = []
-        step_scale = self._step_scale()
-        for idx in range(self.batch_size):
-            x0 = float(p0_xy[idx, 0].item())
-            y0 = float(p0_xy[idx, 1].item())
-            x1 = float(p1_xy[idx, 0].item())
-            y1 = float(p1_xy[idx, 1].item())
-            distance = math.hypot(x1 - x0, y1 - y0)
-            if distance == 0.0:
-                point = torch.tensor([[x0, y0]], device=self.heightmaps.device, dtype=self.heightmaps.dtype)
-                outputs.append(self._sample_map(self.heightmaps[idx : idx + 1], point)[0])
-                continue
+        S = self._SEGMENT_SAMPLES
+        t = torch.linspace(0.0, 1.0, S, device=p0_xy.device, dtype=p0_xy.dtype).view(1, S, 1)
+        # (N, S, 2): interpolated sample points along each segment
+        points = (1.0 - t) * p0_xy.unsqueeze(1) + t * p1_xy.unsqueeze(1)
 
-            sample_count = max(3, int(math.ceil(distance / step_scale)) * 4 + 1)
-            if sample_count % 2 == 0:
-                sample_count += 1
+        grid_xy = _normalize_points(points, self.world_x_range, self.world_y_range)
+        # grid_sample expects (N, C, H, W) input and (N, H_out, W_out, 2) grid
+        sample_grid = grid_xy.unsqueeze(2)  # (N, S, 1, 2)
+        sampled = F.grid_sample(
+            self.heightmaps,
+            sample_grid,
+            mode="bilinear",
+            align_corners=True,
+            padding_mode="border",
+        )
+        heights = sampled[:, 0, :, 0]  # (N, S)
 
-            ts = torch.linspace(0.0, 1.0, sample_count, device=self.heightmaps.device, dtype=self.heightmaps.dtype)
-            xs = x0 + (x1 - x0) * ts
-            ys = y0 + (y1 - y0) * ts
-            pts = torch.stack((xs, ys), dim=-1).unsqueeze(0)
-            heights = self._sample_map(self.heightmaps[idx : idx + 1], pts)[0]
-            outputs.append(torch.max(heights))
+        return torch.amax(heights, dim=1)
 
-        return torch.stack(outputs)
+    def batch_max_height_along_segment(self, p0_xy: Tensor, p1_xy: Tensor) -> Tensor:
+        """Query max terrain height along segments for multiple legs at once.
+
+        Args:
+            p0_xy: (N, K, 2) start endpoints for K legs across N envs.
+            p1_xy: (N, K, 2) end endpoints for K legs across N envs.
+
+        Returns:
+            (N, K) max heights along each segment.
+        """
+        p0_xy = torch.as_tensor(p0_xy, device=self.heightmaps.device, dtype=self.heightmaps.dtype)
+        p1_xy = torch.as_tensor(p1_xy, device=self.heightmaps.device, dtype=self.heightmaps.dtype)
+
+        if p0_xy.ndim != 3 or p1_xy.ndim != 3:
+            raise ValueError("batch_max_height_along_segment expects (N, K, 2) inputs")
+        N, K, _ = p0_xy.shape
+        if N != self.batch_size:
+            raise ValueError("batch size must match terrain batch size")
+
+        S = self._SEGMENT_SAMPLES
+        t = torch.linspace(0.0, 1.0, S, device=p0_xy.device, dtype=p0_xy.dtype).view(1, 1, S, 1)
+        # (N, K, S, 2)
+        points = (1.0 - t) * p0_xy.unsqueeze(2) + t * p1_xy.unsqueeze(2)
+        # Reshape to (N, K*S, 2) for normalization and grid_sample
+        points_flat = points.reshape(N, K * S, 2)
+
+        grid_xy = _normalize_points(points_flat, self.world_x_range, self.world_y_range)
+        sample_grid = grid_xy.unsqueeze(2)  # (N, K*S, 1, 2)
+        sampled = F.grid_sample(
+            self.heightmaps,
+            sample_grid,
+            mode="bilinear",
+            align_corners=True,
+            padding_mode="border",
+        )
+        heights = sampled[:, 0, :, 0]  # (N, K*S)
+        heights = heights.reshape(N, K, S)
+
+        return torch.amax(heights, dim=2)  # (N, K)
 
 
 class PlannerTerrain(BatchedTerrain):
