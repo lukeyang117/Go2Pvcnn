@@ -305,3 +305,29 @@ class TestSwingTargetsVectorized:
             rtol=0.0,
             msg="N=4 targets do not match golden reference",
         )
+
+
+class TestSwingDynamicN:
+    @pytest.mark.parametrize("n_envs", [1, 32, 256])
+    def test_swing_targets_arbitrary_n(self, n_envs):
+        from extension.batched_planner.swing import batched_compute_swing_targets
+
+        torch.manual_seed(1)
+        t_frames = 24
+        contact_seq = torch.rand(n_envs, t_frames, 4, dtype=torch.float64)
+        contact_seq = (contact_seq > 0.45).to(torch.float64)
+        foot_pos = torch.randn(n_envs, 4, 3, dtype=torch.float64) * 0.05
+        foot_pos[..., 0] += 0.19 * torch.tensor([1.0, 1.0, -1.0, -1.0])
+        foot_pos[..., 1] += 0.11 * torch.tensor([1.0, -1.0, 1.0, -1.0])
+        touchdown_pos = foot_pos.clone()
+        touchdown_pos[..., 0] += 0.05
+
+        out = batched_compute_swing_targets(
+            contact_seq,
+            foot_pos,
+            touchdown_pos,
+            step_height=0.08,
+            terrain_max_heights=None,
+        )
+        assert tuple(out.shape) == (n_envs, t_frames, 4, 3)
+        assert torch.isfinite(out).all()

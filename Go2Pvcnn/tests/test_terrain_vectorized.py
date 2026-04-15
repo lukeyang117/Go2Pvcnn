@@ -248,3 +248,23 @@ class TestBatchMaxHeightMultiLeg:
 
         result = terrain.batch_max_height_along_segment(p0, p1)
         assert result.shape == (N, K), f"Expected ({N}, {K}), got {result.shape}"
+
+
+class TestTerrainDynamicN:
+    @pytest.mark.parametrize("n_envs", [1, 32, 256])
+    def test_max_height_segment_arbitrary_n(self, n_envs):
+        from extension.batched_planner.terrain import BatchedTerrain
+
+        torch.manual_seed(7)
+        heightmaps = torch.rand(n_envs, 1, 20, 20, dtype=torch.float32)
+        terrain = BatchedTerrain(
+            heightmaps,
+            world_x_range=(-1.0, 1.0),
+            world_y_range=(-1.0, 1.0),
+        )
+        p0 = torch.rand(n_envs, 2, dtype=torch.float32) * 1.6 - 0.8
+        p1 = torch.rand(n_envs, 2, dtype=torch.float32) * 1.6 - 0.8
+
+        result = terrain.max_height_along_segment(p0, p1)
+        assert result.shape == (n_envs,)
+        assert torch.isfinite(result).all()
