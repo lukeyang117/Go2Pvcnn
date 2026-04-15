@@ -1,7 +1,7 @@
 """Isaac Lab livestream viewer for the batched Go2 footstep planner.
 
-This script keeps ``extension.batched_planner`` read-only and visualizes its
-predicted trajectory inside Isaac Lab with terminal teleop controls.
+Pure kinematic playback: plan once, replay frame-by-frame, replan when
+the horizon is exhausted or the teleop command changes.  No physics step.
 """
 
 from __future__ import annotations
@@ -40,17 +40,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
     parser.add_argument("--warmup-steps", type=int, default=6, help="Number of zero-action warmup steps before visualization.")
-    parser.add_argument(
-        "--planner-playback-mode",
-        type=str,
-        default="physics",
-        choices=["physics", "direct"],
-        help=(
-            "How to drive the displayed robot state. "
-            "'physics' steps Isaac normally (default). "
-            "'direct' plays back planner-generated pose/joint state for inspection."
-        ),
-    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -70,26 +59,10 @@ def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
     return args_cli
 
 
-def _resolve_planner_playback_mode(args_cli: argparse.Namespace) -> str:
-    """Normalize the CLI flag into an explicit playback mode string.
-
-    This helper exists so viewer-mode behavior is testable without Isaac runtime.
-    """
-    mode = getattr(args_cli, "planner_playback_mode", None)
-    if mode is None:
-        return "physics"
-    mode_str = str(mode).strip().lower()
-    if mode_str in ("physics", ""):
-        return "physics"
-    if mode_str == "direct":
-        return "direct"
-    raise ValueError(f"unsupported planner playback mode: {mode!r}")
-
-
 def _planner_state_from_reference_result(result, *, frame_idx: int):
-    """Build a planner-facing state snapshot from the reference-cache result.
+    """Build a planner-facing state snapshot from a trajectory result.
 
-    The planner uses wxyz convention; reference cache stores wxyz quaternions.
+    The planner uses wxyz convention; result stores wxyz quaternions.
     """
     from extension.batched_planner.types import BatchedRobotState
 
@@ -108,7 +81,7 @@ def _planner_state_from_reference_result(result, *, frame_idx: int):
 
 
 def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
-    """Best-effort: write the planner frame pose/joints into the displayed robot.
+    """Write the planner frame pose/joints into the displayed robot.
 
     Isaac Lab is not available in unit tests, so we keep this duck-typed and
     only call common "write_*_to_sim" methods when present.
@@ -122,44 +95,18 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
     joint_pos = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float32)
     joint_vel = torch.zeros_like(joint_pos)
 
-    # Root pose
     if hasattr(robot, "write_root_pose_to_sim"):
         robot.write_root_pose_to_sim(root_pose_xyzw)
     elif hasattr(robot, "write_root_state_to_sim"):
-        # Common Isaac Lab API: (pos, quat, linvel, angvel)
         zeros = torch.zeros((root_pos_w.shape[0], 6), dtype=root_pos_w.dtype, device=root_pos_w.device)
         robot.write_root_state_to_sim(torch.cat([root_pose_xyzw, zeros], dim=-1))
 
-    # Joint state
     if hasattr(robot, "write_joint_state_to_sim"):
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
     elif hasattr(robot, "write_joint_pos_to_sim"):
         robot.write_joint_pos_to_sim(joint_pos)
     elif hasattr(robot, "write_joint_position_to_sim"):
         robot.write_joint_position_to_sim(joint_pos)
-
-
-def _get_viewer_planner_state(
-    env: "ManagerBasedRLEnv",
-    *,
-    foot_ids: list[int],
-    playback_mode: str,
-    result=None,
-    frame_idx: int = 0,
-):
-    """Return the state used for camera/status in the viewer.
-
-    - physics: read from Isaac (physics constrained)
-    - direct: read from planner cache/result (physics independent)
-    """
-    mode = str(playback_mode).strip().lower()
-    if mode == "direct":
-        if result is None:
-            raise ValueError("direct planner playback requires a reference-cache result")
-        return _planner_state_from_reference_result(result, frame_idx=int(frame_idx))
-    if mode == "physics":
-        return _planner_state_from_env(env, foot_ids)
-    raise ValueError(f"unsupported planner playback mode: {playback_mode!r}")
 
 
 def _launch_app(args_cli: argparse.Namespace):
@@ -265,7 +212,7 @@ class TerminalTeleop:
         return TeleopCommand(values=values, reset_requested=reset_requested)
 
 
-def _make_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]) -> VisualizationMarkersCfg:
+def _make_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]):
     import isaaclab.sim as sim_utils
     from isaaclab.markers import VisualizationMarkersCfg
 
@@ -285,7 +232,7 @@ def _make_cuboid_cfg(
     *,
     size: tuple[float, float, float],
     color: tuple[float, float, float],
-) -> VisualizationMarkersCfg:
+):
     import isaaclab.sim as sim_utils
     from isaaclab.markers import VisualizationMarkersCfg
 
@@ -405,46 +352,7 @@ class PlannerVisualizer:
         )
 
 
-class _ViewerCommandManagerProxy:
-    """Expose teleop commands through the env's shared command manager interface."""
-
-    def __init__(self, command_manager, *, command_name: str, num_envs: int, device: torch.device):
-        self._command_manager = command_manager
-        self._command_name = str(command_name)
-        self._num_envs = int(num_envs)
-        self._device = torch.device(device)
-        self._command: torch.Tensor | None = None
-
-    def set_command(self, command: torch.Tensor) -> None:
-        command_t = torch.as_tensor(command, dtype=torch.float64, device=self._device)
-        if command_t.ndim == 1:
-            command_t = command_t.unsqueeze(0)
-        if command_t.ndim != 2 or int(command_t.shape[-1]) != 3:
-            raise ValueError(f"command must have shape (3,) or (num_envs, 3), got {tuple(command_t.shape)}")
-        if int(command_t.shape[0]) == 1 and self._num_envs > 1:
-            command_t = command_t.expand(self._num_envs, -1).clone()
-        elif int(command_t.shape[0]) != self._num_envs:
-            raise ValueError(f"command must have shape (1, 3) or ({self._num_envs}, 3), got {tuple(command_t.shape)}")
-        self._command = command_t
-
-    @property
-    def command(self) -> torch.Tensor | None:
-        return self._command
-
-    @command.setter
-    def command(self, value: torch.Tensor) -> None:
-        self.set_command(value)
-
-    def get_command(self, name: str):
-        if name == self._command_name and self._command is not None:
-            return self._command
-        return self._command_manager.get_command(name)
-
-    def __getattr__(self, name: str):
-        return getattr(self._command_manager, name)
-
-
-def _apply_terrain_mode(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY, terrain_mode: str) -> None:
+def _apply_terrain_mode(env_cfg, terrain_mode: str) -> None:
     tg = env_cfg.scene.terrain.terrain_generator
     if tg is None:
         return
@@ -469,7 +377,7 @@ def _apply_terrain_mode(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY, terrain_
     env_cfg.scene.terrain.max_init_terrain_level = 0
 
 
-def _build_env_cfg(args_cli: argparse.Namespace) -> TeacherElevationTrajectoryEnvCfg_PLAY:
+def _build_env_cfg(args_cli: argparse.Namespace):
     from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg_PLAY
 
     env_cfg = TeacherElevationTrajectoryEnvCfg_PLAY()
@@ -488,7 +396,7 @@ def _build_env_cfg(args_cli: argparse.Namespace) -> TeacherElevationTrajectoryEn
     return env_cfg
 
 
-def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> BatchedTrajectoryConfig:
+def _build_planner_cfg(env_cfg):
     from extension.batched_planner.config import BatchedTrajectoryConfig
 
     return BatchedTrajectoryConfig(
@@ -502,23 +410,6 @@ def _build_planner_cfg(env_cfg: TeacherElevationTrajectoryEnvCfg_PLAY) -> Batche
         max_roughness=float(env_cfg.max_roughness),
         replan_stop_speed=float(env_cfg.replan_stop_speed),
     )
-
-
-def _attach_viewer_reference_manager(base_env: ManagerBasedRLEnv, planner_cfg: BatchedTrajectoryConfig):
-    from extension.batched_planner.manager import BatchedTrajectoryManager
-
-    command_name = str(getattr(planner_cfg, "reference_command_name", "base_velocity"))
-    proxy = _ViewerCommandManagerProxy(
-        base_env.command_manager,
-        command_name=command_name,
-        num_envs=int(base_env.num_envs),
-        device=base_env.device,
-    )
-    base_env.command_manager = proxy
-    manager = BatchedTrajectoryManager(planner_cfg, device=base_env.device)
-    base_env._trajectory_manager = manager
-    base_env._trajectory_reference_cache = None
-    return manager, proxy
 
 
 def _compute_stable_scan_ranges(scanner, *, env_id: int = 0) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -578,7 +469,7 @@ def _subsample_height_points(ray_hits: torch.Tensor, stride: int) -> torch.Tenso
     return sampled[valid]
 
 
-def _make_zero_actions(env: ManagerBasedRLEnv) -> torch.Tensor:
+def _make_zero_actions(env) -> torch.Tensor:
     import gymnasium as gym
 
     if hasattr(env, "action_manager"):
@@ -588,7 +479,7 @@ def _make_zero_actions(env: ManagerBasedRLEnv) -> torch.Tensor:
     return torch.zeros((env.num_envs, action_dim), dtype=torch.float32, device=env.device)
 
 
-def _update_camera(env: ManagerBasedRLEnv, *, root_pos: torch.Tensor, root_yaw: torch.Tensor, distance: float, height: float) -> None:
+def _update_camera(env, *, root_pos: torch.Tensor, root_yaw: torch.Tensor, distance: float, height: float) -> None:
     yaw_val = float(root_yaw[0].item())
     camera_offset = torch.tensor(
         [-distance * math.cos(yaw_val), -distance * math.sin(yaw_val), height],
@@ -600,7 +491,7 @@ def _update_camera(env: ManagerBasedRLEnv, *, root_pos: torch.Tensor, root_yaw: 
     env.sim.set_camera_view(camera_position, target_position)
 
 
-def _planner_state_from_env(env: ManagerBasedRLEnv, foot_ids: list[int]):
+def _planner_state_from_env(env, foot_ids: list[int]):
     from extension.convention import isaac_state_to_planner_state, quat_wxyz_to_xyzw
 
     robot = env.scene["robot"]
@@ -630,15 +521,14 @@ def main() -> int:
     import gymnasium as gym
 
     import go2_pvcnn.tasks.register_envs  # noqa: F401,F403
+    from extension.batched_planner.trajectory import batched_generate_trajectory
     from extension.convention import extract_yaw_batch
-    from extension.mdp import rewards_reference
     from isaaclab.envs import ManagerBasedRLEnv
 
     env_cfg = _build_env_cfg(args_cli)
     planner_cfg = _build_planner_cfg(env_cfg)
     planner_cfg.dt = float(args_cli.plan_dt)
     planner_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
-    planner_cfg.reference_replan_interval_steps = int(env_cfg.reference_replan_interval_steps)
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
@@ -651,20 +541,20 @@ def main() -> int:
     foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
     scanner = base_env.scene.sensors["height_scanner"]
     visualizer = PlannerVisualizer()
-    _, command_proxy = _attach_viewer_reference_manager(base_env, planner_cfg)
-    playback_mode = _resolve_planner_playback_mode(args_cli)
 
     print(f"[Viewer] Terrain mode: {args_cli.terrain}", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
-    print(f"[Viewer] Planner playback mode: {playback_mode}", flush=True)
+    print("[Viewer] Playback mode: kinematic (no physics)", flush=True)
     _print_help()
 
     env.reset()
     for _ in range(max(0, int(args_cli.warmup_steps))):
         env.step(zero_actions)
 
+    result = None
     playback_frame = 0
-    last_result_id = None
+    last_cmd = None
+
     with TerminalTeleop(
         device=base_env.device,
         vx_scale=float(args_cli.vx_scale),
@@ -676,76 +566,82 @@ def main() -> int:
         try:
             while simulation_app.is_running():
                 teleop_cmd = teleop.poll()
-                command_proxy.command = teleop_cmd.values
+
                 if teleop_cmd.reset_requested:
                     env.reset()
                     for _ in range(max(0, int(args_cli.warmup_steps))):
                         env.step(zero_actions)
+                    result = None
                     playback_frame = 0
-                    last_result_id = None
+                    last_cmd = None
 
-                if playback_mode == "direct":
-                    # Direct planner playback: step sim normally, then drive the displayed robot state from
-                    # the planner cache for inspection (physics-independent playback).
-                    env.step(zero_actions)
-                    result = rewards_reference.ensure_reference_cache(base_env)
+                need_replan = (
+                    result is None
+                    or playback_frame >= result.num_frames
+                    or (last_cmd is not None and not torch.allclose(teleop_cmd.values, last_cmd, atol=1e-3))
+                )
 
-                    # Direct planner playback: animate across the cached horizon.
-                    result_id = id(result)
-                    if result_id != last_result_id:
-                        playback_frame = 0
-                        last_result_id = result_id
+                if need_replan:
+                    if result is not None and playback_frame > 0:
+                        frame = min(playback_frame - 1, result.num_frames - 1)
+                        state = _planner_state_from_reference_result(result, frame_idx=frame)
                     else:
-                        horizon = int(getattr(result, "num_frames", result.root_pos_w.shape[1]))
-                        playback_frame = (playback_frame + 1) % max(1, horizon)
+                        state = _planner_state_from_env(base_env, foot_ids)
 
-                    planner_state = _get_viewer_planner_state(
-                        base_env,
-                        foot_ids=foot_ids,
-                        playback_mode="direct",
+                    terrain, ray_hits = _compute_local_terrain(scanner)
+
+                    result = batched_generate_trajectory(
+                        terrain,
+                        state,
+                        teleop_cmd.values,
+                        requested_n_frames=args_cli.n_frames,
+                        dt=args_cli.plan_dt,
+                        cfg=planner_cfg,
+                    )
+                    playback_frame = 0
+
+                    planner_state = _planner_state_from_reference_result(result, frame_idx=0)
+                    root_yaw = extract_yaw_batch(planner_state.root_quat)
+                    height_points = _subsample_height_points(ray_hits, int(args_cli.heightmap_viz_stride))
+                    visualizer.update(
                         result=result,
-                        frame_idx=playback_frame,
+                        command=teleop_cmd.values,
+                        root_yaw=root_yaw,
+                        height_points=height_points,
                     )
+
+                if result is not None and playback_frame < result.num_frames:
                     _apply_direct_playback_to_robot(base_env.scene["robot"], result, frame_idx=playback_frame)
-                else:
-                    # Physics/default: step the sim and read state from Isaac.
-                    env.step(zero_actions)
-                    result = rewards_reference.ensure_reference_cache(base_env)
-                    planner_state = _get_viewer_planner_state(
+                    base_env.sim.render()
+                    playback_frame += 1
+
+                last_cmd = teleop_cmd.values.clone()
+
+                if result is not None:
+                    display_frame = min(playback_frame - 1, result.num_frames - 1) if playback_frame > 0 else 0
+                    planner_state = _planner_state_from_reference_result(result, frame_idx=display_frame)
+                    root_yaw = extract_yaw_batch(planner_state.root_quat)
+                    _update_camera(
                         base_env,
-                        foot_ids=foot_ids,
-                        playback_mode="physics",
+                        root_pos=planner_state.root_pos[0],
+                        root_yaw=root_yaw,
+                        distance=float(args_cli.camera_distance),
+                        height=float(args_cli.camera_height),
                     )
 
-                root_yaw = extract_yaw_batch(planner_state.root_quat)
-                ray_hits = scanner.data.ray_hits_w[0].to(dtype=torch.float64)
-                height_points = _subsample_height_points(ray_hits, int(args_cli.heightmap_viz_stride))
-                visualizer.update(
-                    result=result,
-                    command=teleop_cmd.values,
-                    root_yaw=root_yaw,
-                    height_points=height_points,
-                )
-                _update_camera(
-                    base_env,
-                    root_pos=planner_state.root_pos[0],
-                    root_yaw=root_yaw,
-                    distance=float(args_cli.camera_distance),
-                    height=float(args_cli.camera_height),
-                )
-
-                root_pos = planner_state.root_pos[0]
-                yaw_rate = float(teleop_cmd.values[0, 2].item())
-                status = (
-                    f"\rcmd vx={teleop_cmd.values[0,0]:+0.2f} "
-                    f"vy={teleop_cmd.values[0,1]:+0.2f} "
-                    f"yaw={yaw_rate:+0.2f} | "
-                    f"root=({root_pos[0]:+0.2f}, {root_pos[1]:+0.2f}, {root_pos[2]:+0.2f})"
-                )
-                if status != last_status:
-                    sys.stdout.write(status)
-                    sys.stdout.flush()
-                    last_status = status
+                    root_pos = planner_state.root_pos[0]
+                    yaw_rate = float(teleop_cmd.values[0, 2].item())
+                    status = (
+                        f"\rcmd vx={teleop_cmd.values[0,0]:+0.2f} "
+                        f"vy={teleop_cmd.values[0,1]:+0.2f} "
+                        f"yaw={yaw_rate:+0.2f} | "
+                        f"root=({root_pos[0]:+0.2f}, {root_pos[1]:+0.2f}, {root_pos[2]:+0.2f}) "
+                        f"frame={display_frame}/{result.num_frames}"
+                    )
+                    if status != last_status:
+                        sys.stdout.write(status)
+                        sys.stdout.flush()
+                        last_status = status
         finally:
             print()
             env.close()
