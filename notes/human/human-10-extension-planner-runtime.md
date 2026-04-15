@@ -11,11 +11,17 @@
 
 ## 一句话总结
 
-当前 runtime 采用：
+当前 runtime 采用（更新于 2026-04-15）：
 
-`Isaac state + 高分辨率 height_scanner -> batched_generate_trajectory -> BatchedTrajectoryManager -> extension/reference cache -> 当前 phase slice -> trajectory reward`
+`Isaac state + 高分辨率 height_scanner -> BatchedTrajectoryManager.refresh_from_env() -> (按需单次 planner 调用, 支持 per-env masked replan) -> planner-owned ReferenceTrajectoryCache -> reward / viewer 消费`
 
-核心特征是 **固定间隔全量 GPU replan**，不再依赖旧的 raw EventTerm 重规划链路。
+核心特征是：
+
+- planner-owned cache：reward/viewer 不再依赖“外部 cache 生成器”，而是必须通过 `env.unwrapped._trajectory_manager` 刷新 cache。
+- single-shot / per-env 解耦：每次 runtime 刷新最多触发一次规划调用；只对需要重规划的 env 行进行 batched 规划，并把结果写回完整 cache。
+- full cache contract：即使发生部分重规划，reward 侧看到的 cache 仍保持 `(num_envs, horizon, ...)` 的完整形状契约。
+- standstill 退化路径：某些 env 规划失败时，将其 cache 行置为站立（时间常量）并持续到它自己的下一次 replan 触发。
+- verbose planner 诊断：可按步数间隔打印 planner timing summary，便于定位性能瓶颈。
 
 ## Mermaid runtime 主链图
 
@@ -26,7 +32,7 @@ graph LR
     convention["Isaac -> planner 状态翻译\n../../Go2Pvcnn/extension/convention.py"]
     trajectory["batched planner 主入口\n../../Go2Pvcnn/extension/batched_planner/trajectory.py"]
     manager["BatchedTrajectoryManager\n../../Go2Pvcnn/extension/batched_planner/manager.py"]
-    cache["reference cache\nenv.unwrapped._trajectory_reference_cache"]
+    cache["planner-owned ReferenceTrajectoryCache\n(env.unwrapped._trajectory_manager.refresh_from_env)\n+ runtime mirror: env.unwrapped._trajectory_reference_cache"]
     reward["reward helper\n../../Go2Pvcnn/extension/mdp/rewards_reference.py"]
     step["每步 RL reward"]
 
@@ -35,9 +41,9 @@ graph LR
     scanner -->|"height map 查询输入"| trajectory
     convention -->|"BatchedRobotState"| trajectory
     trajectory -->|"BatchedTrajectoryResult"| manager
-    manager -->|"planner_result_to_reference_cache"| cache
-    manager -->|"固定 interval replan / phase++"| cache
-    cache -->|"按当前 frame gather"| reward
+    manager -->|"planner_result_to_reference_cache\n+ masked write rows"| cache
+    manager -->|"per-env replan mask\n+ phase counter"| cache
+    cache -->|"ensure_reference_cache()\n按当前 frame gather"| reward
     reward -->|"root/joint/foot/contact/touchdown tracking"| step
 ```
 
@@ -60,19 +66,26 @@ graph LR
    只负责 planner 语义本身，不直接关心 reward manager、EventTerm 或 task 注册。
 
 4. `extension/batched_planner/manager.py`
-   把一次 planner 结果变成多步可消费的 reference runtime。
+   把一次 planner 结果变成多步可消费的 reference runtime，并且负责：
+
+   - planner-owned cache 的生命周期
+   - per-env masked 重规划（只对需要重规划的 env 子集调用 planner）
+   - 将子集结果写回完整 cache（reward 侧始终看到 full-shaped cache）
+   - 规划失败时的 standstill 退化
 
 5. `extension/mdp/rewards_reference.py`
    在每个 RL step 上读取当前 phase 的参考帧，计算 imitation-style reward。
+   注意：这里的 cache 入口是 `ensure_reference_cache(env)`，它要求 `env.unwrapped._trajectory_manager` 存在。
 
 ## 当前主流程
 
 1. 环境提供当前 batched robot state、command、height scanner 地形
-2. `BatchedTrajectoryManager.step()` 按固定 interval 判断是否需要 replan
-3. 到 interval 时调用 `extension/batched_planner/trajectory.py::batched_generate_trajectory`
-4. 结果经 `extension/convention.py::planner_result_to_reference_cache()` 转成 `extension/reference` 里的 cache 结构
-5. manager 维护 per-env `phase_counter`
-6. reward 在每步通过当前 phase 从 cache 里取参考帧
+2. reward/viewer 侧通过 `ensure_reference_cache(env)` 触发 `BatchedTrajectoryManager.refresh_from_env(env)`
+3. manager 计算 per-env `replan_mask` 并最多触发一次 `batched_generate_trajectory(...)`
+4. 结果经 `extension/convention.py::planner_result_to_reference_cache()` 转成 canonical cache ABI
+5. 若是部分重规划：将子集 cache 行 masked 写回到完整 cache（full cache contract）
+6. manager 维护 per-env `phase_counter` 并在每次 refresh/step 时推进或重置
+7. reward 在每步通过当前 phase 从 cache 里取参考帧
 
 ## 和旧 runtime 的本质区别
 
@@ -107,24 +120,46 @@ graph LR
 - `phase_index`
 - `valid_mask`
 
+### full cache contract（重要）
+
+reward/viewer 侧假设 cache 始终满足：
+
+- `root_pos_w` / `root_quat_w` / `joint_angles` / `foot_pos_root` / `contact_state` / `planned_touchdown_w` 等字段都是 batched 且 full-shaped：`(num_envs, horizon, ...)`
+- 即使只对部分 env 重规划，也会把结果 masked 写回，不会生成 “稀疏/子集 cache” 给 reward
+
+这就是 “planner-owned cache contract” 的核心：consumer 永远按 full batch 读取 reference。
+
+### standstill cache persistence（重要）
+
+当某个 env 重规划失败且已有 cache 时：
+
+- manager 将该 env 的 cache 行覆盖为 standstill：重复第 0 帧至整个 horizon
+- 该 env 在后续 step 中会继续使用站立轨迹，直到它自己的下一次重规划触发（例如 command 改变 / reset / interval）
+- interval bookkeeping 会记录 “已经尝试过 replan 的时间点”，避免失败后每步都重试导致抖动和性能浪费
+
 ## 重规划策略
 
-当前实现的触发方式只有一个：
+当前实现是 **per-env 解耦的 masked replanning**。触发条件包含但不限于：
 
-- **固定间隔全量 replan**
+- reset / pending reset：某个 env reset 后，其对应 mask 会要求重规划该行
+- command delta：只对 command 发生变化的 env 行重规划
+- interval elapsed：对满足 `episode_length_buf - last_replan_episode_length_buf >= reference_replan_interval_steps` 的 env 行重规划
+- cache/horizon 形状不兼容：无法安全推断兼容性时回退为全量重规划
 
 manager 内部维护：
 
 - `_step_counter`：全局步数，不因单个 env reset 而清零
 - `_phase_counter`：每个 env 当前消费到的参考帧索引
+- `_last_episode_length_buf`：上一次 refresh 的 episode step
+- `_last_replan_episode_length_buf`：每个 env 上一次成功或尝试重规划时的 episode step（用于 interval 计算，避免失败后每步重试）
+- `_pending_reset_mask`：env reset 的待处理标记（只影响对应行）
 
-行为规则：
+行为规则（概念上）：
 
-- `step 0` 必定 replan
-- 之后每隔 `reference_replan_interval_steps` 再 replan 一次
-- replan 后 `phase_counter` 清零
-- 非 replan 步只推进 `phase_counter`
-- `phase_counter` 超出 `num_frames - 1` 时 clamp 在最后一帧
+- 每次 `refresh_from_env(env)` 计算 `replan_mask`，并且最多触发一次规划调用
+- 若 `replan_mask` 只包含部分 env，则 planner 输入 batch 只包含这些 env
+- 重规划成功：对应 env 的 `phase_counter` 置 0，其他 env `phase_counter` 递增并 clamp
+- 重规划失败（cache 已存在时）：对应 env cache 行填充 standstill（时间常量），并记录本次 “replan time” 防止 interval 立即重试
 
 ## 与旧 runtime 的差异
 
@@ -146,6 +181,27 @@ manager 内部维护：
 - 缓存格式：`extension/reference/cache.py::ReferenceTrajectoryCache`
 - 消费者：trajectory reward、数值对齐工具、后续可视化
 
+## verbose planner diagnostics
+
+当启用 `verbose_planner`（或 `planner_instrumentation`）时，manager 会收集分阶段 timing，并按 `verbose_planner_interval_steps` 打印 compact summary。
+
+这类输出的目标是：
+
+- 观察 terrain/state/replan_mask/plan/cache_convert 等 stage 的耗时
+- 在 viewer 或训练 runtime 中快速定位瓶颈
+
+## viewer direct playback mode
+
+viewer 侧支持 `--planner-playback-mode direct`：
+
+- `direct`：从 planner result / reference cache 读取姿态并直接写入机器人（不依赖物理仿真推进）
+- `physics`：使用默认物理推进，用于显示/对照
+
+direct playback 的优势是：
+
+- 可视化完全跟随 planner 输出，便于 debug 轨迹和 cache contract
+- 避免 “仿真状态偏差” 掩盖 planner 本身的问题
+
 ## 为什么说当前是 pure GPU 主线
 
 这里的 “pure GPU” 不是说仓库里再也没有 raw CPU 文件，而是说当前训练 runtime 的主路径目标是：
@@ -166,3 +222,4 @@ raw CPU 路径现在的主要职责是：
 
 - raw ↔ batched 模块映射看 [human-09-extension-planner-mapping.md](human-09-extension-planner-mapping.md)
 - reward 消费与指标解释看 [human-11-extension-trajectory-reward.md](human-11-extension-trajectory-reward.md)
+- swing/stance 语义与 IK 时间复杂度（单环境、带代码锚点）看 [human-13-batched-planner-swing-stance-ik-complexity.md](human-13-batched-planner-swing-stance-ik-complexity.md)

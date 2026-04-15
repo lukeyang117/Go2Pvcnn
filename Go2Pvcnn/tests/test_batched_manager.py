@@ -338,6 +338,67 @@ class BatchedManagerTest(unittest.TestCase):
         torch.testing.assert_close(cache1.root_pos_w[2], root_pos0[2])
         self.assertFalse(torch.equal(cache1.root_pos_w[0], root_pos0[0]))
 
+    def test_refresh_from_env_interval_replans_only_elapsed_env_rows_and_keeps_full_cache_contract(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+
+        cfg = SimpleNamespace(reference_replan_interval_steps=3, reference_trajectory_horizon=5, dt=0.02)
+        manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+        num_envs = 3
+        ray_hits = torch.zeros(num_envs, 16, 3, dtype=torch.float64)
+        env = _FakeEnv(
+            episode_length_buf=torch.tensor([0, 0, 0], dtype=torch.long),
+            command=torch.zeros(num_envs, 3, dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+
+        planner_batch_sizes: list[int] = []
+
+        def gen_side_effect(terrain, states, commands, requested_n_frames, dt):
+            n = int(commands.shape[0])
+            planner_batch_sizes.append(n)
+            # Offset only for the subset replans to make it obvious which rows changed.
+            offset = 1000.0 if n == 1 else 0.0
+            return _fake_result_with_offset(n, requested_n_frames, offset=offset)
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            side_effect=gen_side_effect,
+        ):
+            cache0 = manager.refresh_from_env(env)
+            root_pos0 = cache0.root_pos_w.clone()
+
+            # No interval elapsed yet, so no replans should happen here.
+            env.episode_length_buf = torch.tensor([1, 1, 1], dtype=torch.long)
+            cache1 = manager.refresh_from_env(env)
+            torch.testing.assert_close(cache1.root_pos_w, root_pos0)
+
+            # Only env0 hits the interval; env1/env2 stay on cached rows.
+            env.episode_length_buf = torch.tensor([3, 2, 2], dtype=torch.long)
+            cache2 = manager.refresh_from_env(env)
+
+        self.assertEqual(planner_batch_sizes, [3, 1])
+        self.assertTrue(cache2.is_ready())
+        self.assertTrue(cache2.is_canonical())
+        self.assertEqual(tuple(cache2.root_pos_w.shape), (num_envs, 5, 3))
+
+        self.assertFalse(torch.equal(cache2.root_pos_w[0], root_pos0[0]))
+        torch.testing.assert_close(cache2.root_pos_w[1], root_pos0[1])
+        torch.testing.assert_close(cache2.root_pos_w[2], root_pos0[2])
+
+        # Replanned env resets phase; non-replanned envs advance.
+        self.assertTrue(torch.equal(manager._phase_counter, torch.tensor([0, 2, 2], dtype=torch.long)))
+
+        # Reward-facing accessor should remain batch-shaped even after a partial replan.
+        ref = manager.current_reference()
+        self.assertEqual(tuple(ref["root_pos_w"].shape), (num_envs, 3))
+        self.assertEqual(tuple(ref["root_quat_w"].shape), (num_envs, 4))
+        self.assertEqual(tuple(ref["joint_angles"].shape), (num_envs, 12))
+        self.assertEqual(tuple(ref["foot_pos_root"].shape), (num_envs, 4, 3))
+        self.assertEqual(tuple(ref["contact_state"].shape), (num_envs, 4))
+        self.assertEqual(tuple(ref["planned_touchdown_w"].shape), (num_envs, 4, 3))
+        self.assertEqual(tuple(ref["phase_index"].shape), (num_envs,))
+        self.assertEqual(tuple(ref["valid_mask"].shape), (num_envs,))
+
     def test_failed_env_keeps_standstill_cache_until_its_own_next_replan(self):
         from extension.batched_planner.manager import BatchedTrajectoryManager
 

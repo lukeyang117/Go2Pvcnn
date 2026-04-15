@@ -390,6 +390,21 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "planner-owned reference cache"):
             rewards_reference.ensure_reference_cache(env)
 
+    def test_reference_cache_does_not_fallback_to_existing_cache_without_manager(self):
+        from extension.mdp import rewards_reference
+
+        fake_cache = SimpleNamespace(is_ready=lambda: True)
+        env = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_envs=1,
+            episode_length_buf=torch.tensor([0], dtype=torch.long),
+            cfg=SimpleNamespace(reference_trajectory_horizon=5),
+            unwrapped=SimpleNamespace(_trajectory_reference_cache=fake_cache),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "planner-owned reference cache"):
+            rewards_reference.ensure_reference_cache(env)
+
     def test_reference_cache_is_filled_from_manager_not_placeholder_generator(self):
         from extension.mdp import rewards_reference
 
@@ -463,6 +478,80 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
 
         self.assertTrue(cache.is_ready())
         gen.assert_called_once()
+
+    def test_shared_runtime_manager_partial_replan_is_masked_and_cache_stays_full_shaped(self):
+        from extension.batched_planner.manager import BatchedTrajectoryManager
+        from extension.mdp import rewards_reference
+
+        num_envs = 2
+        ray_hits = torch.zeros((num_envs, 16, 3), dtype=torch.float64)
+        env = self._make_fake_viewer_env(
+            episode_length_buf=torch.tensor([0, 0], dtype=torch.long),
+            command=torch.zeros((num_envs, 3), dtype=torch.float64),
+            ray_hits=ray_hits,
+        )
+        cfg = SimpleNamespace(
+            reference_replan_interval_steps=50,
+            reference_trajectory_horizon=5,
+            dt=0.02,
+            reference_command_name="base_velocity",
+        )
+        env.unwrapped._trajectory_manager = BatchedTrajectoryManager(cfg, device=torch.device("cpu"))
+
+        planner_batch_sizes: list[int] = []
+
+        def make_result(n: int, h: int, *, offset: float):
+            root_pos_w = torch.zeros((n, h, 3), dtype=torch.float64) + offset
+            root_quat_w = torch.zeros((n, h, 4), dtype=torch.float64)
+            root_quat_w[..., 0] = 1.0
+            zeros = torch.zeros((n, h, 3), dtype=torch.float64)
+            joint_angles = torch.zeros((n, h, 12), dtype=torch.float64) + offset
+            foot_pos = torch.zeros((n, h, 4, 3), dtype=torch.float64) + offset
+            contact_state = torch.zeros((n, h, 4), dtype=torch.bool)
+            body_pos_root = torch.zeros((n, h, 12, 3), dtype=torch.float64) + offset
+            touchdown = torch.zeros((n, 4, 3), dtype=torch.float64) + offset
+            return SimpleNamespace(
+                num_frames=h,
+                root_pos_w=root_pos_w,
+                root_quat_w=root_quat_w,
+                root_lin_vel_w=zeros.clone(),
+                root_ang_vel_w=zeros.clone(),
+                joint_angles=joint_angles,
+                foot_pos_w=foot_pos.clone(),
+                foot_pos_root=foot_pos,
+                contact_state=contact_state,
+                body_pos_root=body_pos_root,
+                planned_touchdown_w=touchdown,
+            )
+
+        def gen_side_effect(terrain, states, commands, requested_n_frames, dt, **kwargs):
+            n = int(commands.shape[0])
+            planner_batch_sizes.append(n)
+            offset = 2000.0 if n == 1 else 0.0
+            return make_result(n, int(requested_n_frames), offset=offset)
+
+        with patch("extension.batched_planner.manager.PlannerTerrain.from_ray_hits", return_value=SimpleNamespace()), patch(
+            "extension.batched_planner.manager.batched_generate_trajectory",
+            side_effect=gen_side_effect,
+        ):
+            cache0 = rewards_reference.ensure_reference_cache(env)
+            cache0_root = cache0.root_pos_w.clone()
+
+            # No changes: should not replan or mutate the cache.
+            cache1 = rewards_reference.ensure_reference_cache(env)
+            torch.testing.assert_close(cache1.root_pos_w, cache0_root)
+
+            # Change only env0 command: replan should be masked to a single row but keep the full cache shape.
+            env.episode_length_buf = torch.tensor([1, 1], dtype=torch.long)
+            env.command_manager.command = torch.tensor([[0.25, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float64)
+            cache2 = rewards_reference.ensure_reference_cache(env)
+
+        self.assertEqual(planner_batch_sizes, [2, 1])
+        self.assertTrue(cache2.is_ready())
+        self.assertTrue(cache2.is_canonical())
+        self.assertEqual(tuple(cache2.root_pos_w.shape), (num_envs, 5, 3))
+        self.assertFalse(torch.equal(cache2.root_pos_w[0], cache0_root[0]))
+        torch.testing.assert_close(cache2.root_pos_w[1], cache0_root[1])
 
 
 if __name__ == "__main__":
