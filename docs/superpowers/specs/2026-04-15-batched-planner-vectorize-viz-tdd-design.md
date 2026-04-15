@@ -27,7 +27,7 @@ N=2048 时线性外推：swing_targets ≈ 1300 秒，完全不可用。
 
 ### 1.2 可视化未对齐
 
-当前 `go2_foostep_planner.py` 通过 Isaac Lab 物理引擎驱动 robot，未实现 raw viewer 的纯 kinematic 回放逻辑。
+当前 `go2_foostep_planner.py` 已有 `--planner-playback-mode direct` 支持 kinematic pose 写入，但主循环仍每帧调 `env.step(zero_actions)`，且控制流是「每帧步进 → 读 cache」而非 raw viewer 的「一次性规划 → 逐帧回放 → 播完再规划」。需要改造为 raw 风格的 plan-once/replay-then-replan 控制流，并彻底去掉物理步进。
 
 ### 1.3 测试缺乏 raw 交叉验证
 
@@ -56,7 +56,7 @@ N=2048 时线性外推：swing_targets ≈ 1300 秒，完全不可用。
 消除 `for batch_idx in range(batch_size): for leg in range(4):` 外层循环：
 
 - `_compute_swing_apex`：已 element-wise，直接支持 `(N, 4)` 输入
-- `_swing_phase_targets`（Hermite 插值）：在 `(N, T, 4)` swing_progress 上操作，输出 `(N, T, 4, 3)`
+- `_swing_phase_targets`（Hermite 插值）：当前使用 `if torch.any(mask_first/second)` 分支和 masked write（`swing.py:65-79`），需重构为 branchless `torch.where` 在完整 `(N, T, 4)` 上操作，输出 `(N, T, 4, 3)`。这不是简单的 shape 提升，需要消除条件分支。
 - `torch.where(stance, anchor, arc)` 合并
 
 #### 2.1.3 Triton 增强（第二阶段）
@@ -71,7 +71,7 @@ N=2048 时如 bench 显示 kernel launch overhead 显著，写 fused Triton kern
 
 1. 端点保持 tensor `(N, 2)`，不调 `.item()`
 2. Batch 插值：`t = linspace(0, 1, n_samples).view(1, -1, 1)` → `points = lerp(p0, p1, t)` 得 `(N, n_samples, 2)`
-3. 一次 `F.grid_sample` 采样所有 env × sample
+3. 一次 `F.grid_sample` 采样所有 env × sample。需确保归一化、边界模式和 dtype 与现有 `_sample_map` 一致（当前 `_sample_map` 使用 `align_corners=True, mode='bilinear', padding_mode='border'`），否则 L1/L2 会因插值差异失败
 4. `torch.amax(sampled, dim=1)` 得 `(N,)` 结果
 5. `trajectory.py` 的 4 次 per-leg 调用合并为一次：stack `(N×4, 2)` → 采样 → reshape `(N, 4)`
 
@@ -160,7 +160,8 @@ Python 嵌套循环 → `torch.meshgrid` 规则网格 + 按距中心距离排序
 Go2Pvcnn/tests/
 ├── conftest.py                            # 共享 fixtures
 ├── fixtures/
-│   └── terrain_adapter.py                 # 桥接 raw terrain 和 batched terrain
+│   ├── terrain_adapter.py                 # 桥接 raw terrain 和 batched terrain
+│   └── golden/                            # 串行版 .pt golden reference 文件
 ├── test_cross_validation_raw.py           # L1: raw ↔ batched 交叉验证
 ├── test_swing_vectorized.py               # L2: swing 向量化回归
 ├── test_terrain_vectorized.py             # L2: terrain 向量化回归
@@ -181,35 +182,45 @@ Go2Pvcnn/tests/
 
 #### 前置条件：参数对齐
 
+两边 config 默认值不同（raw `duty_factor=0.55, max_reach=0.22, replan_stop=0.03`；batched `duty_factor=0.6, max_reach=0.15, replan_stop=0.05`）。L1 测试必须使用统一的 **golden alignment dict** 显式传参：
+
 ```python
+GOLDEN_ALIGNMENT = {
+    "gait_name": "trot",
+    "step_freq": 2.0,
+    "duty_factor": 0.55,
+    "step_height": 0.08,
+    "hip_height": 0.30,
+    "body_clearance_margin": 0.012,
+    "foothold_search_radius": 0.15,
+    "foothold_search_step": 0.03,
+    "max_foothold_step_down": 0.10,
+    "max_touchdown_xy_reach": 0.22,
+    "replan_stop_speed": 0.03,
+}
+
 @pytest.fixture
 def aligned_configs():
-    """raw TrajectoryConfig 和 BatchedTrajectoryConfig 所有共享参数完全一致。"""
-    raw_cfg = TrajectoryConfig()
-    batched_cfg = BatchedTrajectoryConfig(
-        gait_name=raw_cfg.gait_name,
-        step_freq=raw_cfg.step_freq,
-        duty_factor=raw_cfg.duty_factor,
-        step_height=raw_cfg.step_height,
-        hip_height=raw_cfg.hip_height,
-        foothold_search_radius=raw_cfg.foothold_search_radius,
-        foothold_search_step=raw_cfg.foothold_search_step,
-        max_foothold_step_down=raw_cfg.max_foothold_step_down,
-        max_touchdown_xy_reach=raw_cfg.max_touchdown_xy_reach,
-        replan_stop_speed=raw_cfg.replan_stop_speed,
-    )
+    """raw TrajectoryConfig 和 BatchedTrajectoryConfig 全部从 GOLDEN_ALIGNMENT 构造，
+    确保共享参数完全一致。"""
+    raw_cfg = TrajectoryConfig(**{k: v for k, v in GOLDEN_ALIGNMENT.items()
+                                  if k in TrajectoryConfig.__dataclass_fields__})
+    batched_cfg = BatchedTrajectoryConfig(**{k: v for k, v in GOLDEN_ALIGNMENT.items()
+                                             if k in BatchedTrajectoryConfig.__dataclass_fields__})
     return raw_cfg, batched_cfg
 ```
 
+**有意排除的字段**：raw 的 `max_base_roll` / `max_base_pitch` 在 `BatchedTrajectoryConfig` 中不存在，暂不对齐（batched 侧无对应限制逻辑）。如后续添加，需同步更新 golden dict。
+
 #### 前置条件：terrain 桥接
 
-`fixtures/terrain_adapter.py` 从同一 heightmap 数据构造 raw `GlobalElevationTerrain` 和 batched `PlannerTerrain`，先验证两边 `height_at` 一致。
+`fixtures/terrain_adapter.py` 从同一 heightmap 数据构造 raw `GlobalElevationTerrain` 和 batched `PlannerTerrain`，先验证两边 `height_at` 一致（网格内点 atol=1e-6，边界点 atol=1e-4，见 §6.3）。Terrain 桥接一致性本身作为 L1 的前置断言，失败则跳过依赖 terrain 的交叉验证。
 
 #### 逐模块交叉验证
 
 | 测试类 | 对比什么 | 精度 |
 |--------|---------|------|
-| `TestGaitCrossValidation` | contact_seq, touchdown_times, stance_time | exact float64 |
+| `TestGaitCrossValidation` | contact_seq, touchdown_times, stance_time | contact_seq: exact match after `.to(float32)` (batched returns float32 flags); touchdown_times/stance_time: atol=1e-12 |
 | `TestFootholdCrossValidation` | touchdown XYZ | atol=1e-8 |
 | `TestSwingCrossValidation` | foot_targets `(T, 4, 3)` | atol=1e-8 |
 | `TestBaseSolverCrossValidation` | root_pos_w, root_quat_w | atol=1e-8 |
@@ -226,6 +237,8 @@ def aligned_configs():
 
 ### 4.3 L2：向量化回归
 
+**Golden reference 策略**：向量化前，先用当前串行实现对固定输入生成参考输出并序列化为 `.pt` 文件（存储在 `Go2Pvcnn/tests/fixtures/golden/`）。向量化后的实现必须 allclose 匹配。如果串行代码路径被删除，golden `.pt` 文件作为唯一 reference。
+
 在 L1 基础上，额外覆盖 raw 不方便测试的 edge case：
 
 - N>1 的 broadcast 行为
@@ -235,7 +248,9 @@ def aligned_configs():
 
 ### 4.4 L3：性能基准
 
-复用 `bench_batched_planner.py` 框架，扫描 N=[1, 64, 256, 1024, 2048]，输出 per-stage JSONL + 性能门限断言。
+新建 `Go2Pvcnn/tests/benchmarks/bench_planner_scaling.py`（复用 `Go2Pvcnn/scripts/bench_batched_planner.py` 的 `_SyntheticEnv`/`_BenchRow` 框架），扫描 N=[1, 64, 256, 1024, 2048]，输出 per-stage JSONL + 性能门限断言。`bench_batched_planner.py` 保持不变作为独立脚本入口。
+
+**CUDA 依赖**：L3 标记 `@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")`，无 GPU 时自动跳过。
 
 ### 4.5 L4：可视化回放逻辑
 
@@ -264,7 +279,31 @@ def aligned_configs():
 6. **Phase 5 — 可视化改造**：纯 kinematic 回放
 7. **Phase 6 — 全量验证**：L1-L4 全绿 + bench 达标
 
-## 6. 相关代码入口
+## 6. 风险与回退
+
+### 6.1 数值精度
+
+- `batched_gait_schedule` 返回 float32 contact flags，raw 返回 float64。L1 对比时统一为 float32 再 exact match。
+- terrain `grid_sample` 在 float32 下可能引入 ~1e-7 级偏差。L1 terrain 对比使用 `atol=1e-6`。
+- 向量化后的 swing progress 使用 cumsum/scatter 而非逐帧 Python 赋值，浮点累积顺序不同。如果 atol=1e-8 不够，放宽到 1e-6 并记录。
+
+### 6.2 import 路径
+
+L1 测试需要同时 import `raw/kinematic_footsteps/scripts/go2fp/` 和 `Go2Pvcnn/extension/batched_planner/`。`conftest.py` 中通过 `sys.path.insert` 添加两个根路径。需确保 raw 侧的 numpy-based 模块不与 batched 侧的 torch-based 模块命名冲突。
+
+### 6.3 terrain 桥接
+
+raw 使用 `GlobalElevationTerrain`（基于 scipy/numpy 的双线性插值），batched 使用 `PlannerTerrain`（基于 `F.grid_sample`）。即使从同一 heightmap 构造，边界处理和插值精度可能略有差异。terrain_adapter 的首要测试是验证两边 `height_at` 在网格内点精度 <1e-6，边界点精度 <1e-4。
+
+### 6.4 无 CUDA 环境
+
+L1/L2 测试在 CPU 上运行（验证正确性不需要 GPU）。L3 性能测试标记 `skipif` no CUDA。Triton kernel 编译需要 CUDA toolkit，通过 `try: import triton` guard。
+
+### 6.5 Phase 4/5 并行性
+
+可视化改造（Phase 5）与 Triton kernel（Phase 4）无依赖关系，可并行进行。spec 中的顺序是推荐优先级，非硬性依赖。
+
+## 7. 相关代码入口
 
 - `Go2Pvcnn/extension/batched_planner/swing.py` — 核心瓶颈
 - `Go2Pvcnn/extension/batched_planner/terrain.py` — `max_height_along_segment`
