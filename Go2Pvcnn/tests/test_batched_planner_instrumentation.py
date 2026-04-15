@@ -9,9 +9,14 @@ from unittest.mock import patch
 
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+GO2PVCNN_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = GO2PVCNN_ROOT.parent
+# Ensure both the project root (for `Go2Pvcnn.*` imports) and the Go2Pvcnn
+# module root (for `extension.*` imports) are available even after other tests
+# mutate `sys.path` to include the raw planner repo.
+for p in (str(REPO_ROOT), str(GO2PVCNN_ROOT)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 
 class _FakeClock:
@@ -202,7 +207,7 @@ class BatchedPlannerInstrumentationTest(unittest.TestCase):
 
 class BatchedPlannerBenchmarkCliTest(unittest.TestCase):
     def test_benchmark_cli_defaults_cover_required_env_counts(self):
-        from scripts import bench_batched_planner
+        from Go2Pvcnn.scripts import bench_batched_planner
 
         parser = bench_batched_planner.build_arg_parser()
         args = parser.parse_args([])
@@ -211,7 +216,7 @@ class BatchedPlannerBenchmarkCliTest(unittest.TestCase):
     def test_benchmark_output_dir_reuses_run_dir_structure(self):
         import tempfile
 
-        from scripts import bench_batched_planner
+        from Go2Pvcnn.scripts import bench_batched_planner
 
         with tempfile.TemporaryDirectory() as tmp:
             parser = bench_batched_planner.build_arg_parser()
@@ -226,7 +231,7 @@ class BatchedPlannerBenchmarkCliTest(unittest.TestCase):
     def test_train_side_run_dir_helper_is_deterministic_and_testable(self):
         import tempfile
 
-        from scripts import train
+        from Go2Pvcnn.scripts import train
 
         fixed_now = datetime(2020, 1, 2, 3, 4, 5)
         with tempfile.TemporaryDirectory() as tmp:
@@ -240,7 +245,7 @@ class BatchedPlannerBenchmarkCliTest(unittest.TestCase):
         import json
         import tempfile
 
-        from scripts import bench_batched_planner
+        from Go2Pvcnn.scripts import bench_batched_planner
 
         with tempfile.TemporaryDirectory() as tmp:
             rc = bench_batched_planner.main(

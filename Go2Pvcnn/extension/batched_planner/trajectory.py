@@ -144,7 +144,8 @@ def batched_generate_trajectory(
     requested_n_frames = int(requested_n_frames)
     cycle_frames = max(1, round(1.0 / (cfg.step_freq * dt)))
     n_frames = min(requested_n_frames, cycle_frames)
-    standstill_mask = _command_is_standstill(commands_t) | (torch.linalg.norm(commands_t, dim=-1) < float(cfg.replan_stop_speed))
+    # Align with raw semantics: componentwise thresholding (not vector norm).
+    standstill_mask = _command_is_standstill(commands_t) | _command_is_standstill(commands_t, eps=cfg.replan_stop_speed)
 
     if torch.all(standstill_mask):
         with instr.stage("standstill"):
@@ -172,8 +173,7 @@ def batched_generate_trajectory(
     hip_positions = _compute_hip_positions(states.root_pos, initial_yaw)
     touchdown_mask = batched_legs_requiring_touchdown(contact_seq)
 
-    command_norm = torch.linalg.norm(commands_t, dim=-1)
-    standstill_command_mask = _command_is_standstill(commands_t) | (command_norm < float(cfg.replan_stop_speed))
+    standstill_command_mask = _command_is_standstill(commands_t) | _command_is_standstill(commands_t, eps=cfg.replan_stop_speed)
     if torch.all(standstill_command_mask):
         with instr.stage("standstill"):
             return _standstill_trajectory(states, n_frames, dt)

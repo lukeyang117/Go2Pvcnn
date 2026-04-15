@@ -30,8 +30,13 @@ import torch
 
 THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parent.parent
-if str(GO2PVCNN_ROOT) not in sys.path:
-    sys.path.insert(0, str(GO2PVCNN_ROOT))
+REPO_ROOT = GO2PVCNN_ROOT.parent
+# Keep the Go2Pvcnn module root available for `extension.*` imports, and also
+# add the repo root so we can import our own scripts as `Go2Pvcnn.scripts.*`
+# even if a raw `scripts` package is present on `sys.path`.
+for p in (str(REPO_ROOT), str(GO2PVCNN_ROOT)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 
 DEFAULT_ENV_COUNTS: list[int] = [1, 16, 64, 100, 256, 512, 1024, 2048]
@@ -90,7 +95,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def resolve_output_dir(args: argparse.Namespace, *, now: datetime | None = None, mkdir: bool = True) -> Path:
     # Reuse the same run-directory layout used by training so tooling can rely on it.
-    from scripts import train
+    from Go2Pvcnn.scripts import train
 
     return Path(
         train.build_run_log_dir(

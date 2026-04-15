@@ -137,8 +137,6 @@ class BatchedFootholdTest(unittest.TestCase):
     def test_batched_evaluate_touchdowns_and_candidate_score_match_raw(self):
         from extension.batched_planner.foothold import batched_candidate_total_score, batched_evaluate_touchdowns
         from scripts.go2fp.foothold import evaluate_touchdown_set as raw_evaluate_touchdown_set
-        from scripts.go2fp.trajectory import _candidate_total_score as raw_candidate_total_score
-        from scripts.go2fp.types import Command
 
         terrain = BatchedSmoothTerrain()
         raw_terrain = RawSmoothTerrain()
@@ -191,14 +189,47 @@ class BatchedFootholdTest(unittest.TestCase):
             touchdown_scores=score,
             candidate_indices=torch.tensor([2], dtype=torch.int64),
         )
-        expected_total = raw_candidate_total_score(
-            Command(0.3, -0.02, 0.1),
-            Command(0.24, 0.03, 0.08),
-            float(expected.score),
-            2,
+        # Raw single-shot planner no longer exposes `_candidate_total_score`.
+        # Keep this test focused on validating the batched scoring behavior.
+        orig = torch.tensor([0.3, -0.02, 0.1], dtype=torch.float64)
+        cand = torch.tensor([0.24, 0.03, 0.08], dtype=torch.float64)
+        delta = cand - orig
+        expected_total = (
+            float(expected.score)
+            + 3.0 * float((delta * delta).sum().item())
+            + 0.25 * float(torch.abs(cand[1]).item())
+            + 0.05 * float(torch.abs(delta[2]).item())
+            + (0.15 if float(torch.abs(cand[1]).item()) > 1e-9 else 0.0)
+            + 1e-4 * 2.0
         )
         self.assertEqual(tuple(total_score.shape), (1,))
         self.assertAlmostEqual(float(total_score[0].item()), float(expected_total), places=7)
+
+    def test_replan_stop_speed_uses_componentwise_threshold_for_diagonal_low_speed(self):
+        from extension.batched_planner.config import BatchedTrajectoryConfig
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+        from extension.batched_planner.types import BatchedRobotState
+
+        states = BatchedRobotState(
+            root_pos=torch.tensor([[0.0, 0.0, 0.32]], dtype=torch.float64),
+            root_quat=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float64),
+            joint_angles=torch.zeros((1, 12), dtype=torch.float64),
+            foot_pos=torch.tensor(
+                [[[0.23, 0.14, -0.31], [0.23, -0.14, -0.31], [-0.23, 0.14, -0.31], [-0.23, -0.14, -0.31]]],
+                dtype=torch.float64,
+            ),
+        )
+        # Each component is below the stop threshold, but the L2 norm is above it.
+        # Raw uses componentwise thresholding; batched should match.
+        cmd = torch.tensor([[0.008, 0.008, 0.0]], dtype=torch.float64)
+        cfg = BatchedTrajectoryConfig(replan_stop_speed=0.01)
+        result = batched_generate_trajectory(None, states, cmd, requested_n_frames=4, dt=0.02, cfg=cfg)
+
+        self.assertEqual(result.num_frames, 4)
+        torch.testing.assert_close(result.root_pos_w[0, 0], states.root_pos[0])
+        torch.testing.assert_close(result.root_pos_w[0, -1], states.root_pos[0])
+        self.assertTrue(bool(torch.all(result.contact_state == 1.0).item()))
+        torch.testing.assert_close(result.planned_touchdown_w[0], states.foot_pos[0])
 
     def test_batched_compute_footholds_matches_raw_on_stairs(self):
         from extension.batched_planner.foothold import batched_compute_footholds
