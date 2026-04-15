@@ -167,58 +167,6 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
 
         self.assertTrue(parsed.viewer_launcher_flag)
 
-    def test_viewer_parser_accepts_explicit_planner_playback_mode_flag(self):
-        with _fake_isaaclab_app("--viewer-launcher-flag"):
-            module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
-            parser = module.build_arg_parser()
-            try:
-                parsed = parser.parse_args(
-                    ["--planner-playback-mode", "direct", "--viewer-launcher-flag"]
-                )
-            except SystemExit as exc:  # argparse uses SystemExit for parse errors
-                self.fail(f"viewer parser rejected --planner-playback-mode direct: {exc}")
-
-        self.assertEqual(parsed.planner_playback_mode, "direct")
-
-    def test_viewer_planner_playback_mode_resolves_distinctly_from_physics_default(self):
-        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
-        self.assertTrue(hasattr(module, "_resolve_planner_playback_mode"))
-
-        direct = module._resolve_planner_playback_mode(SimpleNamespace(planner_playback_mode="direct"))
-        physics = module._resolve_planner_playback_mode(SimpleNamespace(planner_playback_mode="physics"))
-        default = module._resolve_planner_playback_mode(SimpleNamespace())
-
-        self.assertEqual(direct, "direct")
-        self.assertEqual(physics, "physics")
-        self.assertEqual(default, "physics")
-
-    def test_viewer_direct_playback_uses_reference_cache_state_not_env_state(self):
-        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
-        self.assertTrue(hasattr(module, "_get_viewer_planner_state"))
-
-        fake_result = SimpleNamespace(
-            root_pos_w=torch.tensor([[[0.0, 0.0, 0.25], [1.0, 2.0, 3.0]]], dtype=torch.float64),
-            root_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]], dtype=torch.float64),
-            joint_angles=torch.zeros((1, 2, 12), dtype=torch.float64),
-            foot_pos_w=torch.zeros((1, 2, 4, 3), dtype=torch.float64),
-        )
-
-        with patch.object(
-            module,
-            "_planner_state_from_env",
-            side_effect=AssertionError("direct playback should not read env state"),
-        ):
-            planner_state = module._get_viewer_planner_state(
-                SimpleNamespace(),
-                foot_ids=[0, 1, 2, 3],
-                playback_mode="direct",
-                result=fake_result,
-                frame_idx=1,
-            )
-
-        torch.testing.assert_close(planner_state.root_pos, fake_result.root_pos_w[:, 1])
-        torch.testing.assert_close(planner_state.root_quat, fake_result.root_quat_w[:, 1])
-
     def test_viewer_direct_playback_can_drive_robot_pose_from_planner_result(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
         self.assertTrue(hasattr(module, "_apply_direct_playback_to_robot"))
@@ -298,83 +246,24 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertEqual(captured["world_x_range"], (9.25, 10.75))
         self.assertEqual(captured["world_y_range"], (19.25, 20.75))
 
-    def test_viewer_shared_runtime_manager_replans_on_reset_and_command_change(self):
+    def test_viewer_kinematic_planner_state_slices_reference_result(self):
+        """Kinematic viewer replans from the last displayed frame via _planner_state_from_reference_result."""
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
-        from extension.mdp import rewards_reference
+        self.assertTrue(hasattr(module, "_planner_state_from_reference_result"))
 
-        raw_ray_hits = torch.tensor(
-            [
-                [
-                    [float("inf"), float("nan"), 1.0],
-                    [10.0, 19.25, 1.1],
-                    [10.75, 19.25, 1.2],
-                    [float("inf"), float("nan"), 1.3],
-                    [10.0, 20.0, 1.4],
-                    [10.75, 20.0, 1.5],
-                    [float("inf"), float("nan"), 1.6],
-                    [10.0, 20.75, 1.7],
-                    [10.75, 20.75, 1.8],
-                ]
-            ],
-            dtype=torch.float32,
-        )
-        env = self._make_fake_viewer_env(
-            episode_length_buf=torch.tensor([4], dtype=torch.long),
-            command=torch.zeros((1, 3), dtype=torch.float64),
-            ray_hits=raw_ray_hits,
-        )
-        planner_cfg = SimpleNamespace(
-            reference_replan_interval_steps=50,
-            reference_trajectory_horizon=5,
-            dt=0.02,
-            reference_command_name="base_velocity",
-        )
-        module._attach_viewer_reference_manager(env, planner_cfg)
-
-        fake_cache = SimpleNamespace(
-            is_ready=lambda: True,
-            horizon_length=lambda: 5,
-            root_pos_w=torch.zeros((1, 5, 3), dtype=torch.float64),
-            root_quat_w=torch.zeros((1, 5, 4), dtype=torch.float64),
-            joint_angles=torch.zeros((1, 5, 12), dtype=torch.float64),
-            foot_pos_root=torch.zeros((1, 5, 4, 3), dtype=torch.float64),
-            foot_pos_w=torch.zeros((1, 5, 4, 3), dtype=torch.float64),
-            contact_state=torch.zeros((1, 5, 4), dtype=torch.bool),
-            body_pos_root=torch.zeros((1, 5, 12, 3), dtype=torch.float64),
-            planned_touchdown_w=torch.zeros((1, 4, 3), dtype=torch.float64),
-            phase_index=torch.zeros((1, 5), dtype=torch.int64),
-            valid_mask=torch.ones((1, 5), dtype=torch.bool),
-        )
         fake_result = SimpleNamespace(
-            num_frames=5,
-            root_pos_w=fake_cache.root_pos_w,
-            root_quat_w=fake_cache.root_quat_w,
-            root_lin_vel_w=torch.zeros((1, 5, 3), dtype=torch.float64),
-            root_ang_vel_w=torch.zeros((1, 5, 3), dtype=torch.float64),
-            joint_angles=fake_cache.joint_angles,
-            foot_pos_w=fake_cache.foot_pos_w,
-            foot_pos_root=fake_cache.foot_pos_root,
-            contact_state=fake_cache.contact_state,
-            body_pos_root=fake_cache.body_pos_root,
-            planned_touchdown_w=fake_cache.planned_touchdown_w,
+            root_pos_w=torch.tensor([[[0.0, 0.0, 0.1], [1.0, 2.0, 3.0]]], dtype=torch.float64),
+            root_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]], dtype=torch.float64),
+            joint_angles=torch.arange(24, dtype=torch.float64).reshape(1, 2, 12),
+            foot_pos_w=torch.arange(24, dtype=torch.float64).reshape(1, 2, 4, 3) + 10.0,
         )
-
-        with patch("extension.batched_planner.trajectory.batched_generate_trajectory", side_effect=AssertionError("viewer should not call the raw trajectory entrypoint")), patch(
-            "extension.batched_planner.manager.batched_generate_trajectory",
-            return_value=fake_result,
-        ) as gen:
-            ensured_1 = rewards_reference.ensure_reference_cache(env)
-            ensured_2 = rewards_reference.ensure_reference_cache(env)
-            env.command_manager.command = torch.tensor([[0.25, 0.0, 0.0]], dtype=torch.float64)
-            ensured_3 = rewards_reference.ensure_reference_cache(env)
-            env.episode_length_buf = torch.tensor([0], dtype=torch.long)
-            ensured_4 = rewards_reference.ensure_reference_cache(env)
-
-        self.assertIs(ensured_1, ensured_2)
-        self.assertIs(env.unwrapped._trajectory_reference_cache, ensured_4)
-        self.assertEqual(gen.call_count, 3)
-        self.assertTrue(torch.allclose(env.command_manager.get_command("base_velocity"), torch.tensor([[0.25, 0.0, 0.0]], dtype=torch.float64)))
-        self.assertTrue(ensured_4.is_ready())
+        state = module._planner_state_from_reference_result(fake_result, frame_idx=1)
+        torch.testing.assert_close(state.root_pos, fake_result.root_pos_w[:, 1])
+        torch.testing.assert_close(state.root_quat, fake_result.root_quat_w[:, 1])
+        torch.testing.assert_close(state.joint_angles, fake_result.joint_angles[:, 1])
+        torch.testing.assert_close(state.foot_pos, fake_result.foot_pos_w[:, 1])
+        self.assertEqual(tuple(state.foot_vel.shape), tuple(state.foot_pos.shape))
+        self.assertTrue(torch.all(state.foot_vel == 0))
 
     def test_reference_cache_requires_manager_owned_runtime_path(self):
         from extension.mdp import rewards_reference

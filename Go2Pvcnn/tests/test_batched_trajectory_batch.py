@@ -37,6 +37,11 @@ class FlatTerrain:
             return torch.zeros(p0_t.shape[0], dtype=torch.float64, device=p0_t.device)
         return 0.0
 
+    def batch_max_height_along_segment(self, p0_xy, p1_xy):
+        # p0_xy: (N, K, 2), p1_xy: (N, K, 2) → returns (N, K)
+        p0_xy = torch.as_tensor(p0_xy)
+        return torch.zeros(p0_xy.shape[:-1], dtype=p0_xy.dtype, device=p0_xy.device)
+
 
 class BatchedTrajectoryBatchTest(unittest.TestCase):
     def test_batch_consistency_against_single_env_runs(self):
