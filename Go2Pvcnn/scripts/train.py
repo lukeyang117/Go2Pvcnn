@@ -32,6 +32,32 @@ if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 
+def build_run_log_dir(
+    *,
+    log_root_path: str | os.PathLike[str],
+    run_name: str | None = None,
+    now: datetime | None = None,
+    mkdir: bool = True,
+) -> str:
+    """Create (optionally) and return an absolute run directory under a log root.
+
+    This intentionally mirrors the `logs/<category>/<name>/<timestamp>` structure used
+    by training scripts, but is kept dependency-free so it can be reused by offline
+    benchmark entrypoints without importing Isaac Lab.
+    """
+
+    root = os.path.abspath(os.fspath(log_root_path))
+    if run_name is None:
+        stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+        run_dir = stamp
+    else:
+        run_dir = str(run_name)
+    out = os.path.join(root, run_dir)
+    if mkdir:
+        os.makedirs(out, exist_ok=True)
+    return out
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
 

@@ -2,6 +2,7 @@ import io
 import sys
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -197,6 +198,43 @@ class BatchedPlannerInstrumentationTest(unittest.TestCase):
             side_effect=fake_generate,
         ):
             manager.refresh_from_env(env)
+
+
+class BatchedPlannerBenchmarkCliTest(unittest.TestCase):
+    def test_benchmark_cli_defaults_cover_required_env_counts(self):
+        from scripts import bench_batched_planner
+
+        parser = bench_batched_planner.build_arg_parser()
+        args = parser.parse_args([])
+        self.assertEqual(args.env_counts, [1, 16, 64, 100, 256, 512, 1024, 2048])
+
+    def test_benchmark_output_dir_reuses_run_dir_structure(self):
+        import tempfile
+
+        from scripts import bench_batched_planner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parser = bench_batched_planner.build_arg_parser()
+            args = parser.parse_args(["--output_root", tmp, "--run_name", "unit_test_run"])
+            out_dir = bench_batched_planner.resolve_output_dir(args, mkdir=False)
+
+            out_path = Path(out_dir)
+            self.assertTrue(out_path.is_absolute())
+            self.assertEqual(out_path.name, "unit_test_run")
+            self.assertEqual(out_path.parent, Path(tmp).resolve())
+
+    def test_train_side_run_dir_helper_is_deterministic_and_testable(self):
+        import tempfile
+
+        from scripts import train
+
+        fixed_now = datetime(2020, 1, 2, 3, 4, 5)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = train.build_run_log_dir(log_root_path=tmp, now=fixed_now, mkdir=False)
+            out_path = Path(out_dir)
+            self.assertTrue(out_path.is_absolute())
+            self.assertEqual(out_path.name, "2020-01-02_03-04-05")
+            self.assertEqual(out_path.parent, Path(tmp).resolve())
 
 
 if __name__ == "__main__":
