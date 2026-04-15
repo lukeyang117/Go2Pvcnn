@@ -39,9 +39,16 @@ N=2048 时线性外推：swing_targets ≈ 1300 秒，完全不可用。
 
 `BatchedTrajectoryManager.refresh_from_env()` 不会每步对所有 N=2048 个 env 重新规划。它通过 `_compute_replan_mask()` 计算 per-env 布尔 mask，只有满足以下条件之一的 env 才触发 replan：
 
-- **command 变化**：`|cmd_new - cmd_old| > 1e-6`（per-env 判断，不是全局 any）
+**Per-env 条件**（产生稀疏 mask）：
+- **command 变化**：任一分量 `|cmd_new[i] - cmd_old[i]| > 1e-6`（per-env per-component，不是向量范数）
 - **env reset**：`episode_length_buf < last_episode_length_buf` 或 `pending_reset_mask`
 - **间隔到期**：`episode_length_buf - last_replan_episode_length_buf >= reference_replan_interval_steps`
+
+**全局退化为全量 replan 的分支**（返回 `torch.ones(num_envs)`）：
+- `cache is None`（首次调用）
+- `last_episode_length_buf` / `last_commands` / `last_replan_episode_length_buf` 为 None
+- `episode_length_buf` 或 `commands` 与上次 shape 不一致
+- `cache.horizon_length() != reference_trajectory_horizon`（horizon 配置变更）
 
 对需要 replan 的 env 子集，manager 用 `_subset_state`、`_subset_terrain`、`index_select` 提取子集数据，只对子集调 `batched_generate_trajectory(sub_terrain, sub_states, sub_commands, ...)`，然后通过 `masked_write_reference_cache_rows` 把结果写回全量 cache。不需要 replan 的 env 继续推进 `phase_counter`。
 
@@ -59,6 +66,7 @@ L2 测试需覆盖：
 - N=1（单 env replan）
 - N=小子集（如 N=32 从 2048 中选出）
 - N=全量 2048（首步 / reset 后全 replan）
+- **全局退化分支**：首帧无 cache、horizon 变更、shape 不一致等触发全量 replan
 - **混合 replan**：manager 级测试验证 subset → planner → masked_write → cache 的完整路径
 
 L3 性能基准需增加：
@@ -75,11 +83,11 @@ L3 性能基准需增加：
 
 向量化算法：
 
-1. **边界检测**：`diff` 检测 stance→swing（lift-off）和 swing→stance（touch-down）事件
-2. **区间 ID 分配**：`cumsum(lift_off_events)` × `is_swing` 给每段连续 swing 唯一 ID
-3. **区间内序号**：`frame_idx - scatter_min(frame_idx, run_id)`
-4. **区间长度**：`scatter_add(ones, run_id)` → `gather` 广播回每帧
-5. **归一化**：`progress = idx_in_run / max(run_length - 1, 1)`
+1. **边界检测**：`torch.diff(stance_bool, dim=time_dim)` 检测 stance→swing（lift-off）和 swing→stance（touch-down）事件
+2. **区间 ID 分配**：`torch.cumsum(lift_off_events, dim=time_dim)` × `is_swing` 给每段连续 swing 唯一 ID，shape `(N, T, 4)`
+3. **区间内序号**：`frame_idx - first_frame_of_run`。`first_frame_of_run` 通过 `torch.scatter_reduce(frame_idx, run_id, reduce='amin')` 或等价的 `segment_reduce` 获取，再用 `run_id` 作 index gather 回每帧。PyTorch ≥2.0 的 `scatter_reduce` 支持 `'amin'`/`'amax'`；若版本不支持，用 `torch.zeros().scatter_(dim, run_id, frame_idx, reduce='amin')` 替代
+4. **区间长度**：`torch.zeros().scatter_add_(dim, run_id, ones)` 统计每段 swing 帧数 → `run_id` gather 广播回每帧
+5. **归一化**：`progress = idx_in_run.float() / (run_length - 1).clamp(min=1).float()`
 
 全部在 `(N, T, 4)` 上并行，消除所有 Python 循环和 `.item()` 同步。
 
@@ -203,7 +211,7 @@ Go2Pvcnn/tests/
 ├── test_ik.py                             # L2: IK/FK
 ├── test_gait.py                           # L2: gait
 ├── test_viz_playback.py                   # L4: 可视化回放逻辑
-├── test_manager.py                        # L2: manager 集成
+├── test_batched_manager.py                # L2: manager 集成（扩展现有文件）
 └── benchmarks/
     └── bench_planner_scaling.py           # L3: 性能基准
 ```
@@ -242,7 +250,9 @@ def aligned_configs():
     return raw_cfg, batched_cfg
 ```
 
-**有意排除的字段**：raw 的 `max_base_roll` / `max_base_pitch` 在 `BatchedTrajectoryConfig` 中不存在，暂不对齐（batched 侧无对应限制逻辑）。如后续添加，需同步更新 golden dict。
+**有意排除的字段**：
+- raw 的 `max_base_roll` / `max_base_pitch` 在 `BatchedTrajectoryConfig` 中不存在，暂不对齐（batched 侧无对应限制逻辑）
+- batched 的 `max_roughness`（默认 `0.5`）在 raw 中不存在。注意 `batched_compute_footholds` 内部螺旋搜索当前硬编码 `max_roughness=1.0`，未读 config 字段。L1 不依赖此参数，但如后续接 cfg 需同步更新 golden dict
 
 #### 前置条件：terrain 桥接
 
@@ -281,6 +291,10 @@ def aligned_configs():
 ### 5.4 L3：性能基准
 
 新建 `Go2Pvcnn/tests/benchmarks/bench_planner_scaling.py`（复用 `Go2Pvcnn/scripts/bench_batched_planner.py` 的 `_SyntheticEnv`/`_BenchRow` 框架），扫描 N=[1, 64, 256, 1024, 2048]，输出 per-stage JSONL + 性能门限断言。`bench_batched_planner.py` 保持不变作为独立脚本入口。
+
+**必须包含 §2.3 定义的两种 workload**：
+- **burst replan**：全量 N 同时 replan（现有 bench 逻辑，`replan_interval=1`）
+- **稳态 replan**：N_total=2048 但每步仅 ~5-10% env 触发 replan（通过设置 `replan_interval > 1` + 交错 `episode_length_buf` 模拟）
 
 **CUDA 依赖**：L3 标记 `@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")`，无 GPU 时自动跳过。
 
