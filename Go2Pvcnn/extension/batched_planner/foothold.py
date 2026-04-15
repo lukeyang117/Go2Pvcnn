@@ -13,22 +13,22 @@ from .types import GRAVITY, HIP_HEIGHT, HIP_OFFSETS_ARRAY, LEG_SIDE_SIGN, LEG_OR
 
 
 def _precompute_spiral_offsets(search_radius: float, grid_step: float) -> Tensor:
-    """Return integer spiral offsets matching raw square-ring enumeration order."""
+    """Return integer (dx, dy) offsets on a full [-n_max, n_max]^2 grid, sorted by Euclidean distance.
+
+    Candidate scoring uses argmin over all cells within ``search_radius``, so ordering is not
+    semantically significant.
+    """
     if grid_step <= 0.0:
         raise ValueError("grid_step must be positive")
 
     n_max = max(int(math.floor(float(search_radius) / float(grid_step) + 1e-9)), 0)
-    offsets: list[tuple[int, int]] = [(0, 0)]
-    for k in range(1, n_max + 1):
-        for x in range(-k, k + 1):
-            offsets.append((x, -k))
-        for y in range(-k + 1, k + 1):
-            offsets.append((k, y))
-        for x in range(k - 1, -k - 1, -1):
-            offsets.append((x, k))
-        for y in range(k - 1, -k, -1):
-            offsets.append((-k, y))
-    return torch.tensor(offsets, dtype=torch.int64)
+    coords = torch.arange(-n_max, n_max + 1, dtype=torch.int64)
+    yy, xx = torch.meshgrid(coords, coords, indexing="ij")
+    dx = xx.reshape(-1)
+    dy = yy.reshape(-1)
+    dist_sq = dx * dx + dy * dy
+    order = torch.argsort(dist_sq)
+    return torch.stack([dx[order], dy[order]], dim=-1)
 
 
 _LEG_SIDE_SIGNS = torch.tensor(
@@ -264,7 +264,7 @@ def batched_evaluate_touchdowns(
     terrain,
     previous_footholds,
     max_reach: float = 0.15,
-) -> tuple[Tensor, Tensor, list[str | None]]:
+) -> tuple[Tensor, Tensor, Tensor]:
     device = _resolve_input_device(touchdown_pos, liftoff_pos, contact_seq, touchdown_mask, previous_footholds)
     touchdown_pos_t = _as_shape("touchdown_pos", touchdown_pos, device=device, shape=(4, 3))
     liftoff_pos_t = _as_shape("liftoff_pos", liftoff_pos, device=device, shape=(4, 3))
@@ -288,8 +288,9 @@ def batched_evaluate_touchdowns(
     score_terms = roughness + 0.5 * step_down + 0.1 * travel_xy + 0.25 * xy_reach
     score = torch.where(touchdown_mask_t, score_terms, torch.zeros_like(score_terms)).sum(dim=1)
     score = torch.where(infeasible, torch.full_like(score, float("inf")), score)
-    reasons = ["xy_reach" if bool(flag.item()) else None for flag in infeasible]
-    return ~infeasible, score, reasons
+    # int64 per batch row: 0 = feasible, 1 = infeasible (xy reach); avoids per-env .item() sync
+    reason_codes = infeasible.to(dtype=torch.int64, device=device)
+    return ~infeasible, score, reason_codes
 
 
 def batched_candidate_total_score(original_cmd, candidate_cmd, touchdown_scores, candidate_indices) -> Tensor:

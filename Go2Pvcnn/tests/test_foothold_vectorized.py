@@ -38,6 +38,9 @@ class TestSpiralOffsetsMeshgrid:
         actual_set = {tuple(int(x) for x in row.tolist()) for row in offsets}
         assert actual_set == expected_set
 
+        d2 = offsets[:, 0] * offsets[:, 0] + offsets[:, 1] * offsets[:, 1]
+        assert torch.all(d2[:-1] <= d2[1:]), "offsets must be sorted by non-decreasing squared distance"
+
 
 class TestEvaluateTouchdownsNoItem:
     def test_feasibility_result_is_tensor(self):
@@ -62,7 +65,7 @@ class TestEvaluateTouchdownsNoItem:
         )
         touchdown_mask = torch.tensor([[True, False, True, False]])
 
-        feasible, score, _reasons = batched_evaluate_touchdowns(
+        feasible, score, reason_codes = batched_evaluate_touchdowns(
             touchdown_pos,
             liftoff_pos,
             contact_seq,
@@ -74,6 +77,9 @@ class TestEvaluateTouchdownsNoItem:
         assert isinstance(feasible, torch.Tensor) and feasible.dtype == torch.bool
         assert isinstance(score, torch.Tensor) and score.dtype == torch.float64
         assert not isinstance(feasible, list) and not isinstance(score, list)
+        assert isinstance(reason_codes, torch.Tensor) and reason_codes.dtype == torch.int64
+        assert not isinstance(reason_codes, list)
+        assert tuple(reason_codes.shape) == (1,)
 
 
 class TestFootholdDynamicN:

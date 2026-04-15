@@ -77,9 +77,11 @@ class BatchedFootholdTest(unittest.TestCase):
         actual = _precompute_spiral_offsets(0.15, 0.03)
         expected = torch.tensor(list(_spiral_square_offsets(5)), dtype=torch.int64)
 
-        self.assertEqual(tuple(actual.shape), tuple(expected.shape))
         self.assertEqual(actual.dtype, torch.int64)
-        torch.testing.assert_close(actual, expected)
+        self.assertEqual(tuple(actual.shape), tuple(expected.shape))
+        actual_set = {tuple(int(x) for x in row.tolist()) for row in actual}
+        expected_set = {tuple(int(x) for x in row.tolist()) for row in expected}
+        self.assertEqual(actual_set, expected_set)
 
     def test_batched_compute_footholds_matches_raw(self):
         from extension.batched_planner.foothold import batched_compute_footholds
@@ -158,7 +160,7 @@ class BatchedFootholdTest(unittest.TestCase):
         )
         touchdown_mask = torch.tensor([[True, False, True, False]])
 
-        feasible, score, reason = batched_evaluate_touchdowns(
+        feasible, score, reason_codes = batched_evaluate_touchdowns(
             touchdown_pos,
             liftoff_pos,
             contact_seq,
@@ -179,7 +181,9 @@ class BatchedFootholdTest(unittest.TestCase):
 
         self.assertEqual(tuple(feasible.shape), (1,))
         self.assertEqual(tuple(score.shape), (1,))
-        self.assertEqual(reason, [expected.reason])
+        want_code = 1 if expected.reason == "xy_reach" else 0
+        self.assertEqual(tuple(reason_codes.shape), (1,))
+        self.assertEqual(int(reason_codes[0].item()), want_code)
         self.assertEqual(bool(feasible[0].item()), expected.feasible)
         self.assertAlmostEqual(float(score[0].item()), float(expected.score), places=7)
 
