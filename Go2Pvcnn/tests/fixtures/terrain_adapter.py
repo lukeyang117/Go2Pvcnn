@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,81 @@ def make_stairs_terrains(
             ray_hits[:, i, j, 2] = z
 
     return heightmap, torch.as_tensor(ray_hits, dtype=dtype), world_x_range, world_y_range
+
+
+class NumpyHeightmapTerrain:
+    """Scalar-interface terrain wrapping a 2D numpy heightmap.
+
+    Bilinear interpolation matches PyTorch ``grid_sample(align_corners=True,
+    padding_mode='border')`` so raw planner queries agree with batched terrain.
+    """
+
+    def __init__(
+        self,
+        heightmap_np: np.ndarray,
+        world_x_range: tuple[float, float],
+        world_y_range: tuple[float, float],
+    ) -> None:
+        self._hm = np.asarray(heightmap_np, dtype=np.float64)
+        if self._hm.ndim != 2:
+            raise ValueError("heightmap must be 2-D")
+        self._x0, self._x1 = float(world_x_range[0]), float(world_x_range[1])
+        self._y0, self._y1 = float(world_y_range[0]), float(world_y_range[1])
+        self._h, self._w = self._hm.shape
+
+    def _to_pixel(self, x: float, y: float) -> tuple[float, float]:
+        x = max(self._x0, min(self._x1, float(x)))
+        y = max(self._y0, min(self._y1, float(y)))
+        col = (x - self._x0) / (self._x1 - self._x0) * (self._w - 1) if self._x1 != self._x0 else 0.0
+        row = (self._y1 - y) / (self._y1 - self._y0) * (self._h - 1) if self._y1 != self._y0 else 0.0
+        return row, col
+
+    def _bilinear(self, row_f: float, col_f: float) -> float:
+        r0 = max(0, min(self._h - 2, int(math.floor(row_f))))
+        c0 = max(0, min(self._w - 2, int(math.floor(col_f))))
+        fr = max(0.0, min(1.0, row_f - r0))
+        fc = max(0.0, min(1.0, col_f - c0))
+        return float(
+            self._hm[r0, c0] * (1.0 - fc) * (1.0 - fr)
+            + self._hm[r0, c0 + 1] * fc * (1.0 - fr)
+            + self._hm[r0 + 1, c0] * (1.0 - fc) * fr
+            + self._hm[r0 + 1, c0 + 1] * fc * fr
+        )
+
+    def height_at(self, x: float, y: float) -> float:
+        row, col = self._to_pixel(x, y)
+        return self._bilinear(row, col)
+
+    def roughness_at(self, x: float, y: float) -> float:
+        dx = (self._x1 - self._x0) / max(self._w - 1, 1)
+        dy = (self._y1 - self._y0) / max(self._h - 1, 1)
+        if dx == 0.0 and dy == 0.0:
+            return 0.0
+        dzdx = (self.height_at(x + dx, y) - self.height_at(x - dx, y)) / (2.0 * dx) if dx > 0 else 0.0
+        dzdy = (self.height_at(x, y + dy) - self.height_at(x, y - dy)) / (2.0 * dy) if dy > 0 else 0.0
+        return math.sqrt(dzdx * dzdx + dzdy * dzdy)
+
+    def max_height_along_segment(
+        self,
+        p0_xy: tuple[float, float],
+        p1_xy: tuple[float, float],
+    ) -> float:
+        x0, y0 = float(p0_xy[0]), float(p0_xy[1])
+        x1, y1 = float(p1_xy[0]), float(p1_xy[1])
+        dist = math.hypot(x1 - x0, y1 - y0)
+        if dist == 0.0:
+            return self.height_at(x0, y0)
+        step = (self._x1 - self._x0) / max(self._w - 1, 1)
+        n = max(3, int(math.ceil(dist / max(step, 1e-9))) * 4 + 1)
+        if n % 2 == 0:
+            n += 1
+        max_h = float("-inf")
+        for i in range(n):
+            t = i / (n - 1)
+            h = self.height_at(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+            if h > max_h:
+                max_h = h
+        return max_h
 
 
 def verify_terrain_height_at_consistency(
