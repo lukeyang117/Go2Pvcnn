@@ -236,6 +236,40 @@ class BatchedPlannerBenchmarkCliTest(unittest.TestCase):
             self.assertEqual(out_path.name, "2020-01-02_03-04-05")
             self.assertEqual(out_path.parent, Path(tmp).resolve())
 
+    def test_benchmark_main_emits_jsonl_row_with_required_fields(self):
+        import json
+        import tempfile
+
+        from scripts import bench_batched_planner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = bench_batched_planner.main(
+                [
+                    "--env-counts",
+                    "1",
+                    "--warmup",
+                    "0",
+                    "--iters",
+                    "1",
+                    "--device",
+                    "cpu",
+                    "--output_root",
+                    tmp,
+                    "--run_name",
+                    "unit_test_run",
+                    "--results_filename",
+                    "out.jsonl",
+                ]
+            )
+            self.assertEqual(rc, 0)
+            out_path = Path(tmp).resolve() / "unit_test_run" / "out.jsonl"
+            self.assertTrue(out_path.exists())
+            lines = out_path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertGreaterEqual(len(lines), 1)
+            row = json.loads(lines[0])
+            for key in ("total_s", "per_env_s", "standstill_envs", "replanned_envs"):
+                self.assertIn(key, row)
+
 
 if __name__ == "__main__":
     unittest.main()

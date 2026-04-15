@@ -203,7 +203,20 @@ def _run_env_count(*, num_envs: int, iters: int, warmup: int, device: torch.devi
     # Non-standstill command to avoid fast-path always-standstill trajectories.
     command = torch.zeros((num_envs, 3), dtype=torch.float64, device=device)
     command[:, 0] = 0.3
-    ray_hits = torch.zeros((num_envs, 16, 3), dtype=torch.float64, device=device)
+
+    # `PlannerTerrain.from_ray_hits(...)` derives world ranges from hit x/y coordinates.
+    # Ensure we generate a non-degenerate grid so ranges are strictly increasing.
+    side = 4  # 4x4 => 16 rays (matches the manager test configuration)
+    xs = torch.linspace(-1.0, 1.0, side, dtype=torch.float64, device=device)
+    ys = torch.linspace(-1.0, 1.0, side, dtype=torch.float64, device=device)
+    try:
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    except TypeError:  # pragma: no cover - compatibility with older torch
+        yy, xx = torch.meshgrid(ys, xs)
+    zz = torch.zeros_like(xx)
+    grid = torch.stack((xx, yy, zz), dim=-1)  # (H, W, 3)
+    ray_hits = grid.unsqueeze(0).expand(num_envs, -1, -1, -1).contiguous()
+
     episode_length_buf = torch.zeros((num_envs,), dtype=torch.long, device=device)
     env = _SyntheticEnv(episode_length_buf=episode_length_buf, command=command, ray_hits=ray_hits)
 
@@ -267,4 +280,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
