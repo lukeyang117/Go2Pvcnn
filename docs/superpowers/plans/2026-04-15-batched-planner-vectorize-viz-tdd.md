@@ -318,7 +318,7 @@ class TestTerrainBridgeGate:
         ...
 ```
 
-All terrain-dependent L1 tests should `@pytest.mark.depends(on=["TestTerrainBridgeGate"])` or skip if bridge fails.
+All terrain-dependent L1 tests should be placed after `TestTerrainBridgeGate` in the file. If bridge test fails, downstream tests will likely also fail, making the root cause obvious without needing a plugin.
 
 - [ ] **Step 2: Run test**
 
@@ -642,7 +642,7 @@ Expected: ALL PASS
 ```python
 class TestMaxHeightSegmentVectorized:
     def test_matches_golden(self):
-        golden = torch.load(".../golden_terrain_segment.pt")
+        golden = torch.load(GOLDEN_DIR / "golden_terrain_segment.pt", weights_only=True)
         # Compare new batch implementation against golden
         ...
     def test_varying_segment_lengths(self):
@@ -739,7 +739,9 @@ git commit -m "feat: merge 4× per-leg terrain segment calls into single batch"
 - [ ] **Step 1: Write foothold regression tests**
 
 ```python
-from conftest import GOLDEN_DIR
+# conftest.py is auto-loaded by pytest; GOLDEN_DIR available via fixture or direct import
+from pathlib import Path
+GOLDEN_DIR = Path(__file__).resolve().parent / "fixtures" / "golden"
 
 class TestSpiralOffsetsMeshgrid:
     def test_meshgrid_covers_all_loop_offsets(self):
@@ -763,16 +765,16 @@ class TestFootholdDynamicN:
         ...
 ```
 
-- [ ] **Step 2: Run tests to verify they define the contract**
+- [ ] **Step 2: Run tests to verify they pass with current serial code (baseline)**
 
 Run: `pytest Go2Pvcnn/tests/test_foothold_vectorized.py -v`
-Expected: PASS for existing code, sets baseline for regression
+Expected: PASS (establishes baseline; these become regression guards after vectorization)
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add Go2Pvcnn/tests/test_foothold_vectorized.py
-git commit -m "test(red): add L2 foothold vectorization regression tests"
+git commit -m "test: add L2 foothold vectorization baseline tests"
 ```
 
 ---
