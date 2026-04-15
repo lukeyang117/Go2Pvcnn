@@ -57,6 +57,7 @@ graph LR
 11. [human/human-10-extension-planner-runtime.md](human/human-10-extension-planner-runtime.md)
 12. [human/human-11-extension-trajectory-reward.md](human/human-11-extension-trajectory-reward.md)
 13. [human/human-12-batched-planner-train-viewer-commands.md](human/human-12-batched-planner-train-viewer-commands.md)
+14. [human/human-13-batched-planner-swing-stance-ik-complexity.md](human/human-13-batched-planner-swing-stance-ik-complexity.md)
 
 如果你是为了检索入口、模块边界和输入输出，走 `ai` 主线：
 
@@ -72,6 +73,7 @@ graph LR
 10. [ai/ai-09-extension-planner-mapping.md](ai/ai-09-extension-planner-mapping.md)
 11. [ai/ai-10-extension-planner-runtime.md](ai/ai-10-extension-planner-runtime.md)
 12. [ai/ai-11-extension-trajectory-reward.md](ai/ai-11-extension-trajectory-reward.md)
+13. [ai/ai-13-batched-planner-swing-stance-ik-complexity.md](ai/ai-13-batched-planner-swing-stance-ik-complexity.md)
 
 ## Human / AI 一一对照
 
@@ -90,6 +92,7 @@ graph LR
 | 10 | `human-10-extension-planner-runtime.md` | `ai-10-extension-planner-runtime.md` | planner runtime、缓存与重规划 |
 | 11 | `human-11-extension-trajectory-reward.md` | `ai-11-extension-trajectory-reward.md` | planner 参考轨迹奖励设计 |
 | 12 | `human-12-batched-planner-train-viewer-commands.md` | 暂无 | train / viewer / play 命令与参数说明 |
+| 13 | `human-13-batched-planner-swing-stance-ik-complexity.md` | `ai-13-batched-planner-swing-stance-ik-complexity.md` | batched planner：swing/stance、foothold、base、IK 语义与复杂度（单环境） |
 
 ## 阶段主链
 
