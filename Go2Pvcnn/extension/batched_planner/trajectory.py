@@ -210,12 +210,8 @@ def batched_generate_trajectory(
     if torch.all(standstill_mask):
         with instr.stage("standstill"):
             return _standstill_trajectory(states, n_frames, dt)
-    terrain_max_heights = torch.stack(
-        [
-            terrain.max_height_along_segment(states.foot_pos[:, leg_idx, :2], touchdowns[:, leg_idx, :2])
-            for leg_idx in range(4)
-        ],
-        dim=1,
+    terrain_max_heights = terrain.batch_max_height_along_segment(
+        states.foot_pos[:, :, :2], touchdowns[:, :, :2],
     )
     with instr.stage("swing_targets"):
         foot_targets = batched_compute_swing_targets(
