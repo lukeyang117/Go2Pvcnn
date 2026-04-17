@@ -75,6 +75,27 @@ class RuntimePlanDiagnostics:
 
 
 @dataclass(frozen=True, slots=True)
+class PlannerStageSnapshot:
+    name: str
+    tensors: dict[str, torch.Tensor]
+    scalars: dict[str, float | bool | int]
+
+    @property
+    def primary_tensor(self) -> torch.Tensor:
+        for value in self.tensors.values():
+            return value
+        raise RuntimeError(f"stage '{self.name}' does not contain tensor diagnostics")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimePlanStageDiagnostics:
+    plan: RuntimePlanDiagnostics
+    stages: dict[str, PlannerStageSnapshot]
+    stage_order: tuple[str, ...]
+    stage_summaries: dict[str, dict[str, float]]
+
+
+@dataclass(frozen=True, slots=True)
 class BatchedRuntimeCacheDiagnostics:
     cache: object
     root_pos_w: torch.Tensor
@@ -88,7 +109,156 @@ class BatchedRuntimePlanDiagnostics:
     path_deltas: torch.Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class BatchedRuntimePlanStageDiagnostics:
+    plan: BatchedRuntimePlanDiagnostics
+    stages: dict[str, PlannerStageSnapshot]
+    stage_order: tuple[str, ...]
+    stage_summaries: dict[str, dict[str, float]]
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackDivergenceReport:
+    frame_idx: int
+    root_pos_max_abs: float
+    root_pos_mean_abs: float
+    joint_pos_max_abs: float
+    joint_pos_mean_abs: float
+    plan: RuntimePlanStageDiagnostics
+
+
 _APP_STATE: _RuntimeAppState | None = None
+
+
+def _quat_wxyz_to_yaw(quat_wxyz: torch.Tensor) -> torch.Tensor:
+    quat = torch.as_tensor(quat_wxyz, dtype=torch.float64)
+    w = quat[..., 0]
+    x = quat[..., 1]
+    y = quat[..., 2]
+    z = quat[..., 3]
+    return torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _batch_size_from_tensors(tensors: dict[str, torch.Tensor]) -> float:
+    for value in tensors.values():
+        if value.ndim > 0:
+            return float(value.shape[0])
+    return 0.0
+
+
+def _constant_over_time_ratio(values: torch.Tensor, *, tol: float = 1e-6) -> float:
+    if values.ndim < 2:
+        return 0.0
+    reduce_dims = tuple(range(1, values.ndim))
+    delta = torch.amax(torch.abs(values - values[:, :1]), dim=reduce_dims)
+    return float((delta <= float(tol)).to(torch.float64).mean().item())
+
+
+def _summarize_stage_snapshot(
+    snapshot: PlannerStageSnapshot,
+    *,
+    input_foot_pos: torch.Tensor | None,
+) -> dict[str, float]:
+    summary: dict[str, float] = {"batch_size": _batch_size_from_tensors(snapshot.tensors)}
+    tensors = snapshot.tensors
+
+    commands = tensors.get("commands")
+    if commands is not None:
+        summary["command_vx_mean"] = float(commands[:, 0].mean().item())
+        summary["command_vy_mean"] = float(commands[:, 1].mean().item())
+        summary["command_yaw_mean"] = float(commands[:, 2].mean().item())
+
+    contact = tensors.get("contact_state", tensors.get("contact_seq"))
+    if contact is not None:
+        summary["contact_mean"] = float(contact.to(torch.float64).mean().item())
+
+    standstill_mask = tensors.get("standstill_mask")
+    if standstill_mask is not None:
+        summary["standstill_ratio"] = float(standstill_mask.to(torch.float64).mean().item())
+
+    path = tensors.get("root_pos_w", tensors.get("base_pos_approx"))
+    if path is not None and path.ndim >= 3:
+        delta = path[:, -1] - path[:, 0]
+        summary["path_dx_mean"] = float(delta[:, 0].mean().item())
+        summary["path_dy_mean"] = float(delta[:, 1].mean().item())
+        summary["path_dz_mean"] = float(delta[:, 2].mean().item())
+        path_standstill_ratio = _constant_over_time_ratio(path)
+    else:
+        path_standstill_ratio = None
+
+    yaw = tensors.get("yaw_approx")
+    if yaw is not None and yaw.ndim >= 2:
+        yaw_delta = yaw[:, -1] - yaw[:, 0]
+        summary["yaw_delta_mean"] = float(yaw_delta.mean().item())
+        summary["yaw_delta_abs_mean"] = float(yaw_delta.abs().mean().item())
+        if "standstill_ratio" not in summary:
+            yaw_standstill_ratio = _constant_over_time_ratio(yaw)
+            if path_standstill_ratio is None:
+                summary["standstill_ratio"] = yaw_standstill_ratio
+            else:
+                summary["standstill_ratio"] = min(path_standstill_ratio, yaw_standstill_ratio)
+    else:
+        root_quat = tensors.get("root_quat_w")
+        if root_quat is not None and root_quat.ndim >= 3:
+            yaw_values = _quat_wxyz_to_yaw(root_quat)
+            yaw_delta = yaw_values[:, -1] - yaw_values[:, 0]
+            summary["yaw_delta_mean"] = float(yaw_delta.mean().item())
+            summary["yaw_delta_abs_mean"] = float(yaw_delta.abs().mean().item())
+            if "standstill_ratio" not in summary:
+                quat_standstill_ratio = _constant_over_time_ratio(root_quat)
+                if path_standstill_ratio is None:
+                    summary["standstill_ratio"] = quat_standstill_ratio
+                else:
+                    summary["standstill_ratio"] = min(path_standstill_ratio, quat_standstill_ratio)
+        elif path_standstill_ratio is not None and "standstill_ratio" not in summary:
+            summary["standstill_ratio"] = path_standstill_ratio
+
+    touchdowns = tensors.get("planned_touchdown_w", tensors.get("touchdowns"))
+    if touchdowns is not None and input_foot_pos is not None:
+        touchdown_xy_delta = touchdowns[:, :, :2] - input_foot_pos[:, :, :2]
+        touchdown_norms = torch.linalg.vector_norm(touchdown_xy_delta, dim=-1)
+        summary["touchdown_dx_mean"] = float(touchdown_xy_delta[..., 0].mean().item())
+        summary["touchdown_delta_norm_max"] = float(touchdown_norms.max().item())
+        summary["touchdown_delta_norm_span"] = float((touchdown_norms.max() - touchdown_norms.min()).item())
+        summary["left_touchdown_mean_y"] = float(touchdown_xy_delta[:, (0, 2), 1].mean().item())
+        summary["right_touchdown_mean_y"] = float(touchdown_xy_delta[:, (1, 3), 1].mean().item())
+
+    feasible = tensors.get("feasible")
+    if feasible is not None:
+        summary["feasible_ratio"] = float(feasible.to(torch.float64).mean().item())
+
+    return summary
+
+
+def _summarize_stage_snapshots(
+    stages: dict[str, PlannerStageSnapshot],
+    *,
+    input_foot_pos: torch.Tensor | None,
+) -> dict[str, dict[str, float]]:
+    return {
+        name: _summarize_stage_snapshot(snapshot, input_foot_pos=input_foot_pos)
+        for name, snapshot in stages.items()
+    }
+
+
+class _StageSnapshotCollector:
+    def __init__(self) -> None:
+        self._stage_order: list[str] = []
+        self._stages: dict[str, PlannerStageSnapshot] = {}
+
+    def capture(self, name: str, payload: dict[str, object]) -> None:
+        tensors: dict[str, torch.Tensor] = {}
+        scalars: dict[str, float | bool | int] = {}
+        for key, value in payload.items():
+            if isinstance(value, torch.Tensor):
+                tensors[key] = torch.as_tensor(value)
+            elif isinstance(value, (bool, int, float)):
+                scalars[key] = value
+        self._stage_order.append(str(name))
+        self._stages[str(name)] = PlannerStageSnapshot(name=str(name), tensors=tensors, scalars=scalars)
+
+    def finish(self) -> tuple[tuple[str, ...], dict[str, PlannerStageSnapshot]]:
+        return tuple(self._stage_order), dict(self._stages)
 
 
 def _close_runtime_app() -> None:
@@ -272,19 +442,7 @@ class RealViewerRuntimeFixture:
         terrain, _ = self._viewer._compute_local_terrain(self.base_env.scene.sensors["height_scanner"], env_id=0)
         return terrain
 
-    def plan_case(self, name: str) -> RuntimePlanDiagnostics:
-        self.reset()
-        state = self._single_env_state()
-        terrain = self._single_env_terrain()
-        command = self._command_tensor(name)[:1]
-        result = self._batched_generate_trajectory(
-            terrain,
-            state,
-            command,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            cfg=self.planner_cfg,
-        )
+    def _build_runtime_plan_diagnostics(self, *, name: str, command: torch.Tensor, state, result) -> RuntimePlanDiagnostics:
         summary = self._viewer._trajectory_motion_summary(result)
         touchdown_xy_deltas = torch.as_tensor(
             result.planned_touchdown_w[:, :, :2] - state.foot_pos[:, :, :2],
@@ -302,6 +460,52 @@ class RealViewerRuntimeFixture:
             touchdown_xy_delta_norms=touchdown_xy_delta_norms,
             left_touchdown_mean_y=left_touchdown_mean_y,
             right_touchdown_mean_y=right_touchdown_mean_y,
+        )
+
+    def _build_stage_diagnostics(self, collector: _StageSnapshotCollector):
+        stage_order, stages = collector.finish()
+        input_stage = stages.get("input")
+        input_foot_pos = None if input_stage is None else input_stage.tensors.get("foot_pos")
+        stage_summaries = _summarize_stage_snapshots(stages, input_foot_pos=input_foot_pos)
+        return stage_order, stages, stage_summaries
+
+    def plan_case(self, name: str) -> RuntimePlanDiagnostics:
+        self.reset()
+        state = self._single_env_state()
+        terrain = self._single_env_terrain()
+        command = self._command_tensor(name)[:1]
+        result = self._batched_generate_trajectory(
+            terrain,
+            state,
+            command,
+            requested_n_frames=self.requested_n_frames,
+            dt=self.plan_dt,
+            cfg=self.planner_cfg,
+        )
+        return self._build_runtime_plan_diagnostics(name=name, command=command, state=state, result=result)
+
+    def plan_case_with_stage_diagnostics(self, name: str) -> RuntimePlanStageDiagnostics:
+        self.reset()
+        state = self._single_env_state()
+        terrain = self._single_env_terrain()
+        command = self._command_tensor(name)[:1]
+        collector = _StageSnapshotCollector()
+        result = self._batched_generate_trajectory(
+            terrain,
+            state,
+            command,
+            requested_n_frames=self.requested_n_frames,
+            dt=self.plan_dt,
+            cfg=self.planner_cfg,
+            stage_diagnostics=collector.capture,
+        )
+        plan = self._build_runtime_plan_diagnostics(name=name, command=command, state=state, result=result)
+        stage_order, stages, stage_summaries = self._build_stage_diagnostics(collector)
+        return RuntimePlanStageDiagnostics(
+            plan=plan,
+            stages=stages,
+            stage_order=stage_order,
+            stage_summaries=stage_summaries,
         )
 
     def playback_sync_authoritative_readback(self, result, *, frame_idx: int) -> PlaybackReadback:
@@ -363,6 +567,55 @@ class RealViewerRuntimeFixture:
             path_deltas=path_deltas,
         )
 
+    def plan_batched_cases_with_stage_diagnostics(self, case_names: list[str]) -> BatchedRuntimePlanStageDiagnostics:
+        if len(case_names) != self.num_envs:
+            raise ValueError(f"expected {self.num_envs} case names, got {len(case_names)}")
+
+        self.reset()
+        manager = self.base_env._trajectory_manager
+        commands = torch.stack([self._command_tensor(name)[env_id] for env_id, name in enumerate(case_names)], dim=0)
+        states = manager._batched_state_from_env(self.base_env)
+        terrain = manager._terrain_from_env(self.base_env)
+        collector = _StageSnapshotCollector()
+        result = self._batched_generate_trajectory(
+            terrain,
+            states,
+            commands,
+            requested_n_frames=self.requested_n_frames,
+            dt=self.plan_dt,
+            cfg=self.planner_cfg,
+            stage_diagnostics=collector.capture,
+        )
+        root_pos_w = torch.as_tensor(result.root_pos_w, dtype=torch.float64).clone()
+        path_deltas = (root_pos_w[:, -1] - root_pos_w[:, 0]).clone()
+        plan = BatchedRuntimePlanDiagnostics(
+            result=result,
+            root_pos_w=root_pos_w,
+            path_deltas=path_deltas,
+        )
+        stage_order, stages, stage_summaries = self._build_stage_diagnostics(collector)
+        return BatchedRuntimePlanStageDiagnostics(
+            plan=plan,
+            stages=stages,
+            stage_order=stage_order,
+            stage_summaries=stage_summaries,
+        )
+
+    def planner_output_vs_playback_divergence(self, name: str, *, frame_idx: int | None = None) -> PlaybackDivergenceReport:
+        plan = self.plan_case_with_stage_diagnostics(name)
+        actual_frame_idx = min(7, plan.plan.result.num_frames - 1) if frame_idx is None else int(frame_idx)
+        readback = self.playback_sync_authoritative_readback(plan.plan.result, frame_idx=actual_frame_idx)
+        root_pos_delta = readback.root_pos_w - plan.plan.result.root_pos_w[:, actual_frame_idx]
+        joint_pos_delta = readback.joint_pos - plan.plan.result.joint_angles[:, actual_frame_idx]
+        return PlaybackDivergenceReport(
+            frame_idx=actual_frame_idx,
+            root_pos_max_abs=float(root_pos_delta.abs().max().item()),
+            root_pos_mean_abs=float(root_pos_delta.abs().mean().item()),
+            joint_pos_max_abs=float(joint_pos_delta.abs().max().item()),
+            joint_pos_mean_abs=float(joint_pos_delta.abs().mean().item()),
+            plan=plan,
+        )
+
 
 def make_real_runtime_fixture(**kwargs) -> RealViewerRuntimeFixture:
     import pytest
@@ -392,11 +645,15 @@ def make_real_runtime_fixture(**kwargs) -> RealViewerRuntimeFixture:
 __all__ = [
     "BatchedRuntimeCacheDiagnostics",
     "BatchedRuntimePlanDiagnostics",
+    "BatchedRuntimePlanStageDiagnostics",
     "COMMAND_CASES",
     "CommandCase",
+    "PlaybackDivergenceReport",
     "PlaybackReadback",
+    "PlannerStageSnapshot",
     "RealViewerRuntimeFixture",
     "RuntimePlanDiagnostics",
+    "RuntimePlanStageDiagnostics",
     "build_command_cases",
     "make_real_runtime_fixture",
 ]

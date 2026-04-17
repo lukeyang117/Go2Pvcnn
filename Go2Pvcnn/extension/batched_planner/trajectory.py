@@ -120,6 +120,30 @@ def _mix_trajectory_results(
     )
 
 
+def _resolve_stage_diagnostics_handler(stage_diagnostics):
+    if stage_diagnostics is None:
+        return None
+    if callable(stage_diagnostics):
+        return stage_diagnostics
+    capture = getattr(stage_diagnostics, "capture", None)
+    if callable(capture):
+        return capture
+    raise TypeError("stage_diagnostics must be callable or expose a callable 'capture' attribute")
+
+
+def _clone_stage_value(value):
+    if isinstance(value, Tensor):
+        return value.detach().clone()
+    return value
+
+
+def _emit_stage_diagnostics(stage_diagnostics, name: str, **payload) -> None:
+    handler = _resolve_stage_diagnostics_handler(stage_diagnostics)
+    if handler is None:
+        return
+    handler(str(name), {key: _clone_stage_value(value) for key, value in payload.items()})
+
+
 def batched_generate_trajectory(
     terrain,
     states: BatchedRobotState,
@@ -128,16 +152,26 @@ def batched_generate_trajectory(
     dt: float = 0.02,
     cfg: BatchedTrajectoryConfig | None = None,
     instrumentation: PlannerInstrumentation | None = None,
+    stage_diagnostics=None,
 ) -> BatchedTrajectoryResult:
     cfg = cfg or BatchedTrajectoryConfig()
     instr = instrumentation if instrumentation is not None else _NOOP_PLANNER_INSTRUMENTATION
     device = _resolve_input_device(states.root_pos, states.root_quat, states.joint_angles, states.foot_pos, commands)
+    batch_size = int(states.root_pos.shape[0])
     with instr.stage("input"):
         commands_t = _coerce_tensor(commands, device=device)
         if commands_t.ndim != 2 or commands_t.shape[1] != 3:
             raise ValueError(f"commands must have shape (N, 3); got {tuple(commands_t.shape)}")
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "input",
+            commands=commands_t,
+            root_pos=states.root_pos,
+            root_quat=states.root_quat,
+            foot_pos=states.foot_pos,
+            joint_angles=states.joint_angles,
+        )
 
-    batch_size = int(states.root_pos.shape[0])
     if commands_t.shape[0] != batch_size:
         raise ValueError("states and commands must share batch size")
 
@@ -149,7 +183,29 @@ def batched_generate_trajectory(
 
     if torch.all(standstill_mask):
         with instr.stage("standstill"):
-            return _standstill_trajectory(states, n_frames, dt)
+            result = _standstill_trajectory(states, n_frames, dt)
+            _emit_stage_diagnostics(
+                stage_diagnostics,
+                "standstill",
+                root_pos_w=result.root_pos_w,
+                root_quat_w=result.root_quat_w,
+                joint_angles=result.joint_angles,
+                foot_pos_w=result.foot_pos_w,
+                contact_state=result.contact_state,
+                planned_touchdown_w=result.planned_touchdown_w,
+                standstill_mask=standstill_mask,
+            )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "result",
+            root_pos_w=result.root_pos_w,
+            root_quat_w=result.root_quat_w,
+            joint_angles=result.joint_angles,
+            foot_pos_w=result.foot_pos_w,
+            contact_state=result.contact_state,
+            planned_touchdown_w=result.planned_touchdown_w,
+        )
+        return result
 
     with instr.stage("gait"):
         phase_offsets = torch.as_tensor(GAIT_PARAMS[cfg.gait_name]["offsets"], dtype=torch.float64, device=device)
@@ -169,6 +225,13 @@ def batched_generate_trajectory(
             torch.full((batch_size,), float(cfg.step_freq), dtype=torch.float64, device=device),
             torch.full((batch_size,), float(cfg.duty_factor), dtype=torch.float64, device=device),
         )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "gait",
+            contact_seq=contact_seq,
+            touchdown_times=touchdown_times,
+            stance_time=st,
+        )
     initial_yaw = extract_yaw_batch(states.root_quat)
     hip_positions = _compute_hip_positions(states.root_pos, initial_yaw)
     touchdown_mask = batched_legs_requiring_touchdown(contact_seq)
@@ -176,7 +239,29 @@ def batched_generate_trajectory(
     standstill_command_mask = _command_is_standstill(commands_t) | _command_is_standstill(commands_t, eps=cfg.replan_stop_speed)
     if torch.all(standstill_command_mask):
         with instr.stage("standstill"):
-            return _standstill_trajectory(states, n_frames, dt)
+            result = _standstill_trajectory(states, n_frames, dt)
+            _emit_stage_diagnostics(
+                stage_diagnostics,
+                "standstill",
+                root_pos_w=result.root_pos_w,
+                root_quat_w=result.root_quat_w,
+                joint_angles=result.joint_angles,
+                foot_pos_w=result.foot_pos_w,
+                contact_state=result.contact_state,
+                planned_touchdown_w=result.planned_touchdown_w,
+                standstill_mask=standstill_command_mask,
+            )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "result",
+            root_pos_w=result.root_pos_w,
+            root_quat_w=result.root_quat_w,
+            joint_angles=result.joint_angles,
+            foot_pos_w=result.foot_pos_w,
+            contact_state=result.contact_state,
+            planned_touchdown_w=result.planned_touchdown_w,
+        )
+        return result
 
     with instr.stage("footholds"):
         touchdowns = batched_compute_footholds(
@@ -195,6 +280,13 @@ def batched_generate_trajectory(
             search_step=cfg.foothold_search_step,
             max_step_down=cfg.max_foothold_step_down,
         )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "footholds",
+            hip_positions=hip_positions,
+            touchdowns=touchdowns,
+            touchdown_mask=touchdown_mask,
+        )
     with instr.stage("touchdown_eval"):
         feasible, _, _ = batched_evaluate_touchdowns(
             touchdowns,
@@ -205,11 +297,40 @@ def batched_generate_trajectory(
             states.foot_pos,
             max_reach=cfg.max_touchdown_xy_reach,
         )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "touchdown_eval",
+            feasible=feasible,
+            touchdown_mask=touchdown_mask,
+            touchdowns=touchdowns,
+        )
 
     standstill_mask = standstill_command_mask | ~feasible
     if torch.all(standstill_mask):
         with instr.stage("standstill"):
-            return _standstill_trajectory(states, n_frames, dt)
+            result = _standstill_trajectory(states, n_frames, dt)
+            _emit_stage_diagnostics(
+                stage_diagnostics,
+                "standstill",
+                root_pos_w=result.root_pos_w,
+                root_quat_w=result.root_quat_w,
+                joint_angles=result.joint_angles,
+                foot_pos_w=result.foot_pos_w,
+                contact_state=result.contact_state,
+                planned_touchdown_w=result.planned_touchdown_w,
+                standstill_mask=standstill_mask,
+            )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "result",
+            root_pos_w=result.root_pos_w,
+            root_quat_w=result.root_quat_w,
+            joint_angles=result.joint_angles,
+            foot_pos_w=result.foot_pos_w,
+            contact_state=result.contact_state,
+            planned_touchdown_w=result.planned_touchdown_w,
+        )
+        return result
     terrain_max_heights = terrain.batch_max_height_along_segment(
         states.foot_pos[:, :, :2], touchdowns[:, :, :2],
     )
@@ -219,6 +340,12 @@ def batched_generate_trajectory(
             states.foot_pos,
             touchdowns,
             cfg.step_height,
+            terrain_max_heights=terrain_max_heights,
+        )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "swing_targets",
+            foot_targets=foot_targets,
             terrain_max_heights=terrain_max_heights,
         )
 
@@ -233,6 +360,12 @@ def batched_generate_trajectory(
             dt,
         )
     base_pos_approx = torch.cat([pos_xy_approx, states.root_pos[:, 2:3].unsqueeze(1).expand(-1, n_frames, -1)], dim=-1)
+    _emit_stage_diagnostics(
+        stage_diagnostics,
+        "base_approx",
+        base_pos_approx=base_pos_approx,
+        yaw_approx=yaw_approx,
+    )
     initial_roll, initial_pitch = extract_roll_pitch_batch(states.root_quat)
     initial_height = states.foot_pos[..., 2].mean(dim=-1)
     with instr.stage("terrain_est"):
@@ -244,6 +377,13 @@ def batched_generate_trajectory(
             initial_roll=initial_roll,
             initial_pitch=initial_pitch,
             initial_height=initial_height,
+        )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "terrain_est",
+            roll=roll,
+            pitch=pitch,
+            height=height,
         )
     with instr.stage("base_solve"):
         root_pos, root_quat = batched_solve_base_trajectory(
@@ -263,18 +403,34 @@ def batched_generate_trajectory(
             hip_height=cfg.hip_height,
             body_clearance_margin=cfg.body_clearance_margin,
         )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "base_solve",
+            root_pos_w=root_pos,
+            root_quat_w=root_quat,
+        )
 
     root_pos_flat = root_pos.reshape(batch_size * n_frames, 3)
     root_quat_flat = root_quat.reshape(batch_size * n_frames, 4)
     foot_targets_flat = foot_targets.reshape(batch_size * n_frames, 4, 3)
     with instr.stage("ik"):
         joint_angles = batch_inverse_kinematics(root_pos_flat, root_quat_flat, foot_targets_flat).reshape(batch_size, n_frames, 12)
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "ik",
+            joint_angles=joint_angles,
+        )
     with instr.stage("fk"):
         body_pos_w = batch_forward_kinematics(
             root_pos_flat,
             root_quat_flat,
             joint_angles.reshape(batch_size * n_frames, 12),
         ).reshape(batch_size, n_frames, 12, 3)
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "fk",
+            body_pos_w=body_pos_w,
+        )
     body_pos_root = _world_to_root_frame(root_pos, root_quat, body_pos_w)
     foot_pos_root = _world_to_root_frame(root_pos, root_quat, foot_targets)
     root_lin_vel = torch.diff(root_pos, dim=1, prepend=root_pos[:, :1]) / float(dt)
@@ -301,8 +457,51 @@ def batched_generate_trajectory(
     if torch.any(standstill_mask):
         with instr.stage("mix"):
             standstill_result = _standstill_trajectory(states, n_frames, dt)
-            return _mix_trajectory_results(motion_result, standstill_result, standstill_mask)
+            _emit_stage_diagnostics(
+                stage_diagnostics,
+                "standstill",
+                root_pos_w=standstill_result.root_pos_w,
+                root_quat_w=standstill_result.root_quat_w,
+                joint_angles=standstill_result.joint_angles,
+                foot_pos_w=standstill_result.foot_pos_w,
+                contact_state=standstill_result.contact_state,
+                planned_touchdown_w=standstill_result.planned_touchdown_w,
+                standstill_mask=standstill_mask,
+            )
+            mixed_result = _mix_trajectory_results(motion_result, standstill_result, standstill_mask)
+            _emit_stage_diagnostics(
+                stage_diagnostics,
+                "mix",
+                standstill_mask=standstill_mask,
+                root_pos_w=mixed_result.root_pos_w,
+                root_quat_w=mixed_result.root_quat_w,
+                joint_angles=mixed_result.joint_angles,
+                foot_pos_w=mixed_result.foot_pos_w,
+                contact_state=mixed_result.contact_state,
+                planned_touchdown_w=mixed_result.planned_touchdown_w,
+            )
+        _emit_stage_diagnostics(
+            stage_diagnostics,
+            "result",
+            root_pos_w=mixed_result.root_pos_w,
+            root_quat_w=mixed_result.root_quat_w,
+            joint_angles=mixed_result.joint_angles,
+            foot_pos_w=mixed_result.foot_pos_w,
+            contact_state=mixed_result.contact_state,
+            planned_touchdown_w=mixed_result.planned_touchdown_w,
+        )
+        return mixed_result
 
+    _emit_stage_diagnostics(
+        stage_diagnostics,
+        "result",
+        root_pos_w=motion_result.root_pos_w,
+        root_quat_w=motion_result.root_quat_w,
+        joint_angles=motion_result.joint_angles,
+        foot_pos_w=motion_result.foot_pos_w,
+        contact_state=motion_result.contact_state,
+        planned_touchdown_w=motion_result.planned_touchdown_w,
+    )
     return motion_result
 
 
