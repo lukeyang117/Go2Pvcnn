@@ -124,6 +124,16 @@ def test_planner_output_vs_playback_divergence_report(real_runtime):
     assert report.plan.stage_summaries["result"]["path_dx_mean"] > 0.05
 
 
+def test_planner_output_vs_playback_emit_report(real_runtime):
+    report = real_runtime.planner_output_vs_playback_divergence("forward")
+    text = viewer_diag.format_playback_divergence_report(report)
+    print(text)
+
+    assert "[playback-diag]" in text
+    assert "root_pos_max_abs=" in text
+    assert "joint_pos_max_abs=" in text
+
+
 def test_planner_stage_diagnostics_emit_summary(real_runtime):
     reports = [
         real_runtime.plan_case_with_stage_diagnostics("standstill"),

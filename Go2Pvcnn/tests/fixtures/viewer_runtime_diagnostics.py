@@ -272,6 +272,22 @@ def format_stage_summary_report(name: str, stage_summaries: dict[str, dict[str, 
     return "\n".join(lines)
 
 
+def format_playback_divergence_report(report: PlaybackDivergenceReport) -> str:
+    result_summary = report.plan.stage_summaries.get("result", {})
+    parts = [
+        f"[playback-diag] case={report.plan.plan.name}",
+        f"frame_idx={report.frame_idx}",
+        f"root_pos_max_abs={report.root_pos_max_abs:.6f}",
+        f"root_pos_mean_abs={report.root_pos_mean_abs:.6f}",
+        f"joint_pos_max_abs={report.joint_pos_max_abs:.6f}",
+        f"joint_pos_mean_abs={report.joint_pos_mean_abs:.6f}",
+    ]
+    for key in ("path_dx_mean", "path_dy_mean", "yaw_delta_mean", "standstill_ratio"):
+        if key in result_summary:
+            parts.append(f"{key}={result_summary[key]:+.6f}")
+    return " ".join(parts)
+
+
 class _StageSnapshotCollector:
     def __init__(self) -> None:
         self._stage_order: list[str] = []

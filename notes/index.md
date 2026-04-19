@@ -58,6 +58,7 @@ graph LR
 12. [human/human-11-extension-trajectory-reward.md](human/human-11-extension-trajectory-reward.md)
 13. [human/human-12-batched-planner-train-viewer-commands.md](human/human-12-batched-planner-train-viewer-commands.md)
 14. [human/human-13-batched-planner-swing-stance-ik-complexity.md](human/human-13-batched-planner-swing-stance-ik-complexity.md)
+15. [human/human-14-batched-planner-viewer-diagnostics-summary.md](human/human-14-batched-planner-viewer-diagnostics-summary.md)
 
 如果你是为了检索入口、模块边界和输入输出，走 `ai` 主线：
 
@@ -93,13 +94,14 @@ graph LR
 | 11 | `human-11-extension-trajectory-reward.md` | `ai-11-extension-trajectory-reward.md` | planner 参考轨迹奖励设计 |
 | 12 | `human-12-batched-planner-train-viewer-commands.md` | 暂无 | train / viewer / play 命令与参数说明 |
 | 13 | `human-13-batched-planner-swing-stance-ik-complexity.md` | `ai-13-batched-planner-swing-stance-ik-complexity.md` | batched planner：swing/stance、foothold、base、IK 语义与复杂度（单环境） |
+| 14 | `human-14-batched-planner-viewer-diagnostics-summary.md` | 暂无 | viewer/runtime diagnostics、planner 输出证据与问题归因总结 |
 
 ## 阶段主链
 
 `entry scripts`
 -> `task/env config`
 -> `observations + curriculum`
--> `LiDAR / ray cast / PVCNN`
+-> `height_scanner / semantic grids / optional PVCNN`
 -> `PPO runner / training loop`
 -> `checkpoints / assets / experiment outputs`
 
