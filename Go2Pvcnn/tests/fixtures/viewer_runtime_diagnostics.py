@@ -241,6 +241,37 @@ def _summarize_stage_snapshots(
     }
 
 
+def format_stage_summary_report(name: str, stage_summaries: dict[str, dict[str, float]], *, stage_order: tuple[str, ...] | None = None) -> str:
+    ordered_names = list(stage_order) if stage_order is not None else list(stage_summaries.keys())
+    seen: set[str] = set()
+    lines = [f"[planner-diag] case={name}"]
+    for stage_name in ordered_names:
+        if stage_name in seen or stage_name not in stage_summaries:
+            continue
+        seen.add(stage_name)
+        summary = stage_summaries[stage_name]
+        parts: list[str] = []
+        for key in (
+            "command_vx_mean",
+            "command_vy_mean",
+            "command_yaw_mean",
+            "path_dx_mean",
+            "path_dy_mean",
+            "yaw_delta_mean",
+            "standstill_ratio",
+            "touchdown_dx_mean",
+            "touchdown_delta_norm_max",
+            "feasible_ratio",
+            "contact_mean",
+        ):
+            if key in summary:
+                parts.append(f"{key}={summary[key]:+.4f}")
+        if not parts:
+            parts.append("no_numeric_summary")
+        lines.append(f"  - {stage_name}: " + " ".join(parts))
+    return "\n".join(lines)
+
+
 class _StageSnapshotCollector:
     def __init__(self) -> None:
         self._stage_order: list[str] = []

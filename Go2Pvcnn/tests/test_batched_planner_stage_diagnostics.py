@@ -124,6 +124,24 @@ def test_planner_output_vs_playback_divergence_report(real_runtime):
     assert report.plan.stage_summaries["result"]["path_dx_mean"] > 0.05
 
 
+def test_planner_stage_diagnostics_emit_summary(real_runtime):
+    reports = [
+        real_runtime.plan_case_with_stage_diagnostics("standstill"),
+        real_runtime.plan_case_with_stage_diagnostics("forward"),
+        real_runtime.plan_case_with_stage_diagnostics("yaw_left"),
+    ]
+
+    for report in reports:
+        text = viewer_diag.format_stage_summary_report(
+            report.plan.name,
+            report.stage_summaries,
+            stage_order=report.stage_order,
+        )
+        print(text)
+        assert "[planner-diag]" in text
+        assert "result:" in text
+
+
 def test_planner_stage_diagnostics_batched_smoke_preserves_tensor_path(real_runtime_32):
     case_cycle = [
         "standstill",
