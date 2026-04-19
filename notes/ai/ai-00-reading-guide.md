@@ -39,7 +39,7 @@ graph LR
 1. overview and reading entry
 2. training and script entrypoints
 3. task config, scene, observations, curriculum
-4. LiDAR, ray cast, and PVCNN feature flow
+4. height scanner / LiDAR / optional PVCNN feature flow
 5. PPO runner, rollout, and update loop
 6. assets, checkpoints, logs, and directory boundaries
 7. manual tuning and parameter lookup
@@ -47,7 +47,7 @@ graph LR
 ## Main Files
 
 - `Go2Pvcnn/scripts/train.py`
-- `Go2Pvcnn/scripts/train_go2_pvcnn.py`
+- `Go2Pvcnn/scripts/train_go2_pvcnn.py` (legacy / dedicated PVCNN path)
 - `Go2Pvcnn/scripts/play.py`
 - `Go2Pvcnn/go2_pvcnn/tasks/`
 - `Go2Pvcnn/go2_pvcnn/sensor/lidar/`
@@ -82,6 +82,12 @@ For parameter lookup rather than stage tracing, jump directly to:
 For extension planner sync or trajectory-reward work, jump directly to:
 
 - [ai-08-extension-planner-reading-guide.md](ai-08-extension-planner-reading-guide.md)
+
+## Active-vs-Legacy Note
+
+- active training mainline: `Go2Pvcnn/scripts/train.py` with teacher experiments and `rsl_rl_2_01`
+- active playback mainline: `Go2Pvcnn/scripts/play.py`
+- dedicated PVCNN pipeline: `Go2Pvcnn/scripts/train_go2_pvcnn.py`, useful for the older `Go2PvcnnEnv` path but not the default project flow anymore
 
 ## Relationship To Other Notes
 

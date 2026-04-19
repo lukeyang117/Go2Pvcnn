@@ -10,7 +10,7 @@
 
 ## 作用
 
-说明当前仓库有哪些主要入口脚本，它们分别负责训练、播放、测试还是特定调试任务。
+说明当前仓库有哪些主要入口脚本，并区分哪些是当前默认主线，哪些是旧的 / 专项分支。
 
 ## Mermaid 代码入口图
 
@@ -19,6 +19,7 @@ graph LR
     train["训练脚本\n../../Go2Pvcnn/scripts/train.py"]
     play["回放脚本\n../../Go2Pvcnn/scripts/play.py"]
     collision["碰撞测试\n../../Go2Pvcnn/scripts/test_go2_pvcnn_collision.py"]
+    legacy["旧 PVCNN 训练\n../../Go2Pvcnn/scripts/train_go2_pvcnn.py"]
     launcher["Isaac AppLauncher\nisaaclab.app.AppLauncher"]
     register["环境注册\n../../Go2Pvcnn/go2_pvcnn/tasks/register_envs.py"]
     envcfg["环境配置类\n../../Go2Pvcnn/go2_pvcnn/tasks/*.py"]
@@ -30,8 +31,10 @@ graph LR
     train -->|"解析 CLI 并启动 simulator"| launcher
     play -->|"解析 CLI 并启动 simulator"| launcher
     collision -->|"独立测试入口"| launcher
+    legacy -->|"旧专项训练入口"| launcher
     train -->|"import 触发注册"| register
     play -->|"import 触发注册"| register
+    legacy -->|"旧 Go2PvcnnEnv 路径"| register
     register -->|"experiment -> gym id / cfg class"| envcfg
     envcfg -->|"gym.make 创建 env"| gymenv
     gymenv -->|"训练脚本内包装成 VecEnv"| wrapper
@@ -47,6 +50,12 @@ graph LR
 - [play.py](../../Go2Pvcnn/scripts/play.py)
 - [test_go2_pvcnn_collision.py](../../Go2Pvcnn/scripts/test_go2_pvcnn_collision.py)
 
+## 当前推荐理解方式
+
+- `train.py` 是当前默认训练入口，负责 teacher 系列 experiment
+- `play.py` 是对应回放入口
+- `train_go2_pvcnn.py` 仍然有价值，但更适合当成旧的 / 专项 PVCNN 训练链，而不是现在整仓库最优先阅读的入口
+
 ## 上游输入
 
 - 命令行参数
@@ -57,11 +66,12 @@ graph LR
 ## 下游消费者
 
 - `go2_pvcnn/tasks/` 环境配置
-- `go2_pvcnn/wrapper/` 环境包装器
-- `rsl_rl` runner
+- `train.py` / `play.py` 内部的 `SimpleRslRlEnvWrapper`
+- `rsl_rl_2_01` runner
 
-## 待补充
+## 已确认的关键点
 
-- 各脚本的精确分工
-- 训练入口与通用 Isaac Lab 入口的关系
-- 需要保留的环境变量和路径假设
+- `train.py` 通过 `--experiment` 在 teacher 系列 env cfg 之间切换
+- `teacher_elevation_trajectory` 会额外挂上 `BatchedTrajectoryManager`
+- `play.py` 与训练主线共用 teacher experiment 映射
+- `train_go2_pvcnn.py` 仍使用独立的 PVCNN wrapper 路径

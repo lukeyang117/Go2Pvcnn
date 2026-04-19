@@ -10,7 +10,7 @@
 
 ## Purpose
 
-Index the PPO update loop, rollout storage, checkpoint handling, and optional synchronous PVCNN training.
+Index the PPO update loop, rollout storage, checkpoint handling, and clarify that the active teacher scripts import `rsl_rl_2_01.runners.OnPolicyRunner` even though the tracked source sits under the vendored `Go2Pvcnn/rsl_rl/` tree.
 
 ## Code Graph
 
@@ -18,7 +18,7 @@ Index the PPO update loop, rollout storage, checkpoint handling, and optional sy
 graph LR
     train["train.py\n../../Go2Pvcnn/scripts/train.py"]
     wrapper["VecEnv wrapper\n../../Go2Pvcnn/scripts/train.py"]
-    runner["on_policy_runner.py\n../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py"]
+    runner["runner source\n../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py"]
     storage["rollout_storage.py\n../../Go2Pvcnn/rsl_rl/rsl_rl/storage/rollout_storage.py"]
     algo["ppo.py\n../../Go2Pvcnn/rsl_rl/rsl_rl/algorithms/ppo.py"]
     logs["run outputs\n../../logs/rsl_rl/"]
@@ -43,10 +43,17 @@ graph LR
 - observations
 - rewards
 - dones
-- feature tensors or semantic supervision payloads
+- policy / critic tensor groups
+- legacy PVCNN branch semantic supervision payloads
 
 ## Outputs
 
 - updated actor/critic
 - checkpoints
 - metrics
+
+## Runtime Import Note
+
+- active scripts: `train.py` and `play.py` import `OnPolicyRunner` from `rsl_rl_2_01.runners`
+- tracked implementation source for note reading still lives under `Go2Pvcnn/rsl_rl/rsl_rl/`
+- optional synchronous PVCNN training is mostly relevant to the older dedicated PVCNN branch, not the default teacher mainline

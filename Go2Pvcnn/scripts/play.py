@@ -28,7 +28,7 @@ from isaaclab.app import AppLauncher
 # Add argparse arguments
 parser = argparse.ArgumentParser(description="Play a trained teacher policy")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during play")
-parser.add_argument("--video_length", type=int, default=200, help="Length of recorded video (steps)")
+parser.add_argument("--video_length", type=int, default=2000000, help="Length of recorded video (steps)")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (steps)")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate")
 parser.add_argument("--checkpoint", type=str, default="model_1600.pt", help="Checkpoint file name")

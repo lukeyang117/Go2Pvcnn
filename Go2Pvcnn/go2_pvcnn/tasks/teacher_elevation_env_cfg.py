@@ -182,9 +182,9 @@ class TeacherElevationEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
             tg.num_rows = SEMANTIC_TERRAIN_CFG.num_rows
             tg.num_cols = SEMANTIC_TERRAIN_CFG.num_cols
             tg.curriculum = SEMANTIC_TERRAIN_CFG.curriculum
-        # Play: constant velocity command +x = 1 m/s (no lateral / yaw)
+        # Play: constant velocity command +x = 0.5 m/s (no lateral / yaw)
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(1.0, 1.0),
+            lin_vel_x=(0.5, 0.5),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0),
         )

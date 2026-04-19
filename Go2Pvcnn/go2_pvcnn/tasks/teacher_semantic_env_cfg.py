@@ -55,7 +55,7 @@ _TEACHER_OBJECTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "teacher
 ##
 
 COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(8.0, 8.0),
+    size=(4.0, 4.0),
     border_width=20.0,
     num_rows=10,
     num_cols=20,
@@ -70,10 +70,10 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.1, noise_range=(0.01, 0.06), noise_step=0.01, border_width=0.25
         ),
         "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
-            proportion=0.1, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+            proportion=0.1, slope_range=(0.0, 0.4), platform_width=1.0, border_width=0.25
         ),
         "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
-            proportion=0.1, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+            proportion=0.1, slope_range=(0.0, 0.4), platform_width=1.0, border_width=0.25
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.2, grid_width=0.45, grid_height_range=(0.05, 0.2), platform_width=2.0
@@ -82,7 +82,7 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.2,
             step_height_range=(0.05, 0.23),
             step_width=0.3,
-            platform_width=3.0,
+            platform_width=1.0,
             border_width=1.0,
             holes=False,
         ),
@@ -90,7 +90,7 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.2,
             step_height_range=(0.05, 0.23),
             step_width=0.3,
-            platform_width=3.0,
+            platform_width=1.0,
             border_width=1.0,
             holes=False,
         ),

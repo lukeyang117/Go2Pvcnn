@@ -10,7 +10,7 @@
 
 ## 作用
 
-说明 `rsl_rl` 里的 runner、PPO 和 rollout / update / checkpoint 主循环怎样和当前项目耦合。
+说明 runner、PPO 和 rollout / update / checkpoint 主循环怎样和当前项目耦合，并明确区分“当前 teacher 主线”和“旧 PVCNN 分支”。
 
 ## Mermaid 训练主循环图
 
@@ -18,7 +18,7 @@
 graph LR
     train["训练入口\n../../Go2Pvcnn/scripts/train.py"]
     wrapper["SimpleRslRlEnvWrapper\n../../Go2Pvcnn/scripts/train.py"]
-    runner["OnPolicyRunner\n../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py"]
+    runner["OnPolicyRunner 源码\n../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py"]
     storage["RolloutStorage\n../../Go2Pvcnn/rsl_rl/rsl_rl/storage/rollout_storage.py"]
     algo["PPO\n../../Go2Pvcnn/rsl_rl/rsl_rl/algorithms/ppo.py"]
     env["ManagerBasedRLEnv\nIsaac Lab"]
@@ -44,13 +44,20 @@ graph LR
 ## 上游输入
 
 - env wrapper 提供的观测、奖励、done
-- PVCNN 特征或监督数据
+- 当前 teacher 主线的 policy / critic 观测组
+- 旧 PVCNN 分支里的特征或监督数据
 
 ## 下游消费者
 
 - checkpoint 保存与恢复
 - 日志记录
 - 下轮训练迭代
+
+## 已确认的代码事实
+
+- `train.py` / `play.py` 运行时从 `rsl_rl_2_01.runners` 导入 `OnPolicyRunner`
+- 便于读源码时，真正对应的 vendored 实现仍然在 `../../Go2Pvcnn/rsl_rl/rsl_rl/`
+- “同步 PVCNN 训练” 这个点不该再默认理解成 teacher 主线的一部分
 
 ## 待补充
 

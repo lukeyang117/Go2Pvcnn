@@ -149,6 +149,7 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     foothold_search_step: float = 0.03
     max_step_down: float = float("inf")
     max_roughness: float = 0.5
+    max_touchdown_xy_reach: float = 0.22
     # Optional: planner-owned timing/diagnostics (quiet by default).
     verbose_planner: bool = False
     verbose_planner_interval_steps: int = 250
@@ -182,6 +183,7 @@ class TeacherElevationTrajectoryEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
     foothold_search_step: float = 0.03
     max_step_down: float = float("inf")
     max_roughness: float = 0.5
+    max_touchdown_xy_reach: float = 0.22
     verbose_planner: bool = False
     verbose_planner_interval_steps: int = 250
 

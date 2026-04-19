@@ -259,6 +259,66 @@ python -m pytest Go2Pvcnn/tests/test_viz_playback.py::TestKinematicPlaybackLogic
 
 如果这里没有变，就不用先怀疑 planner。
 
+## 新增可执行证据（2026-04-19）
+
+这一轮又把上面的怀疑链往前推进了一步，不再只是“读代码觉得像”，而是把 viewer 主循环里的关键语义直接抽成了 production helper，再由单测钉死：
+
+- `Go2Pvcnn/extension/viz/go2_foostep_planner.py`
+  - 新增 `_viewer_loop_need_replan(...)`
+  - 新增 `_viewer_direct_playback_step(..., sync_scene=False)`
+  - main loop 现在直接复用这两个 helper，而不是把逻辑散在 `while` 循环里
+- main loop 新增诊断打印：
+  - `[Viewer][Loop] teleop_cmd=(...) need_replan=... playback_frame=...`
+  - `[Viewer][Playback] path=render-only`
+
+这样做以后，证据强度比之前更高，因为：
+
+- `need_replan` 不再只是测试文件自己复制一份判断逻辑
+- 而是测试直接调用 `go2_foostep_planner.py` 里的真实 helper
+- playback 分支也不再只是人工读代码判断，而是对调用序列做了明确断言
+
+### 新增测试
+
+- `Go2Pvcnn/tests/test_viz_playback.py::TestKinematicPlaybackLogic::test_viewer_loop_need_replan_tracks_teleop_values_in_real_helper`
+  - 直接证明 `teleop_cmd.values` 改变、`reset_requested=True`、`playback_frame >= result.num_frames` 都会触发真实 viewer helper 的 `need_replan`
+- `Go2Pvcnn/tests/test_viz_playback.py::TestKinematicPlaybackLogic::test_viewer_playback_branch_render_only_skips_scene_sync`
+  - 直接证明当前默认 playback 路径的调用顺序是：
+    1. `robot.write_root_pose_to_sim(...)`
+    2. `robot.write_joint_state_to_sim(...)`
+    3. `sim.render()`
+  - **没有** `scene.write_data_to_sim()`
+  - **没有** `scene.update(...)`
+- `Go2Pvcnn/tests/test_viz_playback.py::TestKinematicPlaybackLogic::test_viewer_playback_branch_scene_sync_path_flushes_scene_before_readback`
+  - 对照证明另一条显式 sync 路径的调用顺序是：
+    1. `robot.write_root_pose_to_sim(...)`
+    2. `robot.write_joint_state_to_sim(...)`
+    3. `scene.write_data_to_sim()`
+    4. `sim.render()`
+    5. `scene.update(physics_dt)`
+
+### 这轮跑通的命令
+
+```bash
+pytest Go2Pvcnn/tests/test_viz_playback.py -q
+```
+
+结果：
+
+- `14 passed`
+
+### 对结论的增量更新
+
+现在可以把这条结论说得更硬一些：
+
+- **viewer 当前主循环的 direct playback 默认分支，确实是 `render-only`。**
+- **diagnostics fixture 对齐的是另一条更强的 `render + scene sync` 契约。**
+- **所以“planner result 数值健康，但 viewer 里 robot 姿态怪”这条怀疑链，现在已经同时具备：**
+  - 数值对齐证据
+  - 代码路径证据
+  - 单测调用序列证据
+
+同样，`WASD` 这边也不再只是怀疑“也许没触发 replan”，而是已经把真实 replan 语义收成了可测 helper。接下来如果真实终端里 `teleop_cmd.values` 没变化，或者变化了但 `need_replan=False`，我们会第一时间从日志里看到。
+
 ## 相关测试入口
 
 - viewer runtime diagnostics：

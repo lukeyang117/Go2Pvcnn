@@ -75,9 +75,15 @@ graph LR
 `train/play/test scripts`
 -> `task config`
 -> `scene + sensors + observations`
--> `LiDAR / PVCNN features`
+-> `height_scanner / LiDAR / 可选 PVCNN features`
 -> `PPO runner`
 -> `checkpoints / assets / experiment outputs`
+
+## 当前主线说明
+
+- 当前默认训练主线是 `../../Go2Pvcnn/scripts/train.py` 里的 teacher 系列实验
+- `../../Go2Pvcnn/scripts/play.py` 是对应回放主线
+- `../../Go2Pvcnn/scripts/train_go2_pvcnn.py` 仍然存在，但更适合视为旧的 / 专项 PVCNN 训练路径，不应再默认当成整个仓库的主入口
 
 ## 本文与其他文档的关系
 

@@ -7,10 +7,12 @@ the horizon is exhausted or the teleop command changes.  No physics step.
 from __future__ import annotations
 
 import argparse
+import atexit
 import copy
 import math
 import os
 import select
+import signal
 import sys
 import time
 from dataclasses import dataclass
@@ -29,12 +31,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description="Visualize batched Go2 footstep planning in Isaac Lab.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of Isaac Lab environments.")
-    parser.add_argument("--terrain", type=str, default="mixed", choices=["flat", "stairs", "mixed"])
+    parser.add_argument("--terrain", type=str, default="flat", choices=["flat", "stairs", "mixed"])
     parser.add_argument("--n-frames", type=int, default=50, help="Planner horizon in frames.")
     parser.add_argument("--plan-dt", type=float, default=0.02, help="Planner integration step.")
-    parser.add_argument("--vx-scale", type=float, default=0.8, help="Teleop forward/backward speed.")
+    parser.add_argument("--vx-scale", type=float, default=0.4, help="Teleop forward/backward speed.")
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
-    parser.add_argument("--yaw-scale", type=float, default=1.0, help="Teleop yaw-rate command.")
+    parser.add_argument("--yaw-scale", type=float, default=0.3, help="Teleop yaw-rate command.")
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")
     parser.add_argument("--heightmap-viz-stride", type=int, default=10, help="Subsample stride for heightmap markers.")
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
@@ -80,6 +82,58 @@ def _planner_state_from_reference_result(result, *, frame_idx: int):
     )
 
 
+def _quat_wxyz_to_yaw(quat_wxyz: torch.Tensor) -> torch.Tensor:
+    w = quat_wxyz[..., 0]
+    x = quat_wxyz[..., 1]
+    y = quat_wxyz[..., 2]
+    z = quat_wxyz[..., 3]
+    return torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _trajectory_motion_summary(result) -> dict[str, float | bool]:
+    root_pos = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
+    root_quat = torch.as_tensor(result.root_quat_w, dtype=torch.float64)
+    first_pos = root_pos[:, 0]
+    last_pos = root_pos[:, -1]
+    delta_pos = last_pos - first_pos
+    first_yaw = _quat_wxyz_to_yaw(root_quat[:, 0])
+    last_yaw = _quat_wxyz_to_yaw(root_quat[:, -1])
+    delta_yaw = last_yaw - first_yaw
+    standstill = bool(torch.allclose(root_pos, root_pos[:, :1], atol=1e-6, rtol=1e-6) and torch.allclose(root_quat, root_quat[:, :1], atol=1e-6, rtol=1e-6))
+    return {
+        "dx": float(delta_pos[0, 0].item()),
+        "dy": float(delta_pos[0, 1].item()),
+        "dz": float(delta_pos[0, 2].item()),
+        "dyaw": float(delta_yaw[0].item()),
+        "standstill": standstill,
+    }
+
+
+def _format_command_values(values: torch.Tensor) -> str:
+    command = torch.as_tensor(values, dtype=torch.float64)
+    return f"({command[0,0]:+0.2f}, {command[0,1]:+0.2f}, {command[0,2]:+0.2f})"
+
+
+def _viewer_loop_need_replan(
+    *,
+    result,
+    playback_frame: int,
+    reset_requested: bool,
+    teleop_values: torch.Tensor,
+    last_cmd: torch.Tensor | None,
+    atol: float = 1e-3,
+) -> bool:
+    if result is None:
+        return True
+    if playback_frame >= result.num_frames:
+        return True
+    if reset_requested:
+        return True
+    if last_cmd is not None and not torch.allclose(teleop_values, last_cmd, atol=atol):
+        return True
+    return False
+
+
 def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
     """Write the planner frame pose/joints into the displayed robot.
 
@@ -93,6 +147,7 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
     root_quat_wxyz = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float32)
     root_pose_xyzw = torch.cat([root_pos_w, quat_wxyz_to_xyzw(root_quat_wxyz)], dim=-1)
     joint_pos = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float32)
+    joint_pos = _joint_pos_planner_to_robot(robot, joint_pos)
     joint_vel = torch.zeros_like(joint_pos)
 
     if hasattr(robot, "write_root_pose_to_sim"):
@@ -109,11 +164,34 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
         robot.write_joint_position_to_sim(joint_pos)
 
 
+def _viewer_direct_playback_step(base_env, result, *, frame_idx: int, sync_scene: bool = True) -> str:
+    _apply_direct_playback_to_robot(base_env.scene["robot"], result, frame_idx=int(frame_idx))
+    if sync_scene and hasattr(base_env.scene, "write_data_to_sim"):
+        base_env.scene.write_data_to_sim()
+    base_env.sim.render()
+    if sync_scene and hasattr(base_env.scene, "update"):
+        base_env.scene.update(float(base_env.physics_dt))
+    return "render+scene_sync" if sync_scene else "render-only"
+
+
 def _launch_app(args_cli: argparse.Namespace):
     from isaaclab.app import AppLauncher
 
     app_launcher = AppLauncher(args_cli)
     return app_launcher, app_launcher.app
+
+
+def _attach_reference_manager_if_enabled(env, env_cfg) -> None:
+    if not getattr(env_cfg, "planner_owned_reference_cache", False):
+        return
+
+    from extension.batched_planner.manager import BatchedTrajectoryManager
+
+    manager_device = getattr(env, "device", env_cfg.sim.device)
+    manager = BatchedTrajectoryManager(env_cfg, device=manager_device)
+    env.unwrapped._trajectory_manager = manager
+    env.unwrapped._trajectory_reference_cache = None
+    print("[Viewer] Attached planner-owned trajectory manager", flush=True)
 
 LEG_COLORS = (
     (1.0, 0.2, 0.2),
@@ -121,6 +199,58 @@ LEG_COLORS = (
     (0.2, 0.4, 1.0),
     (1.0, 0.8, 0.2),
 )
+
+PLANNER_JOINT_ORDER = (
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint",
+)
+
+
+def _normalize_joint_name(name: str) -> str:
+    normalized = str(name).split("/")[-1]
+    normalized = normalized.split(":")[-1]
+    return normalized.lower()
+
+
+def _joint_order_indices(*, source_order: tuple[str, ...], target_order: tuple[str, ...]) -> torch.Tensor | None:
+    source_to_index = {_normalize_joint_name(name): idx for idx, name in enumerate(source_order)}
+    indices: list[int] = []
+    for target_name in target_order:
+        source_idx = source_to_index.get(_normalize_joint_name(target_name))
+        if source_idx is None:
+            return None
+        indices.append(int(source_idx))
+    return torch.tensor(indices, dtype=torch.long)
+
+
+def _joint_pos_planner_to_robot(robot, joint_pos: torch.Tensor) -> torch.Tensor:
+    joint_names = getattr(robot, "joint_names", None)
+    if not joint_names:
+        return joint_pos
+    indices = _joint_order_indices(source_order=PLANNER_JOINT_ORDER, target_order=tuple(joint_names))
+    if indices is None:
+        return joint_pos
+    return joint_pos.index_select(-1, indices.to(device=joint_pos.device))
+
+
+def _joint_pos_robot_to_planner(robot, joint_pos: torch.Tensor) -> torch.Tensor:
+    joint_names = getattr(robot, "joint_names", None)
+    if not joint_names:
+        return joint_pos
+    indices = _joint_order_indices(source_order=tuple(joint_names), target_order=PLANNER_JOINT_ORDER)
+    if indices is None:
+        return joint_pos
+    return joint_pos.index_select(-1, indices.to(device=joint_pos.device))
 
 
 @dataclass
@@ -150,6 +280,8 @@ class TerminalTeleop:
         self._old_flags = None
         self._enabled = False
         self._stdin_fd = None
+        self._old_signal_handlers: dict[int, object] = {}
+        self._atexit_registered = False
 
     def __enter__(self) -> "TerminalTeleop":
         if not sys.stdin.isatty():
@@ -165,9 +297,14 @@ class TerminalTeleop:
         tty.setcbreak(self._stdin_fd)
         fcntl.fcntl(self._stdin_fd, fcntl.F_SETFL, self._old_flags | os.O_NONBLOCK)
         self._enabled = True
+        self._install_cleanup_guards()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        self._remove_cleanup_guards()
+        self._restore_terminal_state()
+
+    def _restore_terminal_state(self) -> None:
         if not self._enabled:
             return
         import fcntl
@@ -179,6 +316,31 @@ class TerminalTeleop:
         if self._old_flags is not None:
             fcntl.fcntl(self._stdin_fd, fcntl.F_SETFL, self._old_flags)
         self._enabled = False
+
+    def _install_cleanup_guards(self) -> None:
+        if not self._atexit_registered:
+            atexit.register(self._restore_terminal_state)
+            self._atexit_registered = True
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            self._old_signal_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, self._handle_signal)
+
+    def _remove_cleanup_guards(self) -> None:
+        if self._atexit_registered:
+            try:
+                atexit.unregister(self._restore_terminal_state)
+            except Exception:
+                pass
+            self._atexit_registered = False
+        for signum, handler in self._old_signal_handlers.items():
+            signal.signal(signum, handler)
+        self._old_signal_handlers.clear()
+
+    def _handle_signal(self, signum, frame) -> None:
+        self._restore_terminal_state()
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise SystemExit(128 + int(signum))
 
     def poll(self) -> TeleopCommand:
         reset_requested = False
@@ -408,6 +570,7 @@ def _build_planner_cfg(env_cfg):
         foothold_search_step=float(env_cfg.foothold_search_step),
         max_foothold_step_down=float(env_cfg.max_step_down),
         max_roughness=float(env_cfg.max_roughness),
+        max_touchdown_xy_reach=float(getattr(env_cfg, "max_touchdown_xy_reach", 0.22)),
         replan_stop_speed=float(env_cfg.replan_stop_speed),
     )
 
@@ -495,10 +658,11 @@ def _planner_state_from_env(env, foot_ids: list[int]):
     from extension.convention import isaac_state_to_planner_state, quat_wxyz_to_xyzw
 
     robot = env.scene["robot"]
+    joint_pos = _joint_pos_robot_to_planner(robot, robot.data.joint_pos[:1].to(dtype=torch.float64))
     return isaac_state_to_planner_state(
         root_pos_w=robot.data.root_pos_w[:1].to(dtype=torch.float64),
         root_quat_xyzw=quat_wxyz_to_xyzw(robot.data.root_quat_w[:1]).to(dtype=torch.float64),
-        joint_pos=robot.data.joint_pos[:1].to(dtype=torch.float64),
+        joint_pos=joint_pos,
         foot_pos_w=robot.data.body_pos_w[:1, foot_ids, :].to(dtype=torch.float64),
         foot_vel_w=robot.data.body_lin_vel_w[:1, foot_ids, :].to(dtype=torch.float64),
     )
@@ -537,6 +701,7 @@ def main() -> int:
     )
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
+    _attach_reference_manager_if_enabled(base_env, env_cfg)
     zero_actions = _make_zero_actions(base_env)
     foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
     scanner = base_env.scene.sensors["height_scanner"]
@@ -563,6 +728,8 @@ def main() -> int:
         timeout_s=float(args_cli.key_hold_timeout),
     ) as teleop:
         last_status = None
+        last_loop_diag = None
+        last_playback_path = None
         try:
             while simulation_app.is_running():
                 teleop_cmd = teleop.poll()
@@ -575,11 +742,23 @@ def main() -> int:
                     playback_frame = 0
                     last_cmd = None
 
-                need_replan = (
-                    result is None
-                    or playback_frame >= result.num_frames
-                    or (last_cmd is not None and not torch.allclose(teleop_cmd.values, last_cmd, atol=1e-3))
+                need_replan = _viewer_loop_need_replan(
+                    result=result,
+                    playback_frame=playback_frame,
+                    reset_requested=teleop_cmd.reset_requested,
+                    teleop_values=teleop_cmd.values,
+                    last_cmd=last_cmd,
                 )
+                loop_diag = (_format_command_values(teleop_cmd.values), need_replan)
+                if loop_diag != last_loop_diag:
+                    print(
+                        "[Viewer][Loop] "
+                        f"teleop_cmd={loop_diag[0]} "
+                        f"need_replan={need_replan} "
+                        f"playback_frame={playback_frame}",
+                        flush=True,
+                    )
+                    last_loop_diag = loop_diag
 
                 if need_replan:
                     if result is not None and playback_frame > 0:
@@ -598,6 +777,15 @@ def main() -> int:
                         dt=args_cli.plan_dt,
                         cfg=planner_cfg,
                     )
+                    summary = _trajectory_motion_summary(result)
+                    print(
+                        "[Viewer][Plan] "
+                        f"cmd={_format_command_values(teleop_cmd.values)} "
+                        f"delta=({summary['dx']:+0.2f}, {summary['dy']:+0.2f}, {summary['dz']:+0.2f}) "
+                        f"dyaw={summary['dyaw']:+0.2f} "
+                        f"standstill={summary['standstill']}",
+                        flush=True,
+                    )
                     playback_frame = 0
 
                     planner_state = _planner_state_from_reference_result(result, frame_idx=0)
@@ -611,8 +799,13 @@ def main() -> int:
                     )
 
                 if result is not None and playback_frame < result.num_frames:
-                    _apply_direct_playback_to_robot(base_env.scene["robot"], result, frame_idx=playback_frame)
-                    base_env.sim.render()
+                    playback_path = _viewer_direct_playback_step(base_env, result, frame_idx=playback_frame)
+                    if playback_path != last_playback_path:
+                        print(
+                            f"[Viewer][Playback] path={playback_path}",
+                            flush=True,
+                        )
+                        last_playback_path = playback_path
                     playback_frame += 1
 
                 last_cmd = teleop_cmd.values.clone()

@@ -7,11 +7,11 @@
 - 上一篇：[human-00-reading-guide.md](human-00-reading-guide.md)
 - 下一篇：[human-02-training-and-entrypoints.md](human-02-training-and-entrypoints.md)
 - 总索引：[../index.md](../index.md)
-- 相关代码：[README.md](../../Go2Pvcnn/README.md), [ARCHITECTURE.md](../../Go2Pvcnn/ARCHITECTURE.md), [train_go2_pvcnn.py](../../Go2Pvcnn/scripts/train_go2_pvcnn.py), [on_policy_runner.py](../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py)
+- 相关代码：[README.md](../../Go2Pvcnn/README.md), [ARCHITECTURE.md](../../Go2Pvcnn/ARCHITECTURE.md), [train.py](../../Go2Pvcnn/scripts/train.py), [play.py](../../Go2Pvcnn/scripts/play.py), [train_go2_pvcnn.py](../../Go2Pvcnn/scripts/train_go2_pvcnn.py), [on_policy_runner.py](../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py)
 
 ## 一句话总结
 
-当前仓库的主线，是由训练/测试脚本启动 Isaac Lab 环境，环境把 LiDAR 与机器人状态整理成观测，再由 PVCNN 和 PPO 共同驱动策略学习，最后把权重、日志和实验产物落到固定目录。
+当前仓库的默认主线，是由 `train.py` / `play.py` 启动 teacher 系列实验，环境把机器人状态与 semantic / elevation / planner reference 相关观测整理出来，再交给 `rsl_rl_2_01` PPO runner 训练或回放。PVCNN 仍然保留，但它已经更像专门分支，而不是当前默认训练主线。
 
 ## Mermaid 总览图
 
@@ -23,7 +23,8 @@ graph LR
     envcfg["任务配置\n../../Go2Pvcnn/go2_pvcnn/tasks/*.py"]
     obs["观测/课程\n../../Go2Pvcnn/go2_pvcnn/mdp/observations.py\n../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py"]
     sensor["LiDAR / height_scanner\n../../Go2Pvcnn/go2_pvcnn/sensor/"]
-    pvcnn["PVCNN 包装器\n../../Go2Pvcnn/go2_pvcnn/pvcnn_wrapper.py\n../../Go2Pvcnn/go2_pvcnn/wrapper/pvcnn_env_wrapper.py"]
+    planner["planner cache / manager\n../../Go2Pvcnn/extension/batched_planner/manager.py"]
+    pvcnn["PVCNN 专项分支\n../../Go2Pvcnn/go2_pvcnn/pvcnn_wrapper.py\n../../Go2Pvcnn/go2_pvcnn/wrapper/pvcnn_env_wrapper.py\n../../Go2Pvcnn/scripts/train_go2_pvcnn.py"]
     runner["PPO Runner\n../../Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py"]
     outputs["日志/权重/资产\n../../logs\n../../assets\n../../other_model"]
 
@@ -32,10 +33,11 @@ graph LR
     register -->|"gym id -> cfg class"| envcfg
     envcfg -->|"构建 scene / commands / rewards"| obs
     envcfg -->|"实例化 RayCaster / LiDAR"| sensor
+    envcfg -->|"trajectory 实验挂 planner manager"| planner
     sensor -->|"点云/高程图输入"| obs
-    obs -->|"可选调用 PVCNN 提特征"| pvcnn
+    planner -->|"reference cache / reward 读取"| obs
     obs -->|"拼接 policy / critic 观测"| runner
-    pvcnn -->|"特征注入 wrapper / obs"| runner
+    pvcnn -.->|"旧 Go2PvcnnEnv / 专项训练链"| runner
     runner -->|"保存 checkpoint / metrics"| outputs
     outputs -->|"resume / play 时再读取"| train
 ```
@@ -73,19 +75,19 @@ graph LR
 - critic 观测
 - curriculum 难度推进
 
-### 阶段 4：LiDAR 和 PVCNN 提供感知特征
+### 阶段 4：height_scanner / LiDAR / planner cache 提供感知特征
 
-LiDAR / ray caster 负责采样环境点云，PVCNN 负责把点云变成可供策略消费的特征。
+当前 teacher 主线主要使用 semantic / elevation grid、height scanner，以及 `teacher_elevation_trajectory` 下的 planner-owned reference cache。PVCNN 相关点云特征链仍然存在，但主要在 `train_go2_pvcnn.py` 那条专项路径里使用。
 
 输出：
 
-- point cloud
-- semantic / geometric features
-- 供 PPO 使用的感知输入
+- elevation / semantic maps
+- reference trajectory cache
+- 供 PPO 使用的 policy / critic 输入
 
-### 阶段 5：PPO runner 驱动训练和可选同步学习
+### 阶段 5：PPO runner 驱动训练和回放主循环
 
-`rsl_rl` runner 负责 rollout、update、logging、checkpoint，以及可选的 PVCNN 同步训练。
+当前主线通过 `rsl_rl_2_01.runners.OnPolicyRunner` 驱动 rollout、update、logging 与 checkpoint。可选的 PVCNN 同步训练更多属于旧 PVCNN 分支，而不是默认 teacher 路径。
 
 输出：
 

@@ -159,6 +159,19 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
         self.assertTrue(hasattr(module, "build_arg_parser"))
 
+    def test_viewer_attaches_planner_owned_manager_before_warmup(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        env = SimpleNamespace(device=torch.device("cpu"), unwrapped=SimpleNamespace())
+        env_cfg = SimpleNamespace(sim=SimpleNamespace(device="cpu"), planner_owned_reference_cache=True)
+        sentinel_manager = SimpleNamespace(refresh_from_env=SimpleNamespace())
+
+        with patch("extension.batched_planner.manager.BatchedTrajectoryManager", return_value=sentinel_manager) as ctor:
+            module._attach_reference_manager_if_enabled(env, env_cfg)
+
+        ctor.assert_called_once_with(env_cfg, device=torch.device("cpu"))
+        self.assertIs(env.unwrapped._trajectory_manager, sentinel_manager)
+        self.assertIsNone(env.unwrapped._trajectory_reference_cache)
+
     def test_viewer_parser_includes_app_launcher_args(self):
         with _fake_isaaclab_app("--viewer-launcher-flag"):
             module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
@@ -166,6 +179,35 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
             parsed = parser.parse_args(["--viewer-launcher-flag"])
 
         self.assertTrue(parsed.viewer_launcher_flag)
+
+    def test_viewer_parser_defaults_match_validated_diagnostics_regime(self):
+        with _fake_isaaclab_app("--viewer-launcher-flag"):
+            module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+            parser = module.build_arg_parser()
+            parsed = parser.parse_args([])
+
+        self.assertEqual(parsed.terrain, "flat")
+        self.assertEqual(parsed.vx_scale, 0.4)
+        self.assertEqual(parsed.yaw_scale, 0.3)
+
+    def test_viewer_build_planner_cfg_preserves_touchdown_reach_for_translation_commands(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        env_cfg = SimpleNamespace(
+            gait_name="trot",
+            step_freq=2.0,
+            duty_factor=0.6,
+            step_height=0.08,
+            foothold_search_radius=0.15,
+            foothold_search_step=0.03,
+            max_step_down=float("inf"),
+            max_roughness=0.5,
+            replan_stop_speed=0.05,
+            max_touchdown_xy_reach=0.22,
+        )
+
+        planner_cfg = module._build_planner_cfg(env_cfg)
+
+        self.assertEqual(planner_cfg.max_touchdown_xy_reach, 0.22)
 
     def test_viewer_direct_playback_can_drive_robot_pose_from_planner_result(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
@@ -264,6 +306,76 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         torch.testing.assert_close(state.foot_pos, fake_result.foot_pos_w[:, 1])
         self.assertEqual(tuple(state.foot_vel.shape), tuple(state.foot_pos.shape))
         self.assertTrue(torch.all(state.foot_vel == 0))
+
+    def test_viewer_kinematic_planner_state_can_project_reference_quat_to_yaw_only(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+
+        yaw = 0.5
+        roll = 0.2
+        pitch = -0.15
+        cy = torch.cos(torch.tensor(yaw / 2))
+        sy = torch.sin(torch.tensor(yaw / 2))
+        cr = torch.cos(torch.tensor(roll / 2))
+        sr = torch.sin(torch.tensor(roll / 2))
+        cp = torch.cos(torch.tensor(pitch / 2))
+        sp = torch.sin(torch.tensor(pitch / 2))
+        quat_wxyz = torch.tensor(
+            [[[
+                (cr * cp * cy + sr * sp * sy).item(),
+                (sr * cp * cy - cr * sp * sy).item(),
+                (cr * sp * cy + sr * cp * sy).item(),
+                (cr * cp * sy - sr * sp * cy).item(),
+            ]]],
+            dtype=torch.float64,
+        )
+        fake_result = SimpleNamespace(
+            root_pos_w=torch.tensor([[[0.0, 0.0, 0.3]]], dtype=torch.float64),
+            root_quat_w=quat_wxyz,
+            joint_angles=torch.zeros((1, 1, 12), dtype=torch.float64),
+            foot_pos_w=torch.zeros((1, 1, 4, 3), dtype=torch.float64),
+        )
+
+        state = module._planner_state_from_reference_result(fake_result, frame_idx=0, yaw_only_root=True)
+
+        expected = torch.tensor(
+            [[torch.cos(torch.tensor(yaw / 2)).item(), 0.0, 0.0, torch.sin(torch.tensor(yaw / 2)).item()]],
+            dtype=torch.float64,
+        )
+        torch.testing.assert_close(state.root_quat, expected, atol=1e-5, rtol=1e-5)
+
+    def test_viewer_planner_state_from_env_reorders_robot_joint_order_back_to_planner_order(self):
+        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
+        robot = SimpleNamespace(
+            joint_names=[
+                "FL_hip_joint",
+                "FR_hip_joint",
+                "RL_hip_joint",
+                "RR_hip_joint",
+                "FL_thigh_joint",
+                "FR_thigh_joint",
+                "RL_thigh_joint",
+                "RR_thigh_joint",
+                "FL_calf_joint",
+                "FR_calf_joint",
+                "RL_calf_joint",
+                "RR_calf_joint",
+            ],
+            data=SimpleNamespace(
+                root_pos_w=torch.tensor([[0.0, 0.0, 0.3]], dtype=torch.float64),
+                root_quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float64),
+                joint_pos=torch.tensor([[0.0, 3.0, 6.0, 9.0, 1.0, 4.0, 7.0, 10.0, 2.0, 5.0, 8.0, 11.0]], dtype=torch.float64),
+                body_pos_w=torch.zeros((1, 4, 3), dtype=torch.float64),
+                body_lin_vel_w=torch.zeros((1, 4, 3), dtype=torch.float64),
+            ),
+        )
+        env = SimpleNamespace(scene={"robot": robot})
+
+        state = module._planner_state_from_env(env, [0, 1, 2, 3])
+
+        torch.testing.assert_close(
+            state.joint_angles,
+            torch.arange(12, dtype=torch.float64).reshape(1, 12),
+        )
 
     def test_reference_cache_requires_manager_owned_runtime_path(self):
         from extension.mdp import rewards_reference

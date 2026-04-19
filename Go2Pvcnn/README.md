@@ -1,6 +1,21 @@
 # Go2 PVCNN Locomotion
 
-强化学习项目：使用PVCNN处理LiDAR点云数据来训练Unitree Go2机器狗行走。
+## Status Update
+
+当前仓库已经不再只有最早的 PVCNN 训练链。
+
+- 当前默认主线：`scripts/train.py` / `scripts/play.py`
+- 当前默认实验族：`teacher_semantic`、`teacher_without_semantic`、`teacher_elevation`、`teacher_elevation_semantic_map`、`teacher_elevation_trajectory`
+- 当前 `teacher_elevation_trajectory` 主线：planner-only，运行时通过 `extension.batched_planner.manager.BatchedTrajectoryManager`
+- `scripts/train_go2_pvcnn.py` 仍保留，但更适合作为旧的 / 专项 PVCNN 训练入口，而不是默认入口
+
+如果你是第一次进入这个仓库，建议先读：
+
+- [`../notes/index.md`](../notes/index.md)
+- [`scripts/train.py`](scripts/train.py)
+- [`scripts/play.py`](scripts/play.py)
+
+强化学习项目：当前主线以 teacher 系列语义 / 高程 / 轨迹奖励实验为主，同时保留了早期基于 PVCNN 的 LiDAR 点云训练路径。
 
 ## 项目概述
 
