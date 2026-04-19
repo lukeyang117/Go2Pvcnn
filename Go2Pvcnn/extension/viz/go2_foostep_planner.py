@@ -42,6 +42,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
     parser.add_argument("--warmup-steps", type=int, default=6, help="Number of zero-action warmup steps before visualization.")
+    parser.add_argument(
+        "--scripted-command",
+        type=str,
+        default=None,
+        help='Optional fixed body-frame command as "vx vy yaw_rate" for deterministic diagnostics.',
+    )
+    parser.add_argument(
+        "--scripted-command-cycles",
+        type=int,
+        default=0,
+        help="How many replan cycles to apply --scripted-command for (0 disables scripted playback).",
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -114,6 +126,105 @@ def _format_command_values(values: torch.Tensor) -> str:
     return f"({command[0,0]:+0.2f}, {command[0,1]:+0.2f}, {command[0,2]:+0.2f})"
 
 
+def _parse_scripted_command(spec: str | None, *, device: torch.device) -> torch.Tensor | None:
+    if spec is None:
+        return None
+    parts = str(spec).split()
+    if len(parts) != 3:
+        raise ValueError("--scripted-command must contain exactly three floats: vx vy yaw_rate")
+    try:
+        values = [float(part) for part in parts]
+    except ValueError as exc:
+        raise ValueError("--scripted-command must contain exactly three floats: vx vy yaw_rate") from exc
+    return torch.tensor([values], dtype=torch.float64, device=device)
+
+
+def _quat_wxyz_to_rpy(quat_wxyz: torch.Tensor) -> torch.Tensor:
+    quat = torch.as_tensor(quat_wxyz, dtype=torch.float64)
+    w = quat[..., 0]
+    x = quat[..., 1]
+    y = quat[..., 2]
+    z = quat[..., 3]
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+    sinp = torch.clamp(2.0 * (w * y - z * x), -1.0, 1.0)
+    pitch = torch.asin(sinp)
+    yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return torch.stack([roll, pitch, yaw], dim=-1)
+
+
+def _format_xyz(values: torch.Tensor) -> str:
+    tensor = torch.as_tensor(values, dtype=torch.float64)
+    return f"({tensor[0]:+0.3f}, {tensor[1]:+0.3f}, {tensor[2]:+0.3f})"
+
+
+def _format_quat(values: torch.Tensor) -> str:
+    tensor = torch.as_tensor(values, dtype=torch.float64)
+    return f"({tensor[0]:+0.4f}, {tensor[1]:+0.4f}, {tensor[2]:+0.4f}, {tensor[3]:+0.4f})"
+
+
+def _foot_id_list(foot_ids) -> list[int]:
+    if isinstance(foot_ids, torch.Tensor):
+        return [int(value) for value in foot_ids.detach().cpu().tolist()]
+    return [int(value) for value in foot_ids]
+
+
+def _read_actual_base_state(base_env) -> dict[str, torch.Tensor]:
+    from extension.convention import quat_xyzw_to_wxyz
+
+    robot = base_env.scene["robot"]
+    root_pos_w = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float64).clone()
+    root_quat_raw = torch.as_tensor(robot.data.root_quat_w[:1], dtype=torch.float64).clone()
+    rpy_if_wxyz = _quat_wxyz_to_rpy(root_quat_raw)
+    rpy_if_xyzw = _quat_wxyz_to_rpy(quat_xyzw_to_wxyz(root_quat_raw))
+    return {
+        "root_pos_w": root_pos_w,
+        "root_quat_raw": root_quat_raw,
+        "rpy_if_wxyz": rpy_if_wxyz,
+        "rpy_if_xyzw": rpy_if_xyzw,
+    }
+
+
+def _reorder_feet_by_quadrant(foot_pos_w: torch.Tensor, root_pos_w: torch.Tensor) -> torch.Tensor:
+    rel = torch.as_tensor(foot_pos_w, dtype=torch.float64) - torch.as_tensor(root_pos_w, dtype=torch.float64).unsqueeze(1)
+    order = torch.empty((rel.shape[0], 4), dtype=torch.long, device=rel.device)
+    selectors = (
+        torch.tensor([1.0, 1.0], dtype=torch.float64, device=rel.device),
+        torch.tensor([1.0, -1.0], dtype=torch.float64, device=rel.device),
+        torch.tensor([-1.0, 1.0], dtype=torch.float64, device=rel.device),
+        torch.tensor([-1.0, -1.0], dtype=torch.float64, device=rel.device),
+    )
+    xy = rel[..., :2]
+    selected = torch.zeros((rel.shape[0], rel.shape[1]), dtype=torch.bool, device=rel.device)
+    large_negative = torch.finfo(torch.float64).min
+    for target_idx, selector in enumerate(selectors):
+        scores = (xy * selector).sum(dim=-1)
+        scores = torch.where(selected, torch.full_like(scores, large_negative), scores)
+        chosen = scores.argmax(dim=-1)
+        order[:, target_idx] = chosen
+        selected.scatter_(1, chosen.unsqueeze(-1), True)
+    gather_index = order.unsqueeze(-1).expand(-1, -1, foot_pos_w.shape[-1])
+    return foot_pos_w.gather(1, gather_index)
+
+
+def _read_actual_kinematic_state(base_env, foot_ids: list[int] | torch.Tensor) -> dict[str, torch.Tensor]:
+    robot = base_env.scene["robot"]
+    joint_pos_planner = _joint_pos_robot_to_planner(
+        robot,
+        torch.as_tensor(robot.data.joint_pos[:1], dtype=torch.float64).clone(),
+    )
+    body_pos_w = torch.as_tensor(robot.data.body_pos_w[:1], dtype=torch.float64).clone()
+    foot_ids_t = torch.as_tensor(_foot_id_list(foot_ids), dtype=torch.long, device=body_pos_w.device)
+    foot_pos_w = body_pos_w.index_select(1, foot_ids_t)
+    root_pos_w = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float64).clone()
+    foot_pos_w = _reorder_feet_by_quadrant(foot_pos_w, root_pos_w)
+    return {
+        "joint_pos_planner": joint_pos_planner,
+        "foot_pos_w": foot_pos_w,
+    }
+
+
 def _viewer_loop_need_replan(
     *,
     result,
@@ -140,21 +251,19 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
     Isaac Lab is not available in unit tests, so we keep this duck-typed and
     only call common "write_*_to_sim" methods when present.
     """
-    from extension.convention import quat_wxyz_to_xyzw
-
     frame = int(frame_idx)
     root_pos_w = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float32)
     root_quat_wxyz = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float32)
-    root_pose_xyzw = torch.cat([root_pos_w, quat_wxyz_to_xyzw(root_quat_wxyz)], dim=-1)
+    root_pose_wxyz = torch.cat([root_pos_w, root_quat_wxyz], dim=-1)
     joint_pos = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float32)
     joint_pos = _joint_pos_planner_to_robot(robot, joint_pos)
     joint_vel = torch.zeros_like(joint_pos)
 
     if hasattr(robot, "write_root_pose_to_sim"):
-        robot.write_root_pose_to_sim(root_pose_xyzw)
+        robot.write_root_pose_to_sim(root_pose_wxyz)
     elif hasattr(robot, "write_root_state_to_sim"):
         zeros = torch.zeros((root_pos_w.shape[0], 6), dtype=root_pos_w.dtype, device=root_pos_w.device)
-        robot.write_root_state_to_sim(torch.cat([root_pose_xyzw, zeros], dim=-1))
+        robot.write_root_state_to_sim(torch.cat([root_pose_wxyz, zeros], dim=-1))
 
     if hasattr(robot, "write_joint_state_to_sim"):
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
@@ -572,6 +681,7 @@ def _build_planner_cfg(env_cfg):
         max_roughness=float(env_cfg.max_roughness),
         max_touchdown_xy_reach=float(getattr(env_cfg, "max_touchdown_xy_reach", 0.22)),
         replan_stop_speed=float(env_cfg.replan_stop_speed),
+        use_support_contact_terrain_estimator=True,
     )
 
 
@@ -719,6 +829,9 @@ def main() -> int:
     result = None
     playback_frame = 0
     last_cmd = None
+    plan_cycle = 0
+    scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
+    scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
 
     with TerminalTeleop(
         device=base_env.device,
@@ -730,32 +843,42 @@ def main() -> int:
         last_status = None
         last_loop_diag = None
         last_playback_path = None
+        last_actual_summary = None
+        last_kinematic_summary = None
         try:
             while simulation_app.is_running():
                 teleop_cmd = teleop.poll()
+                active_cmd = teleop_cmd
+                if scripted_command is not None and scripted_cycles_remaining > 0:
+                    active_cmd = TeleopCommand(
+                        values=scripted_command.clone(),
+                        reset_requested=teleop_cmd.reset_requested,
+                    )
 
-                if teleop_cmd.reset_requested:
+                if active_cmd.reset_requested:
                     env.reset()
                     for _ in range(max(0, int(args_cli.warmup_steps))):
                         env.step(zero_actions)
                     result = None
                     playback_frame = 0
                     last_cmd = None
+                    plan_cycle = 0
 
                 need_replan = _viewer_loop_need_replan(
                     result=result,
                     playback_frame=playback_frame,
-                    reset_requested=teleop_cmd.reset_requested,
-                    teleop_values=teleop_cmd.values,
+                    reset_requested=active_cmd.reset_requested,
+                    teleop_values=active_cmd.values,
                     last_cmd=last_cmd,
                 )
-                loop_diag = (_format_command_values(teleop_cmd.values), need_replan)
+                loop_diag = (_format_command_values(active_cmd.values), need_replan)
                 if loop_diag != last_loop_diag:
                     print(
                         "[Viewer][Loop] "
                         f"teleop_cmd={loop_diag[0]} "
                         f"need_replan={need_replan} "
-                        f"playback_frame={playback_frame}",
+                        f"playback_frame={playback_frame} "
+                        f"cycle={plan_cycle}",
                         flush=True,
                     )
                     last_loop_diag = loop_diag
@@ -772,7 +895,7 @@ def main() -> int:
                     result = batched_generate_trajectory(
                         terrain,
                         state,
-                        teleop_cmd.values,
+                        active_cmd.values,
                         requested_n_frames=args_cli.n_frames,
                         dt=args_cli.plan_dt,
                         cfg=planner_cfg,
@@ -780,7 +903,8 @@ def main() -> int:
                     summary = _trajectory_motion_summary(result)
                     print(
                         "[Viewer][Plan] "
-                        f"cmd={_format_command_values(teleop_cmd.values)} "
+                        f"cycle={plan_cycle} "
+                        f"cmd={_format_command_values(active_cmd.values)} "
                         f"delta=({summary['dx']:+0.2f}, {summary['dy']:+0.2f}, {summary['dz']:+0.2f}) "
                         f"dyaw={summary['dyaw']:+0.2f} "
                         f"standstill={summary['standstill']}",
@@ -793,10 +917,13 @@ def main() -> int:
                     height_points = _subsample_height_points(ray_hits, int(args_cli.heightmap_viz_stride))
                     visualizer.update(
                         result=result,
-                        command=teleop_cmd.values,
+                        command=active_cmd.values,
                         root_yaw=root_yaw,
                         height_points=height_points,
                     )
+                    plan_cycle += 1
+                    if scripted_command is not None and scripted_cycles_remaining > 0:
+                        scripted_cycles_remaining = max(0, scripted_cycles_remaining - 1)
 
                 if result is not None and playback_frame < result.num_frames:
                     playback_path = _viewer_direct_playback_step(base_env, result, frame_idx=playback_frame)
@@ -806,9 +933,53 @@ def main() -> int:
                             flush=True,
                         )
                         last_playback_path = playback_path
+                    actual = _read_actual_base_state(base_env)
+                    planner_frame = _planner_state_from_reference_result(result, frame_idx=playback_frame)
+                    actual_summary = (
+                        _format_xyz(actual["root_pos_w"][0]),
+                        _format_quat(actual["root_quat_raw"][0]),
+                        _format_xyz(actual["rpy_if_wxyz"][0]),
+                        _format_xyz(actual["rpy_if_xyzw"][0]),
+                        _format_xyz(planner_frame.root_pos[0]),
+                        _format_xyz(_quat_wxyz_to_rpy(planner_frame.root_quat[0])),
+                    )
+                    if actual_summary != last_actual_summary:
+                        print(
+                            "[Viewer][ActualBase] "
+                            f"cycle={max(plan_cycle - 1, 0)} "
+                            f"actual_pos={actual_summary[0]} "
+                            f"actual_quat_raw={actual_summary[1]} "
+                            f"actual_rpy_if_wxyz={actual_summary[2]} "
+                            f"actual_rpy_if_xyzw={actual_summary[3]} "
+                            f"plan_pos={actual_summary[4]} "
+                            f"plan_rpy={actual_summary[5]}",
+                            flush=True,
+                        )
+                        last_actual_summary = actual_summary
+                    actual_kin = _read_actual_kinematic_state(base_env, foot_ids)
+                    joint_err = actual_kin["joint_pos_planner"] - planner_frame.joint_angles
+                    foot_err = actual_kin["foot_pos_w"] - planner_frame.foot_pos
+                    foot_err_norm = torch.linalg.vector_norm(foot_err, dim=-1)
+                    kinematic_summary = (
+                        float(joint_err.abs().max().item()),
+                        float(joint_err.abs().mean().item()),
+                        float(foot_err_norm.max().item()),
+                        float(foot_err_norm.mean().item()),
+                    )
+                    if kinematic_summary != last_kinematic_summary:
+                        print(
+                            "[Viewer][ActualKinematics] "
+                            f"cycle={max(plan_cycle - 1, 0)} "
+                            f"joint_err_max={kinematic_summary[0]:0.6f} "
+                            f"joint_err_mean={kinematic_summary[1]:0.6f} "
+                            f"foot_err_max={kinematic_summary[2]:0.6f} "
+                            f"foot_err_mean={kinematic_summary[3]:0.6f}",
+                            flush=True,
+                        )
+                        last_kinematic_summary = kinematic_summary
                     playback_frame += 1
 
-                last_cmd = teleop_cmd.values.clone()
+                last_cmd = active_cmd.values.clone()
 
                 if result is not None:
                     display_frame = min(playback_frame - 1, result.num_frames - 1) if playback_frame > 0 else 0
@@ -823,12 +994,18 @@ def main() -> int:
                     )
 
                     root_pos = planner_state.root_pos[0]
-                    yaw_rate = float(teleop_cmd.values[0, 2].item())
+                    yaw_rate = float(active_cmd.values[0, 2].item())
+                    actual = _read_actual_base_state(base_env)
+                    actual_pos = actual["root_pos_w"][0]
+                    actual_rpy_xyzw = actual["rpy_if_xyzw"][0]
                     status = (
-                        f"\rcmd vx={teleop_cmd.values[0,0]:+0.2f} "
-                        f"vy={teleop_cmd.values[0,1]:+0.2f} "
+                        f"\rcycle={max(plan_cycle - 1, 0)} "
+                        f"cmd vx={active_cmd.values[0,0]:+0.2f} "
+                        f"vy={active_cmd.values[0,1]:+0.2f} "
                         f"yaw={yaw_rate:+0.2f} | "
-                        f"root=({root_pos[0]:+0.2f}, {root_pos[1]:+0.2f}, {root_pos[2]:+0.2f}) "
+                        f"plan=({root_pos[0]:+0.2f}, {root_pos[1]:+0.2f}, {root_pos[2]:+0.2f}) "
+                        f"actual=({actual_pos[0]:+0.2f}, {actual_pos[1]:+0.2f}, {actual_pos[2]:+0.2f}) "
+                        f"actual_rpy_xyzw=({actual_rpy_xyzw[0]:+0.2f}, {actual_rpy_xyzw[1]:+0.2f}, {actual_rpy_xyzw[2]:+0.2f}) "
                         f"frame={display_frame}/{result.num_frames}"
                     )
                     if status != last_status:

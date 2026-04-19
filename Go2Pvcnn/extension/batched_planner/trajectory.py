@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from ..convention import extract_roll_pitch_batch, extract_yaw_batch, yaw_rotation_matrix_batch
+from ..convention import extract_yaw_batch, yaw_rotation_matrix_batch
 from .base_solver import batched_integrate_base_planar, batched_solve_base_trajectory
 from .config import BatchedTrajectoryConfig
 from .foothold import batched_compute_footholds, batched_evaluate_touchdowns
@@ -13,7 +13,7 @@ from .gait import GAIT_PARAMS, batched_gait_schedule, batched_legs_requiring_tou
 from .ik import batch_forward_kinematics, batch_inverse_kinematics
 from .instrumentation import PlannerInstrumentation
 from .swing import batched_compute_swing_targets
-from .terrain_estimator import batched_estimate_terrain
+from .terrain_estimator import batched_estimate_terrain, batched_support_roll_pitch
 from .types import BatchedRobotState, BatchedTrajectoryResult, HIP_OFFSETS_ARRAY
 
 _STANDSTILL_CMD_EPS = 1e-5
@@ -366,7 +366,7 @@ def batched_generate_trajectory(
         base_pos_approx=base_pos_approx,
         yaw_approx=yaw_approx,
     )
-    initial_roll, initial_pitch = extract_roll_pitch_batch(states.root_quat)
+    initial_roll, initial_pitch = batched_support_roll_pitch(states.foot_pos)
     initial_height = states.foot_pos[..., 2].mean(dim=-1)
     with instr.stage("terrain_est"):
         roll, pitch, height = batched_estimate_terrain(
@@ -377,6 +377,7 @@ def batched_generate_trajectory(
             initial_roll=initial_roll,
             initial_pitch=initial_pitch,
             initial_height=initial_height,
+            contact_state=contact_seq if cfg.use_support_contact_terrain_estimator else None,
         )
         _emit_stage_diagnostics(
             stage_diagnostics,

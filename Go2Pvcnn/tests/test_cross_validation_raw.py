@@ -39,6 +39,7 @@ from extension.batched_planner.ik import (
 from extension.batched_planner.swing import batched_compute_swing_targets
 from extension.batched_planner.trajectory import batched_generate_trajectory
 from extension.batched_planner.types import BatchedRobotState
+from extension.convention import extract_roll_pitch_batch
 
 from tests.fixtures.terrain_adapter import (
     NumpyHeightmapTerrain,
@@ -264,6 +265,41 @@ class TestTrajectoryEndToEnd:
                 atol=atol,
                 rtol=rtol,
             )
+
+    def test_repeated_flat_turn_replans_do_not_accumulate_large_roll_pitch(self, aligned_configs, flat_terrain_pair):
+        raw_cfg, batched_cfg = aligned_configs
+        _heightmap_np, batched_terrain, _wx, _wy = flat_terrain_pair
+
+        raw_state = raw_default_initial_state(terrain=None)
+        state = _raw_state_to_batched(raw_state)
+        batched_cfg.use_support_contact_terrain_estimator = True
+        batched_cmd = torch.tensor([[0.0, 0.0, 0.3]], dtype=torch.float64)
+
+        max_roll_by_cycle: list[float] = []
+        max_pitch_by_cycle: list[float] = []
+
+        for _ in range(4):
+            result = batched_generate_trajectory(
+                batched_terrain,
+                state,
+                batched_cmd,
+                50,
+                0.02,
+                cfg=batched_cfg,
+            )
+            roll, pitch = extract_roll_pitch_batch(result.root_quat_w[0])
+            max_roll_by_cycle.append(float(roll.abs().max().item()))
+            max_pitch_by_cycle.append(float(pitch.abs().max().item()))
+            state = BatchedRobotState(
+                root_pos=result.root_pos_w[:, -1],
+                root_quat=result.root_quat_w[:, -1],
+                joint_angles=result.joint_angles[:, -1],
+                foot_pos=result.foot_pos_w[:, -1],
+                foot_vel=torch.zeros_like(result.foot_pos_w[:, -1]),
+            )
+
+        assert max(max_roll_by_cycle) < 0.20, f"roll drifted across replans: {max_roll_by_cycle}"
+        assert max(max_pitch_by_cycle) < 0.10, f"pitch drifted across replans: {max_pitch_by_cycle}"
 
     def test_full_trajectory_stairs(self, aligned_configs):
         """E2E on a linear ramp (stairs surrogate) terrain.

@@ -257,6 +257,88 @@ class TestKinematicPlaybackLogic:
         torch.testing.assert_close(cmd.values, torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float64))
         assert cmd.reset_requested is False
 
+    def test_parse_scripted_command_returns_single_command_tensor(self):
+        from extension.viz.go2_foostep_planner import _parse_scripted_command
+
+        command = _parse_scripted_command("0.0 0.0 0.3", device=torch.device("cpu"))
+
+        torch.testing.assert_close(command, torch.tensor([[0.0, 0.0, 0.3]], dtype=torch.float64))
+
+    def test_parse_scripted_command_rejects_wrong_arity(self):
+        from extension.viz.go2_foostep_planner import _parse_scripted_command
+
+        with pytest.raises(ValueError, match="three floats"):
+            _parse_scripted_command("0.0 0.3", device=torch.device("cpu"))
+
+    def test_read_actual_base_state_reports_raw_quat_and_both_rpy_conventions(self):
+        from extension.viz.go2_foostep_planner import _read_actual_base_state
+
+        yaw = 0.5
+        raw_xyzw = torch.tensor(
+            [[0.0, 0.0, torch.sin(torch.tensor(yaw / 2)).item(), torch.cos(torch.tensor(yaw / 2)).item()]],
+            dtype=torch.float64,
+        )
+        robot = SimpleNamespace(
+            data=SimpleNamespace(
+                root_pos_w=torch.tensor([[1.0, 2.0, 0.33]], dtype=torch.float64),
+                root_quat_w=raw_xyzw,
+            )
+        )
+        base_env = SimpleNamespace(scene={"robot": robot})
+
+        actual = _read_actual_base_state(base_env)
+
+        torch.testing.assert_close(actual["root_pos_w"], torch.tensor([[1.0, 2.0, 0.33]], dtype=torch.float64))
+        torch.testing.assert_close(actual["root_quat_raw"], raw_xyzw)
+        assert actual["rpy_if_xyzw"].shape == (1, 3)
+        assert actual["rpy_if_wxyz"].shape == (1, 3)
+        assert actual["rpy_if_xyzw"][0, 2].item() == pytest.approx(yaw, abs=1e-6)
+        assert abs(actual["rpy_if_wxyz"][0, 2].item() - yaw) > 1e-3
+
+    def test_read_actual_kinematic_state_reorders_joints_and_slices_feet(self):
+        from extension.viz.go2_foostep_planner import _read_actual_kinematic_state
+
+        robot = SimpleNamespace(
+            joint_names=[
+                "FL_hip_joint",
+                "FR_hip_joint",
+                "RL_hip_joint",
+                "RR_hip_joint",
+                "FL_thigh_joint",
+                "FR_thigh_joint",
+                "RL_thigh_joint",
+                "RR_thigh_joint",
+                "FL_calf_joint",
+                "FR_calf_joint",
+                "RL_calf_joint",
+                "RR_calf_joint",
+            ],
+            data=SimpleNamespace(
+                root_pos_w=torch.tensor([[0.0, 0.0, 0.3]], dtype=torch.float64),
+                root_quat_w=torch.tensor([[0.0, 0.0, 0.0, 1.0]], dtype=torch.float64),
+                joint_pos=torch.tensor([[0.0, 3.0, 6.0, 9.0, 1.0, 4.0, 7.0, 10.0, 2.0, 5.0, 8.0, 11.0]], dtype=torch.float64),
+                body_pos_w=torch.tensor(
+                    [[[-1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0]]],
+                    dtype=torch.float64,
+                ),
+            ),
+        )
+        base_env = SimpleNamespace(scene={"robot": robot})
+
+        actual = _read_actual_kinematic_state(base_env, foot_ids=[0, 1, 2, 3])
+
+        torch.testing.assert_close(
+            actual["joint_pos_planner"],
+            torch.arange(12, dtype=torch.float64).reshape(1, 12),
+        )
+        torch.testing.assert_close(
+            actual["foot_pos_w"],
+            torch.tensor(
+                [[[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0]]],
+                dtype=torch.float64,
+            ),
+        )
+
     def test_direct_playback_reorders_planner_joint_angles_into_robot_joint_order(self):
         from extension.viz.go2_foostep_planner import _apply_direct_playback_to_robot
 
@@ -301,58 +383,6 @@ class TestKinematicPlaybackLogic:
             robot.joint_pos,
             torch.tensor([[0.0, 3.0, 6.0, 9.0, 1.0, 4.0, 7.0, 10.0, 2.0, 5.0, 8.0, 11.0]], dtype=torch.float32),
         )
-
-    def test_direct_playback_can_project_root_orientation_to_yaw_only(self):
-        from extension.viz.go2_foostep_planner import _apply_direct_playback_to_robot
-
-        class FakeRobot:
-            joint_names = []
-
-            def __init__(self):
-                self.root_pose_xyzw = None
-                self.joint_pos = None
-                self.joint_vel = None
-
-            def write_root_pose_to_sim(self, root_pose_xyzw, env_ids=None):
-                self.root_pose_xyzw = root_pose_xyzw.clone()
-
-            def write_joint_state_to_sim(self, joint_pos, joint_vel, env_ids=None):
-                self.joint_pos = joint_pos.clone()
-                self.joint_vel = joint_vel.clone()
-
-        yaw = 0.5
-        roll = 0.2
-        pitch = -0.15
-        cy = torch.cos(torch.tensor(yaw / 2))
-        sy = torch.sin(torch.tensor(yaw / 2))
-        cr = torch.cos(torch.tensor(roll / 2))
-        sr = torch.sin(torch.tensor(roll / 2))
-        cp = torch.cos(torch.tensor(pitch / 2))
-        sp = torch.sin(torch.tensor(pitch / 2))
-        quat_wxyz = torch.tensor(
-            [[[
-                (cr * cp * cy + sr * sp * sy).item(),
-                (sr * cp * cy - cr * sp * sy).item(),
-                (cr * sp * cy + sr * cp * sy).item(),
-                (cr * cp * sy - sr * sp * cy).item(),
-            ]]],
-            dtype=torch.float64,
-        )
-
-        robot = FakeRobot()
-        fake_result = SimpleNamespace(
-            root_pos_w=torch.tensor([[[0.0, 0.0, 0.3]]], dtype=torch.float64),
-            root_quat_w=quat_wxyz,
-            joint_angles=torch.zeros((1, 1, 12), dtype=torch.float64),
-        )
-
-        _apply_direct_playback_to_robot(robot, fake_result, frame_idx=0, yaw_only_root=True)
-
-        expected_root_pose = torch.tensor(
-            [[0.0, 0.0, 0.3, 0.0, 0.0, torch.sin(torch.tensor(yaw / 2)).item(), torch.cos(torch.tensor(yaw / 2)).item()]],
-            dtype=torch.float32,
-        )
-        torch.testing.assert_close(robot.root_pose_xyzw, expected_root_pose, atol=1e-5, rtol=1e-5)
 
     def test_viewer_playback_branch_defaults_to_scene_sync(self):
         from extension.viz.go2_foostep_planner import _viewer_direct_playback_step

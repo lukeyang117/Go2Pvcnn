@@ -19,6 +19,7 @@ class BatchedTrajectoryConfig:
     max_roughness: float = 0.5
     max_touchdown_xy_reach: float = 0.15
     replan_stop_speed: float = 0.05
+    use_support_contact_terrain_estimator: bool = False
 
 
 __all__ = ["BatchedTrajectoryConfig"]

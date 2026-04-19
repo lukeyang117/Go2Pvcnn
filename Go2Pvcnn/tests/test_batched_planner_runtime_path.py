@@ -235,8 +235,8 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
 
         module._apply_direct_playback_to_robot(robot, fake_result, frame_idx=0)
 
-        # root pose should be (x,y,z,qx,qy,qz,qw) == (pos, identity xyzw)
-        expected_root_pose = torch.tensor([[1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)
+        # Isaac Lab write_root_pose_to_sim expects quaternion in wxyz order.
+        expected_root_pose = torch.tensor([[1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)
         torch.testing.assert_close(robot.root_pose_xyzw, expected_root_pose)
         torch.testing.assert_close(robot.joint_pos, torch.ones((1, 12), dtype=torch.float32))
         torch.testing.assert_close(robot.joint_vel, torch.zeros((1, 12), dtype=torch.float32))
@@ -306,42 +306,6 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         torch.testing.assert_close(state.foot_pos, fake_result.foot_pos_w[:, 1])
         self.assertEqual(tuple(state.foot_vel.shape), tuple(state.foot_pos.shape))
         self.assertTrue(torch.all(state.foot_vel == 0))
-
-    def test_viewer_kinematic_planner_state_can_project_reference_quat_to_yaw_only(self):
-        module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
-
-        yaw = 0.5
-        roll = 0.2
-        pitch = -0.15
-        cy = torch.cos(torch.tensor(yaw / 2))
-        sy = torch.sin(torch.tensor(yaw / 2))
-        cr = torch.cos(torch.tensor(roll / 2))
-        sr = torch.sin(torch.tensor(roll / 2))
-        cp = torch.cos(torch.tensor(pitch / 2))
-        sp = torch.sin(torch.tensor(pitch / 2))
-        quat_wxyz = torch.tensor(
-            [[[
-                (cr * cp * cy + sr * sp * sy).item(),
-                (sr * cp * cy - cr * sp * sy).item(),
-                (cr * sp * cy + sr * cp * sy).item(),
-                (cr * cp * sy - sr * sp * cy).item(),
-            ]]],
-            dtype=torch.float64,
-        )
-        fake_result = SimpleNamespace(
-            root_pos_w=torch.tensor([[[0.0, 0.0, 0.3]]], dtype=torch.float64),
-            root_quat_w=quat_wxyz,
-            joint_angles=torch.zeros((1, 1, 12), dtype=torch.float64),
-            foot_pos_w=torch.zeros((1, 1, 4, 3), dtype=torch.float64),
-        )
-
-        state = module._planner_state_from_reference_result(fake_result, frame_idx=0, yaw_only_root=True)
-
-        expected = torch.tensor(
-            [[torch.cos(torch.tensor(yaw / 2)).item(), 0.0, 0.0, torch.sin(torch.tensor(yaw / 2)).item()]],
-            dtype=torch.float64,
-        )
-        torch.testing.assert_close(state.root_quat, expected, atol=1e-5, rtol=1e-5)
 
     def test_viewer_planner_state_from_env_reorders_robot_joint_order_back_to_planner_order(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")

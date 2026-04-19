@@ -51,6 +51,35 @@ def _sample_sequences(batch_size: int = 2, num_frames: int = 25):
 
 
 class BatchedTerrainEstimatorTest(unittest.TestCase):
+    def test_support_roll_pitch_matches_raw_support_plane_solver(self):
+        from extension.batched_planner.terrain_estimator import batched_support_roll_pitch
+        from scripts.go2fp.base_solver import solve_base_roll_pitch as raw_solve_base_roll_pitch
+
+        foot_pos = torch.tensor(
+            [
+                [
+                    [0.22, 0.12, -0.28],
+                    [0.22, -0.12, -0.32],
+                    [-0.22, 0.12, -0.26],
+                    [-0.22, -0.12, -0.30],
+                ],
+                [
+                    [0.20, 0.10, -0.31],
+                    [0.20, -0.10, -0.29],
+                    [-0.20, 0.10, -0.33],
+                    [-0.20, -0.10, -0.31],
+                ],
+            ],
+            dtype=torch.float64,
+        )
+
+        roll, pitch = batched_support_roll_pitch(foot_pos)
+
+        for idx in range(int(foot_pos.shape[0])):
+            expected_roll, expected_pitch = raw_solve_base_roll_pitch(foot_pos[idx].cpu().numpy())
+            self.assertAlmostEqual(roll[idx].item(), expected_roll, places=7)
+            self.assertAlmostEqual(pitch[idx].item(), expected_pitch, places=7)
+
     def test_estimate_terrain_matches_raw(self):
         from extension.batched_planner.terrain_estimator import batched_estimate_terrain
         from scripts.go2fp.terrain_estimator import estimate_terrain_batch as raw_estimate_terrain_batch
@@ -100,6 +129,40 @@ class BatchedTerrainEstimatorTest(unittest.TestCase):
             torch.testing.assert_close(roll[idx], torch.as_tensor(expected[0], dtype=roll.dtype), atol=1e-7, rtol=1e-7)
             torch.testing.assert_close(pitch[idx], torch.as_tensor(expected[1], dtype=pitch.dtype), atol=1e-7, rtol=1e-7)
             torch.testing.assert_close(height[idx], torch.as_tensor(expected[2], dtype=height.dtype), atol=1e-7, rtol=1e-7)
+
+    def test_estimate_terrain_with_contact_state_ignores_swing_leg_lift(self):
+        from extension.batched_planner.terrain_estimator import batched_estimate_terrain
+
+        foot_pos = torch.tensor(
+            [
+                [
+                    [
+                        [0.22, 0.12, -0.18],
+                        [0.22, -0.12, -0.30],
+                        [-0.22, 0.12, -0.30],
+                        [-0.22, -0.12, -0.18],
+                    ]
+                ]
+            ],
+            dtype=torch.float64,
+        )
+        base_pos = torch.zeros((1, 1, 3), dtype=torch.float64)
+        base_yaw = torch.zeros((1, 1), dtype=torch.float64)
+        contact_state = torch.tensor([[[0.0, 1.0, 1.0, 0.0]]], dtype=torch.float64)
+
+        roll_free, pitch_free, height_free = batched_estimate_terrain(foot_pos, base_pos, base_yaw)
+        roll_support, pitch_support, height_support = batched_estimate_terrain(
+            foot_pos,
+            base_pos,
+            base_yaw,
+            contact_state=contact_state,
+        )
+
+        self.assertGreater(abs(roll_free[0, 0].item()), 0.01)
+        self.assertAlmostEqual(roll_support[0, 0].item(), 0.0, places=7)
+        self.assertAlmostEqual(pitch_support[0, 0].item(), 0.0, places=7)
+        self.assertAlmostEqual(height_support[0, 0].item(), -0.30, places=7)
+        self.assertGreater(height_free[0, 0].item(), height_support[0, 0].item())
 
 
 if __name__ == "__main__":
