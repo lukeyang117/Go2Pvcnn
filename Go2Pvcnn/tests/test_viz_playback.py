@@ -7,8 +7,17 @@ or simulation is required.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import signal
 import torch
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 class FakeTrajectoryResult:
@@ -119,6 +128,90 @@ class TestKinematicPlaybackLogic:
             playback_frame += 1
         assert max(accessed_frames) == result.num_frames - 1
         assert len(accessed_frames) == result.num_frames
+
+    def test_trajectory_motion_summary_detects_standstill_result(self):
+        from extension.viz.go2_foostep_planner import _trajectory_motion_summary
+
+        result = FakeTrajectoryResult(n_frames=5)
+        result.root_pos_w[:] = result.root_pos_w[:, :1]
+        result.root_quat_w[:] = result.root_quat_w[:, :1]
+
+        summary = _trajectory_motion_summary(result)
+
+        assert summary["standstill"] is True
+        assert summary["dx"] == pytest.approx(0.0)
+        assert summary["dy"] == pytest.approx(0.0)
+        assert summary["dyaw"] == pytest.approx(0.0)
+
+    def test_trajectory_motion_summary_reports_planar_and_yaw_motion(self):
+        from extension.viz.go2_foostep_planner import _trajectory_motion_summary
+
+        result = FakeTrajectoryResult(n_frames=3)
+        result.root_pos_w[0, 0] = torch.tensor([0.0, 0.0, 0.3], dtype=torch.float64)
+        result.root_pos_w[0, -1] = torch.tensor([0.4, -0.2, 0.3], dtype=torch.float64)
+        result.root_quat_w[0, 0] = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float64)
+        yaw = 0.5
+        result.root_quat_w[0, -1] = torch.tensor([torch.cos(torch.tensor(yaw / 2)).item(), 0.0, 0.0, torch.sin(torch.tensor(yaw / 2)).item()], dtype=torch.float64)
+
+        summary = _trajectory_motion_summary(result)
+
+        assert summary["standstill"] is False
+        assert summary["dx"] == pytest.approx(0.4)
+        assert summary["dy"] == pytest.approx(-0.2)
+        assert summary["dyaw"] == pytest.approx(0.5)
+
+    def test_terminal_teleop_sigint_handler_restores_tty_before_interrupt(self):
+        from extension.viz.go2_foostep_planner import TerminalTeleop
+
+        teleop = TerminalTeleop(
+            device=torch.device("cpu"),
+            vx_scale=0.5,
+            vy_scale=0.5,
+            yaw_scale=1.0,
+            timeout_s=0.1,
+        )
+        calls: list[str] = []
+
+        def fake_restore():
+            calls.append("restore")
+
+        teleop._restore_terminal_state = fake_restore  # type: ignore[method-assign]
+
+        with pytest.raises(KeyboardInterrupt):
+            teleop._handle_signal(signal.SIGINT, None)
+
+        assert calls == ["restore"]
+
+    def test_terminal_teleop_poll_reads_stdin_and_maps_wasdqe(self, monkeypatch):
+        from extension.viz.go2_foostep_planner import TerminalTeleop
+
+        teleop = TerminalTeleop(
+            device=torch.device("cpu"),
+            vx_scale=0.4,
+            vy_scale=0.4,
+            yaw_scale=1.0,
+            timeout_s=0.2,
+        )
+        teleop._enabled = True
+
+        fake_stdin = SimpleNamespace(read=lambda n=1: "w")
+        select_calls = {"count": 0}
+
+        def fake_select(read_list, write_list, err_list, timeout):
+            select_calls["count"] += 1
+            if select_calls["count"] == 1:
+                return ([fake_stdin], [], [])
+            return ([], [], [])
+
+        times = iter([10.0, 10.0])
+        monkeypatch.setattr("extension.viz.go2_foostep_planner.sys.stdin", fake_stdin)
+        monkeypatch.setattr("extension.viz.go2_foostep_planner.select.select", fake_select)
+        monkeypatch.setattr("extension.viz.go2_foostep_planner.time.monotonic", lambda: next(times))
+
+        cmd = teleop.poll()
+
+        torch.testing.assert_close(cmd.values, torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float64))
+        assert cmd.reset_requested is False
 
 
 def _need_replan(

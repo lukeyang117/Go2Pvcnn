@@ -133,6 +133,46 @@ joint_pos_mean_abs=0.000000
   - 但 Go2 本体姿态不正常
   - 甚至像整体翻转或某条腿怪
 
+### 5. `WASD` 不动的另一个强嫌疑：viewer 输入链就是 stdin，不是窗口键盘事件
+
+这一点现在不只是代码阅读结论，还有单测佐证：
+
+- 代码位置：
+  - `Go2Pvcnn/extension/viz/go2_foostep_planner.py`
+    - `TerminalTeleop.__enter__()` 先检查 `sys.stdin.isatty()`
+    - `TerminalTeleop.poll()` 使用 `select.select([sys.stdin], ...)` 和 `sys.stdin.read(1)`
+- 单测：
+  - `Go2Pvcnn/tests/test_viz_playback.py::test_terminal_teleop_poll_reads_stdin_and_maps_wasdqe`
+
+执行命令：
+
+```bash
+python -m pytest Go2Pvcnn/tests/test_viz_playback.py::TestKinematicPlaybackLogic::test_terminal_teleop_poll_reads_stdin_and_maps_wasdqe -q
+```
+
+结果：
+
+- `1 passed`
+
+这条测试证明的是：
+
+- `TerminalTeleop.poll()` 的键盘来源就是 `stdin`
+- 它不是 Isaac viewer 窗口事件系统
+- 所以如果你的焦点不在启动脚本的终端里，或者 livestream / headless 使用方式让终端输入链异常，
+  **`WASD` 可能根本没有被写进 `teleop_cmd.values`**
+
+这会直接导致：
+
+- `need_replan` 不会因为命令变化而触发
+- planner 压根拿不到新的平移命令
+- 于是表面现象就会是：
+  - touchdown 不动
+  - robot 也不动
+
+换句话说：
+
+- **“WASD 不动”现在最应该优先怀疑的是输入链，而不是 planner 不支持平移。**
+
 ## 对原始现象的重新归因
 
 ### 现象 A：`WASD` 时 touchdowns 和机器人都不动
@@ -198,6 +238,13 @@ joint_pos_mean_abs=0.000000
   - `scene.update(...)`
 - viewer 主循环：
   - 目前只有 `render()`
+
+这件事从代码上也能直接看出来：
+
+- `Go2Pvcnn/extension/viz/go2_foostep_planner.py`
+  - `_apply_direct_playback_to_robot(...)` 只写 root/joint 到 robot
+  - main loop 播放分支只接了 `base_env.sim.render()`
+  - 没有接 `scene.write_data_to_sim()` / `scene.update(...)`
 
 这两条链的差异，最值得优先确认。
 
