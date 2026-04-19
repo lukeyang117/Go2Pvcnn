@@ -179,3 +179,20 @@ def test_planner_stage_diagnostics_batched_smoke_preserves_tensor_path(real_runt
         primary = stage.primary_tensor
         assert isinstance(primary, torch.Tensor)
         assert primary.shape[0] == 32
+
+
+def test_viewer_style_forward_replan_sequence_does_not_stick_in_standstill(real_runtime):
+    report = real_runtime.viewer_style_replan_sequence("forward", num_cycles=3)
+
+    for cycle_idx, summary in enumerate(report.cycle_summaries):
+        stage_summary = report.cycle_stage_summaries[cycle_idx]["result"]
+        print(
+            f"[viewer-style-replan] cycle={cycle_idx} "
+            f"standstill={summary['standstill']} "
+            f"dx={summary['dx']:+0.4f} dy={summary['dy']:+0.4f} dyaw={summary['dyaw']:+0.4f} "
+            f"stage_standstill_ratio={stage_summary['standstill_ratio']:+0.4f} "
+            f"path_dx_mean={stage_summary['path_dx_mean']:+0.4f}"
+        )
+        assert summary["standstill"] is False
+        assert stage_summary["standstill_ratio"] == 0.0
+        assert stage_summary["path_dx_mean"] > 0.05

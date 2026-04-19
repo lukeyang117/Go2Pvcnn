@@ -127,6 +127,13 @@ class PlaybackDivergenceReport:
     plan: RuntimePlanStageDiagnostics
 
 
+@dataclass(frozen=True, slots=True)
+class ViewerStyleReplanReport:
+    command_name: str
+    cycle_summaries: tuple[dict[str, float | bool], ...]
+    cycle_stage_summaries: tuple[dict[str, dict[str, float]], ...]
+
+
 _APP_STATE: _RuntimeAppState | None = None
 
 
@@ -663,6 +670,42 @@ class RealViewerRuntimeFixture:
             plan=plan,
         )
 
+    def viewer_style_replan_sequence(self, name: str, *, num_cycles: int = 3) -> ViewerStyleReplanReport:
+        if num_cycles < 1:
+            raise ValueError("num_cycles must be >= 1")
+
+        self.reset()
+        terrain = self._single_env_terrain()
+        command = self._command_tensor(name)[:1]
+        state = self._single_env_state()
+        cycle_summaries: list[dict[str, float | bool]] = []
+        cycle_stage_summaries: list[dict[str, dict[str, float]]] = []
+
+        for cycle_idx in range(num_cycles):
+            collector = _StageSnapshotCollector()
+            result = self._batched_generate_trajectory(
+                terrain,
+                state,
+                command,
+                requested_n_frames=self.requested_n_frames,
+                dt=self.plan_dt,
+                cfg=self.planner_cfg,
+                stage_diagnostics=collector.capture,
+            )
+            summary = self._viewer._trajectory_motion_summary(result)
+            _, stages, stage_summaries = self._build_stage_diagnostics(collector)
+            cycle_summaries.append(dict(summary))
+            cycle_stage_summaries.append(stage_summaries)
+
+            frame_idx = min(result.num_frames - 1, max(0, result.num_frames - 1))
+            state = self._viewer._planner_state_from_reference_result(result, frame_idx=frame_idx)
+
+        return ViewerStyleReplanReport(
+            command_name=name,
+            cycle_summaries=tuple(cycle_summaries),
+            cycle_stage_summaries=tuple(cycle_stage_summaries),
+        )
+
 
 def make_real_runtime_fixture(**kwargs) -> RealViewerRuntimeFixture:
     import pytest
@@ -701,6 +744,9 @@ __all__ = [
     "RealViewerRuntimeFixture",
     "RuntimePlanDiagnostics",
     "RuntimePlanStageDiagnostics",
+    "ViewerStyleReplanReport",
     "build_command_cases",
+    "format_playback_divergence_report",
+    "format_stage_summary_report",
     "make_real_runtime_fixture",
 ]
