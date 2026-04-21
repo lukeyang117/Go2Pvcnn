@@ -5,7 +5,7 @@
 - doc role: AI retrieval note for planner-based trajectory rewards
 - paired human doc: [../human/human-11-extension-trajectory-reward.md](../human/human-11-extension-trajectory-reward.md)
 - previous: [ai-10-extension-planner-runtime.md](ai-10-extension-planner-runtime.md)
-- next: none
+- next: [ai-12-isaaclab-runtime-testing-reference.md](ai-12-isaaclab-runtime-testing-reference.md)
 - master index: [../index.md](../index.md)
 - raw index: [../../raw/kinematic_footsteps/notes/index.md](../../raw/kinematic_footsteps/notes/index.md)
 

@@ -159,6 +159,89 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
         self.assertTrue(hasattr(module, "build_arg_parser"))
 
+    def test_play_module_is_import_safe(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+        self.assertTrue(hasattr(module, "build_arg_parser"))
+
+    def test_play_parser_includes_app_launcher_args_and_debug_flag(self):
+        with _fake_isaaclab_app("--play-launcher-flag"):
+            module = _fresh_import("Go2Pvcnn.scripts.play")
+            parser = module.build_arg_parser()
+            parsed = parser.parse_args(
+                [
+                    "--run_dir",
+                    "2026-04-16_11-53-48",
+                    "--checkpoint",
+                    "model_5300.pt",
+                    "--debug-livestream",
+                    "--play-launcher-flag",
+                ]
+            )
+
+        self.assertTrue(parsed.debug_livestream)
+        self.assertTrue(parsed.play_launcher_flag)
+
+    def test_play_prepare_runtime_args_enables_cameras_for_livestream(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+        args = SimpleNamespace(
+            livestream=2,
+            enable_cameras=False,
+            headless=True,
+            video=False,
+            debug_livestream=False,
+        )
+
+        prepared = module._prepare_runtime_args(args)
+
+        self.assertIs(prepared, args)
+        self.assertTrue(prepared.enable_cameras)
+
+    def test_play_render_mode_uses_rgb_array_for_livestream(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+        args = SimpleNamespace(video=False, livestream=2)
+
+        render_mode = module._resolve_render_mode(args)
+
+        self.assertEqual(render_mode, "rgb_array")
+
+    def test_play_camera_update_policy_throttles_livestream(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+
+        self.assertTrue(module._should_update_follow_camera(timestep=8, num_envs=1, livestream=2, interval=4))
+        self.assertFalse(module._should_update_follow_camera(timestep=9, num_envs=1, livestream=2, interval=4))
+        self.assertTrue(module._should_update_follow_camera(timestep=9, num_envs=1, livestream=0, interval=4))
+        self.assertFalse(module._should_update_follow_camera(timestep=8, num_envs=2, livestream=2, interval=4))
+
+    def test_play_debug_runtime_snapshot_reports_effective_launch_settings(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+        args = SimpleNamespace(
+            livestream=2,
+            headless=True,
+            enable_cameras=True,
+            device="cuda:0",
+            debug_livestream=True,
+        )
+
+        snapshot = module._collect_runtime_debug_snapshot(args, argv=["python", "play.py", "--livestream", "2"])
+
+        self.assertEqual(snapshot["argv"], ["python", "play.py", "--livestream", "2"])
+        self.assertEqual(snapshot["args"]["livestream"], 2)
+        self.assertEqual(snapshot["args"]["headless"], True)
+        self.assertEqual(snapshot["args"]["enable_cameras"], True)
+
+    def test_play_step_probe_snapshot_resets_accumulators(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+        probe = module._StepProbe(enabled=True)
+        probe.accumulators["sim_step_s"] = 1.25
+        probe.accumulators["obs_compute_s"] = 0.5
+
+        snapshot = probe.snapshot_and_reset()
+
+        self.assertEqual(snapshot["sim_step_s"], 1.25)
+        self.assertEqual(snapshot["obs_compute_s"], 0.5)
+        self.assertEqual(probe.accumulators["sim_step_s"], 0.0)
+        self.assertEqual(probe.accumulators["obs_compute_s"], 0.0)
+
     def test_viewer_attaches_planner_owned_manager_before_warmup(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
         env = SimpleNamespace(device=torch.device("cpu"), unwrapped=SimpleNamespace())

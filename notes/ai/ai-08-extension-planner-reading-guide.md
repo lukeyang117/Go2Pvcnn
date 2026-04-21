@@ -24,12 +24,14 @@ Do not treat those as interchangeable.
 1. [ai-09-extension-planner-mapping.md](ai-09-extension-planner-mapping.md)
 2. [ai-10-extension-planner-runtime.md](ai-10-extension-planner-runtime.md)
 3. [ai-11-extension-trajectory-reward.md](ai-11-extension-trajectory-reward.md)
+4. [ai-12-isaaclab-runtime-testing-reference.md](ai-12-isaaclab-runtime-testing-reference.md)
 
 Use them by question type:
 
 - CPU vs pure-GPU distinction -> `ai-09`
 - planner / Isaac Lab runtime boundary -> `ai-10`
 - planner / reward boundary -> `ai-11`
+- Isaac Lab real runtime test pitfalls / debugging workflow -> `ai-12`
 
 ## Hard Constraints
 
