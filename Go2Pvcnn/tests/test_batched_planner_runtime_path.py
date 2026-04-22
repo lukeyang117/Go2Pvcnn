@@ -174,12 +174,15 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
                     "--checkpoint",
                     "model_5300.pt",
                     "--debug-livestream",
+                    "--warmup-steps",
+                    "12",
                     "--play-launcher-flag",
                 ]
             )
 
         self.assertTrue(parsed.debug_livestream)
         self.assertTrue(parsed.play_launcher_flag)
+        self.assertEqual(parsed.warmup_steps, 12)
 
     def test_play_prepare_runtime_args_enables_cameras_for_livestream(self):
         module = _fresh_import("Go2Pvcnn.scripts.play")
@@ -241,6 +244,13 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertEqual(snapshot["obs_compute_s"], 0.5)
         self.assertEqual(probe.accumulators["sim_step_s"], 0.0)
         self.assertEqual(probe.accumulators["obs_compute_s"], 0.0)
+
+    def test_play_should_run_warmup_before_loop_when_positive_steps_requested(self):
+        module = _fresh_import("Go2Pvcnn.scripts.play")
+
+        self.assertTrue(module._should_run_warmup(30))
+        self.assertFalse(module._should_run_warmup(0))
+        self.assertFalse(module._should_run_warmup(-3))
 
     def test_viewer_attaches_planner_owned_manager_before_warmup(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")

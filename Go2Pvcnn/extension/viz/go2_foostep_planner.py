@@ -31,7 +31,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description="Visualize batched Go2 footstep planning in Isaac Lab.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of Isaac Lab environments.")
-    parser.add_argument("--terrain", type=str, default="flat", choices=["flat", "stairs", "mixed"])
+    parser.add_argument(
+        "--terrain",
+        type=str,
+        default="task",
+        choices=["task"],
+        help="Use the terrain generator exactly as defined by teacher_elevation_trajectory env config.",
+    )
     parser.add_argument("--n-frames", type=int, default=50, help="Planner horizon in frames.")
     parser.add_argument("--plan-dt", type=float, default=0.02, help="Planner integration step.")
     parser.add_argument("--vx-scale", type=float, default=0.4, help="Teleop forward/backward speed.")
@@ -623,31 +629,6 @@ class PlannerVisualizer:
         )
 
 
-def _apply_terrain_mode(env_cfg, terrain_mode: str) -> None:
-    tg = env_cfg.scene.terrain.terrain_generator
-    if tg is None:
-        return
-
-    for name, sub_terrain in tg.sub_terrains.items():
-        sub_terrain.proportion = 0.0
-
-    if terrain_mode == "flat":
-        tg.num_rows = 1
-        tg.num_cols = 1
-        tg.sub_terrains["flat"].proportion = 1.0
-    elif terrain_mode == "stairs":
-        tg.num_rows = 1
-        tg.num_cols = 1
-        tg.sub_terrains["pyramid_stairs"].proportion = 1.0
-    else:
-        tg.num_rows = 1
-        tg.num_cols = 2
-        tg.sub_terrains["flat"].proportion = 0.5
-        tg.sub_terrains["pyramid_stairs"].proportion = 0.5
-
-    env_cfg.scene.terrain.max_init_terrain_level = 0
-
-
 def _build_env_cfg(args_cli: argparse.Namespace):
     from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg_PLAY
 
@@ -663,7 +644,6 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     reset_base.params["pose_range"]["x"] = (0.0, 0.0)
     reset_base.params["pose_range"]["y"] = (0.0, 0.0)
     reset_base.params["pose_range"]["yaw"] = (0.0, 0.0)
-    _apply_terrain_mode(env_cfg, args_cli.terrain)
     return env_cfg
 
 
@@ -817,7 +797,7 @@ def main() -> int:
     scanner = base_env.scene.sensors["height_scanner"]
     visualizer = PlannerVisualizer()
 
-    print(f"[Viewer] Terrain mode: {args_cli.terrain}", flush=True)
+    print("[Viewer] Terrain source: teacher_elevation_trajectory env config", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
     print("[Viewer] Playback mode: kinematic (no physics)", flush=True)
     _print_help()

@@ -100,27 +100,28 @@ conda run -n env_isaaclab python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
   --headless \
   --livestream 2 \
   --device cuda:0 \
-  --terrain mixed
+  --terrain task
 ```
 
-只看平地：
+常用单环境启动：
+
+```bash
+conda run -n env_isaaclab python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --device cuda:0 \
+  --num_envs 1 \
+  --terrain task
+```
+
+固定 horizon / planner dt：
 
 ```bash
 conda run -n env_isaaclab python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
   --headless \
   --livestream 2 \
   --device cuda:0 \
-  --terrain flat
-```
-
-只看楼梯：
-
-```bash
-conda run -n env_isaaclab python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
-  --headless \
-  --livestream 2 \
-  --device cuda:0 \
-  --terrain stairs
+  --terrain task \
+  --n-frames 50 \
+  --plan-dt 0.02
 ```
 
 teleop 键位：
@@ -175,7 +176,7 @@ conda run -n env_isaaclab python Go2Pvcnn/scripts/play.py \
 viewer 侧：
 
 - `--terrain`
-  `flat / stairs / mixed`。
+  当前只支持 `task`，表示严格使用 `teacher_elevation_trajectory` 任务配置里的 terrain generator。
 - `--n-frames`
   planner horizon。
 - `--plan-dt`
@@ -186,6 +187,10 @@ viewer 侧：
   viewer 启动后零动作 warmup 步数。
 - `--livestream`
   Isaac Sim WebRTC 模式，通常用 `2`。
+- `--num_envs`
+  viewer 创建的 Isaac Lab 环境数，当前最常用的是 `1`。
+- `--device`
+  viewer / planner / scanner 所在 device，通常用 `cuda:0`。
 
 env cfg 侧关键字段：
 
@@ -228,6 +233,11 @@ viewer 能启动但不重规划：
 
 - 先看 teleop 命令是否真的写进 shared command 通道
 - 再看 reset / command change 是否进入 manager 的 immediate replan 分支
+
+`argument --terrain: invalid choice`
+
+- 说明你还在用旧文档里的 `flat / stairs / mixed`
+- 当前 viewer 已经改成严格对齐任务地形配置，只接受 `--terrain task`
 
 ## 现在的建议使用顺序
 
