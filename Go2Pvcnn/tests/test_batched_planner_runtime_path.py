@@ -137,13 +137,17 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
     def test_train_attaches_planner_owned_manager_for_teacher_elevation_trajectory(self):
         module = _fresh_import("Go2Pvcnn.scripts.train")
         env = SimpleNamespace(device=torch.device("cpu"), unwrapped=SimpleNamespace())
-        env_cfg = SimpleNamespace(sim=SimpleNamespace(device="cpu"), planner_owned_reference_cache=True)
-        sentinel_manager = SimpleNamespace(refresh_from_env=SimpleNamespace())
+        env_cfg = SimpleNamespace(
+            sim=SimpleNamespace(device="cpu"),
+            planner_owned_reference_cache=True,
+            planner_backend="together",
+        )
+        sentinel_manager = SimpleNamespace(planner_backend="together", refresh_from_env=SimpleNamespace())
 
-        with patch("extension.batched_planner.manager.BatchedTrajectoryManager", return_value=sentinel_manager) as ctor:
+        with patch("extension.trajectory_manager_factory.create_trajectory_manager", return_value=sentinel_manager) as factory:
             module._attach_reference_manager_if_enabled(env, env_cfg, "teacher_elevation_trajectory")
 
-        ctor.assert_called_once_with(env_cfg, device=torch.device("cpu"))
+        factory.assert_called_once_with(env_cfg, device=torch.device("cpu"))
         self.assertIs(env.unwrapped._trajectory_manager, sentinel_manager)
         self.assertIsNone(env.unwrapped._trajectory_reference_cache)
 
@@ -174,15 +178,13 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
                     "--checkpoint",
                     "model_5300.pt",
                     "--debug-livestream",
-                    "--warmup-steps",
-                    "12",
                     "--play-launcher-flag",
                 ]
             )
 
         self.assertTrue(parsed.debug_livestream)
         self.assertTrue(parsed.play_launcher_flag)
-        self.assertEqual(parsed.warmup_steps, 12)
+        self.assertIsNone(parsed.planner_backend)
 
     def test_play_prepare_runtime_args_enables_cameras_for_livestream(self):
         module = _fresh_import("Go2Pvcnn.scripts.play")
@@ -245,23 +247,31 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
         self.assertEqual(probe.accumulators["sim_step_s"], 0.0)
         self.assertEqual(probe.accumulators["obs_compute_s"], 0.0)
 
-    def test_play_should_run_warmup_before_loop_when_positive_steps_requested(self):
+    def test_play_configures_batched_reference_runtime_and_warns_legacy_raw_flag(self):
         module = _fresh_import("Go2Pvcnn.scripts.play")
+        env_cfg = SimpleNamespace(use_batched_reference_trajectory=False)
 
-        self.assertTrue(module._should_run_warmup(30))
-        self.assertFalse(module._should_run_warmup(0))
-        self.assertFalse(module._should_run_warmup(-3))
+        with patch("builtins.print") as print_mock:
+            module._configure_reference_trajectory(env_cfg, use_raw_reference_trajectory=True)
 
-    def test_viewer_attaches_planner_owned_manager_before_warmup(self):
+        self.assertTrue(env_cfg.use_batched_reference_trajectory)
+        print_mock.assert_called_once()
+        self.assertIn("legacy-only", print_mock.call_args.args[0])
+
+    def test_viewer_attaches_factory_owned_manager_before_warmup(self):
         module = _fresh_import("Go2Pvcnn.extension.viz.go2_foostep_planner")
         env = SimpleNamespace(device=torch.device("cpu"), unwrapped=SimpleNamespace())
-        env_cfg = SimpleNamespace(sim=SimpleNamespace(device="cpu"), planner_owned_reference_cache=True)
-        sentinel_manager = SimpleNamespace(refresh_from_env=SimpleNamespace())
+        env_cfg = SimpleNamespace(
+            sim=SimpleNamespace(device="cpu"),
+            planner_owned_reference_cache=True,
+            planner_backend="together",
+        )
+        sentinel_manager = SimpleNamespace(planner_backend="together", refresh_from_env=SimpleNamespace())
 
-        with patch("extension.batched_planner.manager.BatchedTrajectoryManager", return_value=sentinel_manager) as ctor:
+        with patch("extension.trajectory_manager_factory.create_trajectory_manager", return_value=sentinel_manager) as factory:
             module._attach_reference_manager_if_enabled(env, env_cfg)
 
-        ctor.assert_called_once_with(env_cfg, device=torch.device("cpu"))
+        factory.assert_called_once_with(env_cfg, device=torch.device("cpu"))
         self.assertIs(env.unwrapped._trajectory_manager, sentinel_manager)
         self.assertIsNone(env.unwrapped._trajectory_reference_cache)
 
@@ -279,7 +289,10 @@ class BatchedPlannerRuntimePathTest(unittest.TestCase):
             parser = module.build_arg_parser()
             parsed = parser.parse_args([])
 
-        self.assertEqual(parsed.terrain, "flat")
+        self.assertEqual(parsed.terrain, "task")
+        self.assertEqual(parsed.planner_backend, "together")
+        self.assertEqual(parsed.n_frames, 35)
+        self.assertEqual(parsed.plan_dt, 0.02)
         self.assertEqual(parsed.vx_scale, 0.4)
         self.assertEqual(parsed.yaw_scale, 0.3)
 

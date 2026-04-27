@@ -135,8 +135,10 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     # fall back to placeholder/reference-generator cache creation.
     planner_owned_reference_cache: bool = True
     use_batched_reference_trajectory: bool = True
-    reference_trajectory_horizon: int = 50
-    reference_replan_interval_steps: int = 250
+    planner_backend: str = "together"
+    reference_trajectory_horizon: int = 35
+    reference_replan_interval_steps: int = 35
+    plan_dt: float = 0.02
     replan_velocity_scales: list[float] = [1.0, 0.8, 0.6]
     replan_yaw_biases: list[float] = [0.0, 0.15, -0.15]
     replan_vy_biases: list[float] = [0.0, 0.05, -0.05]
@@ -169,8 +171,10 @@ class TeacherElevationTrajectoryEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
     # Planner-only runtime: the play path also consumes the planner-owned manager/cache.
     planner_owned_reference_cache: bool = True
     use_batched_reference_trajectory: bool = True
-    reference_trajectory_horizon: int = 50
-    reference_replan_interval_steps: int = 250
+    planner_backend: str = "together"
+    reference_trajectory_horizon: int = 35
+    reference_replan_interval_steps: int = 35
+    plan_dt: float = 0.02
     replan_velocity_scales: list[float] = [1.0, 0.8, 0.6]
     replan_yaw_biases: list[float] = [0.0, 0.15, -0.15]
     replan_vy_biases: list[float] = [0.0, 0.05, -0.05]

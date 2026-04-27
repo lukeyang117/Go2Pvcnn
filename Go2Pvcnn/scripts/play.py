@@ -57,6 +57,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Print startup and loop timing diagnostics for WebRTC livestream bottlenecks.",
     )
+    parser.add_argument(
+        "--planner-backend",
+        type=str,
+        default=None,
+        choices=["together", "legacy"],
+        help="For teacher_elevation_trajectory: trajectory planner backend.",
+    )
 
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -373,6 +380,24 @@ def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bo
         env_cfg.use_raw_reference_trajectory = bool(use_raw_reference_trajectory)
 
 
+def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> None:
+    from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
+
+    manager_device = getattr(env, "device", env_cfg.sim.device)
+    manager = attach_trajectory_manager_if_enabled(
+        env,
+        env_cfg,
+        experiment_name=experiment_name,
+        device=manager_device,
+    )
+    if manager is not None:
+        print(
+            f"[Planner] Attached {getattr(manager, 'planner_backend', 'legacy')} trajectory manager "
+            "for teacher_elevation_trajectory",
+            flush=True,
+        )
+
+
 def main() -> int:
     args_cli = _prepare_runtime_args(_parse_args())
     debug = _LivestreamDebug(enabled=bool(args_cli.debug_livestream))
@@ -440,6 +465,8 @@ def main() -> int:
             env_cfg,
             use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),
         )
+        if getattr(args_cli, "planner_backend", None) is not None:
+            env_cfg.planner_backend = str(args_cli.planner_backend)
 
     render_mode = _resolve_render_mode(args_cli)
     if render_mode is not None:
@@ -468,6 +495,7 @@ def main() -> int:
 
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
+    _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     step_probe = _install_env_step_probes(base_env, enabled=bool(args_cli.debug_livestream))
 
     print("\n[Wrapper] Creating RSL-RL environment wrapper...", flush=True)

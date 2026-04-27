@@ -98,6 +98,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Print compact planner timing diagnostics (quiet by default).",
     )
+    parser.add_argument(
+        "--planner-backend",
+        type=str,
+        default="together",
+        choices=["together", "legacy"],
+        help="For teacher_elevation_trajectory: trajectory planner backend.",
+    )
 
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -157,18 +164,20 @@ def _launch_app(args_cli: argparse.Namespace):
 
 
 def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> None:
-    if experiment_name != "teacher_elevation_trajectory":
-        return
-    if not getattr(env_cfg, "planner_owned_reference_cache", False):
-        raise RuntimeError("teacher_elevation_trajectory requires planner_owned_reference_cache=True")
-
-    from extension.batched_planner.manager import BatchedTrajectoryManager
+    from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
 
     manager_device = getattr(env, "device", env_cfg.sim.device)
-    manager = BatchedTrajectoryManager(env_cfg, device=manager_device)
-    env.unwrapped._trajectory_manager = manager
-    env.unwrapped._trajectory_reference_cache = None
-    print("[Planner] Attached planner-owned trajectory manager for teacher_elevation_trajectory")
+    manager = attach_trajectory_manager_if_enabled(
+        env,
+        env_cfg,
+        experiment_name=experiment_name,
+        device=manager_device,
+    )
+    if manager is not None:
+        print(
+            f"[Planner] Attached {getattr(manager, 'planner_backend', 'legacy')} trajectory manager "
+            "for teacher_elevation_trajectory"
+        )
 
 
 def main() -> int:
@@ -275,6 +284,8 @@ def main() -> int:
     # Planner verbosity is owned by the planner/manager path; the train CLI only toggles it.
     if args_cli.experiment == "teacher_elevation_trajectory":
         setattr(env_cfg, "verbose_planner", bool(getattr(args_cli, "verbose_planner", False)))
+        if getattr(args_cli, "planner_backend", None) is not None:
+            setattr(env_cfg, "planner_backend", str(args_cli.planner_backend))
 
     # ========================================
     # Setup Logging Directory

@@ -13,12 +13,26 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "notes/human/human-10-extension-planner-runtime.md",
+                "file": "notes/todo/T100-batched-together-planner-gpu-migration.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "human-10-extension-planner-runtime"
+              "title": "T100-batched-together-planner-gpu-migration"
+            }
+          },
+          {
+            "id": "f0215ca8bdc60027",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "notes/todo/T100-batched-together-planner-gpu-migration.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "T100-batched-together-planner-gpu-migration"
             }
           },
           {
@@ -199,10 +213,12 @@
   },
   "active": "a8d0ff14dcd70189",
   "lastOpenFiles": [
+    "notes/todo.md",
+    "notes/todo/T100-batched-together-planner-gpu-migration.md",
+    "notes/human/human-10-extension-planner-runtime.md",
     "notes/human/human-13-batched-planner-swing-stance-ik-complexity.md",
     "notes/human/human-12-batched-planner-train-viewer-commands.md",
     "notes/human/human-11-extension-trajectory-reward.md",
-    "notes/human/human-10-extension-planner-runtime.md",
     "notes/human/human-08-extension-planner-reading-guide.md",
     "notes/human/human-00-reading-guide.md",
     "notes/human/human-09-extension-planner-mapping.md",

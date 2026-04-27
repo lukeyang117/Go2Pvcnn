@@ -13,6 +13,14 @@
 - 所有知识库链接必须使用仓库内相对路径，便于服务器路径和本地 `Z:` 映射共用一套 Obsidian graph
 - `raw/` 和 `onlyReference/` 默认是参考资料，不是当前项目主线
 
+## Agent Memory Entry
+
+- [调查 dashboard](todo.md)
+- [branch memory 目录](todo/README.md)
+- [验证日志索引](log/index.md)
+
+进入具体任务前，先读 [todo.md](todo.md)，再按需继续读相关 branch page、相关 log，以及对应 `human/` 或 `ai/` 阶段文档。
+
 ## Mermaid 总入口图
 
 ```mermaid

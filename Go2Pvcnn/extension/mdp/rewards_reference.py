@@ -138,6 +138,14 @@ def ensure_reference_cache(env):
     return cache
 
 
+def _trajectory_manager(env):
+    return getattr(env.unwrapped, "_trajectory_manager", None)
+
+
+def _uses_together_manager(manager) -> bool:
+    return getattr(manager, "planner_backend", None) == "together"
+
+
 def _reference_indices(env, horizon: int) -> torch.Tensor:
     return (env.episode_length_buf.to(dtype=torch.long) % int(horizon)).to(env.device)
 
@@ -166,8 +174,23 @@ def _select_reference_frame(env):
     horizon = cache.horizon_length()
     if horizon is None:
         raise RuntimeError("reference cache has no horizon")
-    frame_ids = _reference_indices(env, horizon)
+    manager = _trajectory_manager(env)
+    if _uses_together_manager(manager):
+        frame_ids = manager.current_frame_ids()
+    else:
+        frame_ids = _reference_indices(env, horizon)
     return cache, frame_ids
+
+
+def _reference_field(env, cache, name: str, frame_ids: torch.Tensor) -> torch.Tensor:
+    manager = _trajectory_manager(env)
+    if _uses_together_manager(manager):
+        current = manager.current_reference()
+        field = current.get(name)
+        if field is None:
+            raise RuntimeError(f"reference cache missing {name}")
+        return field.to(device=env.device)
+    return _gather_reference_field(cache, name, frame_ids, env)
 
 
 def reference_root_pose_reward(
@@ -184,8 +207,8 @@ def reference_root_pose_reward(
         asset_cfg = SceneEntityCfg("robot")
     cache, frame_ids = _select_reference_frame(env)
     asset: Articulation = env.scene[asset_cfg.name]
-    ref_pos = _gather_reference_field(cache, "root_pos_w", frame_ids, env).to(dtype=asset.data.root_pos_w.dtype)
-    ref_quat = _gather_reference_field(cache, "root_quat_w", frame_ids, env).to(dtype=asset.data.root_quat_w.dtype)
+    ref_pos = _reference_field(env, cache, "root_pos_w", frame_ids).to(dtype=asset.data.root_pos_w.dtype)
+    ref_quat = _reference_field(env, cache, "root_quat_w", frame_ids).to(dtype=asset.data.root_quat_w.dtype)
     pos_err = root_position_error(asset.data.root_pos_w, ref_pos)
     rot_err = root_orientation_error(asset.data.root_quat_w, ref_quat)
     return 0.5 * (
@@ -207,7 +230,7 @@ def reference_joint_pos_reward(
         asset_cfg = SceneEntityCfg("robot")
     cache, frame_ids = _select_reference_frame(env)
     asset: Articulation = env.scene[asset_cfg.name]
-    ref_joint = _gather_reference_field(cache, "joint_angles", frame_ids, env).to(dtype=asset.data.joint_pos.dtype)
+    ref_joint = _reference_field(env, cache, "joint_angles", frame_ids).to(dtype=asset.data.joint_pos.dtype)
     err = joint_position_error(asset.data.joint_pos, ref_joint)
     return exponential_tracking_reward(err, sigma=sigma)
 
@@ -239,7 +262,7 @@ def reference_foot_pos_reward(
         asset_cfg = SceneEntityCfg("robot", body_names=".*_foot")
     cache, frame_ids = _select_reference_frame(env)
     current_foot = _current_foot_positions_root(env, asset_cfg)
-    ref_foot = _gather_reference_field(cache, "foot_pos_root", frame_ids, env).to(dtype=current_foot.dtype)
+    ref_foot = _reference_field(env, cache, "foot_pos_root", frame_ids).to(dtype=current_foot.dtype)
     err = foot_position_error(current_foot, ref_foot)
     return exponential_tracking_reward(err, sigma=sigma)
 
@@ -258,7 +281,7 @@ def reference_contact_reward(
     cache, frame_ids = _select_reference_frame(env)
     sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     current_contact = sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2] > 1.0
-    ref_contact = _gather_reference_field(cache, "contact_state", frame_ids, env)
+    ref_contact = _reference_field(env, cache, "contact_state", frame_ids)
     err = contact_state_error(current_contact, ref_contact)
     return exponential_tracking_reward(err, sigma=sigma)
 
@@ -277,9 +300,7 @@ def reference_touchdown_reward(
     cache, frame_ids = _select_reference_frame(env)
     asset: Articulation = env.scene[asset_cfg.name]
     current_touchdown = asset.data.body_pos_w[:, asset_cfg.body_ids, :]
-    ref_touchdown = _gather_reference_field(cache, "planned_touchdown_w", frame_ids, env).to(
-        dtype=current_touchdown.dtype
-    )
+    ref_touchdown = _reference_field(env, cache, "planned_touchdown_w", frame_ids).to(dtype=current_touchdown.dtype)
     err = touchdown_position_error(current_touchdown, ref_touchdown)
     return exponential_tracking_reward(err, sigma=sigma)
 

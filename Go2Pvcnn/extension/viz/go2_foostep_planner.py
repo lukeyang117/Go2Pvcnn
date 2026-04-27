@@ -15,7 +15,7 @@ import select
 import signal
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
@@ -25,6 +25,21 @@ THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parents[2]
 if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
+
+
+@dataclass(frozen=True)
+class ViewerTrajectoryResult:
+    num_frames: int
+    root_pos_w: torch.Tensor
+    root_quat_w: torch.Tensor
+    joint_angles: torch.Tensor
+    foot_pos_w: torch.Tensor
+    foot_pos_root: torch.Tensor
+    contact_state: torch.Tensor
+    planned_touchdown_w: torch.Tensor
+    root_lin_vel_w: torch.Tensor | None = None
+    root_ang_vel_w: torch.Tensor | None = None
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
@@ -38,8 +53,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["task"],
         help="Use the terrain generator exactly as defined by teacher_elevation_trajectory env config.",
     )
-    parser.add_argument("--n-frames", type=int, default=50, help="Planner horizon in frames.")
+    parser.add_argument("--n-frames", type=int, default=35, help="Planner horizon in frames.")
     parser.add_argument("--plan-dt", type=float, default=0.02, help="Planner integration step.")
+    parser.add_argument(
+        "--planner-backend",
+        type=str,
+        default="together",
+        choices=["together", "legacy"],
+        help="Trajectory manager backend used by the task attachment path.",
+    )
     parser.add_argument("--vx-scale", type=float, default=0.4, help="Teleop forward/backward speed.")
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
     parser.add_argument("--yaw-scale", type=float, default=0.3, help="Teleop yaw-rate command.")
@@ -97,6 +119,38 @@ def _planner_state_from_reference_result(result, *, frame_idx: int):
         joint_angles=joint_angles,
         foot_pos=foot_pos,
         foot_vel=torch.zeros_like(foot_pos),
+    )
+
+
+def _together_state_from_reference_result(result, *, frame_idx: int):
+    from extension.batched_together_planner.types import TogetherRobotState
+
+    frame = int(frame_idx)
+    root_pos = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float64)
+    root_quat = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float64)
+    root_rpy = _quat_wxyz_to_rpy(root_quat)
+    joint_angles = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float64)
+    foot_pos = torch.as_tensor(result.foot_pos_w[:, frame], dtype=torch.float64)
+    return TogetherRobotState(
+        root_pos=root_pos,
+        root_rpy=root_rpy,
+        joint_angles=joint_angles,
+        foot_pos=foot_pos,
+        foot_vel=torch.zeros_like(foot_pos),
+    )
+
+
+def _legacy_state_to_together_state(state):
+    from extension.batched_together_planner.types import TogetherRobotState
+
+    root_pos = torch.as_tensor(state.root_pos, dtype=torch.float64)
+    root_quat = torch.as_tensor(state.root_quat, dtype=torch.float64)
+    return TogetherRobotState(
+        root_pos=root_pos,
+        root_rpy=_quat_wxyz_to_rpy(root_quat),
+        joint_angles=torch.as_tensor(state.joint_angles, dtype=torch.float64),
+        foot_pos=torch.as_tensor(state.foot_pos, dtype=torch.float64),
+        foot_vel=torch.zeros_like(torch.as_tensor(state.foot_pos, dtype=torch.float64)),
     )
 
 
@@ -297,16 +351,15 @@ def _launch_app(args_cli: argparse.Namespace):
 
 
 def _attach_reference_manager_if_enabled(env, env_cfg) -> None:
-    if not getattr(env_cfg, "planner_owned_reference_cache", False):
-        return
-
-    from extension.batched_planner.manager import BatchedTrajectoryManager
+    from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
 
     manager_device = getattr(env, "device", env_cfg.sim.device)
-    manager = BatchedTrajectoryManager(env_cfg, device=manager_device)
-    env.unwrapped._trajectory_manager = manager
-    env.unwrapped._trajectory_reference_cache = None
-    print("[Viewer] Attached planner-owned trajectory manager", flush=True)
+    manager = attach_trajectory_manager_if_enabled(env, env_cfg, device=manager_device)
+    if manager is not None:
+        print(
+            f"[Viewer] Attached {getattr(manager, 'planner_backend', 'legacy')} trajectory manager",
+            flush=True,
+        )
 
 LEG_COLORS = (
     (1.0, 0.2, 0.2),
@@ -640,6 +693,10 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     env_cfg.events.push_robot = None
     env_cfg.commands.base_velocity.debug_vis = False
     env_cfg.commands.base_velocity.ranges = env_cfg.commands.base_velocity.limit_ranges
+    env_cfg.planner_backend = str(args_cli.planner_backend)
+    env_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
+    env_cfg.reference_replan_interval_steps = int(args_cli.n_frames)
+    env_cfg.plan_dt = float(args_cli.plan_dt)
     reset_base = env_cfg.events.reset_base
     reset_base.params["pose_range"]["x"] = (0.0, 0.0)
     reset_base.params["pose_range"]["y"] = (0.0, 0.0)
@@ -662,6 +719,26 @@ def _build_planner_cfg(env_cfg):
         max_touchdown_xy_reach=float(getattr(env_cfg, "max_touchdown_xy_reach", 0.22)),
         replan_stop_speed=float(env_cfg.replan_stop_speed),
         use_support_contact_terrain_estimator=True,
+    )
+
+
+def _build_together_planner_cfg(env_cfg):
+    from extension.batched_together_planner.config import TogetherPlannerConfig
+
+    base = TogetherPlannerConfig()
+    horizon_steps = int(getattr(env_cfg, "reference_trajectory_horizon", base.horizon_steps))
+    dt = float(getattr(env_cfg, "plan_dt", base.dt))
+    return replace(
+        base,
+        horizon_s=float(horizon_steps) * dt,
+        dt=dt,
+        horizon_steps=horizon_steps,
+        step_freq=float(getattr(env_cfg, "step_freq", base.step_freq)),
+        duty_factor=float(getattr(env_cfg, "together_duty_factor", base.duty_factor)),
+        idle_command_eps=float(getattr(env_cfg, "idle_command_eps", base.idle_command_eps)),
+        swing_height=float(getattr(env_cfg, "step_height", base.swing_height)),
+        support_search_radius=float(getattr(env_cfg, "support_search_radius", base.support_search_radius)),
+        support_search_step=float(getattr(env_cfg, "support_search_step", base.support_search_step)),
     )
 
 
@@ -701,6 +778,19 @@ def _compute_local_terrain(scanner, *, env_id: int = 0):
     ray_hits = scanner.data.ray_hits_w[env_id].to(dtype=torch.float64)
     world_x_range, world_y_range = _compute_stable_scan_ranges(scanner, env_id=env_id)
     terrain = PlannerTerrain.from_ray_hits(
+        ray_hits.unsqueeze(0),
+        world_x_range=world_x_range,
+        world_y_range=world_y_range,
+    )
+    return terrain, ray_hits
+
+
+def _compute_together_local_terrain(scanner, *, env_id: int = 0):
+    from extension.batched_together_planner.terrain import TogetherPlannerTerrain
+
+    ray_hits = scanner.data.ray_hits_w[env_id].to(dtype=torch.float64)
+    world_x_range, world_y_range = _compute_stable_scan_ranges(scanner, env_id=env_id)
+    terrain = TogetherPlannerTerrain.from_ray_hits(
         ray_hits.unsqueeze(0),
         world_x_range=world_x_range,
         world_y_range=world_y_range,
@@ -758,6 +848,72 @@ def _planner_state_from_env(env, foot_ids: list[int]):
     )
 
 
+def _together_state_from_env(env, foot_ids: list[int]):
+    return _legacy_state_to_together_state(_planner_state_from_env(env, foot_ids))
+
+
+def _adapt_together_result_for_viewer(result) -> ViewerTrajectoryResult:
+    from extension.convention import euler_to_quat_batch
+
+    root_pos_w = torch.as_tensor(result.root_pos).contiguous()
+    root_rpy = torch.as_tensor(result.root_rpy, device=root_pos_w.device, dtype=root_pos_w.dtype)
+    root_quat_w = euler_to_quat_batch(root_rpy[..., 0], root_rpy[..., 1], root_rpy[..., 2]).contiguous()
+    foot_pos_w = torch.as_tensor(result.foot_pos, device=root_pos_w.device, dtype=root_pos_w.dtype).contiguous()
+    foot_pos_root = (foot_pos_w - root_pos_w.unsqueeze(2)).contiguous()
+    planned_touchdown_w = torch.as_tensor(result.touchdown_seq[:, :, 0, :], device=root_pos_w.device, dtype=root_pos_w.dtype).contiguous()
+    num_frames = int(root_pos_w.shape[1])
+    zeros_vel = torch.zeros_like(root_pos_w)
+    return ViewerTrajectoryResult(
+        num_frames=num_frames,
+        root_pos_w=root_pos_w,
+        root_quat_w=root_quat_w,
+        joint_angles=torch.as_tensor(result.joint_angles, device=root_pos_w.device, dtype=root_pos_w.dtype).contiguous(),
+        foot_pos_w=foot_pos_w,
+        foot_pos_root=foot_pos_root,
+        contact_state=torch.as_tensor(result.contact_state, device=root_pos_w.device).contiguous(),
+        planned_touchdown_w=planned_touchdown_w,
+        root_lin_vel_w=zeros_vel,
+        root_ang_vel_w=zeros_vel.clone(),
+    )
+
+
+def _plan_viewer_trajectory(
+    *,
+    backend: str,
+    terrain,
+    state,
+    command: torch.Tensor,
+    requested_n_frames: int,
+    dt: float,
+    legacy_cfg,
+    together_cfg,
+):
+    backend_name = str(backend).lower()
+    if backend_name == "legacy":
+        from extension.batched_planner.trajectory import batched_generate_trajectory
+
+        return batched_generate_trajectory(
+            terrain,
+            state,
+            command,
+            requested_n_frames=requested_n_frames,
+            dt=dt,
+            cfg=legacy_cfg,
+        )
+    if backend_name == "together":
+        from extension.batched_together_planner.planner import plan_segment
+
+        return _adapt_together_result_for_viewer(
+            plan_segment(
+                terrain,
+                state,
+                command,
+                cfg=together_cfg,
+            )
+        )
+    raise ValueError(f"Unsupported planner backend: {backend!r}")
+
+
 def _print_help() -> None:
     print("\nTerminal teleop (hold keys with repeat):", flush=True)
     print("  W/S : forward/backward", flush=True)
@@ -775,7 +931,6 @@ def main() -> int:
     import gymnasium as gym
 
     import go2_pvcnn.tasks.register_envs  # noqa: F401,F403
-    from extension.batched_planner.trajectory import batched_generate_trajectory
     from extension.convention import extract_yaw_batch
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -783,6 +938,7 @@ def main() -> int:
     planner_cfg = _build_planner_cfg(env_cfg)
     planner_cfg.dt = float(args_cli.plan_dt)
     planner_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
+    together_planner_cfg = _build_together_planner_cfg(env_cfg)
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
@@ -866,23 +1022,35 @@ def main() -> int:
                 if need_replan:
                     if result is not None and playback_frame > 0:
                         frame = min(playback_frame - 1, result.num_frames - 1)
-                        state = _planner_state_from_reference_result(result, frame_idx=frame)
+                        if args_cli.planner_backend == "together":
+                            state = _together_state_from_reference_result(result, frame_idx=frame)
+                        else:
+                            state = _planner_state_from_reference_result(result, frame_idx=frame)
                     else:
-                        state = _planner_state_from_env(base_env, foot_ids)
+                        if args_cli.planner_backend == "together":
+                            state = _together_state_from_env(base_env, foot_ids)
+                        else:
+                            state = _planner_state_from_env(base_env, foot_ids)
 
-                    terrain, ray_hits = _compute_local_terrain(scanner)
+                    if args_cli.planner_backend == "together":
+                        terrain, ray_hits = _compute_together_local_terrain(scanner)
+                    else:
+                        terrain, ray_hits = _compute_local_terrain(scanner)
 
-                    result = batched_generate_trajectory(
-                        terrain,
-                        state,
-                        active_cmd.values,
+                    result = _plan_viewer_trajectory(
+                        backend=args_cli.planner_backend,
+                        terrain=terrain,
+                        state=state,
+                        command=active_cmd.values,
                         requested_n_frames=args_cli.n_frames,
                         dt=args_cli.plan_dt,
-                        cfg=planner_cfg,
+                        legacy_cfg=planner_cfg,
+                        together_cfg=together_planner_cfg,
                     )
                     summary = _trajectory_motion_summary(result)
                     print(
                         "[Viewer][Plan] "
+                        f"backend={args_cli.planner_backend} "
                         f"cycle={plan_cycle} "
                         f"cmd={_format_command_values(active_cmd.values)} "
                         f"delta=({summary['dx']:+0.2f}, {summary['dy']:+0.2f}, {summary['dz']:+0.2f}) "

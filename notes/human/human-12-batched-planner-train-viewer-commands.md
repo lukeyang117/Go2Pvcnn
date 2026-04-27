@@ -61,11 +61,16 @@ conda run -n env_isaaclab python Go2Pvcnn/scripts/train.py \
 常用单卡训练：
 
 ```bash
-conda run -n env_isaaclab python Go2Pvcnn/scripts/train.py \
+cd /home/lhy/testPvcnnWithIsaacsim
+
+/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/train.py \
   --headless \
-  --num_envs 4096 \
+  --device cuda:0 \
+  --num_envs 2048 \
   --max_iterations 5000 \
-  --experiment teacher_elevation_trajectory
+  --experiment teacher_elevation_trajectory \
+  --planner-backend together
+
 ```
 
 分布式训练：
