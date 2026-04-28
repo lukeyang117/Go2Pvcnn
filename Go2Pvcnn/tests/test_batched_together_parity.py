@@ -309,7 +309,7 @@ class TestBatchedTogetherBehavior:
         initial_root_xy = state["foot_pos"][0, :, :2] - state["root_pos"][0, :2]
         terminal_root_xy = result.foot_pos[0, -1, :, :2] - result.root_pos[0, -1, :2]
         assert torch.linalg.norm(terminal_root_xy - nominal_root) < torch.linalg.norm(initial_root_xy - nominal_root)
-        assert torch.linalg.norm(result.root_rpy[0, -1, :2]) <= torch.linalg.norm(state["root_rpy"][0, :2]) + 1e-5
+        assert torch.linalg.norm(result.root_rpy[0, -1, :2]) < torch.linalg.norm(state["root_rpy"][0, :2]) * 0.25
 
     def test_mixed_full_batch_per_row_commands_are_independent(self):
         commands = torch.tensor(

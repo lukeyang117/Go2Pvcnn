@@ -94,21 +94,44 @@ def test_zero_command_root_frame_rehome_moves_terminal_feet_toward_nominal() -> 
         [[0.04, -0.02], [-0.03, 0.03], [0.02, 0.01], [-0.04, -0.01]],
         device=device,
     )
+    root_pos = state.root_pos.clone()
+    root_pos[:, 2] = torch.tensor([0.18, 0.42, 0.24], device=device)
     foot_pos = state.foot_pos.clone()
     foot_pos[..., :2] = foot_pos[..., :2] + perturb.view(1, 4, 2)
     root_rpy = state.root_rpy.clone()
-    root_rpy[:, 0] = 0.22
-    root_rpy[:, 1] = -0.16
-    state = TogetherRobotState(root_pos=state.root_pos, root_rpy=root_rpy, foot_pos=foot_pos, joint_angles=state.joint_angles)
+    root_rpy[:, 0] = torch.tensor([0.22, -0.18, 0.08], device=device)
+    root_rpy[:, 1] = torch.tensor([-0.16, 0.14, -0.10], device=device)
+    root_rpy[:, 2] = torch.tensor([0.35, -0.70, 1.10], device=device)
+    state = TogetherRobotState(root_pos=root_pos, root_rpy=root_rpy, foot_pos=foot_pos, joint_angles=state.joint_angles)
     commands = torch.zeros((3, 3), device=device)
 
     result = plan_segment(terrain, state, commands, cfg)
 
     nominal_xy = HIP_OFFSETS_ARRAY.to(device=device, dtype=result.root_pos.dtype)[:, :2]
-    initial_root_xy = state.foot_pos[:, :, :2] - state.root_pos[:, None, :2]
-    terminal_root_xy = result.foot_pos[:, -1, :, :2] - result.root_pos[:, -1, None, :2]
+    yaw = state.root_rpy[:, 2]
+    cos_yaw = torch.cos(yaw).view(3, 1)
+    sin_yaw = torch.sin(yaw).view(3, 1)
+    initial_offset_w = state.foot_pos[:, :, :2] - state.root_pos[:, None, :2]
+    terminal_offset_w = result.foot_pos[:, -1, :, :2] - result.root_pos[:, -1, None, :2]
+    initial_root_xy = torch.stack(
+        (
+            cos_yaw * initial_offset_w[..., 0] + sin_yaw * initial_offset_w[..., 1],
+            -sin_yaw * initial_offset_w[..., 0] + cos_yaw * initial_offset_w[..., 1],
+        ),
+        dim=-1,
+    )
+    terminal_root_xy = torch.stack(
+        (
+            cos_yaw * terminal_offset_w[..., 0] + sin_yaw * terminal_offset_w[..., 1],
+            -sin_yaw * terminal_offset_w[..., 0] + cos_yaw * terminal_offset_w[..., 1],
+        ),
+        dim=-1,
+    )
     assert torch.linalg.vector_norm(terminal_root_xy - nominal_xy, dim=(1, 2)).amax() < torch.linalg.vector_norm(initial_root_xy - nominal_xy, dim=(1, 2)).amin()
-    assert torch.all(torch.linalg.vector_norm(result.root_rpy[:, -1, :2], dim=-1) <= torch.linalg.vector_norm(state.root_rpy[:, :2], dim=-1) + 1e-5)
+    torch.testing.assert_close(result.root_pos[:, -1, :2], state.root_pos[:, :2], atol=1e-6, rtol=0.0)
+    torch.testing.assert_close(result.root_rpy[:, -1, 2], state.root_rpy[:, 2], atol=1e-6, rtol=0.0)
+    torch.testing.assert_close(result.root_pos[:, -1, 2], torch.full((3,), float(cfg.hip_height), device=device), atol=1e-5, rtol=0.0)
+    assert torch.all(torch.linalg.vector_norm(result.root_rpy[:, -1, :2], dim=-1) < torch.linalg.vector_norm(state.root_rpy[:, :2], dim=-1) * 0.25)
 
 
 def test_mixed_command_batch_keeps_zero_row_and_moves_commanded_rows() -> None:

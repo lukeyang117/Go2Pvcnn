@@ -270,6 +270,83 @@ class TestKinematicPlaybackLogic:
         with pytest.raises(ValueError, match="three floats"):
             _parse_scripted_command("0.0 0.3", device=torch.device("cpu"))
 
+    def test_together_viewer_handoff_does_not_accumulate_root_height_on_flat_walk(self):
+        from extension.batched_together_planner import (
+            TogetherPlannerConfig,
+            TogetherPlannerTerrain,
+            TogetherRobotState,
+            plan_segment,
+        )
+        from extension.batched_together_planner.types import HIP_OFFSETS_ARRAY
+        from extension.viz.go2_foostep_planner import (
+            _adapt_together_result_for_viewer,
+            _together_state_from_reference_result,
+        )
+
+        dtype = torch.float32
+        device = torch.device("cpu")
+        terrain = TogetherPlannerTerrain.from_heightmap(
+            torch.zeros((1, 33, 33), dtype=dtype, device=device),
+            world_x_range=(-0.8, 0.8),
+            world_y_range=(-0.8, 0.8),
+        )
+        state = TogetherRobotState(
+            root_pos=torch.tensor([[0.0, 0.0, 0.30]], dtype=dtype, device=device),
+            root_rpy=torch.zeros((1, 3), dtype=dtype, device=device),
+            foot_pos=HIP_OFFSETS_ARRAY.to(dtype=dtype, device=device).unsqueeze(0).clone(),
+            joint_angles=torch.zeros((1, 12), dtype=dtype, device=device),
+        )
+        command = torch.tensor([[0.4, 0.0, 0.0]], dtype=dtype, device=device)
+        initial_root_z = state.root_pos[:, 2].clone()
+        terminal_root_z = []
+
+        for _cycle_idx in range(4):
+            result = _adapt_together_result_for_viewer(plan_segment(terrain, state, command, TogetherPlannerConfig()))
+            terminal_root_z.append(result.root_pos_w[:, -1, 2].clone())
+            state = _together_state_from_reference_result(result, frame_idx=result.num_frames - 1)
+
+        max_terminal_z = torch.stack(terminal_root_z, dim=1).amax(dim=1)
+        assert torch.all(max_terminal_z <= initial_root_z + 0.04)
+
+    def test_together_viewer_zero_command_rehome_does_not_replay_vertical_recovery_after_handoff(self):
+        from extension.batched_together_planner import (
+            TogetherPlannerConfig,
+            TogetherPlannerTerrain,
+            TogetherRobotState,
+            plan_segment,
+        )
+        from extension.batched_together_planner.types import HIP_OFFSETS_ARRAY
+        from extension.viz.go2_foostep_planner import (
+            _adapt_together_result_for_viewer,
+            _together_state_from_reference_result,
+        )
+
+        dtype = torch.float32
+        device = torch.device("cpu")
+        cfg = TogetherPlannerConfig()
+        terrain = TogetherPlannerTerrain.from_heightmap(
+            torch.zeros((1, 33, 33), dtype=dtype, device=device),
+            world_x_range=(-0.8, 0.8),
+            world_y_range=(-0.8, 0.8),
+        )
+        state = TogetherRobotState(
+            root_pos=torch.tensor([[0.0, 0.0, 0.40]], dtype=dtype, device=device),
+            root_rpy=torch.zeros((1, 3), dtype=dtype, device=device),
+            foot_pos=HIP_OFFSETS_ARRAY.to(dtype=dtype, device=device).unsqueeze(0).clone(),
+            joint_angles=torch.zeros((1, 12), dtype=dtype, device=device),
+        )
+        zero_command = torch.zeros((1, 3), dtype=dtype, device=device)
+
+        first_result = _adapt_together_result_for_viewer(plan_segment(terrain, state, zero_command, cfg))
+        first_delta_z = first_result.root_pos_w[0, -1, 2] - first_result.root_pos_w[0, 0, 2]
+        assert float(first_delta_z) < -0.08
+
+        handoff_state = _together_state_from_reference_result(first_result, frame_idx=first_result.num_frames - 1)
+        second_result = _adapt_together_result_for_viewer(plan_segment(terrain, handoff_state, zero_command, cfg))
+        second_delta_z = second_result.root_pos_w[0, -1, 2] - second_result.root_pos_w[0, 0, 2]
+
+        assert abs(float(second_delta_z)) < 0.01
+
     def test_read_actual_base_state_reports_raw_quat_and_both_rpy_conventions(self):
         from extension.viz.go2_foostep_planner import _read_actual_base_state
 

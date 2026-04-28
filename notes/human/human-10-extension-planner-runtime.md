@@ -240,6 +240,33 @@ graph LR
 
 这证明当前 diagnostics 不是只在单环境上“看起来对”，而是 batched planner 的 mixed-case 路径也真的跑过了。
 
+### 6. together viewer handoff 防止 root z 累积（2026-04-28）
+
+`Go2Pvcnn/extension/viz/go2_foostep_planner.py` 的 together viewer 现在在段与段之间回写下一次规划状态时，会单独稳定 root z：
+
+- 单段 planner result 仍保持 raw/together parity，不在 planner core 里为了 viewer 改轨迹。
+- viewer 下一段 state 不再直接把上一段末帧 root z 当成永久机身高度。
+- `_together_state_from_reference_result()` 会通过 `_together_handoff_root_pos()` 用“当前接触脚平均高度 + 本段初始 support clearance”重构 handoff root z。
+- 这样 repeated walking replan 不会把单段 root-z bias 逐段累加成视觉 lift-off。
+- 但对 full-contact 且 `root xy / yaw` 不动的 hold-like 段，viewer 现在会直接继承段末 root z，而不是继续用初始 clearance 重建；否则 zero-command recovery 会每个 `0.7s` 段重复播放一次。
+
+验证见 [../log/2026-04-28-1007-viewer-together-root-z-ratchet.md](../log/2026-04-28-1007-viewer-together-root-z-ratchet.md)。
+
+### 7. together zero-command 回正恢复（2026-04-28）
+
+`Go2Pvcnn/extension/batched_together_planner/parameterization.py` 的 zero-command hold
+现在不再只冻结 root 并移动脚：
+
+- root `xy` 和 yaw 保持当前值，避免停下时强行转回世界朝向。
+- 四足按当前 yaw 回到 root-frame nominal slot，并通过 terrain support 查询脚端高度。
+- root `z` 朝支撑高度 + `hip_height` 恢复。
+- roll/pitch 朝支撑面法向恢复；平地上会回到接近 `0/0`。
+- 支撑面法向用四足前后/左右中点叉乘做 batched tensor 计算，不使用 `torch.linalg.svd`，避免训练热路径里的 solver/sync 风险。
+- hold 仍保持 full-contact、无 touchdown event，mixed batch 通过 `hold_mask` 和 `torch.where` 分行选择，不拆动态 sub-batch。
+- viewer handoff 也配合改成“第一次 recovery 后直接从段末高度继续”，这样回正完成后不会继续做视觉上的上下重复运动。
+
+验证见 [../log/2026-04-28-1132-together-zero-command-rehome.md](../log/2026-04-28-1132-together-zero-command-rehome.md)。
+
 ## batch planner 规划过程拆解（结合代码）
 
 下面这段更偏“跟代码走”的阅读版，重点回答：
@@ -370,7 +397,7 @@ planner 核心入口在：
 #### 5.2 gait / contact schedule
 
 - `Go2Pvcnn/extension/batched_planner/trajectory.py:154`
-	
+
 这一段根据 `gait_name / step_freq / duty_factor` 生成：
 
 - `contact_seq`

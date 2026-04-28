@@ -85,6 +85,8 @@ FORBIDDEN_TORCH_CALLS = {
     "torch.equal",
     "torch.allclose",
     "torch.cuda.synchronize",
+    "torch.linalg.svd",
+    "torch.svd",
     "torch.split",
     "torch.chunk",
 }

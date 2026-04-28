@@ -55,7 +55,7 @@ _TEACHER_OBJECTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "teacher
 ##
 
 COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(4.0, 4.0),
+    size=(8.0, 8.0),
     border_width=20.0,
     num_rows=10,
     num_cols=20,

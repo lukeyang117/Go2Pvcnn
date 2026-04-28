@@ -16,9 +16,15 @@
 - Viewer backend fix verified: `--planner-backend together` now calls the native together `plan_segment` path with the scripted/teleop command, while `legacy` keeps `batched_generate_trajectory`.
 - Final conda verification in `/home/lhy/anaconda3/envs/env_isaaclab` passed: full together suite `50 passed`, CUDA smoke at `N=1024/4096`, py_compile, diff check, together viewer headless smoke, and subagent train/play smoke for both together and legacy.
 - Continued testing passed: together 1-iteration training at `32` and `128` envs, legacy rollback 1-iteration training at `16` envs, real Isaac cadence/full-N checks, and updated regression tests for the new factory/default-together contract.
+- Human command guide [human-12-batched-planner-train-viewer-commands.md](../human/human-12-batched-planner-train-viewer-commands.md) now matches the current train/play/viewer CLI: `env_isaaclab` Python, explicit `--planner-backend together`, legacy rollback, and viewer `task/35/0.02` contract.
+- New viewer issue fixed to verification: launching the together viewer could make the displayed Go2 walk for a while and then lift into the air. Root cause was repeated viewer-style replan handoff/root-z accumulation, not a CLI startup problem.
+- New viewer stop-command issue under T110 is fixed to verification: together zero-command hold now rehomes feet, root height, and root roll/pitch while keeping root `xy` and yaw.
+- Follow-up viewer handoff fix under T110: hold-like zero-command segments now hand off terminal root z directly, so recovery plays once and then stays settled instead of repeating every `0.7s`.
 
 ## Open Children
 
+- T110: together zero-command rehome / upright recovery is implemented and smoke-verified; manual interactive viewer confirmation remains useful.
+- T109: viewer together root-z ratchet / visual lift-off is fixed in code and awaiting manual visual confirmation.
 - T103: complex raw planner core semantic parity beyond flat P0.
 - T107: long training, env counts beyond 128, and multi-device Isaac runtime throughput.
 
@@ -34,6 +40,10 @@
 
 ## Related Logs
 
+- [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](../log/2026-04-28-1254-viewer-zero-command-handoff-idempotence.md)
+- [2026-04-28-1132-together-zero-command-rehome.md](../log/2026-04-28-1132-together-zero-command-rehome.md)
+- [2026-04-28-1007-viewer-together-root-z-ratchet.md](../log/2026-04-28-1007-viewer-together-root-z-ratchet.md)
+- [2026-04-28-0952-human-12-command-guide-update.md](../log/2026-04-28-0952-human-12-command-guide-update.md)
 - [2026-04-27-1914-batched-together-continued-testing.md](../log/2026-04-27-1914-batched-together-continued-testing.md)
 - [2026-04-27-1836-batched-together-env-isaaclab-final-verification.md](../log/2026-04-27-1836-batched-together-env-isaaclab-final-verification.md)
 - [2026-04-27-1828-viewer-together-backend-smoke.md](../log/2026-04-27-1828-viewer-together-backend-smoke.md)
@@ -61,10 +71,40 @@
 
 ## Next Step
 
+- Rerun the interactive together viewer manually and confirm both T109 lift-off and T110 zero-command crouch recovery are visually resolved.
 - Extend T103 with complex terrain/support/CEM parity cases beyond flat P0.
 - Extend T107 with multi-iteration train profiling, env counts beyond `128`, and multi-device scaling once the user wants performance numbers beyond smoke.
 
 ## Node Details
+
+### T110 zero-command rehome upright recovery
+
+- why-created: The user reported that giving speed `0` in the together viewer lacks the raw-style "回正" effect; screenshot shows the robot ending crouched/twisted after stop.
+- observed-current-behavior-before-fix:
+  - `Go2Pvcnn/extension/batched_together_planner/parameterization.py` has `_hold_rehome_targets()` that moves feet toward root-frame nominal slots.
+  - The hold branch still uses `hold_root = root_pos[:, None, :]` and `hold_rpy = root_rpy[:, None, :]`, so root height and roll/pitch are frozen for the full horizon.
+  - Existing tests only allowed terminal roll/pitch to be unchanged, so they did not catch the missing recovery.
+- implemented-behavior:
+  - For zero command, keep current yaw and root `xy`.
+  - Move feet toward current-yaw nominal root-frame slots with support heights from the local terrain.
+  - Move root `z` toward support height plus nominal `hip_height`.
+  - Move root roll/pitch toward the support-plane or flat upright target.
+  - Keep full-contact / no-touchdown semantics for hold.
+- parallelism-constraints:
+  - Training hot path must remain batched over all envs.
+  - No per-env Python loops, comprehensions, NumPy/CPU packages, `.cpu()`, `.item()`, `nonzero`, dynamic sub-batch planner calls, or GPU-mask host branching.
+  - Use tensor masks and `torch.where`/broadcasting so mixed batches of zero and moving commands remain independent.
+- implementation-notes:
+  - Support-plane target uses vectorized four-foot midpoint cross product rather than `torch.linalg.svd`, avoiding solver/sync risk in the training hot path.
+  - Static guardrail now forbids `torch.linalg.svd` and `torch.svd` in together training files.
+- verification:
+  - Red test caught frozen terminal root z before implementation.
+  - `test_batched_together_core.py`, `test_batched_together_parity.py`, and `test_batched_together_guardrails.py`: `26 passed`.
+  - Runtime/viz subset: `29 passed`.
+  - Combined core/parity/guardrail/runtime/viz subset: `55 passed`.
+  - CUDA diagnostic recovered root rpy `[0.22, -0.16, 0.70] -> [0.0, 0.0, 0.70]` and root z `0.18 -> 0.30`.
+  - Headless viewer scripted forward then zero command reached playback with plan/actual near `z=+0.30` and `rpy=0`; process was timeout-terminated by design with no residual GPU compute process.
+  - Follow-up viewer handoff regression: repeated zero-command replans now show `0.4 -> 0.3` once, then `0.3 -> 0.3` on later segments instead of replaying the same recovery each cycle.
 
 ### T101 architecture and fixed-shape runtime design
 
@@ -292,3 +332,28 @@
   - Fixed CEM iteration loops are not automatically exempt; if CEM iteration remains, it must be vectorized/unrolled or explicitly approved by the user before implementation.
 - path coverage:
   - If a future file is added under `batched_together_planner/` and is not covered by the scan manifest or an allowlist with reason, guardrail fails.
+
+### T109 viewer together root-z ratchet
+
+- why-created: User reported, with a viewer screenshot, that the robot "walks then flies" when launching the viewer.
+- status: `verify`; fixed by stabilizing together viewer handoff root z, but interactive visual confirmation remains.
+- scope:
+  - Primary affected workflow: `Go2Pvcnn/extension/viz/go2_foostep_planner.py` together viewer playback and segment handoff.
+  - Related planner workflow: `Go2Pvcnn/extension/batched_together_planner/parameterization.py` root z trajectory and raw single-segment parity.
+  - Training path must not gain CPU packages, NumPy, or dynamic sub-batch logic from this fix.
+- initial hypothesis:
+  - The together planner's single segment can end with a positive root-z bias.
+  - The viewer uses the last played frame as the next segment's initial state.
+  - Repeated walking replans can therefore accumulate base height even on flat terrain, producing visual lift-off.
+- implemented fix:
+  - Added `_together_handoff_root_pos()` in [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py).
+  - `_together_state_from_reference_result()` now reconstructs the next segment root z from current contact-foot support height plus the segment's initial support clearance.
+  - The fix is viewer-only and preserves raw/together single-segment parity.
+- evidence:
+  - New regression reproduced `0.3964m` terminal z after 4 viewer-style replans before the fix.
+  - `Go2Pvcnn/tests/test_viz_playback.py`: `20 passed`.
+  - Together parity/core/runtime/guardrail set: `35 passed`.
+  - Headless viewer reached real together playback and was terminated by timeout; later standstill evidence stayed near `plan.z=+0.30`, `actual.z=+0.30`.
+- acceptance:
+  - Regression, relevant unit tests, parity/core/runtime/guardrail tests, py_compile, and headless viewer smoke evidence are complete.
+  - Remaining: manual interactive visual confirmation.

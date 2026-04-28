@@ -87,6 +87,31 @@ With `verbose_planner` (or `planner_instrumentation`) enabled, the manager print
 
 Viewer supports `--planner-playback-mode direct` to drive robot pose/joints directly from the planner result/reference cache (as opposed to the default `physics` mode).
 
+### Together Viewer Handoff Root Z
+
+Updated 2026-04-28 for `Go2Pvcnn/extension/viz/go2_foostep_planner.py`:
+
+- The together viewer preserves single-segment raw/together planner parity.
+- Segment chaining no longer uses the previous segment's terminal root z directly as the next initial base height.
+- `_together_state_from_reference_result()` calls `_together_handoff_root_pos()` and reconstructs handoff root z from current contact-foot support height plus the segment's initial support clearance.
+- This prevents repeated viewer replans from accumulating segment root-z bias into visible lift-off.
+- For hold-like full-contact segments with no planar/yaw motion, the viewer now bypasses that clearance reconstruction and keeps the terminal root z directly, preventing zero-command recovery from replaying every segment.
+
+Evidence: [../log/2026-04-28-1007-viewer-together-root-z-ratchet.md](../log/2026-04-28-1007-viewer-together-root-z-ratchet.md).
+
+### Together Zero-Command Rehome
+
+Updated 2026-04-28 for `Go2Pvcnn/extension/batched_together_planner/parameterization.py`:
+
+- Zero-command hold keeps root `xy` and yaw.
+- Feet move toward current-yaw root-frame nominal slots, with z from terrain support.
+- Root `z` recovers toward support height plus `hip_height`.
+- Root roll/pitch recover toward the support plane; flat terrain recovers toward `0/0`.
+- The support-plane normal is computed with a vectorized four-foot midpoint cross product, not `torch.linalg.svd`.
+- The training-path guardrail now forbids `torch.linalg.svd` and `torch.svd` under `extension/batched_together_planner`.
+
+Evidence: [../log/2026-04-28-1132-together-zero-command-rehome.md](../log/2026-04-28-1132-together-zero-command-rehome.md).
+
 ## CPU vs Pure-GPU Runtime Role
 
 - raw CPU path remains the semantic parity baseline

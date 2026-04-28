@@ -145,6 +145,28 @@ def _touchdown_targets(
     return target
 
 
+def _support_plane_target_rpy(root_rpy: Tensor, target_foot: Tensor, cfg: TogetherPlannerConfig) -> Tensor:
+    front_mid = 0.5 * (target_foot[:, 0, :] + target_foot[:, 1, :])
+    rear_mid = 0.5 * (target_foot[:, 2, :] + target_foot[:, 3, :])
+    left_mid = 0.5 * (target_foot[:, 0, :] + target_foot[:, 2, :])
+    right_mid = 0.5 * (target_foot[:, 1, :] + target_foot[:, 3, :])
+    forward = front_mid - rear_mid
+    left = left_mid - right_mid
+    support_normal = torch.cross(forward, left, dim=-1)
+    support_normal = torch.where(support_normal[:, 2:3] < 0.0, -support_normal, support_normal)
+    support_normal = support_normal / torch.linalg.vector_norm(support_normal, dim=-1, keepdim=True).clamp_min(1e-6)
+    yaw = root_rpy[:, 2]
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    yaw_aligned_x = cos_yaw * support_normal[:, 0] + sin_yaw * support_normal[:, 1]
+    yaw_aligned_y = -sin_yaw * support_normal[:, 0] + cos_yaw * support_normal[:, 1]
+    yaw_aligned_z = support_normal[:, 2]
+    limit = float(cfg.rehome_roll_pitch_limit)
+    target_roll = torch.asin((-yaw_aligned_y).clamp(-1.0, 1.0)).clamp(-limit, limit)
+    target_pitch = torch.atan2(yaw_aligned_x, yaw_aligned_z).clamp(-limit, limit)
+    return torch.stack((target_roll, target_pitch, yaw), dim=-1)
+
+
 def _hold_rehome_targets(
     terrain: TogetherPlannerTerrain,
     root_pos: Tensor,
@@ -152,11 +174,12 @@ def _hold_rehome_targets(
     foot_pos: Tensor,
     time_s: Tensor,
     cfg: TogetherPlannerConfig,
-) -> Tensor:
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     batch_size = root_pos.shape[0]
     horizon_steps = int(cfg.horizon_steps)
     phase = 0.5 - 0.5 * torch.cos(torch.pi * time_s / time_s[-1].clamp_min(1e-6))
-    phase = phase.view(1, horizon_steps, 1, 1)
+    phase_root = phase.view(1, horizon_steps, 1)
+    phase_foot = phase.view(1, horizon_steps, 1, 1)
     nominal_xy = HIP_OFFSETS_ARRAY.to(device=root_pos.device, dtype=root_pos.dtype)[:, :2].view(1, 4, 2)
     yaw = root_rpy[:, 2:3]
     cos_yaw = torch.cos(yaw)
@@ -166,7 +189,24 @@ def _hold_rehome_targets(
     target_xy[..., 1] = root_pos[:, None, 1] + sin_yaw * nominal_xy[..., 0] + cos_yaw * nominal_xy[..., 1]
     _, support_height, _ = terrain.support_at(target_xy, cfg)
     target_foot = torch.cat((target_xy, support_height.unsqueeze(-1)), dim=-1)
-    return foot_pos[:, None, :, :] + phase * (target_foot[:, None, :, :] - foot_pos[:, None, :, :])
+    target_root_z = support_height.mean(dim=-1) + float(cfg.hip_height)
+    target_root = torch.cat((root_pos[:, :2], target_root_z.unsqueeze(-1)), dim=-1)
+    target_rpy = _support_plane_target_rpy(root_rpy, target_foot, cfg)
+    hold_root = root_pos[:, None, :] + phase_root * (target_root[:, None, :] - root_pos[:, None, :])
+    hold_rpy = root_rpy[:, None, :] + phase_root * (target_rpy[:, None, :] - root_rpy[:, None, :])
+    hold_foot_xy = foot_pos[:, None, :, :2] + phase_foot * (target_foot[:, None, :, :2] - foot_pos[:, None, :, :2])
+    _, hold_support_height, hold_support_slope = terrain.support_at(hold_foot_xy.reshape(batch_size, -1, 2), cfg)
+    hold_support_height = hold_support_height.reshape(batch_size, horizon_steps, 4)
+    hold_support_slope = hold_support_slope.reshape(batch_size, horizon_steps, 4)
+    linear_foot_z = foot_pos[:, None, :, 2] + phase.view(1, horizon_steps, 1) * (
+        target_foot[:, None, :, 2] - foot_pos[:, None, :, 2]
+    )
+    hold_foot_z = torch.maximum(linear_foot_z, hold_support_height)
+    hold_foot = torch.cat((hold_foot_xy, hold_foot_z.unsqueeze(-1)), dim=-1)
+    first_frame = phase.view(1, horizon_steps, 1, 1) <= 0.0
+    hold_foot = torch.where(first_frame, foot_pos[:, None, :, :], hold_foot)
+    hold_support_height = torch.where(first_frame.squeeze(-1), foot_pos[:, None, :, 2], hold_support_height)
+    return hold_root, hold_rpy, hold_foot, hold_support_height, hold_support_slope
 
 
 def expand_segment(
@@ -304,16 +344,21 @@ def expand_segment(
     support_height = support_height.reshape(batch_size, horizon_steps, 4)
     support_slope = support_slope.reshape(batch_size, horizon_steps, 4)
     hold_mask = hold_command_mask(command_batch, cfg).to(device=root_pos.device)
-    hold_root = root_pos[:, None, :].expand(-1, horizon_steps, -1)
-    hold_rpy = root_rpy[:, None, :].expand(-1, horizon_steps, -1)
-    hold_foot = _hold_rehome_targets(terrain, root_pos, root_rpy, foot_pos, time_s, cfg)
+    hold_root, hold_rpy, hold_foot, hold_support_height, hold_support_slope = _hold_rehome_targets(
+        terrain,
+        root_pos,
+        root_rpy,
+        foot_pos,
+        time_s,
+        cfg,
+    )
     root_traj = torch.where(hold_mask[:, None, None], hold_root, root_traj)
     rpy_traj = torch.where(hold_mask[:, None, None], hold_rpy, rpy_traj)
     foot_traj = torch.where(hold_mask[:, None, None, None], hold_foot, foot_traj)
     touchdown_seq = torch.where(hold_mask[:, None, None, None], foot_pos[:, :, None, :].expand(-1, -1, int(cfg.event_cap), -1), touchdown_seq)
     support_xy = torch.where(hold_mask[:, None, None, None], hold_foot[..., :2], support_xy)
-    support_height = torch.where(hold_mask[:, None, None], hold_foot[..., 2], support_height)
-    support_slope = torch.where(hold_mask[:, None, None], torch.zeros_like(support_slope), support_slope)
+    support_height = torch.where(hold_mask[:, None, None], hold_support_height, support_height)
+    support_slope = torch.where(hold_mask[:, None, None], hold_support_slope, support_slope)
     return TogetherRollout(
         root_pos=root_traj,
         root_rpy=rpy_traj,

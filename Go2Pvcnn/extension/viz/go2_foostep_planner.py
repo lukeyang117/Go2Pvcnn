@@ -122,11 +122,57 @@ def _planner_state_from_reference_result(result, *, frame_idx: int):
     )
 
 
+def _together_handoff_root_pos(result, *, frame_idx: int) -> torch.Tensor:
+    root_pos_all = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
+    root_pos = root_pos_all[:, int(frame_idx)].clone()
+    contact_state = getattr(result, "contact_state", None)
+    foot_pos_w = getattr(result, "foot_pos_w", None)
+    if contact_state is None or foot_pos_w is None:
+        return root_pos
+
+    foot_pos = torch.as_tensor(foot_pos_w, device=root_pos.device, dtype=root_pos.dtype)
+    contact = torch.as_tensor(contact_state, device=root_pos.device)
+    if foot_pos.ndim != 4 or contact.ndim != 3 or foot_pos.shape[:3] != contact.shape:
+        return root_pos
+
+    frame = int(frame_idx)
+    root_quat_w = getattr(result, "root_quat_w", None)
+    hold_like = torch.zeros((root_pos.shape[0],), dtype=torch.bool, device=root_pos.device)
+    if root_quat_w is not None:
+        root_quat = torch.as_tensor(root_quat_w, device=root_pos.device, dtype=root_pos.dtype)
+        if root_quat.ndim == 3 and root_quat.shape[:2] == root_pos_all.shape[:2]:
+            # Hold-like segments should hand off their settled base height directly;
+            # reconstructing support clearance would replay the recovery each replan.
+            full_contact = (contact > 0.5).all(dim=2).all(dim=1)
+            planar_delta = torch.linalg.vector_norm(root_pos_all[:, frame, :2] - root_pos_all[:, 0, :2], dim=-1)
+            yaw_delta = torch.abs(_quat_wxyz_to_yaw(root_quat[:, frame]) - _quat_wxyz_to_yaw(root_quat[:, 0]))
+            hold_like = full_contact & (planar_delta <= 1e-6) & (yaw_delta <= 1e-6)
+
+    frame_contact = contact[:, frame].to(dtype=root_pos.dtype)
+    initial_contact = contact[:, 0].to(dtype=root_pos.dtype)
+    frame_contact_count = frame_contact.sum(dim=-1)
+    initial_contact_count = initial_contact.sum(dim=-1)
+    frame_support_z = torch.where(
+        frame_contact_count > 0.0,
+        (foot_pos[:, frame, :, 2] * frame_contact).sum(dim=-1) / frame_contact_count.clamp_min(1.0),
+        foot_pos[:, frame, :, 2].mean(dim=-1),
+    )
+    initial_support_z = torch.where(
+        initial_contact_count > 0.0,
+        (foot_pos[:, 0, :, 2] * initial_contact).sum(dim=-1) / initial_contact_count.clamp_min(1.0),
+        foot_pos[:, 0, :, 2].mean(dim=-1),
+    )
+    initial_clearance = root_pos_all[:, 0, 2].to(device=root_pos.device, dtype=root_pos.dtype) - initial_support_z
+    reconstructed_z = frame_support_z + initial_clearance
+    root_pos[:, 2] = torch.where(hold_like, root_pos_all[:, frame, 2], reconstructed_z)
+    return root_pos
+
+
 def _together_state_from_reference_result(result, *, frame_idx: int):
     from extension.batched_together_planner.types import TogetherRobotState
 
     frame = int(frame_idx)
-    root_pos = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float64)
+    root_pos = _together_handoff_root_pos(result, frame_idx=frame)
     root_quat = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float64)
     root_rpy = _quat_wxyz_to_rpy(root_quat)
     joint_angles = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float64)

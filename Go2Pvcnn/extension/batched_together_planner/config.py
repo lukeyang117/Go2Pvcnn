@@ -49,6 +49,7 @@ class TogetherPlannerConfig:
     touchdown_xy_bias_scale: float = 0.04
     touchdown_z_bias_scale: float = 0.02
     swing_parabola_multiplier: float = 4.0
+    rehome_roll_pitch_limit: float = 0.35
     default_terrain_local_resolution: float = 0.01
     cost_weights: dict[str, float] = field(default_factory=_default_cost_weights)
 
