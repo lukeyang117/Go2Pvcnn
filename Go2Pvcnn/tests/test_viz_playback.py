@@ -270,6 +270,81 @@ class TestKinematicPlaybackLogic:
         with pytest.raises(ValueError, match="three floats"):
             _parse_scripted_command("0.0 0.3", device=torch.device("cpu"))
 
+    def test_subsample_semantic_height_points_keeps_grid_alignment_and_ignores_invalid_hits(self):
+        from extension.viz.go2_foostep_planner import (
+            SEMANTIC_LARGE_ID,
+            SEMANTIC_SMALL_ID,
+            SEMANTIC_TERRAIN_ID,
+            _subsample_semantic_height_points,
+        )
+
+        ray_hits = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, float("inf")],
+                [3.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [3.0, 1.0, 0.0],
+                [0.0, 2.0, 0.6],
+                [1.0, 2.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [3.0, 2.0, 0.0],
+                [0.0, 3.0, 0.0],
+                [1.0, 3.0, 0.0],
+                [2.0, 3.0, 0.0],
+                [3.0, 3.0, 0.0],
+            ],
+            dtype=torch.float64,
+        )
+        semantic_map = torch.tensor(
+            [
+                [0, 0, 1, 0],
+                [0, 0, 0, 0],
+                [2, 0, 0, 0],
+                [0, 0, 0, 0],
+            ],
+            dtype=torch.int64,
+        )
+
+        points_by_class, diagnostics = _subsample_semantic_height_points(ray_hits, semantic_map, stride=2)
+
+        assert diagnostics["terrain_hit_count"] == 2
+        assert diagnostics["small_hit_count"] == 0
+        assert diagnostics["large_hit_count"] == 1
+        assert diagnostics["valid_sample_count"] == 3
+        assert diagnostics["height_lift_max"] == pytest.approx(0.6)
+        torch.testing.assert_close(
+            points_by_class[SEMANTIC_TERRAIN_ID],
+            torch.tensor([[0.0, 0.0, 0.0], [2.0, 2.0, 0.0]], dtype=torch.float64),
+        )
+        assert points_by_class[SEMANTIC_SMALL_ID].shape == (0, 3)
+        torch.testing.assert_close(
+            points_by_class[SEMANTIC_LARGE_ID],
+            torch.tensor([[0.0, 2.0, 0.6]], dtype=torch.float64),
+        )
+
+    def test_format_semantic_diagnostics_reports_required_contract(self):
+        from extension.viz.go2_foostep_planner import _format_semantic_diagnostics
+
+        text = _format_semantic_diagnostics(
+            {
+                "terrain_hit_count": 9,
+                "small_hit_count": 4,
+                "large_hit_count": 1,
+                "valid_sample_count": 14,
+                "height_lift_max": 0.55,
+            }
+        )
+
+        assert "terrain=9" in text
+        assert "small=4" in text
+        assert "large=1" in text
+        assert "valid=14" in text
+        assert "height_lift_max=0.550" in text
+
     def test_together_viewer_handoff_does_not_accumulate_root_height_on_flat_walk(self):
         from extension.batched_together_planner import (
             TogetherPlannerConfig,

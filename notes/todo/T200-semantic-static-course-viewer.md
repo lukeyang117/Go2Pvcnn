@@ -13,23 +13,31 @@
   - semantic-course root containers must always exist
   - raster size and diagnostics contracts are now explicit
   - semantic rollout success is required on default `together`
+- Implementation slices for sensor, course/config, and viewer integration are now landed in the working tree.
+- Local unit/static/viewer tests are passing.
+- Compact real `env_isaaclab` headless runtime smoke now passes for:
+  - `semantic_height_scanner_contract`
+  - default `together` semantic smoke
+- The remaining acceptance gap is no longer semantic correctness in compact smoke; it is full-grid interactive startup cost and manual viewer confirmation.
 
 ## Open Children
 
-- T201: redesign `semantic_raycaster` root traversal / static semantic merge / sensor tests
-- T202: add `extension/semantic_course.py` for difficulty-to-stage mapping, static tile layouts, and grounded cuboid generation
-- T203: add `teacher_elevation_trajectory_semantic_viewer_env_cfg.py` and replace inherited scanner references with `semantic_height_scanner`
-- T204: update `go2_foostep_planner.py` to consume `semantic_height_scanner` and color semantic hits
+- T205: full-grid interactive viewer startup cost / manual semantic viewer confirmation
 
 ## Closed Children Archive
 
-- none yet
+- T201: `semantic_raycaster` root traversal / static semantic merge / sensor tests landed; local tests pass
+- T202: `extension/semantic_course.py` landed; local tests pass
+- T203: semantic viewer env config landed; local tests pass
+- T204: viewer semantic scanner path / diagnostics / marker partitioning landed; local tests pass
 
 ## Related Logs
 
 - [2026-04-29-2209-semantic-static-course-viewer-design.md](../log/2026-04-29-2209-semantic-static-course-viewer-design.md)
 - [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](../log/2026-04-29-2234-semantic-static-course-viewer-spec-review.md)
 - [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](../log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
+- [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](../log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
+- [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](../log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
 
 ## Git Refs
 
@@ -45,11 +53,8 @@
 
 ## Next Step
 
-- Run parallel subagent technical reviews on:
-  - `semantic_raycaster` redesign scope and failure risks
-  - semantic-course placement / prestartup / terrain attachment details
-  - test-metrics completeness and viewer integration contract
-- Let the main agent absorb those reviews, decide the final execution order, and then dispatch implementation workers with disjoint write scopes.
+- Decide whether the full interactive viewer should keep the training-aligned full terrain grid or borrow the compact smoke strategy for startup practicality.
+- Run one manual semantic viewer confirmation pass when interactive validation is needed.
 
 ## Execution Model
 

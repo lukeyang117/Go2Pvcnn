@@ -150,6 +150,39 @@ def test_backend_factory_rejects_unknown_backend():
         _create_manager(_cfg(planner_backend="does-not-exist"), device=torch.device("cpu"))
 
 
+def test_together_manager_terrain_path_respects_semantic_height_scanner_name():
+    manager = _create_manager(
+        _cfg(planner_backend="together", reference_height_scanner_name="semantic_height_scanner"),
+        device=torch.device("cpu"),
+    )
+    ray_hits = torch.tensor(
+        [
+            [
+                [0.0, 0.0, 0.0],
+                [1.5, 0.0, 0.1],
+                [0.0, 1.5, 0.2],
+                [1.5, 1.5, 0.3],
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    scanner = SimpleNamespace(
+        data=SimpleNamespace(ray_hits_w=ray_hits),
+        cfg=SimpleNamespace(pattern_cfg=SimpleNamespace(size=(1.5, 1.5))),
+    )
+    env = SimpleNamespace(
+        scene=SimpleNamespace(sensors={"semantic_height_scanner": scanner}),
+        unwrapped=None,
+    )
+    env.unwrapped = env
+
+    terrain = manager._terrain_from_env(env)
+
+    assert terrain.heightmaps.shape == (1, 1, 2, 2)
+    assert terrain.world_x_range == (-0.75, 0.75)
+    assert terrain.world_y_range == (-0.75, 0.75)
+
+
 def test_reward_frame_ids_come_from_manager_not_episode_modulo():
     rewards_reference = _require_module("extension.mdp.rewards_reference")
     cache = _fake_cache(num_envs=2, horizon=5)

@@ -6,6 +6,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-29 23:59 | semantic static-course env_isaaclab compact runtime smoke | semantic static course real runtime | pass with scoped caveat | `semantic_height_scanner_contract` pass; `together_semantic_smoke` pass; compact `4x1` terrain grid; full-grid interactive startup still unverified | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md) |
+| 2026-04-29 23:48 | semantic static-course implementation + local verification | semantic static course implementation | local tests pass; real runtime smoke incomplete | sensor `4 passed`; course/config `12 passed`; viewer `33+29 passed`; runtime contract reached live semantic-course spawning but timed out at `120s` | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md) |
 | 2026-04-29 23:18 | semantic static-course parallel review convergence | semantic static course review integration | blockers absorbed into spec | `replicate_physics=False`; stable semantic root containers; `151x151`; valid-hit diagnostics; default `together` success target | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](2026-04-29-2318-semantic-static-course-parallel-review-convergence.md) |
 | 2026-04-29 22:52 | semantic static-course execution model | semantic static course workflow | parallel review / worker split recorded | main agent owns decisions/integration; parallel reviews `R1/R2/R3`; worker split `W1/W2/W3` | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2252-semantic-static-course-execution-model.md](2026-04-29-2252-semantic-static-course-execution-model.md) |
 | 2026-04-29 22:34 | semantic static-course viewer spec review | semantic static course design review | approved with refinements | subagent `Approved`; explicit row-band split; fixed `S3/S4` default counts/anchors; semantic hit counts marked required diagnostics | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](2026-04-29-2234-semantic-static-course-viewer-spec-review.md) |
@@ -25,6 +27,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 ## Topic Log Index
 
 - T200 semantic static-course viewer:
+  - [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
+  - [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
   - [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
   - [2026-04-29-2252-semantic-static-course-execution-model.md](2026-04-29-2252-semantic-static-course-execution-model.md)
   - [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](2026-04-29-2234-semantic-static-course-viewer-spec-review.md)

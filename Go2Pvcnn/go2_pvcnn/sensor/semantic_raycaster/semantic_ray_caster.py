@@ -34,6 +34,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SUPPORTED_GEOMETRY_TYPES = ("Mesh", "Plane", "Cube", "Sphere", "Cylinder")
+
 # 设置环境变量 SEMANTIC_RAYCASTER_DEBUG=N（N 为正整数）：打印合并 mesh 摘要，并在前 N 次 _update_buffers_impl 打印 face_id 统计。
 # 例：export SEMANTIC_RAYCASTER_DEBUG=5
 
@@ -76,16 +78,15 @@ def _apply_world_transform(points_local: np.ndarray, transform_T: np.ndarray) ->
     return (points_local @ r.T + t).astype(np.float32)
 
 
-def _find_first_geometry_prim(root_prim: Usd.Prim) -> tuple[Usd.Prim, str] | tuple[None, None]:
-    """Depth-first: first prim whose type is usable for ray-cast mesh extraction."""
-    for t in ("Mesh", "Plane", "Cube", "Sphere", "Cylinder"):
-        if root_prim.GetTypeName() == t:
-            return root_prim, t
+def _collect_supported_geometry_prims(root_prim: Usd.Prim) -> list[tuple[Usd.Prim, str]]:
+    """Depth-first collect every supported geometry prim under ``root_prim``."""
+    collected: list[tuple[Usd.Prim, str]] = []
+    prim_type = root_prim.GetTypeName()
+    if prim_type in _SUPPORTED_GEOMETRY_TYPES:
+        collected.append((root_prim, prim_type))
     for child in root_prim.GetChildren():
-        p, typ = _find_first_geometry_prim(child)
-        if p is not None:
-            return p, typ
-    return None, None
+        collected.extend(_collect_supported_geometry_prims(child))
+    return collected
 
 
 def _mesh_prim_to_world_trimesh(prim: Usd.Prim) -> tuple[np.ndarray, np.ndarray]:
@@ -148,18 +149,8 @@ def _cube_prim_to_world_trimesh(prim: Usd.Prim) -> tuple[np.ndarray, np.ndarray]
     return _apply_world_transform(pts, transform_T), tri
 
 
-def _usd_prim_to_world_trimesh(mesh_prim_path: str) -> tuple[np.ndarray, np.ndarray]:
-    """Resolve ``mesh_prim_path`` and extract world-space triangles (Mesh / Plane / Cube / … in subtree)."""
-    root = sim_utils.find_first_matching_prim(mesh_prim_path)
-    if root is None or not root.IsValid():
-        raise RuntimeError(f"No prim matched for ray-cast path: {mesh_prim_path!r}")
-
-    geom_prim, geom_type = _find_first_geometry_prim(root)
-    if geom_prim is None:
-        raise RuntimeError(
-            f"No Mesh / Plane / Cube (or other supported geom) under {mesh_prim_path!r} for ray casting."
-        )
-
+def _geometry_prim_to_world_trimesh(geom_prim: Usd.Prim, geom_type: str) -> tuple[np.ndarray, np.ndarray]:
+    """Convert one supported USD geometry prim into a world-space triangle mesh."""
     if geom_type == "Mesh":
         return _mesh_prim_to_world_trimesh(geom_prim)
     if geom_type == "Plane":
@@ -203,6 +194,36 @@ def _usd_prim_to_world_trimesh(mesh_prim_path: str) -> tuple[np.ndarray, np.ndar
     raise RuntimeError(f"Unsupported geometry type {geom_type!r} at {geom_prim.GetPath()}.")
 
 
+def _usd_prim_to_world_trimeshes(mesh_prim_path: str) -> list[tuple[str, str, np.ndarray, np.ndarray]]:
+    """Resolve ``mesh_prim_path`` and extract every supported world-space triangle mesh in its subtree."""
+    root = sim_utils.find_first_matching_prim(mesh_prim_path)
+    if root is None or not root.IsValid():
+        raise RuntimeError(f"No prim matched for ray-cast path: {mesh_prim_path!r}")
+
+    meshes: list[tuple[str, str, np.ndarray, np.ndarray]] = []
+    for geom_prim, geom_type in _collect_supported_geometry_prims(root):
+        points, triangles = _geometry_prim_to_world_trimesh(geom_prim, geom_type)
+        meshes.append((str(geom_prim.GetPath()), geom_type, points, triangles))
+    return meshes
+
+
+def _semantic_ids_from_face_ids(
+    face_ids: torch.Tensor,
+    face_semantic_ids: torch.Tensor,
+    device: str | torch.device,
+) -> torch.Tensor:
+    """Map ray-cast face ids to semantic ids without crashing on invalid indices."""
+    fid_flat = face_ids.reshape(-1).to(device=device, dtype=torch.long)
+    if face_semantic_ids.numel() == 0:
+        return torch.zeros(fid_flat.shape[0], device=device, dtype=torch.float32)
+
+    table = face_semantic_ids.to(device=device, dtype=torch.long)
+    safe_idx = torch.clamp(fid_flat, min=0, max=table.shape[0] - 1)
+    gathered = table[safe_idx].float()
+    valid = (fid_flat >= 0) & (fid_flat < table.shape[0])
+    return torch.where(valid, gathered, torch.zeros_like(gathered))
+
+
 class SemanticGridRayCaster(RayCaster):
     """Isaac Lab ``RayCaster`` with one merged mesh, face-id semantics, and elevation + semantic rasters."""
 
@@ -229,19 +250,42 @@ class SemanticGridRayCaster(RayCaster):
         vertex_offset = 0
         for mesh_prim_path in self.cfg.mesh_prim_paths:
             semantic_id = int(self.cfg.mesh_semantic_ids[mesh_prim_path])
-            points, triangles = _usd_prim_to_world_trimesh(mesh_prim_path)
-            nt = triangles.shape[0]
-            face_semantic.extend([semantic_id] * nt)
-            vert_blocks.append(points)
-            tri_blocks.append(triangles.astype(np.int32) + vertex_offset)
-            vertex_offset += points.shape[0]
-            logger.info(
-                "SemanticGridRayCaster: merged submesh %r — %d verts, %d tris, semantic=%d.",
-                mesh_prim_path,
-                points.shape[0],
-                nt,
-                semantic_id,
-            )
+            submeshes = _usd_prim_to_world_trimeshes(mesh_prim_path)
+            if not submeshes:
+                if semantic_id == 0:
+                    raise RuntimeError(f"No supported geometry descendants under required root: {mesh_prim_path!r}")
+                logger.info(
+                    "SemanticGridRayCaster: semantic root %r is present but empty; skipping semantic=%d.",
+                    mesh_prim_path,
+                    semantic_id,
+                )
+                continue
+
+            for geom_path, geom_type, points, triangles in submeshes:
+                nt = triangles.shape[0]
+                if nt == 0:
+                    logger.info(
+                        "SemanticGridRayCaster: skipping zero-triangle geometry %r under root %r.",
+                        geom_path,
+                        mesh_prim_path,
+                    )
+                    continue
+                face_semantic.extend([semantic_id] * nt)
+                vert_blocks.append(points)
+                tri_blocks.append(triangles.astype(np.int32) + vertex_offset)
+                vertex_offset += points.shape[0]
+                logger.info(
+                    "SemanticGridRayCaster: merged %s %r from root %r — %d verts, %d tris, semantic=%d.",
+                    geom_type,
+                    geom_path,
+                    mesh_prim_path,
+                    points.shape[0],
+                    nt,
+                    semantic_id,
+                )
+
+        if not vert_blocks or not tri_blocks:
+            raise RuntimeError("SemanticGridRayCaster: no supported geometry collected from configured roots.")
 
         all_points = np.concatenate(vert_blocks, axis=0)
         all_triangles = np.concatenate(tri_blocks, axis=0)
@@ -336,14 +380,8 @@ class SemanticGridRayCaster(RayCaster):
         ne, nr = face_ids.shape
         fid_flat = face_ids.reshape(-1).to(device=self.device, dtype=torch.long)
         n_faces = int(self._face_semantic_ids.shape[0])
-        sem_flat = torch.zeros(fid_flat.shape[0], device=self.device, dtype=torch.float32)
-        if n_faces > 0:
-            table = self._face_semantic_ids.to(device=self.device, dtype=torch.long)
-            # Warp 返回的 face id 可能与 CPU 侧三角计数不完全一致；必须用 clamp 避免 CUDA 索引越界。
-            safe_idx = torch.clamp(fid_flat, min=0, max=n_faces - 1)
-            gathered = table[safe_idx].float()
-            mask = (fid_flat >= 0) & (fid_flat < n_faces)
-            sem_flat = torch.where(mask, gathered, sem_flat)
+        sem_flat = _semantic_ids_from_face_ids(face_ids, self._face_semantic_ids, self.device)
+        mask = (fid_flat >= 0) & (fid_flat < n_faces)
         sem_ray = sem_flat.view(ne, nr)
 
         pos_z = self._data.pos_w[env_ids, 2].unsqueeze(1)

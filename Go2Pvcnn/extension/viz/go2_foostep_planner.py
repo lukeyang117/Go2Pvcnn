@@ -414,6 +414,16 @@ LEG_COLORS = (
     (1.0, 0.8, 0.2),
 )
 
+SEMANTIC_TERRAIN_ID = 0
+SEMANTIC_SMALL_ID = 1
+SEMANTIC_LARGE_ID = 2
+
+SEMANTIC_MARKER_COLORS = {
+    SEMANTIC_TERRAIN_ID: (0.7, 0.9, 1.0),
+    SEMANTIC_SMALL_ID: (1.0, 0.35, 0.35),
+    SEMANTIC_LARGE_ID: (1.0, 0.8, 0.2),
+}
+
 PLANNER_JOINT_ORDER = (
     "FL_hip_joint",
     "FL_thigh_joint",
@@ -631,9 +641,16 @@ class PlannerVisualizer:
         self.root_traj = VisualizationMarkers(
             _make_marker_cfg("/Visuals/BatchedPlanner/root_traj", radius=0.03, color=(1.0, 0.6, 0.1))
         )
-        self.heightmap = VisualizationMarkers(
-            _make_marker_cfg("/Visuals/BatchedPlanner/heightmap", radius=0.012, color=(0.7, 0.9, 1.0))
-        )
+        self.heightmap = {
+            semantic_id: VisualizationMarkers(
+                _make_marker_cfg(
+                    f"/Visuals/BatchedPlanner/heightmap_{semantic_id}",
+                    radius=0.012,
+                    color=color,
+                )
+            )
+            for semantic_id, color in SEMANTIC_MARKER_COLORS.items()
+        }
         self.command_arrow = VisualizationMarkers(
             copy.deepcopy(GREEN_ARROW_X_MARKER_CFG).replace(prim_path="/Visuals/BatchedPlanner/command_arrow")
         )
@@ -685,7 +702,14 @@ class PlannerVisualizer:
             return touchdowns[:, 0]
         return touchdowns
 
-    def update(self, *, result, command: torch.Tensor, root_yaw: torch.Tensor, height_points: torch.Tensor) -> None:
+    def update(
+        self,
+        *,
+        result,
+        command: torch.Tensor,
+        root_yaw: torch.Tensor,
+        height_points_by_class: dict[int, torch.Tensor],
+    ) -> None:
         from extension.convention import quat_wxyz_to_xyzw
 
         foot_pos_w = self._foot_positions_world(result)
@@ -695,10 +719,13 @@ class PlannerVisualizer:
             self.foot_traj[leg_idx].visualize(translations=foot_pos_w[0, :, leg_idx].to(torch.float32))
             self.touchdowns[leg_idx].visualize(translations=touchdown_w[0, leg_idx : leg_idx + 1].to(torch.float32))
 
-        if height_points.numel() > 0:
-            self.heightmap.visualize(translations=height_points.to(torch.float32))
-        else:
-            self.heightmap.visualize(translations=torch.empty((0, 3), dtype=torch.float32))
+        empty = torch.empty((0, 3), dtype=torch.float32)
+        for semantic_id, markers in self.heightmap.items():
+            points = height_points_by_class.get(semantic_id)
+            if points is None or points.numel() == 0:
+                markers.visualize(translations=empty)
+            else:
+                markers.visualize(translations=points.to(torch.float32))
 
         cmd_xy = command[0, :2]
         speed = float(torch.linalg.norm(cmd_xy).item())
@@ -729,9 +756,11 @@ class PlannerVisualizer:
 
 
 def _build_env_cfg(args_cli: argparse.Namespace):
-    from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg_PLAY
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_semantic_viewer_env_cfg import (
+        TeacherElevationTrajectorySemanticViewerEnvCfg_PLAY,
+    )
 
-    env_cfg = TeacherElevationTrajectoryEnvCfg_PLAY()
+    env_cfg = TeacherElevationTrajectorySemanticViewerEnvCfg_PLAY()
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.scene.env_spacing = 6.0
     env_cfg.sim.device = args_cli.device
@@ -844,18 +873,96 @@ def _compute_together_local_terrain(scanner, *, env_id: int = 0):
     return terrain, ray_hits
 
 
-def _subsample_height_points(ray_hits: torch.Tensor, stride: int) -> torch.Tensor:
+def _reshape_scanner_grid(ray_hits: torch.Tensor) -> tuple[torch.Tensor, int]:
     if ray_hits.ndim != 2 or ray_hits.shape[-1] != 3:
-        return torch.empty((0, 3), dtype=ray_hits.dtype, device=ray_hits.device)
+        raise ValueError("ray_hits must have shape (H*W, 3)")
     side = int(round(math.sqrt(int(ray_hits.shape[0]))))
     if side * side != int(ray_hits.shape[0]):
-        sampled = ray_hits[:: max(1, stride)]
+        raise ValueError(f"ray hit count {int(ray_hits.shape[0])} is not a perfect square")
+    return ray_hits.reshape(side, side, 3), side
+
+
+def _subsample_semantic_height_points(
+    ray_hits: torch.Tensor,
+    semantic_map: torch.Tensor | None,
+    stride: int,
+) -> tuple[dict[int, torch.Tensor], dict[str, float | int]]:
+    grid, side = _reshape_scanner_grid(torch.as_tensor(ray_hits))
+    if semantic_map is None:
+        semantic_grid = torch.full((side, side), SEMANTIC_TERRAIN_ID, dtype=torch.long, device=grid.device)
+    else:
+        semantic_grid = torch.as_tensor(semantic_map, device=grid.device)
+        if semantic_grid.ndim != 2 or tuple(semantic_grid.shape) != (side, side):
+            raise ValueError(f"semantic_map must have shape {(side, side)}, got {tuple(semantic_grid.shape)}")
+        semantic_grid = semantic_grid.to(dtype=torch.long)
+
+    step = max(1, int(stride))
+    sampled_hits = grid[::step, ::step].reshape(-1, 3)
+    sampled_semantic = semantic_grid[::step, ::step].reshape(-1)
+    valid_mask = torch.isfinite(sampled_hits).all(dim=-1)
+
+    points_by_class: dict[int, torch.Tensor] = {}
+    for semantic_id in (SEMANTIC_TERRAIN_ID, SEMANTIC_SMALL_ID, SEMANTIC_LARGE_ID):
+        class_mask = valid_mask & (sampled_semantic == semantic_id)
+        points_by_class[semantic_id] = sampled_hits[class_mask]
+
+    valid_hits = sampled_hits[valid_mask]
+    terrain_hits = points_by_class[SEMANTIC_TERRAIN_ID]
+    if terrain_hits.shape[0] > 0:
+        baseline_z = terrain_hits[:, 2].median()
+    elif valid_hits.shape[0] > 0:
+        baseline_z = valid_hits[:, 2].amin()
+    else:
+        baseline_z = torch.tensor(0.0, dtype=sampled_hits.dtype, device=sampled_hits.device)
+
+    height_lift_max = 0.0
+    if valid_hits.shape[0] > 0:
+        height_lift_max = float(torch.clamp(valid_hits[:, 2] - baseline_z, min=0.0).amax().item())
+
+    diagnostics: dict[str, float | int] = {
+        "terrain_hit_count": int(points_by_class[SEMANTIC_TERRAIN_ID].shape[0]),
+        "small_hit_count": int(points_by_class[SEMANTIC_SMALL_ID].shape[0]),
+        "large_hit_count": int(points_by_class[SEMANTIC_LARGE_ID].shape[0]),
+        "valid_sample_count": int(valid_hits.shape[0]),
+        "height_lift_max": height_lift_max,
+    }
+    return points_by_class, diagnostics
+
+
+def _subsample_height_points(ray_hits: torch.Tensor, stride: int) -> torch.Tensor:
+    try:
+        return _subsample_semantic_height_points(ray_hits, None, stride)[0][SEMANTIC_TERRAIN_ID]
+    except ValueError:
+        sampled = torch.as_tensor(ray_hits)[:: max(1, int(stride))]
         valid = torch.isfinite(sampled).all(dim=-1)
         return sampled[valid]
-    grid = ray_hits.reshape(side, side, 3)
-    sampled = grid[:: max(1, stride), :: max(1, stride)].reshape(-1, 3)
-    valid = torch.isfinite(sampled).all(dim=-1)
-    return sampled[valid]
+
+
+def _reference_height_scanner_name(env_cfg) -> str:
+    return str(getattr(env_cfg, "reference_height_scanner_name", "height_scanner"))
+
+
+def _reference_height_scanner(base_env, env_cfg):
+    return base_env.scene.sensors[_reference_height_scanner_name(env_cfg)]
+
+
+def _scanner_semantic_map(scanner, *, env_id: int = 0) -> torch.Tensor | None:
+    semantic_map = getattr(scanner.data, "semantic_map", None)
+    if semantic_map is None:
+        return None
+    return torch.as_tensor(semantic_map[env_id])
+
+
+def _format_semantic_diagnostics(diagnostics: dict[str, float | int]) -> str:
+    return (
+        "semantic("
+        f"terrain={int(diagnostics['terrain_hit_count'])} "
+        f"small={int(diagnostics['small_hit_count'])} "
+        f"large={int(diagnostics['large_hit_count'])} "
+        f"valid={int(diagnostics['valid_sample_count'])} "
+        f"height_lift_max={float(diagnostics['height_lift_max']):0.3f}"
+        ")"
+    )
 
 
 def _make_zero_actions(env) -> torch.Tensor:
@@ -996,7 +1103,7 @@ def main() -> int:
     _attach_reference_manager_if_enabled(base_env, env_cfg)
     zero_actions = _make_zero_actions(base_env)
     foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
-    scanner = base_env.scene.sensors["height_scanner"]
+    scanner = _reference_height_scanner(base_env, env_cfg)
     visualizer = PlannerVisualizer()
 
     print("[Viewer] Terrain source: teacher_elevation_trajectory env config", flush=True)
@@ -1094,6 +1201,12 @@ def main() -> int:
                         together_cfg=together_planner_cfg,
                     )
                     summary = _trajectory_motion_summary(result)
+                    semantic_map = _scanner_semantic_map(scanner)
+                    height_points_by_class, semantic_diag = _subsample_semantic_height_points(
+                        ray_hits,
+                        semantic_map,
+                        int(args_cli.heightmap_viz_stride),
+                    )
                     print(
                         "[Viewer][Plan] "
                         f"backend={args_cli.planner_backend} "
@@ -1101,19 +1214,19 @@ def main() -> int:
                         f"cmd={_format_command_values(active_cmd.values)} "
                         f"delta=({summary['dx']:+0.2f}, {summary['dy']:+0.2f}, {summary['dz']:+0.2f}) "
                         f"dyaw={summary['dyaw']:+0.2f} "
-                        f"standstill={summary['standstill']}",
+                        f"standstill={summary['standstill']} "
+                        f"{_format_semantic_diagnostics(semantic_diag)}",
                         flush=True,
                     )
                     playback_frame = 0
 
                     planner_state = _planner_state_from_reference_result(result, frame_idx=0)
                     root_yaw = extract_yaw_batch(planner_state.root_quat)
-                    height_points = _subsample_height_points(ray_hits, int(args_cli.heightmap_viz_stride))
                     visualizer.update(
                         result=result,
                         command=active_cmd.values,
                         root_yaw=root_yaw,
-                        height_points=height_points,
+                        height_points_by_class=height_points_by_class,
                     )
                     plan_cycle += 1
                     if scripted_command is not None and scripted_cycles_remaining > 0:

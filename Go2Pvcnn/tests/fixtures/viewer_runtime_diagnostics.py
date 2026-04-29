@@ -68,6 +68,7 @@ class RuntimePlanDiagnostics:
     command: torch.Tensor
     result: object
     summary: dict[str, float | bool]
+    semantic_diagnostics: dict[str, float | int]
     touchdown_xy_deltas: torch.Tensor
     touchdown_xy_delta_norms: torch.Tensor
     left_touchdown_mean_y: float
@@ -421,6 +422,8 @@ class RealViewerRuntimeFixture:
         warmup_steps: int = 6,
         requested_n_frames: int = 20,
         planner_max_touchdown_xy_reach: float = 0.22,
+        planner_backend: str = "legacy",
+        heightmap_viz_stride: int = 10,
     ) -> None:
         self._closed = False
         self.env = None
@@ -441,12 +444,23 @@ class RealViewerRuntimeFixture:
             self.terrain = str(terrain)
             self.warmup_steps = int(warmup_steps)
             self.requested_n_frames = int(requested_n_frames)
+            self.planner_backend = str(planner_backend)
+            self.heightmap_viz_stride = int(heightmap_viz_stride)
 
-            args_cli = SimpleNamespace(num_envs=self.num_envs, device=self.device, terrain=self.terrain)
+            args_cli = SimpleNamespace(
+                num_envs=self.num_envs,
+                device=self.device,
+                terrain=self.terrain,
+                planner_backend=self.planner_backend,
+                n_frames=self.requested_n_frames,
+                plan_dt=0.02,
+            )
             self.env_cfg = self._viewer._build_env_cfg(args_cli)
+            self._configure_compact_semantic_runtime_grid()
             self.planner_cfg = self._viewer._build_planner_cfg(self.env_cfg)
             self.planner_cfg.max_touchdown_xy_reach = float(planner_max_touchdown_xy_reach)
-            self.plan_dt = float(getattr(self.env_cfg, "dt", self.env_cfg.decimation * self.env_cfg.sim.dt))
+            self.together_planner_cfg = self._viewer._build_together_planner_cfg(self.env_cfg)
+            self.plan_dt = float(getattr(self.env_cfg, "plan_dt", self.env_cfg.decimation * self.env_cfg.sim.dt))
 
             self.env = self._gym.make(
                 "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
@@ -457,6 +471,8 @@ class RealViewerRuntimeFixture:
             self._viewer._attach_reference_manager_if_enabled(self.base_env, self.env_cfg)
             self.zero_actions = self._viewer._make_zero_actions(self.base_env)
             self.robot = self.base_env.scene["robot"]
+            self.scanner_name = self._viewer._reference_height_scanner_name(self.env_cfg)
+            self.scanner = self.base_env.scene.sensors[self.scanner_name]
             foot_ids, foot_names = self.robot.find_bodies(".*_foot")
             self.foot_ids = torch.as_tensor(foot_ids, dtype=torch.long, device=self.base_env.device)
             self.foot_names = tuple(name.replace("_foot", "") for name in foot_names)
@@ -470,6 +486,28 @@ class RealViewerRuntimeFixture:
                     pass
             _close_runtime_app()
             raise
+
+    def _configure_compact_semantic_runtime_grid(self) -> None:
+        """Shrink semantic-course runtime smoke to a 4x1 terrain grid.
+
+        The feature config keeps training-aligned terrain dimensions. For real headless
+        runtime diagnostics we only need one representative tile per semantic stage,
+        so reducing the terrain grid keeps Isaac startup bounded while preserving
+        `S1..S4` coverage.
+        """
+        scene = getattr(self.env_cfg, "scene", None)
+        if scene is None:
+            return
+        if not hasattr(scene, "semantic_height_scanner") or getattr(scene, "semantic_height_scanner") is None:
+            return
+        terrain_cfg = getattr(scene, "terrain", None)
+        terrain_gen = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
+        if terrain_gen is None:
+            return
+        terrain_gen.num_rows = 4
+        terrain_gen.num_cols = 1
+        if hasattr(terrain_cfg, "max_init_terrain_level"):
+            terrain_cfg.max_init_terrain_level = 3
 
     def close(self) -> None:
         if self._closed:
@@ -490,11 +528,27 @@ class RealViewerRuntimeFixture:
         return command.to(device=self.base_env.device, dtype=torch.float64)
 
     def _single_env_state(self):
+        if self.planner_backend == "together":
+            return self._viewer._together_state_from_env(self.base_env, self.foot_ids.tolist())
         return self._viewer._planner_state_from_env(self.base_env, self.foot_ids.tolist())
 
+    def _single_env_terrain_and_hits(self):
+        if self.planner_backend == "together":
+            return self._viewer._compute_together_local_terrain(self.scanner, env_id=0)
+        return self._viewer._compute_local_terrain(self.scanner, env_id=0)
+
     def _single_env_terrain(self):
-        terrain, _ = self._viewer._compute_local_terrain(self.base_env.scene.sensors["height_scanner"], env_id=0)
+        terrain, _ = self._single_env_terrain_and_hits()
         return terrain
+
+    def _semantic_scan_diagnostics(self, ray_hits: torch.Tensor) -> dict[str, float | int]:
+        semantic_map = self._viewer._scanner_semantic_map(self.scanner, env_id=0)
+        _, diagnostics = self._viewer._subsample_semantic_height_points(
+            ray_hits,
+            semantic_map,
+            self.heightmap_viz_stride,
+        )
+        return diagnostics
 
     def _build_runtime_plan_diagnostics(self, *, name: str, command: torch.Tensor, state, result) -> RuntimePlanDiagnostics:
         summary = self._viewer._trajectory_motion_summary(result)
@@ -505,11 +559,13 @@ class RealViewerRuntimeFixture:
         touchdown_xy_delta_norms = torch.linalg.vector_norm(touchdown_xy_deltas[0], dim=-1)
         left_touchdown_mean_y = float(touchdown_xy_deltas[0, (0, 2), 1].mean().item())
         right_touchdown_mean_y = float(touchdown_xy_deltas[0, (1, 3), 1].mean().item())
+        _terrain, ray_hits = self._single_env_terrain_and_hits()
         return RuntimePlanDiagnostics(
             name=name,
             command=command.clone(),
             result=result,
             summary=summary,
+            semantic_diagnostics=self._semantic_scan_diagnostics(ray_hits),
             touchdown_xy_deltas=touchdown_xy_deltas,
             touchdown_xy_delta_norms=touchdown_xy_delta_norms,
             left_touchdown_mean_y=left_touchdown_mean_y,
@@ -528,17 +584,21 @@ class RealViewerRuntimeFixture:
         state = self._single_env_state()
         terrain = self._single_env_terrain()
         command = self._command_tensor(name)[:1]
-        result = self._batched_generate_trajectory(
-            terrain,
-            state,
-            command,
+        result = self._viewer._plan_viewer_trajectory(
+            backend=self.planner_backend,
+            terrain=terrain,
+            state=state,
+            command=command,
             requested_n_frames=self.requested_n_frames,
             dt=self.plan_dt,
-            cfg=self.planner_cfg,
+            legacy_cfg=self.planner_cfg,
+            together_cfg=self.together_planner_cfg,
         )
         return self._build_runtime_plan_diagnostics(name=name, command=command, state=state, result=result)
 
     def plan_case_with_stage_diagnostics(self, name: str) -> RuntimePlanStageDiagnostics:
+        if self.planner_backend != "legacy":
+            raise RuntimeError("stage diagnostics are only available for the legacy batched planner path")
         self.reset()
         state = self._single_env_state()
         terrain = self._single_env_terrain()

@@ -38,6 +38,15 @@ def real_batched_runtime(real_runtime):
     return real_runtime
 
 
+@pytest.fixture(scope="module")
+def real_semantic_together_runtime():
+    runtime = _make_real_runtime_fixture(num_envs=2, planner_backend="together")
+    try:
+        yield runtime
+    finally:
+        runtime.close()
+
+
 def test_build_command_cases_includes_forward_command():
     cases = build_command_cases(device=torch.device("cpu"), num_envs=1)
 
@@ -102,6 +111,11 @@ def test_viewer_forward_command_changes_plan_motion_metrics(real_runtime):
     assert abs(forward.summary["dx"]) > abs(forward.summary["dy"]) + 0.03
 
 
+def test_viewer_runtime_uses_semantic_height_scanner_contract(real_runtime):
+    assert real_runtime.scanner_name == "semantic_height_scanner"
+    assert hasattr(real_runtime.scanner.data, "semantic_map")
+
+
 def test_viewer_lateral_command_changes_plan_motion_metrics(real_runtime):
     standstill = real_runtime.plan_case("standstill")
     lateral = real_runtime.plan_case("lateral_left")
@@ -140,6 +154,27 @@ def test_viewer_standstill_has_no_single_leg_outlier(real_runtime):
 
 def test_viewer_leg_order_matches_planner_contract(real_runtime):
     assert real_runtime.foot_names == LEG_ORDER
+
+
+def test_viewer_semantic_diagnostics_ignore_invalid_hits_and_cover_valid_partition(real_runtime):
+    forward = real_runtime.plan_case("forward")
+    diagnostics = forward.semantic_diagnostics
+
+    assert diagnostics["valid_sample_count"] > 0
+    assert diagnostics["terrain_hit_count"] + diagnostics["small_hit_count"] + diagnostics["large_hit_count"] == diagnostics["valid_sample_count"]
+    assert diagnostics["height_lift_max"] >= 0.0
+
+
+def test_viewer_together_semantic_smoke_reports_required_obstacle_hits(real_semantic_together_runtime):
+    forward = real_semantic_together_runtime.plan_case("forward")
+    diagnostics = forward.semantic_diagnostics
+
+    assert diagnostics["valid_sample_count"] > 0
+    assert diagnostics["terrain_hit_count"] > 0
+    assert diagnostics["small_hit_count"] > 0
+    assert diagnostics["large_hit_count"] > 0
+    assert diagnostics["height_lift_max"] > 0.05
+    assert forward.summary["dx"] > 0.05
 
 
 def test_viewer_batched_runtime_smoke_preserves_parallel_path(real_batched_runtime):

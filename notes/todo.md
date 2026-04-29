@@ -7,6 +7,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - Current focus: semantic static-course viewer design for terrain-aligned scanner testing, while keeping the existing together viewer/planner runtime context available for follow-up verification.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic static-course env_isaaclab compact runtime smoke](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
+  - [semantic static-course implementation + local verification log](log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
   - [semantic static-course parallel review convergence log](log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
   - [semantic static-course execution model log](log/2026-04-29-2252-semantic-static-course-execution-model.md)
   - [semantic static-course viewer design log](log/2026-04-29-2209-semantic-static-course-viewer-design.md)
@@ -47,10 +49,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
-| T201 | The semantic raycaster must be upgraded for recursive static semantic roots before semantic viewer code can trust it. | Run the parallel technical review first, then implement `semantic_raycaster` recursion, semantic ids, and tests with the sensor worker. |
-| T202 | Semantic obstacles must exist by `prestartup` and be grounded on terrain before scanner initialization. | Implement `extension/semantic_course.py` with tile-based stage mapping, grounded cuboid placement, stable root containers, and non-replicated viewer-scene assumptions. |
-| T203 | The viewer-first config needs its own `semantic_height_scanner` contract and must remove inherited `height_scanner`. | Add the derived viewer config and repoint inherited scanner references. |
-| T204 | Viewer hit coloring depends on the new semantic scanner and static course being in place. | Update `go2_foostep_planner.py` to read `semantic_height_scanner` and split markers by semantic class. |
+| T205 | Compact real-runtime acceptance now passes, but full-grid interactive startup cost and manual viewer confirmation are still unverified. | Decide whether to optimize the full viewer startup path or to keep compact runtime smoke as the automated acceptance path. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
 | T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
 | T103 | Complex raw terrain/support/CEM parity still needs broader scenarios beyond flat P0 parity. | Use [T100](todo/T100-batched-together-planner-gpu-migration.md#t103-raw-planner-core-semantic-migration) and extend parity cases. |
@@ -62,16 +61,13 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | --- | --- | --- | --- | --- | --- |
 | T000 | done | notes workflow | [T000](todo/T000-notes-workflow.md) | memory system bootstrapped and linked into existing notes | feature `7cf6c11`; verified `7cf6c11` |
 | T100 | verify | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | implementation landed and smoke-verified in `env_isaaclab`: together backend, manager/factory/reward wiring, viewer together core path, flat raw parity, static guardrail, 1-iteration train 32/128 envs | feature `pending`; verified `59 passed`, `36 passed`, CUDA smoke, cadence/full-N real env, train/play/viewer smoke |
-| T200 | doing | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | user-approved design is recorded and subagent-reviewed: viewer-first semantic scanner config, tile-based static semantic course, `prestartup` stage generation, and `semantic_raycaster` redesign are in scope | feature `pending`; verified `Isaac Lab source-order inspection`, design spec, subagent spec review |
+| T200 | verify | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | implementation landed; local tests pass; compact headless `env_isaaclab` semantic runtime smoke passes on default `together`; full-grid interactive startup/manual confirmation still open | feature `pending`; verified local pytest + py_compile, compact real-runtime smoke |
 
 ## Open Leaves
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
-| T201 | T200 | doing | P0 | The current semantic raycaster contract is too narrow for root-based static semantic geometry and must be redesigned before implementation can start safely. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
-| T202 | T200 | todo | P0 | Static semantic props must be generated and grounded before scanner initialization, and they must belong to terrain tiles rather than env instances. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
-| T203 | T200 | todo | P0 | The viewer-first derived config must delete inherited `height_scanner`, add `semantic_height_scanner`, and repoint inherited scanner consumers. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
-| T204 | T200 | todo | P1 | Viewer semantic hit coloring depends on the new scanner contract and should be implemented after the sensor/config path is solid. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
+| T205 | T200 | verify | P1 | Semantic correctness is proven in compact headless runtime, but full-grid interactive startup cost and manual viewer confirmation remain open. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
 | T110 | T100 | verify | P0 | Core fix and headless zero-command smoke passed; interactive visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) |
 | T109 | T100 | verify | P0 | Regression fixed and headless viewer reached real playback; visual manual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) |
 | T103 | T100 | verify | P1 | Flat raw tensor parity now passes; complex terrain/support/CEM scenarios still need expansion. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t103-raw-planner-core-semantic-migration) |
@@ -88,6 +84,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-29 23:59 | semantic static-course env_isaaclab compact runtime smoke | pass with scoped caveat | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md) |
+| 2026-04-29 23:48 | semantic static-course implementation + local verification | local tests pass; real runtime smoke incomplete | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md) |
 | 2026-04-29 23:18 | semantic static-course parallel review convergence | blockers absorbed into spec | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md) |
 | 2026-04-29 22:52 | semantic static-course execution model | parallel review / worker split recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2252-semantic-static-course-execution-model.md](log/2026-04-29-2252-semantic-static-course-execution-model.md) |
 | 2026-04-29 22:34 | semantic static-course viewer spec review | approved with refinements | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](log/2026-04-29-2234-semantic-static-course-viewer-spec-review.md) |
