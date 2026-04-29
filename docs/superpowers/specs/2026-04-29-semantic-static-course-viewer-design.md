@@ -184,11 +184,15 @@ The first implementation maps terrain difficulty by terrain row.
 
 Recommended first rule:
 
-- split `num_rows` into four contiguous bands
-- lowest band -> `S1`
-- next band -> `S2`
-- next band -> `S3`
-- highest band -> `S4`
+- compute:
+  - `b1 = ceil(num_rows * 1 / 4)`
+  - `b2 = ceil(num_rows * 2 / 4)`
+  - `b3 = ceil(num_rows * 3 / 4)`
+- map row bands deterministically:
+  - rows `[0, b1)` -> `S1`
+  - rows `[b1, b2)` -> `S2`
+  - rows `[b2, b3)` -> `S3`
+  - rows `[b3, num_rows)` -> `S4`
 
 This mirrors current terrain curriculum semantics closely enough for the first semantic-course version and stays deterministic across viewer and later training.
 
@@ -210,10 +214,34 @@ The approved course progression is:
 
 - `S1`: no semantic objects
 - `S2`: `4` small obstacles
-- `S3`: large obstacle plus small obstacles
-- `S4`: large obstacle plus more small obstacles
+- `S3`: `1` large obstacle plus `4` small obstacles
+- `S4`: `1` large obstacle plus `6` small obstacles
 
 Exact dimensions are intentionally left tunable, but the layout structure must be fixed and deterministic.
+
+Default first-implementation local anchors, expressed in tile-local `(x, y)` meters and chosen to stay inside the initial `1.5 x 1.5 m` scan window around the spawn area:
+
+- `S2.small`:
+  - `(0.35, 0.35)`
+  - `(0.35, -0.35)`
+  - `(0.65, 0.20)`
+  - `(0.65, -0.20)`
+- `S3.large`:
+  - `(0.55, 0.00)`
+- `S3.small`:
+  - `(0.25, 0.45)`
+  - `(0.25, -0.45)`
+  - `(0.70, 0.45)`
+  - `(0.70, -0.45)`
+- `S4.large`:
+  - `(0.55, 0.00)`
+- `S4.small`:
+  - `(0.20, 0.50)`
+  - `(0.20, -0.50)`
+  - `(0.45, 0.28)`
+  - `(0.45, -0.28)`
+  - `(0.70, 0.50)`
+  - `(0.70, -0.50)`
 
 ### 6.6 Root Paths
 
@@ -356,6 +384,7 @@ On each replan, add lightweight semantic counts from the visible scan:
 - large hit count
 
 This provides a numeric confirmation that the viewer is actually scanning the semantic course being shown.
+These counts are required as rollout diagnostics for this feature and should be logged through the existing viewer print path, but they are not a new user-configurable UI mode.
 
 ## 10. Test Strategy
 
@@ -397,6 +426,8 @@ Add headless tests for the viewer path that verify:
 - planner terrain construction from `ray_hits_w` still succeeds
 - semantic hit counts differ across `S1/S2/S3/S4`
 - semantic marker coloring receives the correct class partitions
+
+The semantic hit counts are a required verification signal for this rollout, not an optional nicety.
 
 ### 10.5 Manual Smoke
 

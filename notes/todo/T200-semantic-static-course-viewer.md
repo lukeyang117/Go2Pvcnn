@@ -7,6 +7,7 @@
 - The old inherited `height_scanner` must be removed in the viewer config and replaced by `semantic_height_scanner`.
 - `semantic_raycaster` is in scope for redesign and tests, not just reuse.
 - Source inspection established that `startup` is too late for semantic prop spawning because sensor warp-mesh initialization happens on `sim.reset()` / timeline `PLAY` before `startup`. Semantic props must exist by `prestartup`.
+- The written spec has passed subagent review with no blocking issues; advisory refinements were folded back into the spec.
 
 ## Open Children
 
@@ -22,6 +23,7 @@
 ## Related Logs
 
 - [2026-04-29-2209-semantic-static-course-viewer-design.md](../log/2026-04-29-2209-semantic-static-course-viewer-design.md)
+- [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](../log/2026-04-29-2234-semantic-static-course-viewer-spec-review.md)
 
 ## Git Refs
 
@@ -37,8 +39,7 @@
 
 ## Next Step
 
-- Run the spec review loop on the new design document.
-- If the spec review passes, ask the user to review the written spec before creating the implementation plan.
+- Ask the user to review the written spec before creating the implementation plan.
 
 ## Node Details
 
