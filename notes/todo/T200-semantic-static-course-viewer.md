@@ -8,6 +8,11 @@
 - `semantic_raycaster` is in scope for redesign and tests, not just reuse.
 - Source inspection established that `startup` is too late for semantic prop spawning because sensor warp-mesh initialization happens on `sim.reset()` / timeline `PLAY` before `startup`. Semantic props must exist by `prestartup`.
 - The written spec has passed subagent review with no blocking issues; advisory refinements were folded back into the spec.
+- Parallel technical/detail/completeness review found and resolved additional blockers in the spec:
+  - semantic viewer scene must be non-replicated
+  - semantic-course root containers must always exist
+  - raster size and diagnostics contracts are now explicit
+  - semantic rollout success is required on default `together`
 
 ## Open Children
 
@@ -24,6 +29,7 @@
 
 - [2026-04-29-2209-semantic-static-course-viewer-design.md](../log/2026-04-29-2209-semantic-static-course-viewer-design.md)
 - [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](../log/2026-04-29-2234-semantic-static-course-viewer-spec-review.md)
+- [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](../log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
 
 ## Git Refs
 
@@ -39,7 +45,54 @@
 
 ## Next Step
 
-- Ask the user to review the written spec before creating the implementation plan.
+- Run parallel subagent technical reviews on:
+  - `semantic_raycaster` redesign scope and failure risks
+  - semantic-course placement / prestartup / terrain attachment details
+  - test-metrics completeness and viewer integration contract
+- Let the main agent absorb those reviews, decide the final execution order, and then dispatch implementation workers with disjoint write scopes.
+
+## Execution Model
+
+### Main Agent Responsibilities
+
+- own the design source of truth and decision changes
+- own sequencing, integration order, and conflict resolution
+- review subagent findings for architectural correctness and scope discipline
+- assign implementation slices with disjoint write scopes
+- review returned code and verification before accepting it
+
+### Parallel Review Subagents
+
+- `R1 semantic_raycaster review`
+  - check recursive root traversal, static semantic merge behavior, data contract, and likely edge cases
+- `R2 semantic_course review`
+  - check tile-based generation, `prestartup` timing, grounded placement, and terrain-difficulty coupling
+- `R3 metrics/viewer review`
+  - check viewer consumption contract, semantic hit diagnostics, and test/metric completeness
+
+### Implementation Worker Direction
+
+- workers own code changes and focused tests in clearly separated write scopes
+- workers return:
+  - what changed
+  - what tests they ran
+  - unresolved concerns or interface assumptions
+- main agent does not delegate the final acceptance decision
+
+### Intended Write-Scope Split
+
+- `W1 sensor/tests`
+  - `Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/*`
+  - sensor-focused tests
+- `W2 course/config/tests`
+  - `Go2Pvcnn/extension/semantic_course.py`
+  - `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_semantic_viewer_env_cfg.py`
+  - config/course-focused tests
+- `W3 viewer/tests`
+  - `Go2Pvcnn/extension/viz/go2_foostep_planner.py`
+  - viewer integration tests
+
+This split is provisional and can be adjusted by the main agent after the review subagents report back.
 
 ## Node Details
 
@@ -62,6 +115,10 @@
 - semantic maps return `0=terrain`, `1=small`, `2=large`
 - semantic obstacle generation belongs under `Go2Pvcnn/extension/semantic_course.py`
 - semantic geometry must be created before sensor initialization, so `prestartup` replaces `startup`
+- semantic viewer scene must set `replicate_physics = False`
+- semantic-course root containers under `/World/semantic_course/{small,large}` must always exist
+- semantic diagnostics count only valid sampled hits and must include an elevation-lift metric
+- semantic rollout correctness is required on default `together`; `legacy` only needs a smoke if still exposed
 
 ### Sequencing Constraint
 
@@ -69,3 +126,14 @@
 - `prestartup` can mutate the USD stage before `sim.reset()`.
 - sensors initialize their warp meshes on timeline `PLAY`, triggered by `sim.reset()`.
 - `startup` happens after manager loading and is therefore too late for static semantic mesh inclusion.
+- `prestartup` requires the semantic viewer scene to disable `replicate_physics`.
+
+### Main-Agent Reserved Seam
+
+- lifecycle and scene mode:
+  - `replicate_physics = False`
+  - `prestartup` spawning
+- authoritative `ray_hits_w -> planner terrain` conversion
+- deterministic viewer exposure to representative `S1..S4` rows
+
+These seams stay under direct main-agent review even when implementation workers are dispatched.

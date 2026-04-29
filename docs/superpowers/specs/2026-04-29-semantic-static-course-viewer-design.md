@@ -61,6 +61,12 @@ The user also clarified the architectural direction:
 5. Semantic obstacles are static stage geometry, not dynamic per-env assets.
 6. Training and viewer both rely on the same future terrain-course logic: more difficult terrain means richer semantic obstacle layouts.
 7. The semantic scan must return geometry that includes obstacle surfaces, not only terrain plus post-hoc labels.
+8. The semantic viewer scene must set `replicate_physics = False` because `prestartup` is required and Isaac Lab rejects `prestartup` terms under replicated-physics scene mode.
+9. `extension/semantic_course.py` must always create stable empty container roots:
+   - `/World/semantic_course/small`
+   - `/World/semantic_course/large`
+10. Semantic diagnostics must ignore invalid sampled rays instead of counting them as terrain.
+11. Full semantic correctness is required on the default `together` backend. If `legacy` remains visible in the viewer CLI, it only needs a semantic smoke.
 
 ### Source-Order Constraint
 
@@ -83,6 +89,7 @@ The design uses a viewer-only trajectory config extension plus a shared semantic
    - deletes inherited `height_scanner`
    - adds `semantic_height_scanner`
    - repoints inherited observation terms and planner manager scanner references to `semantic_height_scanner`
+   - disables scene replication so `prestartup` is legal
 
 2. `extension/semantic_course.py`
    - owns semantic stage definitions, tile-to-stage mapping, obstacle sizes, obstacle anchors, terrain height sampling, and stage spawning
@@ -116,6 +123,12 @@ The derived scene config must do both:
 
 `InteractiveScene` skips `None` assets/sensors, so this is the clean way to prevent the parent scanner from being built.
 
+The derived scene config must also set:
+
+- `replicate_physics = False`
+
+This is a lifecycle requirement, not an optimization preference.
+
 ### 5.3 Semantic Scanner Contract
 
 `semantic_height_scanner` keeps the planner footprint and resolution:
@@ -134,7 +147,8 @@ Returned data contract:
 Where:
 
 - `elevation_map.shape == semantic_map.shape`
-- the grid is the full `1.5 x 1.5 m @ 0.01 m` raster
+- the grid is the full inclusive `1.5 x 1.5 m @ 0.01 m` raster
+- first implementation target shape is `151 x 151`
 - semantic ids are exactly:
   - `0`: terrain
   - `1`: small obstacle
@@ -196,6 +210,16 @@ Recommended first rule:
 
 This mirrors current terrain curriculum semantics closely enough for the first semantic-course version and stays deterministic across viewer and later training.
 
+### 6.3.1 Viewer Stage Exposure Rule
+
+The semantic viewer must reach all four stages deterministically without a semantic-curriculum CLI flag.
+
+Approved rule:
+
+- `extension/semantic_course.py` defines one representative terrain row per semantic stage.
+- The interactive semantic viewer defaults env `0` to the representative `S4` row so obstacle visibility is immediate.
+- Headless tests and stage-specific diagnostics explicitly place env `0` onto the representative row for `S1`, `S2`, `S3`, or `S4`.
+
 ### 6.4 Tile-Based, Not Env-Based
 
 Semantic obstacles are generated per terrain tile, not per environment instance.
@@ -218,6 +242,11 @@ The approved course progression is:
 - `S4`: `1` large obstacle plus `6` small obstacles
 
 Exact dimensions are intentionally left tunable, but the layout structure must be fixed and deterministic.
+
+Default first-implementation obstacle sizes reuse the existing semantic-map cuboid sizes:
+
+- `small`: `(0.12, 0.12, 0.22)`
+- `large`: `(0.45, 0.45, 0.55)`
 
 Default first-implementation local anchors, expressed in tile-local `(x, y)` meters and chosen to stay inside the initial `1.5 x 1.5 m` scan window around the spawn area:
 
@@ -249,6 +278,8 @@ Organize stage props under fixed global roots:
 
 - `/World/semantic_course/small`
 - `/World/semantic_course/large`
+
+These root Xforms must always exist, even if the current terrain set yields no active descendants for one semantic class.
 
 Per-tile descendants should be stable and enumerable, for example:
 
@@ -340,6 +371,11 @@ Examples:
 
 If a semantic root contains no geometry descendants, the scanner should skip it without failing the whole sensor initialization.
 
+Additional clarification:
+
+- missing terrain root remains fatal
+- unsupported descendants are skipped
+
 ### 8.5 Data Guarantees
 
 After redesign, the sensor must continue to provide:
@@ -358,6 +394,12 @@ with matching grid shape and deterministic semantic id assignment.
 2. fetch `base_env.scene.sensors["semantic_height_scanner"]`
 3. build local terrain for planner from that scanner's `ray_hits_w`
 4. color viewer hit markers using `semantic_map`
+
+### 9.0 Authoritative Terrain Reconstruction Rule
+
+For this rollout, the authoritative `ray_hits_w -> planner terrain` conversion is the stable world-window reconstruction already used by the direct viewer path, derived from scanner pose/yaw plus `pattern_cfg.size`.
+
+If manager-backed semantic warmup or diagnostics rely on terrain reconstruction in this rollout, they must use the same world-window rule rather than a separate centered-at-zero interpretation.
 
 ### 9.1 Planner Path
 
@@ -382,9 +424,18 @@ On each replan, add lightweight semantic counts from the visible scan:
 - terrain hit count
 - small hit count
 - large hit count
+- valid sampled hit count
+- one elevation-lift metric such as `height_lift_max`
 
 This provides a numeric confirmation that the viewer is actually scanning the semantic course being shown.
 These counts are required as rollout diagnostics for this feature and should be logged through the existing viewer print path, but they are not a new user-configurable UI mode.
+
+Sampling rule:
+
+- subsample on the same `H x W` grid used by `semantic_map`
+- then flatten the sampled cells for marker partitioning
+
+Do not subsample flat `ray_hits_w` independently from the semantic grid. The two must stay index-aligned.
 
 ## 10. Test Strategy
 
@@ -398,6 +449,7 @@ Add tests that verify:
 - stable raster size for the approved `1.5 x 1.5 m @ 0.01 m` grid
 - obstacle surfaces change elevation where expected
 - empty semantic roots do not crash initialization
+- grid/flatten alignment between `semantic_map` cells and flattened `ray_hits_w`
 
 ### 10.2 Semantic Course Tests
 
@@ -410,6 +462,8 @@ Add tests for `extension/semantic_course.py` that verify:
 - `S4` yields large plus more small props
 - generated prim paths land under the correct global roots
 - terrain-attached placement uses surface height plus half obstacle height
+- root container Xforms for `small` and `large` always exist
+- semantic viewer scene uses `replicate_physics = False`
 
 ### 10.3 Initialization-Order Tests
 
@@ -424,10 +478,15 @@ Add headless tests for the viewer path that verify:
 - the semantic viewer config builds successfully in `env_isaaclab`
 - `semantic_height_scanner` exists and returns valid maps
 - planner terrain construction from `ray_hits_w` still succeeds
-- semantic hit counts differ across `S1/S2/S3/S4`
+- semantic hit counts differ deterministically across forced `S1/S2/S3/S4` representative rows
 - semantic marker coloring receives the correct class partitions
 
 The semantic hit counts are a required verification signal for this rollout, not an optional nicety.
+
+Success threshold for this rollout:
+
+- full semantic correctness is required on default `together`
+- if `legacy` remains visible in the viewer CLI, add one semantic smoke there so the surface does not silently rot
 
 ### 10.5 Manual Smoke
 
@@ -445,6 +504,7 @@ Run the interactive viewer in `/home/lhy/anaconda3/envs/env_isaaclab` and confir
 Mitigation:
 
 - use `prestartup`
+- set `replicate_physics = False`
 - add explicit timing verification
 
 ### 11.2 Risk: Scanner Still Misses Child Geometry
@@ -453,6 +513,7 @@ Mitigation:
 
 - redesign root traversal recursively
 - add root-recursion tests
+- require stable semantic root containers
 
 ### 11.3 Risk: Height Attachment Is Wrong On Complex Terrain
 
@@ -468,6 +529,14 @@ Mitigation:
 - replace inherited `height_scanner` references in observation terms
 - set `reference_height_scanner_name = "semantic_height_scanner"`
 
+### 11.5 Risk: Diagnostic Counts Overstate Terrain Hits
+
+Mitigation:
+
+- count only valid sampled hits
+- add `valid_sample_count`
+- add one elevation-lift metric
+
 ## 12. Implementation Readiness
 
 This spec is ready for implementation planning because it resolves the major ambiguity points:
@@ -480,5 +549,7 @@ This spec is ready for implementation planning because it resolves the major amb
 - semantic raycaster redesign scope
 - viewer integration surface
 - required tests
+- authoritative terrain reconstruction rule
+- semantic viewer scene mode and stage exposure rule
 
 No remaining design dependency blocks writing the implementation plan.

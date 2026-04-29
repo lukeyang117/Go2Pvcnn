@@ -7,6 +7,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - Current focus: semantic static-course viewer design for terrain-aligned scanner testing, while keeping the existing together viewer/planner runtime context available for follow-up verification.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic static-course parallel review convergence log](log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
+  - [semantic static-course execution model log](log/2026-04-29-2252-semantic-static-course-execution-model.md)
   - [semantic static-course viewer design log](log/2026-04-29-2209-semantic-static-course-viewer-design.md)
   - [semantic static-course viewer spec review log](log/2026-04-29-2234-semantic-static-course-viewer-spec-review.md)
   - [semantic static-course viewer spec](../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md)
@@ -45,8 +47,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
-| T201 | The semantic raycaster must be upgraded for recursive static semantic roots before semantic viewer code can trust it. | Use the approved spec and implement `semantic_raycaster` recursion, semantic ids, and tests first. |
-| T202 | Semantic obstacles must exist by `prestartup` and be grounded on terrain before scanner initialization. | Implement `extension/semantic_course.py` with tile-based stage mapping, grounded cuboid placement, and stage roots. |
+| T201 | The semantic raycaster must be upgraded for recursive static semantic roots before semantic viewer code can trust it. | Run the parallel technical review first, then implement `semantic_raycaster` recursion, semantic ids, and tests with the sensor worker. |
+| T202 | Semantic obstacles must exist by `prestartup` and be grounded on terrain before scanner initialization. | Implement `extension/semantic_course.py` with tile-based stage mapping, grounded cuboid placement, stable root containers, and non-replicated viewer-scene assumptions. |
 | T203 | The viewer-first config needs its own `semantic_height_scanner` contract and must remove inherited `height_scanner`. | Add the derived viewer config and repoint inherited scanner references. |
 | T204 | Viewer hit coloring depends on the new semantic scanner and static course being in place. | Update `go2_foostep_planner.py` to read `semantic_height_scanner` and split markers by semantic class. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
@@ -86,6 +88,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-29 23:18 | semantic static-course parallel review convergence | blockers absorbed into spec | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md) |
+| 2026-04-29 22:52 | semantic static-course execution model | parallel review / worker split recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2252-semantic-static-course-execution-model.md](log/2026-04-29-2252-semantic-static-course-execution-model.md) |
 | 2026-04-29 22:34 | semantic static-course viewer spec review | approved with refinements | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2234-semantic-static-course-viewer-spec-review.md](log/2026-04-29-2234-semantic-static-course-viewer-spec-review.md) |
 | 2026-04-29 22:09 | semantic static-course viewer design | design recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2209-semantic-static-course-viewer-design.md](log/2026-04-29-2209-semantic-static-course-viewer-design.md) |
 | 2026-04-28 12:54 | viewer zero-command handoff idempotence | pass with scoped caveat | [T100/T110](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](log/2026-04-28-1254-viewer-zero-command-handoff-idempotence.md) |
