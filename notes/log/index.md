@@ -6,6 +6,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-29 22:09 | semantic static-course viewer design | semantic static course / semantic raycaster / viewer design | design recorded | `semantic_height_scanner`; `1.5x1.5m @ 0.01m`; `0/1/2 semantic map`; `prestartup` required by source-order inspection | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2209-semantic-static-course-viewer-design.md](2026-04-29-2209-semantic-static-course-viewer-design.md) |
 | 2026-04-28 12:54 | viewer zero-command handoff idempotence | extension/viz together hold handoff | pass with scoped caveat | red test caught repeated second-segment `delta_z=-0.10`; targeted viewer tests 2 passed; wider subset 56 passed; diagnostic became `0.4->0.3` once then `0.3->0.3` | [T100/T110](../todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](2026-04-28-1254-viewer-zero-command-handoff-idempotence.md) |
 | 2026-04-28 11:32 | together zero-command rehome recovery | batched_together_planner core/viewer stop smoke | pass with scoped caveat | red test caught frozen root z; T110/core/parity/guardrail 26 passed; runtime+viz 29 passed; combined subset 55 passed; headless viewer zero command near z/rpy recovery | [T100/T110](../todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1132-together-zero-command-rehome.md](2026-04-28-1132-together-zero-command-rehome.md) |
 | 2026-04-28 10:07 | viewer together root-z ratchet fix | extension/viz together playback | pass with scoped caveat | red test reproduced `0.3964m` z climb; `test_viz_playback` 20 passed; together parity/core/runtime/guardrail 35 passed; headless viewer reached real playback then timeout | [T100/T109](../todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) | [2026-04-28-1007-viewer-together-root-z-ratchet.md](2026-04-28-1007-viewer-together-root-z-ratchet.md) |
@@ -20,6 +21,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Topic Log Index
 
+- T200 semantic static-course viewer:
+  - [2026-04-29-2209-semantic-static-course-viewer-design.md](2026-04-29-2209-semantic-static-course-viewer-design.md)
 - T100 batched together planner GPU migration:
   - [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](2026-04-28-1254-viewer-zero-command-handoff-idempotence.md)
   - [2026-04-28-1132-together-zero-command-rehome.md](2026-04-28-1132-together-zero-command-rehome.md)

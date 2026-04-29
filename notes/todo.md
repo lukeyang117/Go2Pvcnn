@@ -4,8 +4,11 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 ## Start Here
 
-- Current focus: manually confirm the viewer after the together root-z and zero-command recovery fixes, then continue raw semantic parity and long-run scaling.
+- Current focus: semantic static-course viewer design for terrain-aligned scanner testing, while keeping the existing together viewer/planner runtime context available for follow-up verification.
 - Read next:
+  - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic static-course viewer design log](log/2026-04-29-2209-semantic-static-course-viewer-design.md)
+  - [semantic static-course viewer spec](../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md)
   - [current train/viewer/play command guide](human/human-12-batched-planner-train-viewer-commands.md)
   - [viewer zero-command handoff idempotence log](log/2026-04-28-1254-viewer-zero-command-handoff-idempotence.md)
   - [together zero-command rehome log](log/2026-04-28-1132-together-zero-command-rehome.md)
@@ -26,7 +29,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
   - Do not migrate raw viewer/adapter CPU compatibility code into the training path.
   - Do not preserve legacy dynamic sub-batch replanning in the new `together` backend.
   - Keep viewer CPU logging/camera/visualization exceptions separate from the training-path guardrail.
-- Current git base: `7cf6c11`
+- Current git base: `6279bc4`
 
 ## Status Legend
 
@@ -41,6 +44,10 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
+| T201 | The semantic raycaster must be upgraded for recursive static semantic roots before semantic viewer code can trust it. | Review the new design spec and implement `semantic_raycaster` recursion, semantic ids, and tests first. |
+| T202 | Semantic obstacles must exist by `prestartup` and be grounded on terrain before scanner initialization. | Implement `extension/semantic_course.py` with tile-based stage mapping, grounded cuboid placement, and stage roots. |
+| T203 | The viewer-first config needs its own `semantic_height_scanner` contract and must remove inherited `height_scanner`. | Add the derived viewer config and repoint inherited scanner references. |
+| T204 | Viewer hit coloring depends on the new semantic scanner and static course being in place. | Update `go2_foostep_planner.py` to read `semantic_height_scanner` and split markers by semantic class. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
 | T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
 | T103 | Complex raw terrain/support/CEM parity still needs broader scenarios beyond flat P0 parity. | Use [T100](todo/T100-batched-together-planner-gpu-migration.md#t103-raw-planner-core-semantic-migration) and extend parity cases. |
@@ -52,11 +59,16 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | --- | --- | --- | --- | --- | --- |
 | T000 | done | notes workflow | [T000](todo/T000-notes-workflow.md) | memory system bootstrapped and linked into existing notes | feature `7cf6c11`; verified `7cf6c11` |
 | T100 | verify | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | implementation landed and smoke-verified in `env_isaaclab`: together backend, manager/factory/reward wiring, viewer together core path, flat raw parity, static guardrail, 1-iteration train 32/128 envs | feature `pending`; verified `59 passed`, `36 passed`, CUDA smoke, cadence/full-N real env, train/play/viewer smoke |
+| T200 | doing | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | user-approved design is recorded: viewer-first semantic scanner config, tile-based static semantic course, `prestartup` stage generation, and `semantic_raycaster` redesign are in scope | feature `pending`; verified `Isaac Lab source-order inspection`, design spec, notes sync |
 
 ## Open Leaves
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
+| T201 | T200 | doing | P0 | The current semantic raycaster contract is too narrow for root-based static semantic geometry and must be redesigned before implementation can start safely. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
+| T202 | T200 | todo | P0 | Static semantic props must be generated and grounded before scanner initialization, and they must belong to terrain tiles rather than env instances. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
+| T203 | T200 | todo | P0 | The viewer-first derived config must delete inherited `height_scanner`, add `semantic_height_scanner`, and repoint inherited scanner consumers. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
+| T204 | T200 | todo | P1 | Viewer semantic hit coloring depends on the new scanner contract and should be implemented after the sensor/config path is solid. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
 | T110 | T100 | verify | P0 | Core fix and headless zero-command smoke passed; interactive visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) |
 | T109 | T100 | verify | P0 | Regression fixed and headless viewer reached real playback; visual manual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) |
 | T103 | T100 | verify | P1 | Flat raw tensor parity now passes; complex terrain/support/CEM scenarios still need expansion. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t103-raw-planner-core-semantic-migration) |
@@ -67,11 +79,13 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - [todo/README.md](todo/README.md)
 - [T000-notes-workflow.md](todo/T000-notes-workflow.md)
 - [T100-batched-together-planner-gpu-migration.md](todo/T100-batched-together-planner-gpu-migration.md)
+- [T200-semantic-static-course-viewer.md](todo/T200-semantic-static-course-viewer.md)
 
 ## Recent Logs
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-29 22:09 | semantic static-course viewer design | design recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2209-semantic-static-course-viewer-design.md](log/2026-04-29-2209-semantic-static-course-viewer-design.md) |
 | 2026-04-28 12:54 | viewer zero-command handoff idempotence | pass with scoped caveat | [T100/T110](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](log/2026-04-28-1254-viewer-zero-command-handoff-idempotence.md) |
 | 2026-04-28 11:32 | together zero-command rehome recovery | pass with scoped caveat | [T100/T110](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1132-together-zero-command-rehome.md](log/2026-04-28-1132-together-zero-command-rehome.md) |
 | 2026-04-28 10:07 | viewer together root-z ratchet fix | pass with scoped caveat | [T100/T109](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) | [2026-04-28-1007-viewer-together-root-z-ratchet.md](log/2026-04-28-1007-viewer-together-root-z-ratchet.md) |
