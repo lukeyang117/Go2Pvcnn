@@ -17,6 +17,7 @@
 ## Related Logs
 
 - [2026-04-27-1349-notes-workflow-bootstrap.md](../log/2026-04-27-1349-notes-workflow-bootstrap.md)
+- [2026-04-30-1456-notes-compact-todo.md](../log/2026-04-30-1456-notes-compact-todo.md)
 
 ## Git Refs
 

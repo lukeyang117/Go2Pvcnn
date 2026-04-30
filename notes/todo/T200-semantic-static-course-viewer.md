@@ -35,41 +35,6 @@
 ## Open Children
 
 - T205: full-grid interactive viewer startup cost / manual semantic viewer confirmation
-- T206: native semantic shape-pool expansion in `semantic_course.py`
-
-## T206 Execution Model
-
-### Main Agent Responsibilities
-
-- keep the approved native shape-pool spec as source of truth
-- enforce the shared shape-pool rule for `small` and `large`
-- review scanner-side compatibility for `capsule` and `cone`
-- review worker test coverage before accepting implementation
-
-### Worker Split
-
-- `W4 shape-course/tests`
-  - own `Go2Pvcnn/extension/semantic_course.py`
-  - own `Go2Pvcnn/tests/test_semantic_course.py`
-  - implement:
-    - shape-spec layer
-    - deterministic native shape selection
-    - per-shape parameter mapping
-    - shape-aware grounding offsets
-    - native shape spawn dispatch
-
-- `W5 semantic-raycaster-shape/tests`
-  - own `Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py`
-  - own `Go2Pvcnn/tests/test_semantic_raycaster.py`
-  - implement:
-    - scanner compatibility for every approved native shape in the pool
-    - explicit coverage for `capsule` and `cone`
-    - compatibility tests for the expanded pool
-
-### Main-Agent Reserved Seam
-
-- acceptance proof that compact `env_isaaclab` runtime smoke includes at least one `capsule` and one `cone`
-- decision on whether any viewer-facing diagnostic/test updates are needed after shape expansion
 
 ## Closed Children Archive
 
@@ -77,6 +42,7 @@
 - T202: `extension/semantic_course.py` landed; local tests pass
 - T203: semantic viewer env config landed; local tests pass
 - T204: viewer semantic scanner path / diagnostics / marker partitioning landed; local tests pass
+- T206: native semantic shape-pool landed for `semantic_course` + `semantic_raycaster`; local regression is green and compact runtime acceptance now requires `capsule` and `cone`
 
 ## Related Logs
 
@@ -92,63 +58,22 @@
 
 ## Git Refs
 
-- Last Feature Commit: `pending`
-- Last Verified Commit: `not yet applicable; design-only task`
-- Current Work Ref: `working tree on top of 6279bc4 (2026-04-29 22:09 +0800); spec + notes design update`
+- Last Feature Commit: `7bb89ed`
+- Last Verified Commit: `7bb89ed`
+- Current Work Ref: `working tree on top of 7bb89ed (2026-04-30 14:32 +0800); waiting on full-grid/manual viewer confirmation`
 - Key Files:
   - [../../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md](../../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md)
-  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py)
+  - [../../docs/superpowers/specs/2026-04-30-semantic-native-shape-pool-design.md](../../docs/superpowers/specs/2026-04-30-semantic-native-shape-pool-design.md)
+  - [../../Go2Pvcnn/extension/semantic_course.py](../../Go2Pvcnn/extension/semantic_course.py)
   - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
   - [../../Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py](../../Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py)
-  - [../../Go2Pvcnn/extension](../../Go2Pvcnn/extension)
+  - [../../Go2Pvcnn/tests/test_semantic_course.py](../../Go2Pvcnn/tests/test_semantic_course.py)
+  - [../../Go2Pvcnn/tests/test_semantic_raycaster.py](../../Go2Pvcnn/tests/test_semantic_raycaster.py)
 
 ## Next Step
 
 - Decide whether the full interactive viewer should keep the training-aligned full terrain grid or borrow the compact smoke strategy for startup practicality.
 - Run one manual semantic viewer confirmation pass when interactive validation is needed.
-
-## Execution Model
-
-### Main Agent Responsibilities
-
-- own the design source of truth and decision changes
-- own sequencing, integration order, and conflict resolution
-- review subagent findings for architectural correctness and scope discipline
-- assign implementation slices with disjoint write scopes
-- review returned code and verification before accepting it
-
-### Parallel Review Subagents
-
-- `R1 semantic_raycaster review`
-  - check recursive root traversal, static semantic merge behavior, data contract, and likely edge cases
-- `R2 semantic_course review`
-  - check tile-based generation, `prestartup` timing, grounded placement, and terrain-difficulty coupling
-- `R3 metrics/viewer review`
-  - check viewer consumption contract, semantic hit diagnostics, and test/metric completeness
-
-### Implementation Worker Direction
-
-- workers own code changes and focused tests in clearly separated write scopes
-- workers return:
-  - what changed
-  - what tests they ran
-  - unresolved concerns or interface assumptions
-- main agent does not delegate the final acceptance decision
-
-### Intended Write-Scope Split
-
-- `W1 sensor/tests`
-  - `Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/*`
-  - sensor-focused tests
-- `W2 course/config/tests`
-  - `Go2Pvcnn/extension/semantic_course.py`
-  - `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_semantic_viewer_env_cfg.py`
-  - config/course-focused tests
-- `W3 viewer/tests`
-  - `Go2Pvcnn/extension/viz/go2_foostep_planner.py`
-  - viewer integration tests
-
-This split is provisional and can be adjusted by the main agent after the review subagents report back.
 
 ## Node Details
 
