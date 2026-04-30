@@ -14,11 +14,26 @@ GO2_ROOT = Path(__file__).resolve().parents[1]
 SEMANTIC_RAY_CASTER_PATH = GO2_ROOT / "go2_pvcnn" / "sensor" / "semantic_raycaster" / "semantic_ray_caster.py"
 
 
+class _FakeAttr:
+    def __init__(self, value):
+        self._value = value
+
+    def Get(self):
+        return self._value
+
+
 class _FakePrim:
-    def __init__(self, path: str, prim_type: str, children: list["_FakePrim"] | None = None):
+    def __init__(
+        self,
+        path: str,
+        prim_type: str,
+        children: list["_FakePrim"] | None = None,
+        attrs: dict[str, object] | None = None,
+    ):
         self._path = path
         self._prim_type = prim_type
         self._children = children or []
+        self._attrs = attrs or {}
 
     def GetTypeName(self) -> str:
         return self._prim_type
@@ -31,6 +46,23 @@ class _FakePrim:
 
     def GetPath(self) -> str:
         return self._path
+
+    def GetRadiusAttr(self):
+        return _FakeAttr(self._attrs.get("radius"))
+
+    def GetHeightAttr(self):
+        return _FakeAttr(self._attrs.get("height"))
+
+    def GetAxisAttr(self):
+        return _FakeAttr(self._attrs.get("axis"))
+
+    def GetSizeAttr(self):
+        return _FakeAttr(self._attrs.get("size"))
+
+    def GetAttribute(self, name: str):
+        if name not in self._attrs:
+            return None
+        return _FakeAttr(self._attrs[name])
 
 
 class _FakeView:
@@ -94,6 +126,8 @@ def _install_semantic_raycaster_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
         Cube=lambda prim: prim,
         Sphere=lambda prim: prim,
         Cylinder=lambda prim: prim,
+        Capsule=lambda prim: prim,
+        Cone=lambda prim: prim,
     )
 
     sim_module = ModuleType("isaaclab.sim")
@@ -155,7 +189,7 @@ def test_recursive_root_collection_skips_unsupported_descendants(monkeypatch: py
                 "Xform",
                 children=[
                     _FakePrim("/World/semantic_course/small/row_00/slot_00", "Mesh"),
-                    _FakePrim("/World/semantic_course/small/row_00/ignored_leaf", "Capsule"),
+                    _FakePrim("/World/semantic_course/small/row_00/ignored_leaf", "Camera"),
                 ],
             ),
             _FakePrim(
@@ -189,6 +223,109 @@ def test_recursive_root_collection_skips_unsupported_descendants(monkeypatch: py
         ("/World/semantic_course/small/row_01/group/slot_01", "Cube"),
         ("/World/semantic_course/small/row_01/slot_02", "Mesh"),
     ]
+
+
+def test_recursive_root_collection_includes_full_native_shape_pool(monkeypatch: pytest.MonkeyPatch):
+    module = _load_semantic_raycaster_module(monkeypatch)
+    root = _FakePrim(
+        "/World/semantic_course/large",
+        "Xform",
+        children=[
+            _FakePrim("/World/semantic_course/large/sphere", "Sphere"),
+            _FakePrim("/World/semantic_course/large/cuboid", "Cube"),
+            _FakePrim("/World/semantic_course/large/cylinder", "Cylinder"),
+            _FakePrim("/World/semantic_course/large/capsule", "Capsule"),
+            _FakePrim("/World/semantic_course/large/cone", "Cone"),
+        ],
+    )
+    monkeypatch.setattr(module.sim_utils, "find_first_matching_prim", lambda path: root if path == root.GetPath() else None)
+
+    def _fake_geometry_to_world_trimesh(_prim, _geom_type):
+        return np.zeros((3, 3), dtype=np.float32), np.array([[0, 1, 2]], dtype=np.int32)
+
+    monkeypatch.setattr(module, "_geometry_prim_to_world_trimesh", _fake_geometry_to_world_trimesh)
+
+    meshes = module._usd_prim_to_world_trimeshes("/World/semantic_course/large")
+
+    assert [(path, geom_type) for path, geom_type, *_ in meshes] == [
+        ("/World/semantic_course/large/sphere", "Sphere"),
+        ("/World/semantic_course/large/cuboid", "Cube"),
+        ("/World/semantic_course/large/cylinder", "Cylinder"),
+        ("/World/semantic_course/large/capsule", "Capsule"),
+        ("/World/semantic_course/large/cone", "Cone"),
+    ]
+
+
+def test_geometry_prim_to_world_trimesh_tessellates_capsule_and_cone(monkeypatch: pytest.MonkeyPatch):
+    module = _load_semantic_raycaster_module(monkeypatch)
+    monkeypatch.setattr(module, "_world_transform_matrix_T", lambda _geom: np.eye(4, dtype=np.float32))
+
+    call_log: list[tuple[str, float, float]] = []
+
+    class _FakeCreation:
+        @staticmethod
+        def capsule(radius: float, height: float):
+            call_log.append(("capsule", radius, height))
+            return SimpleNamespace(
+                vertices=np.array([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], dtype=np.float64),
+                faces=np.array([[0, 1, 2]], dtype=np.int32),
+            )
+
+        @staticmethod
+        def cone(radius: float, height: float):
+            call_log.append(("cone", radius, height))
+            return SimpleNamespace(
+                vertices=np.array([[0.0, 0.0, -0.5], [0.0, 0.0, 0.5], [0.5, 0.0, 0.0]], dtype=np.float64),
+                faces=np.array([[0, 1, 2]], dtype=np.int32),
+            )
+
+    monkeypatch.setitem(sys.modules, "trimesh", SimpleNamespace(creation=_FakeCreation))
+
+    capsule_prim = _FakePrim(
+        "/World/semantic_course/large/capsule",
+        "Capsule",
+        attrs={"radius": 0.2, "height": 0.6, "axis": "Z"},
+    )
+    cone_prim = _FakePrim(
+        "/World/semantic_course/large/cone",
+        "Cone",
+        attrs={"radius": 0.3, "height": 0.7, "axis": "Z"},
+    )
+
+    capsule_points, capsule_faces = module._geometry_prim_to_world_trimesh(capsule_prim, "Capsule")
+    cone_points, cone_faces = module._geometry_prim_to_world_trimesh(cone_prim, "Cone")
+
+    assert call_log == [("capsule", 0.2, 0.6), ("cone", 0.3, 0.7)]
+    assert capsule_points.shape == (3, 3)
+    assert cone_points.shape == (3, 3)
+    assert np.array_equal(capsule_faces, np.array([[0, 1, 2]], dtype=np.int32))
+    assert np.array_equal(cone_faces, np.array([[0, 1, 2]], dtype=np.int32))
+
+
+@pytest.mark.parametrize(
+    ("axis", "expected"),
+    [
+        (
+            "Z",
+            np.array([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype=np.float64),
+        ),
+        (
+            "X",
+            np.array([[2.0, 1.0, 0.0], [5.0, 4.0, -3.0]], dtype=np.float64),
+        ),
+        (
+            "Y",
+            np.array([[0.0, 2.0, -1.0], [3.0, 5.0, -4.0]], dtype=np.float64),
+        ),
+    ],
+)
+def test_orient_points_from_z_axis_supports_native_axis_tokens(axis: str, expected: np.ndarray, monkeypatch: pytest.MonkeyPatch):
+    module = _load_semantic_raycaster_module(monkeypatch)
+    points = np.array([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype=np.float64)
+
+    oriented = module._orient_points_from_z_axis(points, axis)
+
+    assert np.array_equal(oriented, expected)
 
 
 def test_initialize_warp_meshes_preserves_root_semantic_ids_and_allows_empty_roots(

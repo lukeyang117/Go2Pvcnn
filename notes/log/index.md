@@ -6,6 +6,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-30 14:32 | semantic native shape-pool compact runtime acceptance | semantic static course implementation | pass with scoped caveat | local regression `34 passed, 11 skipped`; compact runtime acceptance requires both `capsule` and `cone`; full-grid interactive path still separate | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md) |
 | 2026-04-30 13:51 | semantic native shape-pool spec review | semantic static course design review | approved with refinements | scanner-side `capsule/cone` scope explicit; compact smoke must cover `capsule` and `cone`; public scanner contract/name stays stable | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](2026-04-30-1351-semantic-native-shape-pool-spec-review.md) |
 | 2026-04-30 13:43 | semantic native shape-pool design | semantic static course design | design recorded | native shape pool=`sphere,cuboid,cylinder,capsule,cone`; shared pool for `small/large`; deterministic slot-based selection | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1343-semantic-native-shape-pool-design.md](2026-04-30-1343-semantic-native-shape-pool-design.md) |
 | 2026-04-30 02:15 | semantic viewer empty-marker fix | semantic static course viewer runtime | pass | zero-marker crash removed; terrain=`white`; small=`green`; large=`red`; `3 passed` + `13 passed, 10 skipped` | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](2026-04-30-0215-semantic-viewer-empty-marker-fix.md) |
@@ -30,6 +31,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 ## Topic Log Index
 
 - T200 semantic static-course viewer:
+  - [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
   - [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
   - [2026-04-30-1343-semantic-native-shape-pool-design.md](2026-04-30-1343-semantic-native-shape-pool-design.md)
   - [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](2026-04-30-0215-semantic-viewer-empty-marker-fix.md)

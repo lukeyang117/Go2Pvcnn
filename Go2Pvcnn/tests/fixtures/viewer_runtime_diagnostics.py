@@ -487,6 +487,16 @@ class RealViewerRuntimeFixture:
             _close_runtime_app()
             raise
 
+    def compact_semantic_shape_kinds(self) -> set[str]:
+        from extension.semantic_course import build_course_anchors
+
+        terrain = getattr(self.base_env.scene, "terrain", None)
+        terrain_origins = getattr(terrain, "terrain_origins", None) if terrain is not None else None
+        if terrain_origins is None:
+            raise RuntimeError("semantic runtime fixture requires terrain origins to inspect compact shape coverage")
+        anchors = build_course_anchors(terrain_origins.tolist())
+        return {str(anchor.shape_kind) for anchor in anchors}
+
     def _configure_compact_semantic_runtime_grid(self) -> None:
         """Shrink semantic-course runtime smoke to a 4x1 terrain grid.
 

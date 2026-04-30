@@ -7,6 +7,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - Current focus: semantic static-course viewer design for terrain-aligned scanner testing, while keeping the existing together viewer/planner runtime context available for follow-up verification.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic native shape-pool compact runtime acceptance](log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
   - [semantic native shape-pool spec review log](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
   - [semantic native shape-pool design log](log/2026-04-30-1343-semantic-native-shape-pool-design.md)
   - [semantic viewer empty-marker fix log](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
@@ -88,6 +89,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-30 14:32 | semantic native shape-pool compact runtime acceptance | pass with scoped caveat | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md) |
 | 2026-04-30 13:51 | semantic native shape-pool spec review | approved with refinements | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md) |
 | 2026-04-30 13:43 | semantic native shape-pool design | design recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1343-semantic-native-shape-pool-design.md](log/2026-04-30-1343-semantic-native-shape-pool-design.md) |
 | 2026-04-30 02:15 | semantic viewer empty-marker fix | pass | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md) |

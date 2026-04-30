@@ -177,6 +177,13 @@ def test_viewer_together_semantic_smoke_reports_required_obstacle_hits(real_sema
     assert forward.summary["dx"] > 0.05
 
 
+def test_compact_semantic_runtime_shape_pool_includes_capsule_and_cone(real_semantic_together_runtime):
+    shape_kinds = real_semantic_together_runtime.compact_semantic_shape_kinds()
+
+    assert "capsule" in shape_kinds
+    assert "cone" in shape_kinds
+
+
 def test_viewer_batched_runtime_smoke_preserves_parallel_path(real_batched_runtime):
     batched = real_batched_runtime.plan_batched_cases(["batched_forward", "batched_lateral_left"])
 

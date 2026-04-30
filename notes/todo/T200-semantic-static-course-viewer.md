@@ -28,6 +28,8 @@
   - shared shape pool for `small` and `large`
   - deterministic per-slot shape selection
   - spec review passed after clarifying scanner scope and compact runtime acceptance expectations
+- Native shape-pool implementation is now landed in the working tree and local regression is green.
+- Native shape-pool acceptance now explicitly includes the requirement that compact runtime coverage reaches both `capsule` and `cone`.
 - The remaining acceptance gap is no longer semantic correctness in compact smoke; it is full-grid interactive startup cost and manual viewer confirmation.
 
 ## Open Children
@@ -86,6 +88,7 @@
 - [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](../log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
 - [2026-04-30-1343-semantic-native-shape-pool-design.md](../log/2026-04-30-1343-semantic-native-shape-pool-design.md)
 - [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](../log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
+- [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](../log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
 
 ## Git Refs
 
@@ -180,6 +183,7 @@ This split is provisional and can be adjusted by the main agent after the review
   - `cone`
 - `small` and `large` share the same shape pool
 - shape choice is deterministic per `(stage, row, col, slot, semantic_class)`
+- compact runtime acceptance must cover at least one `capsule` and one `cone`
 
 ### Sequencing Constraint
 

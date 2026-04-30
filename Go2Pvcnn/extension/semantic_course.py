@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
-from typing import Any
+from typing import Any, Literal
 
 
 SEMANTIC_COURSE_ROOT = "/World/semantic_course"
@@ -13,8 +13,20 @@ SEMANTIC_COURSE_SMALL_ROOT = f"{SEMANTIC_COURSE_ROOT}/small"
 SEMANTIC_COURSE_LARGE_ROOT = f"{SEMANTIC_COURSE_ROOT}/large"
 SEMANTIC_COURSE_ROOTS = (SEMANTIC_COURSE_SMALL_ROOT, SEMANTIC_COURSE_LARGE_ROOT)
 
-SMALL_OBSTACLE_SIZE = (0.12, 0.12, 0.22)
-LARGE_OBSTACLE_SIZE = (0.45, 0.45, 0.55)
+ShapeKind = Literal["sphere", "cuboid", "cylinder", "capsule", "cone"]
+
+SHARED_NATIVE_SHAPE_POOL: tuple[ShapeKind, ...] = ("sphere", "cuboid", "cylinder", "capsule", "cone")
+SHAPE_AXIS_Z = "Z"
+SHAPE_EPSILON = 1.0e-6
+
+SMALL_OBSTACLE_DIAMETER = 0.12
+SMALL_OBSTACLE_HEIGHT = 0.22
+LARGE_OBSTACLE_DIAMETER = 0.45
+LARGE_OBSTACLE_HEIGHT = 0.55
+
+# Kept for compatibility with existing scale-based tests and callers.
+SMALL_OBSTACLE_SIZE = (SMALL_OBSTACLE_DIAMETER, SMALL_OBSTACLE_DIAMETER, SMALL_OBSTACLE_HEIGHT)
+LARGE_OBSTACLE_SIZE = (LARGE_OBSTACLE_DIAMETER, LARGE_OBSTACLE_DIAMETER, LARGE_OBSTACLE_HEIGHT)
 
 
 class SemanticCourseStage(str, Enum):
@@ -34,8 +46,12 @@ class CourseAnchor:
     stage: SemanticCourseStage
     semantic_class: str
     slot_index: int
+    shape_kind: ShapeKind
+    shape_params: dict[str, float | str | tuple[float, float, float]]
+    target_diameter: float
+    target_height: float
+    ground_offset: float
     local_xy: tuple[float, float]
-    size: tuple[float, float, float]
     world_xy: tuple[float, float]
     prim_path: str
 
@@ -47,8 +63,12 @@ class GroundedCourseObstacle:
     stage: SemanticCourseStage
     semantic_class: str
     slot_index: int
+    shape_kind: ShapeKind
+    shape_params: dict[str, float | str | tuple[float, float, float]]
+    target_diameter: float
+    target_height: float
+    ground_offset: float
     local_xy: tuple[float, float]
-    size: tuple[float, float, float]
     world_center: tuple[float, float, float]
     prim_path: str
 
@@ -116,6 +136,94 @@ def course_anchor_counts(stage: SemanticCourseStage) -> dict[str, int]:
     return {semantic_class: len(layout[semantic_class]) for semantic_class in ("small", "large")}
 
 
+def semantic_scale_profile(semantic_class: str) -> tuple[float, float]:
+    if semantic_class == "small":
+        return SMALL_OBSTACLE_DIAMETER, SMALL_OBSTACLE_HEIGHT
+    if semantic_class == "large":
+        return LARGE_OBSTACLE_DIAMETER, LARGE_OBSTACLE_HEIGHT
+    raise ValueError(f"Unsupported semantic class {semantic_class!r}.")
+
+
+def deterministic_shape_key(
+    *,
+    stage: SemanticCourseStage | str,
+    row: int,
+    col: int,
+    slot_index: int,
+    semantic_class: str,
+) -> int:
+    stage = SemanticCourseStage(stage)
+    stage_index = int(stage.value[1:])
+    semantic_index = {"small": 0, "large": 1}.get(semantic_class)
+    if semantic_index is None:
+        raise ValueError(f"Unsupported semantic class {semantic_class!r}.")
+    return (
+        stage_index * 1_000_003
+        + row * 10_007
+        + col * 1_009
+        + slot_index * 97
+        + semantic_index * 17
+    )
+
+
+def select_shape_kind(
+    *,
+    stage: SemanticCourseStage | str,
+    row: int,
+    col: int,
+    slot_index: int,
+    semantic_class: str,
+    shape_pool: tuple[ShapeKind, ...] = SHARED_NATIVE_SHAPE_POOL,
+) -> ShapeKind:
+    if not shape_pool:
+        raise ValueError("shape_pool must be non-empty.")
+    key = deterministic_shape_key(
+        stage=stage,
+        row=row,
+        col=col,
+        slot_index=slot_index,
+        semantic_class=semantic_class,
+    )
+    return shape_pool[key % len(shape_pool)]
+
+
+def shape_params_for_profile(
+    shape_kind: ShapeKind,
+    *,
+    target_diameter: float,
+    target_height: float,
+) -> dict[str, float | str | tuple[float, float, float]]:
+    radius = 0.5 * float(target_diameter)
+    height = float(target_height)
+    if shape_kind == "sphere":
+        return {"radius": radius}
+    if shape_kind == "cuboid":
+        return {"size": (float(target_diameter), float(target_diameter), height)}
+    if shape_kind == "cylinder":
+        return {"radius": radius, "height": height, "axis": SHAPE_AXIS_Z}
+    if shape_kind == "capsule":
+        return {"radius": radius, "height": max(height - float(target_diameter), SHAPE_EPSILON), "axis": SHAPE_AXIS_Z}
+    if shape_kind == "cone":
+        return {"radius": radius, "height": height, "axis": SHAPE_AXIS_Z}
+    raise ValueError(f"Unsupported shape kind {shape_kind!r}.")
+
+
+def bottom_to_center_offset(
+    shape_kind: ShapeKind,
+    shape_params: dict[str, float | str | tuple[float, float, float]],
+) -> float:
+    if shape_kind == "cuboid":
+        size = shape_params["size"]
+        return 0.5 * float(size[2])  # type: ignore[index]
+    if shape_kind == "sphere":
+        return float(shape_params["radius"])
+    if shape_kind in ("cylinder", "cone"):
+        return 0.5 * float(shape_params["height"])
+    if shape_kind == "capsule":
+        return float(shape_params["radius"]) + 0.5 * float(shape_params["height"])
+    raise ValueError(f"Unsupported shape kind {shape_kind!r}.")
+
+
 def build_course_anchors(terrain_origins: Any) -> list[CourseAnchor]:
     """Build deterministic per-tile obstacle anchors before terrain grounding."""
     num_rows = len(terrain_origins)
@@ -129,10 +237,22 @@ def build_course_anchors(terrain_origins: Any) -> list[CourseAnchor]:
             origin_x = float(origin[0])
             origin_y = float(origin[1])
             for semantic_class in ("small", "large"):
-                size = SMALL_OBSTACLE_SIZE if semantic_class == "small" else LARGE_OBSTACLE_SIZE
+                target_diameter, target_height = semantic_scale_profile(semantic_class)
                 root = SEMANTIC_COURSE_SMALL_ROOT if semantic_class == "small" else SEMANTIC_COURSE_LARGE_ROOT
                 for slot_index, local_xy in enumerate(layout[semantic_class]):
                     local_x, local_y = local_xy
+                    shape_kind = select_shape_kind(
+                        stage=stage,
+                        row=row,
+                        col=col,
+                        slot_index=slot_index,
+                        semantic_class=semantic_class,
+                    )
+                    shape_params = shape_params_for_profile(
+                        shape_kind,
+                        target_diameter=target_diameter,
+                        target_height=target_height,
+                    )
                     anchors.append(
                         CourseAnchor(
                             row=row,
@@ -140,8 +260,12 @@ def build_course_anchors(terrain_origins: Any) -> list[CourseAnchor]:
                             stage=stage,
                             semantic_class=semantic_class,
                             slot_index=slot_index,
+                            shape_kind=shape_kind,
+                            shape_params=shape_params,
+                            target_diameter=target_diameter,
+                            target_height=target_height,
+                            ground_offset=bottom_to_center_offset(shape_kind, shape_params),
                             local_xy=local_xy,
-                            size=size,
                             world_xy=(origin_x + local_x, origin_y + local_y),
                             prim_path=f"{root}/row_{row:02d}/col_{col:02d}/slot_{slot_index:02d}",
                         )
@@ -159,7 +283,7 @@ def ground_course_anchors(
     for anchor in anchors:
         world_x, world_y = anchor.world_xy
         terrain_z = float(terrain_height_at_xy(world_x, world_y))
-        center_z = terrain_z + 0.5 * float(anchor.size[2])
+        center_z = terrain_z + anchor.ground_offset
         obstacles.append(
             GroundedCourseObstacle(
                 row=anchor.row,
@@ -167,8 +291,12 @@ def ground_course_anchors(
                 stage=anchor.stage,
                 semantic_class=anchor.semantic_class,
                 slot_index=anchor.slot_index,
+                shape_kind=anchor.shape_kind,
+                shape_params=anchor.shape_params,
+                target_diameter=anchor.target_diameter,
+                target_height=anchor.target_height,
+                ground_offset=anchor.ground_offset,
                 local_xy=anchor.local_xy,
-                size=anchor.size,
                 world_center=(world_x, world_y, center_z),
                 prim_path=anchor.prim_path,
             )
@@ -211,7 +339,7 @@ def spawn_semantic_course_prestartup(
     anchors = build_course_anchors(terrain.terrain_origins)
     obstacles = _ground_with_runtime_terrain_sampler(anchors, device=getattr(env, "device", "cpu"))
     for obstacle in obstacles:
-        _spawn_grounded_cuboid(obstacle)
+        _spawn_grounded_shape(obstacle)
 
     if scene.num_envs > 0:
         set_scene_env_to_representative_stage(scene, env_id=0, stage=default_stage)
@@ -241,7 +369,45 @@ def clear_semantic_course_children() -> None:
             stage.RemovePrim(child.GetPath().pathString)
 
 
-def _spawn_grounded_cuboid(obstacle: GroundedCourseObstacle) -> None:
+def _shape_spawn_cfg(
+    obstacle: GroundedCourseObstacle,
+    *,
+    sim_utils,
+):
+    shared_kwargs = dict(
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
+        mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+        collision_props=sim_utils.CollisionPropertiesCfg(),
+    )
+    if obstacle.shape_kind == "sphere":
+        return sim_utils.SphereCfg(radius=float(obstacle.shape_params["radius"]), **shared_kwargs)
+    if obstacle.shape_kind == "cuboid":
+        return sim_utils.CuboidCfg(size=obstacle.shape_params["size"], **shared_kwargs)
+    if obstacle.shape_kind == "cylinder":
+        return sim_utils.CylinderCfg(
+            radius=float(obstacle.shape_params["radius"]),
+            height=float(obstacle.shape_params["height"]),
+            axis=str(obstacle.shape_params["axis"]),
+            **shared_kwargs,
+        )
+    if obstacle.shape_kind == "capsule":
+        return sim_utils.CapsuleCfg(
+            radius=float(obstacle.shape_params["radius"]),
+            height=float(obstacle.shape_params["height"]),
+            axis=str(obstacle.shape_params["axis"]),
+            **shared_kwargs,
+        )
+    if obstacle.shape_kind == "cone":
+        return sim_utils.ConeCfg(
+            radius=float(obstacle.shape_params["radius"]),
+            height=float(obstacle.shape_params["height"]),
+            axis=str(obstacle.shape_params["axis"]),
+            **shared_kwargs,
+        )
+    raise ValueError(f"Unsupported shape kind {obstacle.shape_kind!r}.")
+
+
+def _spawn_grounded_shape(obstacle: GroundedCourseObstacle) -> None:
     import isaacsim.core.utils.prims as prim_utils
     import isaaclab.sim as sim_utils
 
@@ -252,13 +418,8 @@ def _spawn_grounded_cuboid(obstacle: GroundedCourseObstacle) -> None:
     if not prim_utils.is_prim_path_valid(col_path):
         prim_utils.create_prim(col_path, "Xform")
 
-    cuboid_cfg = sim_utils.CuboidCfg(
-        size=obstacle.size,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
-        mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-        collision_props=sim_utils.CollisionPropertiesCfg(),
-    )
-    cuboid_cfg.func(obstacle.prim_path, cuboid_cfg, translation=obstacle.world_center)
+    shape_cfg = _shape_spawn_cfg(obstacle, sim_utils=sim_utils)
+    shape_cfg.func(obstacle.prim_path, shape_cfg, translation=obstacle.world_center)
 
 
 def _ground_with_runtime_terrain_sampler(anchors: list[CourseAnchor], *, device: str) -> list[GroundedCourseObstacle]:
@@ -273,9 +434,13 @@ def _ground_with_runtime_terrain_sampler(anchors: list[CourseAnchor], *, device:
             stage=anchor.stage,
             semantic_class=anchor.semantic_class,
             slot_index=anchor.slot_index,
+            shape_kind=anchor.shape_kind,
+            shape_params=anchor.shape_params,
+            target_diameter=anchor.target_diameter,
+            target_height=anchor.target_height,
+            ground_offset=anchor.ground_offset,
             local_xy=anchor.local_xy,
-            size=anchor.size,
-            world_center=(anchor.world_xy[0], anchor.world_xy[1], heights[index] + 0.5 * float(anchor.size[2])),
+            world_center=(anchor.world_xy[0], anchor.world_xy[1], heights[index] + anchor.ground_offset),
             prim_path=anchor.prim_path,
         )
         for index, anchor in enumerate(anchors)

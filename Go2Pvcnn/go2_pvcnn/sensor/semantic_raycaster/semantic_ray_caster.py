@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_GEOMETRY_TYPES = ("Mesh", "Plane", "Cube", "Sphere", "Cylinder")
+_SUPPORTED_GEOMETRY_TYPES = ("Mesh", "Plane", "Cube", "Sphere", "Cylinder", "Capsule", "Cone")
 
 # 设置环境变量 SEMANTIC_RAYCASTER_DEBUG=N（N 为正整数）：打印合并 mesh 摘要，并在前 N 次 _update_buffers_impl 打印 face_id 统计。
 # 例：export SEMANTIC_RAYCASTER_DEBUG=5
@@ -76,6 +76,27 @@ def _apply_world_transform(points_local: np.ndarray, transform_T: np.ndarray) ->
     r = transform_T[:3, :3].astype(np.float64)
     t = transform_T[:3, 3].astype(np.float64)
     return (points_local @ r.T + t).astype(np.float32)
+
+
+def _usd_axis_token(usd_geom, default: str = "Z") -> str:
+    axis_attr = usd_geom.GetAxisAttr() if hasattr(usd_geom, "GetAxisAttr") else None
+    if axis_attr is None:
+        return default
+    axis_value = axis_attr.Get()
+    if axis_value is None:
+        return default
+    return str(axis_value).upper()
+
+
+def _orient_points_from_z_axis(points_local: np.ndarray, axis: str) -> np.ndarray:
+    axis = axis.upper()
+    if axis == "Z":
+        return points_local
+    if axis == "X":
+        return np.stack((points_local[:, 2], points_local[:, 1], -points_local[:, 0]), axis=1)
+    if axis == "Y":
+        return np.stack((points_local[:, 0], points_local[:, 2], -points_local[:, 1]), axis=1)
+    raise RuntimeError(f"Unsupported axis token {axis!r}; expected one of 'X', 'Y', 'Z'.")
 
 
 def _collect_supported_geometry_prims(root_prim: Usd.Prim) -> list[tuple[Usd.Prim, str]]:
@@ -149,6 +170,48 @@ def _cube_prim_to_world_trimesh(prim: Usd.Prim) -> tuple[np.ndarray, np.ndarray]
     return _apply_world_transform(pts, transform_T), tri
 
 
+def _tessellate_native_shape(geom_prim: Usd.Prim, geom_type: str) -> tuple[np.ndarray, np.ndarray]:
+    try:
+        import trimesh
+    except Exception:
+        raise RuntimeError(f"{geom_type} at {geom_prim.GetPath()} requires trimesh for tessellation.") from None
+
+    if geom_type == "Sphere":
+        geom = UsdGeom.Sphere(geom_prim)
+        radius_attr = geom.GetRadiusAttr()
+        radius = float(radius_attr.Get()) if radius_attr and radius_attr.Get() is not None else 1.0
+        tm = trimesh.creation.uv_sphere(radius=radius, count=(16, 16))
+    elif geom_type == "Cylinder":
+        geom = UsdGeom.Cylinder(geom_prim)
+        radius_attr = geom.GetRadiusAttr()
+        height_attr = geom.GetHeightAttr()
+        radius = float(radius_attr.Get()) if radius_attr and radius_attr.Get() is not None else 1.0
+        height = float(height_attr.Get()) if height_attr and height_attr.Get() is not None else 2.0
+        tm = trimesh.creation.cylinder(radius=radius, height=height)
+    elif geom_type == "Capsule":
+        geom = UsdGeom.Capsule(geom_prim)
+        radius_attr = geom.GetRadiusAttr()
+        height_attr = geom.GetHeightAttr()
+        radius = float(radius_attr.Get()) if radius_attr and radius_attr.Get() is not None else 1.0
+        height = float(height_attr.Get()) if height_attr and height_attr.Get() is not None else 2.0
+        tm = trimesh.creation.capsule(radius=radius, height=height)
+    elif geom_type == "Cone":
+        geom = UsdGeom.Cone(geom_prim)
+        radius_attr = geom.GetRadiusAttr()
+        height_attr = geom.GetHeightAttr()
+        radius = float(radius_attr.Get()) if radius_attr and radius_attr.Get() is not None else 1.0
+        height = float(height_attr.Get()) if height_attr and height_attr.Get() is not None else 2.0
+        tm = trimesh.creation.cone(radius=radius, height=height)
+    else:
+        raise RuntimeError(f"Tessellation helper does not handle geometry type {geom_type!r}.")
+
+    points = np.asarray(tm.vertices, dtype=np.float64)
+    triangles = np.asarray(tm.faces, dtype=np.int32)
+    if geom_type in {"Cylinder", "Capsule", "Cone"}:
+        points = _orient_points_from_z_axis(points, _usd_axis_token(geom, default="Z"))
+    return points, triangles
+
+
 def _geometry_prim_to_world_trimesh(geom_prim: Usd.Prim, geom_type: str) -> tuple[np.ndarray, np.ndarray]:
     """Convert one supported USD geometry prim into a world-space triangle mesh."""
     if geom_type == "Mesh":
@@ -160,35 +223,10 @@ def _geometry_prim_to_world_trimesh(geom_prim: Usd.Prim, geom_type: str) -> tupl
         return _apply_world_transform(pts, transform_T), mesh.faces.astype(np.int32)
     if geom_type == "Cube":
         return _cube_prim_to_world_trimesh(geom_prim)
-    if geom_type == "Sphere":
-        try:
-            import trimesh
-
-            sph = UsdGeom.Sphere(geom_prim)
-            r_attr = sph.GetRadiusAttr()
-            radius = float(r_attr.Get()) if r_attr and r_attr.Get() is not None else 1.0
-            tm = trimesh.creation.uv_sphere(radius=radius, count=(16, 16))
-            pts = np.asarray(tm.vertices, dtype=np.float64)
-            tri = np.asarray(tm.faces, dtype=np.int32)
-        except Exception:
-            raise RuntimeError(f"Sphere at {geom_prim.GetPath()} requires trimesh for tessellation.") from None
-        transform_T = _world_transform_matrix_T(UsdGeom.Sphere(geom_prim))
-        return _apply_world_transform(pts, transform_T), tri
-    if geom_type == "Cylinder":
-        try:
-            import trimesh
-
-            cyl = UsdGeom.Cylinder(geom_prim)
-            ra = cyl.GetRadiusAttr()
-            ha = cyl.GetHeightAttr()
-            rad = float(ra.Get()) if ra and ra.Get() is not None else 1.0
-            hgt = float(ha.Get()) if ha and ha.Get() is not None else 2.0
-            tm = trimesh.creation.cylinder(radius=rad, height=hgt)
-            pts = np.asarray(tm.vertices, dtype=np.float64)
-            tri = np.asarray(tm.faces, dtype=np.int32)
-        except Exception:
-            raise RuntimeError(f"Cylinder at {geom_prim.GetPath()} requires trimesh.") from None
-        transform_T = _world_transform_matrix_T(UsdGeom.Cylinder(geom_prim))
+    if geom_type in {"Sphere", "Cylinder", "Capsule", "Cone"}:
+        pts, tri = _tessellate_native_shape(geom_prim, geom_type)
+        usd_geom_ctor = getattr(UsdGeom, geom_type)
+        transform_T = _world_transform_matrix_T(usd_geom_ctor(geom_prim))
         return _apply_world_transform(pts, transform_T), tri
 
     raise RuntimeError(f"Unsupported geometry type {geom_type!r} at {geom_prim.GetPath()}.")
