@@ -6,6 +6,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-30 13:51 | semantic native shape-pool spec review | semantic static course design review | approved with refinements | scanner-side `capsule/cone` scope explicit; compact smoke must cover `capsule` and `cone`; public scanner contract/name stays stable | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](2026-04-30-1351-semantic-native-shape-pool-spec-review.md) |
+| 2026-04-30 13:43 | semantic native shape-pool design | semantic static course design | design recorded | native shape pool=`sphere,cuboid,cylinder,capsule,cone`; shared pool for `small/large`; deterministic slot-based selection | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1343-semantic-native-shape-pool-design.md](2026-04-30-1343-semantic-native-shape-pool-design.md) |
 | 2026-04-30 02:15 | semantic viewer empty-marker fix | semantic static course viewer runtime | pass | zero-marker crash removed; terrain=`white`; small=`green`; large=`red`; `3 passed` + `13 passed, 10 skipped` | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](2026-04-30-0215-semantic-viewer-empty-marker-fix.md) |
 | 2026-04-29 23:59 | semantic static-course env_isaaclab compact runtime smoke | semantic static course real runtime | pass with scoped caveat | `semantic_height_scanner_contract` pass; `together_semantic_smoke` pass; compact `4x1` terrain grid; full-grid interactive startup still unverified | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md) |
 | 2026-04-29 23:48 | semantic static-course implementation + local verification | semantic static course implementation | local tests pass; real runtime smoke incomplete | sensor `4 passed`; course/config `12 passed`; viewer `33+29 passed`; runtime contract reached live semantic-course spawning but timed out at `120s` | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md) |
@@ -28,6 +30,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 ## Topic Log Index
 
 - T200 semantic static-course viewer:
+  - [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
+  - [2026-04-30-1343-semantic-native-shape-pool-design.md](2026-04-30-1343-semantic-native-shape-pool-design.md)
   - [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
   - [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
   - [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)

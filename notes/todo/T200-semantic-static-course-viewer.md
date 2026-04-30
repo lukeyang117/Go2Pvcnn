@@ -23,11 +23,51 @@
   - terrain white
   - small obstacle green
   - large obstacle red
+- A new design increment is approved for native shape-pool expansion:
+  - use only native Isaac shapes
+  - shared shape pool for `small` and `large`
+  - deterministic per-slot shape selection
+  - spec review passed after clarifying scanner scope and compact runtime acceptance expectations
 - The remaining acceptance gap is no longer semantic correctness in compact smoke; it is full-grid interactive startup cost and manual viewer confirmation.
 
 ## Open Children
 
 - T205: full-grid interactive viewer startup cost / manual semantic viewer confirmation
+- T206: native semantic shape-pool expansion in `semantic_course.py`
+
+## T206 Execution Model
+
+### Main Agent Responsibilities
+
+- keep the approved native shape-pool spec as source of truth
+- enforce the shared shape-pool rule for `small` and `large`
+- review scanner-side compatibility for `capsule` and `cone`
+- review worker test coverage before accepting implementation
+
+### Worker Split
+
+- `W4 shape-course/tests`
+  - own `Go2Pvcnn/extension/semantic_course.py`
+  - own `Go2Pvcnn/tests/test_semantic_course.py`
+  - implement:
+    - shape-spec layer
+    - deterministic native shape selection
+    - per-shape parameter mapping
+    - shape-aware grounding offsets
+    - native shape spawn dispatch
+
+- `W5 semantic-raycaster-shape/tests`
+  - own `Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py`
+  - own `Go2Pvcnn/tests/test_semantic_raycaster.py`
+  - implement:
+    - scanner compatibility for every approved native shape in the pool
+    - explicit coverage for `capsule` and `cone`
+    - compatibility tests for the expanded pool
+
+### Main-Agent Reserved Seam
+
+- acceptance proof that compact `env_isaaclab` runtime smoke includes at least one `capsule` and one `cone`
+- decision on whether any viewer-facing diagnostic/test updates are needed after shape expansion
 
 ## Closed Children Archive
 
@@ -44,6 +84,8 @@
 - [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](../log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
 - [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](../log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
 - [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](../log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
+- [2026-04-30-1343-semantic-native-shape-pool-design.md](../log/2026-04-30-1343-semantic-native-shape-pool-design.md)
+- [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](../log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
 
 ## Git Refs
 
@@ -130,6 +172,14 @@ This split is provisional and can be adjusted by the main agent after the review
 - semantic-course root containers under `/World/semantic_course/{small,large}` must always exist
 - semantic diagnostics count only valid sampled hits and must include an elevation-lift metric
 - semantic rollout correctness is required on default `together`; `legacy` only needs a smoke if still exposed
+- native shape-pool increment uses only:
+  - `sphere`
+  - `cuboid`
+  - `cylinder`
+  - `capsule`
+  - `cone`
+- `small` and `large` share the same shape pool
+- shape choice is deterministic per `(stage, row, col, slot, semantic_class)`
 
 ### Sequencing Constraint
 

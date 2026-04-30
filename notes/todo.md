@@ -7,6 +7,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - Current focus: semantic static-course viewer design for terrain-aligned scanner testing, while keeping the existing together viewer/planner runtime context available for follow-up verification.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic native shape-pool spec review log](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
+  - [semantic native shape-pool design log](log/2026-04-30-1343-semantic-native-shape-pool-design.md)
   - [semantic viewer empty-marker fix log](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
   - [semantic static-course env_isaaclab compact runtime smoke](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
   - [semantic static-course implementation + local verification log](log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
@@ -50,6 +52,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
+| T206 | The semantic course now needs native shape diversity beyond cuboids, but without leaving the native Isaac shape set. | Implement the approved shared native shape pool in `semantic_course.py` and extend tests for deterministic selection and shape-aware grounding. |
 | T205 | Compact real-runtime acceptance now passes, but full-grid interactive startup cost and manual viewer confirmation are still unverified. | Decide whether to optimize the full viewer startup path or to keep compact runtime smoke as the automated acceptance path. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
 | T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
@@ -85,6 +88,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-30 13:51 | semantic native shape-pool spec review | approved with refinements | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md) |
+| 2026-04-30 13:43 | semantic native shape-pool design | design recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1343-semantic-native-shape-pool-design.md](log/2026-04-30-1343-semantic-native-shape-pool-design.md) |
 | 2026-04-30 02:15 | semantic viewer empty-marker fix | pass | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md) |
 | 2026-04-29 23:59 | semantic static-course env_isaaclab compact runtime smoke | pass with scoped caveat | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md) |
 | 2026-04-29 23:48 | semantic static-course implementation + local verification | local tests pass; real runtime smoke incomplete | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md) |
