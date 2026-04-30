@@ -345,6 +345,59 @@ class TestKinematicPlaybackLogic:
         assert "valid=14" in text
         assert "height_lift_max=0.550" in text
 
+    def test_planner_visualizer_hides_empty_semantic_classes_without_zero_marker_visualize(self, monkeypatch):
+        from extension.viz.go2_foostep_planner import PlannerVisualizer
+
+        class FakeMarkers:
+            def __init__(self):
+                self.visibility = []
+                self.calls = []
+
+            def set_visibility(self, visible):
+                self.visibility.append(bool(visible))
+
+            def visualize(self, **kwargs):
+                translations = kwargs.get("translations")
+                if translations is not None and int(translations.shape[0]) == 0:
+                    raise AssertionError("visualize() should not be called with zero markers")
+                self.calls.append(kwargs)
+
+        visualizer = object.__new__(PlannerVisualizer)
+        visualizer.root_traj = FakeMarkers()
+        visualizer.command_arrow = FakeMarkers()
+        visualizer.foot_traj = [FakeMarkers() for _ in range(4)]
+        visualizer.touchdowns = [FakeMarkers() for _ in range(4)]
+        visualizer.heightmap = {0: FakeMarkers(), 1: FakeMarkers(), 2: FakeMarkers()}
+
+        result = SimpleNamespace(
+            root_pos_w=torch.zeros((1, 2, 3), dtype=torch.float64),
+            root_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]], dtype=torch.float64),
+            foot_pos_w=torch.zeros((1, 2, 4, 3), dtype=torch.float64),
+            planned_touchdown_w=torch.zeros((1, 4, 3), dtype=torch.float64),
+        )
+
+        command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float64)
+        root_yaw = torch.tensor([0.0], dtype=torch.float64)
+        height_points_by_class = {
+            0: torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float64),
+            1: torch.empty((0, 3), dtype=torch.float64),
+            2: torch.empty((0, 3), dtype=torch.float64),
+        }
+
+        visualizer.update(
+            result=result,
+            command=command,
+            root_yaw=root_yaw,
+            height_points_by_class=height_points_by_class,
+        )
+
+        assert len(visualizer.heightmap[0].calls) == 1
+        assert visualizer.heightmap[0].visibility[-1] is True
+        assert visualizer.heightmap[1].calls == []
+        assert visualizer.heightmap[2].calls == []
+        assert visualizer.heightmap[1].visibility[-1] is False
+        assert visualizer.heightmap[2].visibility[-1] is False
+
     def test_together_viewer_handoff_does_not_accumulate_root_height_on_flat_walk(self):
         from extension.batched_together_planner import (
             TogetherPlannerConfig,

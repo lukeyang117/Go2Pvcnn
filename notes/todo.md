@@ -7,6 +7,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - Current focus: semantic static-course viewer design for terrain-aligned scanner testing, while keeping the existing together viewer/planner runtime context available for follow-up verification.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic viewer empty-marker fix log](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
   - [semantic static-course env_isaaclab compact runtime smoke](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
   - [semantic static-course implementation + local verification log](log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
   - [semantic static-course parallel review convergence log](log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
@@ -84,6 +85,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-30 02:15 | semantic viewer empty-marker fix | pass | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md) |
 | 2026-04-29 23:59 | semantic static-course env_isaaclab compact runtime smoke | pass with scoped caveat | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md) |
 | 2026-04-29 23:48 | semantic static-course implementation + local verification | local tests pass; real runtime smoke incomplete | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md) |
 | 2026-04-29 23:18 | semantic static-course parallel review convergence | blockers absorbed into spec | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md) |

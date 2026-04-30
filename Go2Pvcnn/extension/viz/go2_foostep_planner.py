@@ -419,9 +419,9 @@ SEMANTIC_SMALL_ID = 1
 SEMANTIC_LARGE_ID = 2
 
 SEMANTIC_MARKER_COLORS = {
-    SEMANTIC_TERRAIN_ID: (0.7, 0.9, 1.0),
-    SEMANTIC_SMALL_ID: (1.0, 0.35, 0.35),
-    SEMANTIC_LARGE_ID: (1.0, 0.8, 0.2),
+    SEMANTIC_TERRAIN_ID: (1.0, 1.0, 1.0),
+    SEMANTIC_SMALL_ID: (0.2, 0.9, 0.2),
+    SEMANTIC_LARGE_ID: (1.0, 0.2, 0.2),
 }
 
 PLANNER_JOINT_ORDER = (
@@ -719,12 +719,12 @@ class PlannerVisualizer:
             self.foot_traj[leg_idx].visualize(translations=foot_pos_w[0, :, leg_idx].to(torch.float32))
             self.touchdowns[leg_idx].visualize(translations=touchdown_w[0, leg_idx : leg_idx + 1].to(torch.float32))
 
-        empty = torch.empty((0, 3), dtype=torch.float32)
         for semantic_id, markers in self.heightmap.items():
             points = height_points_by_class.get(semantic_id)
             if points is None or points.numel() == 0:
-                markers.visualize(translations=empty)
+                markers.set_visibility(False)
             else:
+                markers.set_visibility(True)
                 markers.visualize(translations=points.to(torch.float32))
 
         cmd_xy = command[0, :2]

@@ -18,6 +18,11 @@
 - Compact real `env_isaaclab` headless runtime smoke now passes for:
   - `semantic_height_scanner_contract`
   - default `together` semantic smoke
+- Interactive semantic viewer no longer crashes when one semantic class has zero sampled points.
+- Semantic viewer colors are now:
+  - terrain white
+  - small obstacle green
+  - large obstacle red
 - The remaining acceptance gap is no longer semantic correctness in compact smoke; it is full-grid interactive startup cost and manual viewer confirmation.
 
 ## Open Children
@@ -38,6 +43,7 @@
 - [2026-04-29-2318-semantic-static-course-parallel-review-convergence.md](../log/2026-04-29-2318-semantic-static-course-parallel-review-convergence.md)
 - [2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md](../log/2026-04-29-2348-semantic-static-course-implementation-and-local-verification.md)
 - [2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md](../log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
+- [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](../log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
 
 ## Git Refs
 
