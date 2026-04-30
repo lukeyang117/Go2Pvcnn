@@ -6,6 +6,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-30 15:18 | semantic course random layout spec review approval | semantic static course design review | approved | second review passed; no new blockers; user spec review gate next | [T200/T207](../todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md](2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md) |
 | 2026-04-30 15:14 | semantic course random layout spec review | semantic static course design review | issues incorporated | added seed/API defaults, tile-size contract, targeted scan contract, exact grounding defaults, fallback diagnostics | [T200/T207](../todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1514-semantic-course-random-layout-spec-review.md](2026-04-30-1514-semantic-course-random-layout-spec-review.md) |
 | 2026-04-30 15:08 | semantic course random layout grounding design | semantic static course design | design recorded | full sub-terrain deterministic layout; center safety; footprint grounding with slight embed; targeted semantic-hit tests required | [T200/T207](../todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](2026-04-30-1508-semantic-course-random-layout-grounding-design.md) |
 | 2026-04-30 14:50 | T200 branch compact | notes workflow branch compact | pass | T200 branch compressed around open `T205`; completed viewer/shape-pool work moved into closed summaries | [T000](../todo/T000-notes-workflow.md) | [2026-04-30-1450-t200-branch-compact.md](2026-04-30-1450-t200-branch-compact.md) |
@@ -33,6 +34,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 ## Topic Log Index
 
 - T200 semantic static-course viewer:
+  - [2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md](2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md)
   - [2026-04-30-1514-semantic-course-random-layout-spec-review.md](2026-04-30-1514-semantic-course-random-layout-spec-review.md)
   - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
   - [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
