@@ -2,35 +2,21 @@
 
 ## Current State
 
-- User-approved design direction is recorded for a viewer-first semantic static obstacle course tied to terrain difficulty.
-- Training config remains unchanged for now; the immediate target is a derived viewer config that can later be migrated into `teacher_elevation_trajectory_env_cfg.py`.
-- The old inherited `height_scanner` must be removed in the viewer config and replaced by `semantic_height_scanner`.
-- `semantic_raycaster` is in scope for redesign and tests, not just reuse.
-- Source inspection established that `startup` is too late for semantic prop spawning because sensor warp-mesh initialization happens on `sim.reset()` / timeline `PLAY` before `startup`. Semantic props must exist by `prestartup`.
-- The written spec has passed subagent review with no blocking issues; advisory refinements were folded back into the spec.
-- Parallel technical/detail/completeness review found and resolved additional blockers in the spec:
-  - semantic viewer scene must be non-replicated
-  - semantic-course root containers must always exist
-  - raster size and diagnostics contracts are now explicit
-  - semantic rollout success is required on default `together`
-- Implementation slices for sensor, course/config, and viewer integration are now landed in the working tree.
-- Local unit/static/viewer tests are passing.
-- Compact real `env_isaaclab` headless runtime smoke now passes for:
-  - `semantic_height_scanner_contract`
-  - default `together` semantic smoke
-- Interactive semantic viewer no longer crashes when one semantic class has zero sampled points.
-- Semantic viewer colors are now:
+- Viewer-first semantic static-course path is implemented and verified in local tests.
+- `semantic_height_scanner` is the active scanner; compact `env_isaaclab` headless smoke passes on default `together`.
+- Viewer colors are now:
   - terrain white
   - small obstacle green
   - large obstacle red
-- A new design increment is approved for native shape-pool expansion:
-  - use only native Isaac shapes
-  - shared shape pool for `small` and `large`
-  - deterministic per-slot shape selection
-  - spec review passed after clarifying scanner scope and compact runtime acceptance expectations
-- Native shape-pool implementation is now landed in the working tree and local regression is green.
-- Native shape-pool acceptance now explicitly includes the requirement that compact runtime coverage reaches both `capsule` and `cone`.
-- The remaining acceptance gap is no longer semantic correctness in compact smoke; it is full-grid interactive startup cost and manual viewer confirmation.
+- Native shape-pool expansion is also landed:
+  - `sphere`
+  - `cuboid`
+  - `cylinder`
+  - `capsule`
+  - `cone`
+- `small` and `large` share the shape pool; slot shape choice is deterministic per `(stage, row, col, slot, semantic_class)`.
+- Compact runtime acceptance now explicitly requires both `capsule` and `cone`.
+- Remaining work is narrowed to `T205`: full-grid interactive startup cost and one manual viewer confirmation.
 
 ## Open Children
 
@@ -77,53 +63,16 @@
 
 ## Node Details
 
-### Why Created
+### T205 full-grid interactive viewer startup / manual confirmation
 
-- The user wants a semantic obstacle course for scanner/viewer testing before modifying training.
-- The semantic course must be static, terrain-attached, difficulty-aligned, and later migratable into the training trajectory config.
-- The existing viewer and scanner path cannot currently show semantic obstacle hits or obstacle-surface elevation.
-
-### Approved Decisions
-
-- semantic stage is always enabled and tied to terrain difficulty
-- four stages:
-  - `S1`: none
-  - `S2`: four small obstacles
-  - `S3`: large plus small obstacles
-  - `S4`: large plus more small obstacles
-- sensor name must be `semantic_height_scanner`
-- the viewer-derived config must delete inherited `height_scanner`
-- semantic maps return `0=terrain`, `1=small`, `2=large`
-- semantic obstacle generation belongs under `Go2Pvcnn/extension/semantic_course.py`
-- semantic geometry must be created before sensor initialization, so `prestartup` replaces `startup`
-- semantic viewer scene must set `replicate_physics = False`
-- semantic-course root containers under `/World/semantic_course/{small,large}` must always exist
-- semantic diagnostics count only valid sampled hits and must include an elevation-lift metric
-- semantic rollout correctness is required on default `together`; `legacy` only needs a smoke if still exposed
-- native shape-pool increment uses only:
-  - `sphere`
-  - `cuboid`
-  - `cylinder`
-  - `capsule`
-  - `cone`
-- `small` and `large` share the same shape pool
-- shape choice is deterministic per `(stage, row, col, slot, semantic_class)`
-- compact runtime acceptance must cover at least one `capsule` and one `cone`
-
-### Sequencing Constraint
-
-- `InteractiveScene` is built before manager loading.
-- `prestartup` can mutate the USD stage before `sim.reset()`.
-- sensors initialize their warp meshes on timeline `PLAY`, triggered by `sim.reset()`.
-- `startup` happens after manager loading and is therefore too late for static semantic mesh inclusion.
-- `prestartup` requires the semantic viewer scene to disable `replicate_physics`.
-
-### Main-Agent Reserved Seam
-
-- lifecycle and scene mode:
-  - `replicate_physics = False`
-  - `prestartup` spawning
-- authoritative `ray_hits_w -> planner terrain` conversion
-- deterministic viewer exposure to representative `S1..S4` rows
-
-These seams stay under direct main-agent review even when implementation workers are dispatched.
+- why-active:
+  - compact headless runtime and native shape-pool coverage are proven
+  - full-grid interactive startup cost is still unmeasured after the recent semantic expansion
+  - manual visual confirmation is still the fastest way to judge whether the richer shape pool looks good in practice
+- likely decisions:
+  - keep full training-aligned grid for interactive viewer
+  - or adopt compact terrain-grid setup as the default smoke/diagnostic path and reserve full-grid for explicit manual checks
+- keep under direct review:
+  - interactive startup time
+  - visual distribution of `sphere/cuboid/cylinder/capsule/cone`
+  - whether compact runtime smoke is enough as the standing automated acceptance proof

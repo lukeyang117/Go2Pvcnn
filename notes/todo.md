@@ -68,6 +68,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-30 14:50 | T200 branch compact | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-30-1450-t200-branch-compact.md](log/2026-04-30-1450-t200-branch-compact.md) |
 | 2026-04-30 14:56 | notes compact-todo | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-30-1456-notes-compact-todo.md](log/2026-04-30-1456-notes-compact-todo.md) |
 | 2026-04-30 14:32 | semantic native shape-pool compact runtime acceptance | pass with scoped caveat | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md) |
 | 2026-04-30 13:51 | semantic native shape-pool spec review | approved with refinements | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md) |
