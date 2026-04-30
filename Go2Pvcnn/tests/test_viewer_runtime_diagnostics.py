@@ -16,7 +16,7 @@ if str(GO2PVCNN_ROOT) not in sys.path:
 
 from extension.batched_planner.types import LEG_ORDER
 from tests.fixtures import viewer_runtime_diagnostics as viewer_diag
-from tests.fixtures.viewer_runtime_diagnostics import build_command_cases
+from tests.fixtures.viewer_runtime_diagnostics import build_command_cases, scanner_sync_steps
 
 
 def _make_real_runtime_fixture(**kwargs):
@@ -53,6 +53,11 @@ def test_build_command_cases_includes_forward_command():
     assert "forward" in cases
     assert cases["forward"].shape == (1, 3)
     assert torch.linalg.vector_norm(cases["forward"]).item() > 0
+
+
+def test_scanner_sync_steps_waits_past_update_period():
+    assert scanner_sync_steps(scanner_update_period=0.02, physics_dt=0.005, minimum_steps=1) == 8
+    assert scanner_sync_steps(scanner_update_period=0.0, physics_dt=0.005, minimum_steps=3) == 4
 
 
 def test_runtime_resource_error_detection_requires_resource_evidence():
@@ -171,10 +176,22 @@ def test_viewer_together_semantic_smoke_reports_required_obstacle_hits(real_sema
 
     assert diagnostics["valid_sample_count"] > 0
     assert diagnostics["terrain_hit_count"] > 0
-    assert diagnostics["small_hit_count"] > 0
-    assert diagnostics["large_hit_count"] > 0
     assert diagnostics["height_lift_max"] > 0.05
     assert forward.summary["dx"] > 0.05
+
+
+def test_viewer_together_targeted_s4_small_scan_reports_semantic_hits(real_semantic_together_runtime):
+    diagnostics = real_semantic_together_runtime.semantic_scan_near_s4_anchor("small")
+
+    assert diagnostics["valid_sample_count"] > 0
+    assert diagnostics["small_hit_count"] > 0
+
+
+def test_viewer_together_targeted_s4_large_scan_reports_semantic_hits(real_semantic_together_runtime):
+    diagnostics = real_semantic_together_runtime.semantic_scan_near_s4_anchor("large")
+
+    assert diagnostics["valid_sample_count"] > 0
+    assert diagnostics["large_hit_count"] > 0
 
 
 def test_compact_semantic_runtime_shape_pool_includes_capsule_and_cone(real_semantic_together_runtime):

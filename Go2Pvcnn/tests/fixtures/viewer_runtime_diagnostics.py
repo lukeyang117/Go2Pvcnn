@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import atexit
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +40,21 @@ def build_command_cases(*, device: torch.device, num_envs: int) -> dict[str, tor
         case.name: torch.tensor(case.command, dtype=torch.float32, device=device).unsqueeze(0).expand(num_envs, -1).clone()
         for case in COMMAND_CASES
     }
+
+
+def scanner_sync_steps(
+    *,
+    scanner_update_period: float,
+    physics_dt: float,
+    minimum_steps: int = 1,
+    extra_steps: int = 4,
+) -> int:
+    """Number of scene updates needed before a post-teleport scanner read."""
+    update_period = max(0.0, float(scanner_update_period))
+    dt = float(physics_dt)
+    if not math.isfinite(update_period) or not math.isfinite(dt) or dt <= 0.0:
+        return max(1, int(minimum_steps))
+    return max(int(minimum_steps), int(math.ceil(update_period / dt)) + max(1, int(extra_steps)))
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -497,6 +513,33 @@ class RealViewerRuntimeFixture:
         anchors = build_course_anchors(terrain_origins.tolist())
         return {str(anchor.shape_kind) for anchor in anchors}
 
+    def _semantic_course_anchors(self):
+        from extension.semantic_course import build_course_anchors
+
+        terrain = getattr(self.base_env.scene, "terrain", None)
+        terrain_origins = getattr(terrain, "terrain_origins", None) if terrain is not None else None
+        if terrain_origins is None:
+            raise RuntimeError("semantic runtime fixture requires terrain origins to select targeted anchors")
+        terrain_cfg = getattr(terrain, "cfg", None)
+        terrain_generator = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
+        if hasattr(terrain_origins, "tolist"):
+            terrain_origins = terrain_origins.tolist()
+        return build_course_anchors(terrain_origins, terrain_generator=terrain_generator)
+
+    def s4_semantic_course_anchor(self, semantic_class: str):
+        from extension.semantic_course import SemanticCourseStage
+
+        if semantic_class not in {"small", "large"}:
+            raise ValueError(f"semantic_class must be 'small' or 'large', got {semantic_class!r}")
+        anchors = [
+            anchor
+            for anchor in self._semantic_course_anchors()
+            if anchor.stage is SemanticCourseStage.S4 and anchor.semantic_class == semantic_class
+        ]
+        if not anchors:
+            raise RuntimeError(f"semantic runtime fixture found no S4 {semantic_class} anchors")
+        return sorted(anchors, key=lambda anchor: (anchor.row, anchor.col, anchor.slot_index))[0]
+
     def _configure_compact_semantic_runtime_grid(self) -> None:
         """Shrink semantic-course runtime smoke to a 4x1 terrain grid.
 
@@ -531,6 +574,47 @@ class RealViewerRuntimeFixture:
         for _ in range(self.warmup_steps):
             self.env.step(self.zero_actions)
 
+    def _write_env0_root_xy(self, world_xy: tuple[float, float], *, z_clearance: float = 0.65) -> None:
+        root_pose = torch.cat(
+            [
+                torch.as_tensor(self.robot.data.root_pos_w, device=self.base_env.device, dtype=torch.float32),
+                torch.as_tensor(self.robot.data.root_quat_w, device=self.base_env.device, dtype=torch.float32),
+            ],
+            dim=-1,
+        ).clone()
+        root_pose[0, 0] = float(world_xy[0])
+        root_pose[0, 1] = float(world_xy[1])
+        root_pose[0, 2] = torch.clamp(root_pose[0, 2], min=float(z_clearance))
+        env_ids = torch.tensor([0], dtype=torch.long, device=self.base_env.device)
+        self.robot.write_root_pose_to_sim(root_pose[:1], env_ids=env_ids)
+        if hasattr(self.robot, "write_root_velocity_to_sim"):
+            zero_velocity = torch.zeros((1, 6), dtype=torch.float32, device=self.base_env.device)
+            self.robot.write_root_velocity_to_sim(zero_velocity, env_ids=env_ids)
+        self.base_env.scene.write_data_to_sim()
+
+    def _sync_targeted_scan_pose(self) -> None:
+        scanner_cfg = getattr(self.scanner, "cfg", None)
+        update_period = float(getattr(scanner_cfg, "update_period", 0.0))
+        steps = scanner_sync_steps(
+            scanner_update_period=update_period,
+            physics_dt=float(self.base_env.physics_dt),
+            minimum_steps=max(1, self.warmup_steps),
+        )
+        for _ in range(steps):
+            self.base_env.sim.render()
+            self.base_env.scene.update(float(self.base_env.physics_dt))
+
+    def semantic_scan_near_s4_anchor(self, semantic_class: str) -> dict[str, float | int]:
+        anchor = self.s4_semantic_course_anchor(semantic_class)
+        self.reset()
+        self._write_env0_root_xy(anchor.world_xy)
+        self._sync_targeted_scan_pose()
+        scanner_xy = torch.as_tensor(self.scanner.data.pos_w[0, :2], dtype=torch.float64)
+        anchor_xy = torch.tensor(anchor.world_xy, dtype=torch.float64, device=scanner_xy.device)
+        torch.testing.assert_close(scanner_xy, anchor_xy, atol=0.1, rtol=0.0)
+        _terrain, ray_hits = self._single_env_terrain_and_hits()
+        return self._semantic_scan_diagnostics(ray_hits, stride=1)
+
     def _command_tensor(self, name: str) -> torch.Tensor:
         command = self.command_cases[name]
         if command.shape[0] != self.num_envs:
@@ -551,12 +635,12 @@ class RealViewerRuntimeFixture:
         terrain, _ = self._single_env_terrain_and_hits()
         return terrain
 
-    def _semantic_scan_diagnostics(self, ray_hits: torch.Tensor) -> dict[str, float | int]:
+    def _semantic_scan_diagnostics(self, ray_hits: torch.Tensor, *, stride: int | None = None) -> dict[str, float | int]:
         semantic_map = self._viewer._scanner_semantic_map(self.scanner, env_id=0)
         _, diagnostics = self._viewer._subsample_semantic_height_points(
             ray_hits,
             semantic_map,
-            self.heightmap_viz_stride,
+            self.heightmap_viz_stride if stride is None else int(stride),
         )
         return diagnostics
 
