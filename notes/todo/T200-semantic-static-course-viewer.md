@@ -16,10 +16,12 @@
   - `cone`
 - `small` and `large` share the shape pool; slot shape choice is deterministic per `(stage, row, col, slot, semantic_class)`.
 - Compact runtime acceptance now explicitly requires both `capsule` and `cone`.
-- Remaining work is narrowed to `T205`: full-grid interactive startup cost and one manual viewer confirmation.
+- New design follow-up `T207` is active: replace center-clustered semantic anchors with full sub-terrain deterministic random layouts and footprint-based terrain grounding.
+- Remaining existing follow-up `T205`: full-grid interactive startup cost and one manual viewer confirmation.
 
 ## Open Children
 
+- T207: deterministic full-sub-terrain semantic layout and robust footprint grounding
 - T205: full-grid interactive viewer startup cost / manual semantic viewer confirmation
 
 ## Closed Children Archive
@@ -41,6 +43,7 @@
 - [2026-04-30-1343-semantic-native-shape-pool-design.md](../log/2026-04-30-1343-semantic-native-shape-pool-design.md)
 - [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](../log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
 - [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](../log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
+- [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](../log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
 
 ## Git Refs
 
@@ -50,6 +53,7 @@
 - Key Files:
   - [../../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md](../../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md)
   - [../../docs/superpowers/specs/2026-04-30-semantic-native-shape-pool-design.md](../../docs/superpowers/specs/2026-04-30-semantic-native-shape-pool-design.md)
+  - [../../docs/superpowers/specs/2026-04-30-semantic-course-random-layout-grounding-design.md](../../docs/superpowers/specs/2026-04-30-semantic-course-random-layout-grounding-design.md)
   - [../../Go2Pvcnn/extension/semantic_course.py](../../Go2Pvcnn/extension/semantic_course.py)
   - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
   - [../../Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py](../../Go2Pvcnn/go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py)
@@ -58,10 +62,28 @@
 
 ## Next Step
 
+- For `T207`, create the implementation plan for deterministic full-tile layout sampling, footprint terrain grounding, and targeted semantic-hit runtime tests.
 - Decide whether the full interactive viewer should keep the training-aligned full terrain grid or borrow the compact smoke strategy for startup practicality.
 - Run one manual semantic viewer confirmation pass when interactive validation is needed.
 
 ## Node Details
+
+### T207 deterministic full-sub-terrain semantic layout / footprint grounding
+
+- why-created:
+  - user observed semantic objects are clustered near the center plane of each sub-terrain
+  - current `_STAGE_LAYOUTS` only spans roughly the central scanner window even though active sub-terrains are `8m x 8m`
+  - user explicitly chose full sub-terrain spread, deterministic per-tile randomness, and upright robust grounding
+- approved-design:
+  - replace fixed anchor coordinates with deterministic per-tile pseudo-random layout generation
+  - keep S1-S4 object counts and semantic classes unchanged
+  - sample local xy across most of each tile with margin, center safety, and minimum spacing
+  - ground objects with footprint multi-point terrain samples plus a small embedding depth
+  - no default guarantee that env0's initial `1.5m` scanner window sees all semantic objects
+- evidence:
+  - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](../log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
+- next:
+  - write implementation plan after spec review and user spec approval
 
 ### T205 full-grid interactive viewer startup / manual confirmation
 

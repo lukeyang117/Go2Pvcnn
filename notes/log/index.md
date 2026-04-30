@@ -6,6 +6,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-30 15:08 | semantic course random layout grounding design | semantic static course design | design recorded | full sub-terrain deterministic layout; center safety; footprint grounding with slight embed; targeted semantic-hit tests required | [T200/T207](../todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](2026-04-30-1508-semantic-course-random-layout-grounding-design.md) |
 | 2026-04-30 14:50 | T200 branch compact | notes workflow branch compact | pass | T200 branch compressed around open `T205`; completed viewer/shape-pool work moved into closed summaries | [T000](../todo/T000-notes-workflow.md) | [2026-04-30-1450-t200-branch-compact.md](2026-04-30-1450-t200-branch-compact.md) |
 | 2026-04-30 14:56 | notes compact-todo | notes workflow compact | pass | dashboard `92` lines; log index `72` lines; T200 design-chain rows archived | [T000](../todo/T000-notes-workflow.md) | [2026-04-30-1456-notes-compact-todo.md](2026-04-30-1456-notes-compact-todo.md) |
 | 2026-04-30 14:32 | semantic native shape-pool compact runtime acceptance | semantic static course implementation | pass with scoped caveat | local regression `34 passed, 11 skipped`; compact runtime acceptance requires both `capsule` and `cone`; full-grid interactive path still separate | [T200](../todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md) |
@@ -31,6 +32,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 ## Topic Log Index
 
 - T200 semantic static-course viewer:
+  - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
   - [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
   - [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
   - [2026-04-30-1343-semantic-native-shape-pool-design.md](2026-04-30-1343-semantic-native-shape-pool-design.md)
