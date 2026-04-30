@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -14,6 +15,16 @@ if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 from extension.semantic_course import (
+    DEFAULT_CENTER_SAFETY_HALF_EXTENT_M,
+    DEFAULT_GROUNDING_EMBED_DEPTH_M,
+    DEFAULT_GROUNDING_HEIGHT_QUANTILE,
+    DEFAULT_MAX_LAYOUT_ATTEMPTS,
+    DEFAULT_MIN_SPACING_CLEARANCE_M,
+    DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG,
+    DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG,
+    DEFAULT_SEMANTIC_COURSE_SEED,
+    DEFAULT_SEMANTIC_COURSE_TILE_SIZE,
+    DEFAULT_TILE_MARGIN_M,
     DEFAULT_VIEWER_REPRESENTATIVE_STAGE,
     LARGE_OBSTACLE_SIZE,
     SEMANTIC_COURSE_LARGE_ROOT,
@@ -28,6 +39,7 @@ from extension.semantic_course import (
     deterministic_shape_key,
     ground_course_anchors,
     representative_rows,
+    resolve_tile_size,
     select_shape_kind,
     shape_params_for_profile,
     semantic_scale_profile,
@@ -44,6 +56,68 @@ def _terrain_origins(num_rows: int = 10, num_cols: int = 2):
         for col in range(num_cols):
             origins[row].append((row * 8.0, col * 8.0, row * 0.1 + col * 0.01))
     return origins
+
+
+def _s4_anchors(anchors):
+    return [anchor for anchor in anchors if anchor.stage is SemanticCourseStage.S4]
+
+
+def _assert_inside_margin(anchor, tile_size=DEFAULT_SEMANTIC_COURSE_TILE_SIZE):
+    half_x = tile_size[0] / 2.0
+    half_y = tile_size[1] / 2.0
+    radius = anchor.target_diameter / 2.0
+    assert -half_x + DEFAULT_TILE_MARGIN_M + radius <= anchor.local_xy[0] <= half_x - DEFAULT_TILE_MARGIN_M - radius
+    assert -half_y + DEFAULT_TILE_MARGIN_M + radius <= anchor.local_xy[1] <= half_y - DEFAULT_TILE_MARGIN_M - radius
+
+
+def _assert_outside_center_safety(anchor):
+    x, y = anchor.local_xy
+    assert abs(x) > DEFAULT_CENTER_SAFETY_HALF_EXTENT_M or abs(y) > DEFAULT_CENTER_SAFETY_HALF_EXTENT_M
+
+
+def test_semantic_course_defaults_and_configs_are_importable_and_exact():
+    assert DEFAULT_SEMANTIC_COURSE_SEED == 20260430
+    assert DEFAULT_SEMANTIC_COURSE_TILE_SIZE == (8.0, 8.0)
+    assert DEFAULT_TILE_MARGIN_M == pytest.approx(0.50)
+    assert DEFAULT_CENTER_SAFETY_HALF_EXTENT_M == pytest.approx(0.85)
+    assert DEFAULT_MIN_SPACING_CLEARANCE_M == pytest.approx(0.15)
+    assert DEFAULT_MAX_LAYOUT_ATTEMPTS == 64
+    assert DEFAULT_GROUNDING_HEIGHT_QUANTILE == pytest.approx(1.0)
+    assert DEFAULT_GROUNDING_EMBED_DEPTH_M == pytest.approx(0.015)
+
+    assert DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG.tile_margin_m == pytest.approx(DEFAULT_TILE_MARGIN_M)
+    assert DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG.center_safety_half_extent_m == pytest.approx(
+        DEFAULT_CENTER_SAFETY_HALF_EXTENT_M
+    )
+    assert DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG.min_spacing_clearance_m == pytest.approx(
+        DEFAULT_MIN_SPACING_CLEARANCE_M
+    )
+    assert DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG.max_layout_attempts == DEFAULT_MAX_LAYOUT_ATTEMPTS
+    assert DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG.height_quantile == pytest.approx(
+        DEFAULT_GROUNDING_HEIGHT_QUANTILE
+    )
+    assert DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG.embed_depth_m == pytest.approx(DEFAULT_GROUNDING_EMBED_DEPTH_M)
+
+
+def test_resolve_tile_size_prefers_terrain_generator_size_before_origin_inference_and_fallback():
+    class TerrainGenerator:
+        size = (6.0, 7.0)
+
+    origins = _terrain_origins(num_rows=3, num_cols=3)
+    assert resolve_tile_size(origins, terrain_generator=TerrainGenerator()) == (6.0, 7.0)
+    assert resolve_tile_size([[(0.0, 0.0, 0.0)]], fallback_tile_size=(5.0, 4.0)) == (5.0, 4.0)
+
+
+def test_resolve_tile_size_infers_x_y_spacing_from_terrain_origins_without_generator():
+    origins = [
+        [(0.0, 0.0, 0.0), (0.0, 7.0, 0.0), (0.0, 14.0, 0.0)],
+        [(5.0, 0.0, 0.0), (5.0, 7.0, 0.0), (5.0, 14.0, 0.0)],
+        [(10.0, 0.0, 0.0), (10.0, 7.0, 0.0), (10.0, 14.0, 0.0)],
+    ]
+    assert resolve_tile_size(origins) == (5.0, 7.0)
+
+    one_axis = [[(0.0, 0.0, 0.0)], [(6.5, 0.0, 0.0)], [(13.0, 0.0, 0.0)]]
+    assert resolve_tile_size(one_axis, fallback_tile_size=(8.0, 9.0)) == (6.5, 9.0)
 
 
 def test_row_mapping_and_representative_rows_are_deterministic():
@@ -98,6 +172,103 @@ def test_build_course_anchors_uses_stable_roots_and_exact_counts():
     assert all(anchor.prim_path.startswith(SEMANTIC_COURSE_SMALL_ROOT) for anchor in s2_small + s3_small + s4_small)
     assert all(anchor.prim_path.startswith(SEMANTIC_COURSE_LARGE_ROOT) for anchor in s3_large + s4_large)
     assert all(anchor.shape_kind in SHARED_NATIVE_SHAPE_POOL for anchor in anchors)
+    assert all(hasattr(anchor, "layout_fallback_used") for anchor in anchors)
+
+
+def test_build_course_anchors_is_reproducible_with_same_seed():
+    terrain_origins = _terrain_origins(num_rows=10, num_cols=2)
+    anchors_a = build_course_anchors(terrain_origins, semantic_course_seed=12345)
+    anchors_b = build_course_anchors(terrain_origins, semantic_course_seed=12345)
+
+    assert anchors_a == anchors_b
+
+
+def test_different_row_col_layouts_differ():
+    anchors = build_course_anchors(_terrain_origins(num_rows=10, num_cols=2))
+
+    row8_col0 = [(a.semantic_class, a.slot_index, a.local_xy) for a in _s4_anchors(anchors) if a.row == 8 and a.col == 0]
+    row8_col1 = [(a.semantic_class, a.slot_index, a.local_xy) for a in _s4_anchors(anchors) if a.row == 8 and a.col == 1]
+    row9_col0 = [(a.semantic_class, a.slot_index, a.local_xy) for a in _s4_anchors(anchors) if a.row == 9 and a.col == 0]
+
+    assert row8_col0 != row8_col1
+    assert row8_col0 != row9_col0
+
+
+def test_default_local_points_stay_inside_tile_margins_and_avoid_center_safety_box():
+    anchors = build_course_anchors(_terrain_origins(num_rows=10, num_cols=2))
+
+    for anchor in anchors:
+        _assert_inside_margin(anchor)
+        _assert_outside_center_safety(anchor)
+
+
+def test_object_spacing_constraints_hold_for_default_non_fallback_anchors():
+    anchors = [
+        anchor
+        for anchor in build_course_anchors(_terrain_origins(num_rows=10, num_cols=1))
+        if anchor.row == 8 and anchor.col == 0
+    ]
+    assert anchors
+    assert not any(anchor.layout_fallback_used for anchor in anchors)
+
+    for index, anchor_a in enumerate(anchors):
+        for anchor_b in anchors[index + 1 :]:
+            dx = anchor_a.local_xy[0] - anchor_b.local_xy[0]
+            dy = anchor_a.local_xy[1] - anchor_b.local_xy[1]
+            distance = math.hypot(dx, dy)
+            expected = (
+                anchor_a.target_diameter / 2.0
+                + anchor_b.target_diameter / 2.0
+                + DEFAULT_MIN_SPACING_CLEARANCE_M
+            )
+            assert distance + 1.0e-9 >= expected
+
+
+def test_canonical_s4_default_layout_does_not_use_fallback():
+    anchors = [
+        anchor
+        for anchor in build_course_anchors(_terrain_origins(num_rows=10, num_cols=1), tile_size=(8.0, 8.0))
+        if anchor.row == 8 and anchor.col == 0
+    ]
+
+    assert len(anchors) == 7
+    assert not any(anchor.layout_fallback_used for anchor in anchors)
+
+
+def test_tight_tile_can_use_fallback_and_still_satisfies_margin_and_center_safety():
+    tile_size = (3.4, 3.4)
+    tight_layout_cfg = type(DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG)(
+        tile_margin_m=DEFAULT_TILE_MARGIN_M,
+        center_safety_half_extent_m=DEFAULT_CENTER_SAFETY_HALF_EXTENT_M,
+        min_spacing_clearance_m=DEFAULT_MIN_SPACING_CLEARANCE_M,
+        max_layout_attempts=1,
+    )
+    anchors = [
+        anchor
+        for anchor in build_course_anchors(
+            _terrain_origins(num_rows=10, num_cols=1),
+            tile_size=tile_size,
+            layout_cfg=tight_layout_cfg,
+        )
+        if anchor.row == 8 and anchor.col == 0
+    ]
+
+    assert len(anchors) == 7
+    assert any(anchor.layout_fallback_used for anchor in anchors)
+    for anchor in anchors:
+        _assert_inside_margin(anchor, tile_size=tile_size)
+        _assert_outside_center_safety(anchor)
+
+
+def test_default_s4_anchors_spread_outside_old_center_scanner_footprint():
+    anchors = [
+        anchor
+        for anchor in build_course_anchors(_terrain_origins(num_rows=10, num_cols=1))
+        if anchor.row == 8 and anchor.col == 0
+    ]
+
+    assert anchors
+    assert any(abs(anchor.local_xy[0]) > 0.75 or abs(anchor.local_xy[1]) > 0.75 for anchor in anchors)
 
 
 def test_deterministic_shape_selector_is_stable_and_shared_across_classes():

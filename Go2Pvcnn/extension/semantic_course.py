@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import math
-from typing import Any, Literal
+import statistics
+from typing import Any, NamedTuple, Literal
 
 
 SEMANTIC_COURSE_ROOT = "/World/semantic_course"
@@ -28,6 +30,15 @@ LARGE_OBSTACLE_HEIGHT = 0.55
 SMALL_OBSTACLE_SIZE = (SMALL_OBSTACLE_DIAMETER, SMALL_OBSTACLE_DIAMETER, SMALL_OBSTACLE_HEIGHT)
 LARGE_OBSTACLE_SIZE = (LARGE_OBSTACLE_DIAMETER, LARGE_OBSTACLE_DIAMETER, LARGE_OBSTACLE_HEIGHT)
 
+DEFAULT_SEMANTIC_COURSE_SEED = 20260430
+DEFAULT_SEMANTIC_COURSE_TILE_SIZE = (8.0, 8.0)
+DEFAULT_TILE_MARGIN_M = 0.50
+DEFAULT_CENTER_SAFETY_HALF_EXTENT_M = 0.85
+DEFAULT_MIN_SPACING_CLEARANCE_M = 0.15
+DEFAULT_MAX_LAYOUT_ATTEMPTS = 64
+DEFAULT_GROUNDING_HEIGHT_QUANTILE = 1.0
+DEFAULT_GROUNDING_EMBED_DEPTH_M = 0.015
+
 
 class SemanticCourseStage(str, Enum):
     S1 = "S1"
@@ -37,6 +48,24 @@ class SemanticCourseStage(str, Enum):
 
 
 DEFAULT_VIEWER_REPRESENTATIVE_STAGE = SemanticCourseStage.S4
+
+
+@dataclass(frozen=True)
+class SemanticCourseLayoutCfg:
+    tile_margin_m: float = DEFAULT_TILE_MARGIN_M
+    center_safety_half_extent_m: float = DEFAULT_CENTER_SAFETY_HALF_EXTENT_M
+    min_spacing_clearance_m: float = DEFAULT_MIN_SPACING_CLEARANCE_M
+    max_layout_attempts: int = DEFAULT_MAX_LAYOUT_ATTEMPTS
+
+
+@dataclass(frozen=True)
+class SemanticCourseGroundingCfg:
+    height_quantile: float = DEFAULT_GROUNDING_HEIGHT_QUANTILE
+    embed_depth_m: float = DEFAULT_GROUNDING_EMBED_DEPTH_M
+
+
+DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG = SemanticCourseLayoutCfg()
+DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG = SemanticCourseGroundingCfg()
 
 
 @dataclass(frozen=True)
@@ -54,6 +83,7 @@ class CourseAnchor:
     local_xy: tuple[float, float]
     world_xy: tuple[float, float]
     prim_path: str
+    layout_fallback_used: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,21 +103,19 @@ class GroundedCourseObstacle:
     prim_path: str
 
 
-_STAGE_LAYOUTS: dict[SemanticCourseStage, dict[str, tuple[tuple[float, float], ...]]] = {
-    SemanticCourseStage.S1: {"small": (), "large": ()},
-    SemanticCourseStage.S2: {
-        "small": ((0.35, 0.35), (0.35, -0.35), (0.65, 0.20), (0.65, -0.20)),
-        "large": (),
-    },
-    SemanticCourseStage.S3: {
-        "small": ((0.25, 0.45), (0.25, -0.45), (0.70, 0.45), (0.70, -0.45)),
-        "large": ((0.55, 0.00),),
-    },
-    SemanticCourseStage.S4: {
-        "small": ((0.20, 0.50), (0.20, -0.50), (0.45, 0.28), (0.45, -0.28), (0.70, 0.50), (0.70, -0.50)),
-        "large": ((0.55, 0.00),),
-    },
+_STAGE_LAYOUTS: dict[SemanticCourseStage, dict[str, int]] = {
+    SemanticCourseStage.S1: {"small": 0, "large": 0},
+    SemanticCourseStage.S2: {"small": 4, "large": 0},
+    SemanticCourseStage.S3: {"small": 4, "large": 1},
+    SemanticCourseStage.S4: {"small": 6, "large": 1},
 }
+
+
+class _LayoutSlot(NamedTuple):
+    semantic_class: str
+    slot_index: int
+    local_xy: tuple[float, float]
+    layout_fallback_used: bool
 
 
 def stage_row_bands(num_rows: int) -> dict[SemanticCourseStage, tuple[int, int]]:
@@ -127,13 +155,13 @@ def representative_rows(num_rows: int) -> dict[SemanticCourseStage, int]:
     return rows
 
 
-def stage_layout(stage: SemanticCourseStage) -> dict[str, tuple[tuple[float, float], ...]]:
+def stage_layout(stage: SemanticCourseStage) -> dict[str, int]:
     return _STAGE_LAYOUTS[stage]
 
 
 def course_anchor_counts(stage: SemanticCourseStage) -> dict[str, int]:
     layout = stage_layout(stage)
-    return {semantic_class: len(layout[semantic_class]) for semantic_class in ("small", "large")}
+    return {semantic_class: int(layout[semantic_class]) for semantic_class in ("small", "large")}
 
 
 def semantic_scale_profile(semantic_class: str) -> tuple[float, float]:
@@ -224,52 +252,264 @@ def bottom_to_center_offset(
     raise ValueError(f"Unsupported shape kind {shape_kind!r}.")
 
 
-def build_course_anchors(terrain_origins: Any) -> list[CourseAnchor]:
+def _positive_pair(values: Any) -> tuple[float, float] | None:
+    try:
+        x = float(values[0])
+        y = float(values[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if math.isfinite(x) and math.isfinite(y) and x > 0.0 and y > 0.0:
+        return x, y
+    return None
+
+
+def _validated_tile_size(values: Any) -> tuple[float, float]:
+    tile_size = _positive_pair(values)
+    if tile_size is None:
+        raise ValueError(f"tile_size must contain two positive finite values, got {values!r}.")
+    return tile_size
+
+
+def _origin_component(origin: Any, index: int) -> float:
+    value = origin[index]
+    return float(value.item()) if hasattr(value, "item") else float(value)
+
+
+def _infer_axis_spacing(terrain_origins: Any, *, axis: int) -> float | None:
+    num_rows = len(terrain_origins)
+    num_cols = len(terrain_origins[0]) if num_rows > 0 else 0
+    diffs: list[float] = []
+    if axis == 0:
+        for col in range(num_cols):
+            for row in range(num_rows - 1):
+                try:
+                    diff = abs(
+                        _origin_component(terrain_origins[row + 1][col], 0)
+                        - _origin_component(terrain_origins[row][col], 0)
+                    )
+                except (TypeError, ValueError, IndexError, KeyError):
+                    continue
+                if math.isfinite(diff) and diff > 0.0:
+                    diffs.append(diff)
+    elif axis == 1:
+        for row in range(num_rows):
+            for col in range(num_cols - 1):
+                try:
+                    diff = abs(
+                        _origin_component(terrain_origins[row][col + 1], 1)
+                        - _origin_component(terrain_origins[row][col], 1)
+                    )
+                except (TypeError, ValueError, IndexError, KeyError):
+                    continue
+                if math.isfinite(diff) and diff > 0.0:
+                    diffs.append(diff)
+    else:
+        raise ValueError(f"Unsupported axis {axis}.")
+    return float(statistics.median(diffs)) if diffs else None
+
+
+def resolve_tile_size(
+    terrain_origins,
+    *,
+    terrain_generator=None,
+    fallback_tile_size: tuple[float, float] = DEFAULT_SEMANTIC_COURSE_TILE_SIZE,
+) -> tuple[float, float]:
+    """Resolve sub-terrain tile size from generator config, origins, then fallback."""
+    fallback = _validated_tile_size(fallback_tile_size)
+    if terrain_generator is not None and hasattr(terrain_generator, "size"):
+        generator_size = _positive_pair(getattr(terrain_generator, "size"))
+        if generator_size is not None:
+            return generator_size
+    inferred_x = _infer_axis_spacing(terrain_origins, axis=0)
+    inferred_y = _infer_axis_spacing(terrain_origins, axis=1)
+    return (
+        inferred_x if inferred_x is not None else fallback[0],
+        inferred_y if inferred_y is not None else fallback[1],
+    )
+
+
+def _stable_unit_interval(*parts: object) -> float:
+    digest = hashlib.blake2b("|".join(str(part) for part in parts).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False) / float(1 << 64)
+
+
+def _candidate_local_xy(
+    *,
+    seed: int,
+    stage: SemanticCourseStage,
+    row: int,
+    col: int,
+    slot_index: int,
+    semantic_class: str,
+    attempt_index: int,
+    tile_size: tuple[float, float],
+    layout_cfg: SemanticCourseLayoutCfg,
+    radius: float,
+) -> tuple[float, float]:
+    min_x = -tile_size[0] / 2.0 + layout_cfg.tile_margin_m + radius
+    max_x = tile_size[0] / 2.0 - layout_cfg.tile_margin_m - radius
+    min_y = -tile_size[1] / 2.0 + layout_cfg.tile_margin_m + radius
+    max_y = tile_size[1] / 2.0 - layout_cfg.tile_margin_m - radius
+    if min_x > max_x or min_y > max_y:
+        raise ValueError(
+            f"Tile size {tile_size!r} is too small for margin {layout_cfg.tile_margin_m} and radius {radius}."
+        )
+    x_unit = _stable_unit_interval(seed, stage.value, row, col, slot_index, semantic_class, attempt_index, "x")
+    y_unit = _stable_unit_interval(seed, stage.value, row, col, slot_index, semantic_class, attempt_index, "y")
+    return (min_x + (max_x - min_x) * x_unit, min_y + (max_y - min_y) * y_unit)
+
+
+def _outside_center_safety(local_xy: tuple[float, float], layout_cfg: SemanticCourseLayoutCfg) -> bool:
+    return (
+        abs(local_xy[0]) > layout_cfg.center_safety_half_extent_m
+        or abs(local_xy[1]) > layout_cfg.center_safety_half_extent_m
+    )
+
+
+def _has_spacing(
+    candidate: tuple[float, float],
+    *,
+    radius: float,
+    placed: list[tuple[tuple[float, float], float]],
+    layout_cfg: SemanticCourseLayoutCfg,
+) -> bool:
+    for local_xy, placed_radius in placed:
+        required = radius + placed_radius + layout_cfg.min_spacing_clearance_m
+        if math.hypot(candidate[0] - local_xy[0], candidate[1] - local_xy[1]) < required:
+            return False
+    return True
+
+
+def _fallback_candidates(
+    *,
+    tile_size: tuple[float, float],
+    layout_cfg: SemanticCourseLayoutCfg,
+    radius: float,
+) -> list[tuple[float, float]]:
+    min_x = -tile_size[0] / 2.0 + layout_cfg.tile_margin_m + radius
+    max_x = tile_size[0] / 2.0 - layout_cfg.tile_margin_m - radius
+    min_y = -tile_size[1] / 2.0 + layout_cfg.tile_margin_m + radius
+    max_y = tile_size[1] / 2.0 - layout_cfg.tile_margin_m - radius
+    xs = (min_x, max_x, 0.5 * (min_x + max_x))
+    ys = (min_y, max_y, 0.5 * (min_y + max_y))
+    candidates = [(x, y) for x in xs for y in ys if _outside_center_safety((x, y), layout_cfg)]
+    if not candidates:
+        raise ValueError(f"Tile size {tile_size!r} leaves no fallback point outside the center safety box.")
+    return candidates
+
+
+def _stage_slots(
+    *,
+    stage: SemanticCourseStage,
+    row: int,
+    col: int,
+    tile_size: tuple[float, float],
+    semantic_course_seed: int,
+    layout_cfg: SemanticCourseLayoutCfg,
+) -> list[_LayoutSlot]:
+    stage_counts = stage_layout(stage)
+    ordered_classes = ("large", "small")
+    placed: list[tuple[tuple[float, float], float]] = []
+    slots: list[_LayoutSlot] = []
+    for semantic_class in ordered_classes:
+        target_diameter, _target_height = semantic_scale_profile(semantic_class)
+        radius = target_diameter / 2.0
+        for slot_index in range(stage_counts[semantic_class]):
+            selected_xy: tuple[float, float] | None = None
+            for attempt_index in range(layout_cfg.max_layout_attempts):
+                candidate = _candidate_local_xy(
+                    seed=semantic_course_seed,
+                    stage=stage,
+                    row=row,
+                    col=col,
+                    slot_index=slot_index,
+                    semantic_class=semantic_class,
+                    attempt_index=attempt_index,
+                    tile_size=tile_size,
+                    layout_cfg=layout_cfg,
+                    radius=radius,
+                )
+                if _outside_center_safety(candidate, layout_cfg) and _has_spacing(
+                    candidate,
+                    radius=radius,
+                    placed=placed,
+                    layout_cfg=layout_cfg,
+                ):
+                    selected_xy = candidate
+                    break
+            fallback_used = selected_xy is None
+            if fallback_used:
+                candidates = _fallback_candidates(tile_size=tile_size, layout_cfg=layout_cfg, radius=radius)
+                selected_xy = candidates[(len(placed) + slot_index) % len(candidates)]
+            placed.append((selected_xy, radius))
+            slots.append(_LayoutSlot(semantic_class, slot_index, selected_xy, fallback_used))
+    return sorted(slots, key=lambda slot: (0 if slot.semantic_class == "small" else 1, slot.slot_index))
+
+
+def build_course_anchors(
+    terrain_origins: Any,
+    *,
+    terrain_generator=None,
+    tile_size: tuple[float, float] | None = None,
+    semantic_course_seed: int = DEFAULT_SEMANTIC_COURSE_SEED,
+    layout_cfg: SemanticCourseLayoutCfg = DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG,
+) -> list[CourseAnchor]:
     """Build deterministic per-tile obstacle anchors before terrain grounding."""
     num_rows = len(terrain_origins)
     num_cols = len(terrain_origins[0]) if num_rows > 0 else 0
+    resolved_tile_size = _validated_tile_size(tile_size) if tile_size is not None else resolve_tile_size(
+        terrain_origins,
+        terrain_generator=terrain_generator,
+    )
     anchors: list[CourseAnchor] = []
     for row in range(num_rows):
         stage = stage_for_row(row, num_rows)
-        layout = stage_layout(stage)
         for col in range(num_cols):
             origin = terrain_origins[row][col]
-            origin_x = float(origin[0])
-            origin_y = float(origin[1])
-            for semantic_class in ("small", "large"):
+            origin_x = _origin_component(origin, 0)
+            origin_y = _origin_component(origin, 1)
+            for slot in _stage_slots(
+                stage=stage,
+                row=row,
+                col=col,
+                tile_size=resolved_tile_size,
+                semantic_course_seed=semantic_course_seed,
+                layout_cfg=layout_cfg,
+            ):
+                semantic_class = slot.semantic_class
                 target_diameter, target_height = semantic_scale_profile(semantic_class)
                 root = SEMANTIC_COURSE_SMALL_ROOT if semantic_class == "small" else SEMANTIC_COURSE_LARGE_ROOT
-                for slot_index, local_xy in enumerate(layout[semantic_class]):
-                    local_x, local_y = local_xy
-                    shape_kind = select_shape_kind(
-                        stage=stage,
+                local_x, local_y = slot.local_xy
+                shape_kind = select_shape_kind(
+                    stage=stage,
+                    row=row,
+                    col=col,
+                    slot_index=slot.slot_index,
+                    semantic_class=semantic_class,
+                )
+                shape_params = shape_params_for_profile(
+                    shape_kind,
+                    target_diameter=target_diameter,
+                    target_height=target_height,
+                )
+                anchors.append(
+                    CourseAnchor(
                         row=row,
                         col=col,
-                        slot_index=slot_index,
+                        stage=stage,
                         semantic_class=semantic_class,
-                    )
-                    shape_params = shape_params_for_profile(
-                        shape_kind,
+                        slot_index=slot.slot_index,
+                        shape_kind=shape_kind,
+                        shape_params=shape_params,
                         target_diameter=target_diameter,
                         target_height=target_height,
+                        ground_offset=bottom_to_center_offset(shape_kind, shape_params),
+                        local_xy=slot.local_xy,
+                        world_xy=(origin_x + local_x, origin_y + local_y),
+                        prim_path=f"{root}/row_{row:02d}/col_{col:02d}/slot_{slot.slot_index:02d}",
+                        layout_fallback_used=slot.layout_fallback_used,
                     )
-                    anchors.append(
-                        CourseAnchor(
-                            row=row,
-                            col=col,
-                            stage=stage,
-                            semantic_class=semantic_class,
-                            slot_index=slot_index,
-                            shape_kind=shape_kind,
-                            shape_params=shape_params,
-                            target_diameter=target_diameter,
-                            target_height=target_height,
-                            ground_offset=bottom_to_center_offset(shape_kind, shape_params),
-                            local_xy=local_xy,
-                            world_xy=(origin_x + local_x, origin_y + local_y),
-                            prim_path=f"{root}/row_{row:02d}/col_{col:02d}/slot_{slot_index:02d}",
-                        )
-                    )
+                )
     return anchors
 
 
@@ -326,8 +566,13 @@ def spawn_semantic_course_prestartup(
     _env_ids,
     *,
     default_stage: str = DEFAULT_VIEWER_REPRESENTATIVE_STAGE.value,
+    semantic_course_seed: int = DEFAULT_SEMANTIC_COURSE_SEED,
+    tile_size: tuple[float, float] | None = None,
+    layout_cfg: SemanticCourseLayoutCfg = DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG,
+    grounding_cfg: SemanticCourseGroundingCfg = DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG,
 ) -> None:
     """Prestartup event: create semantic-course geometry before sensor initialization."""
+    del grounding_cfg  # W2 will consume this when footprint grounding is implemented.
     scene = env.scene
     terrain = scene.terrain
     if terrain is None or terrain.terrain_origins is None:
@@ -336,7 +581,15 @@ def spawn_semantic_course_prestartup(
     ensure_semantic_course_roots()
     clear_semantic_course_children()
 
-    anchors = build_course_anchors(terrain.terrain_origins)
+    terrain_cfg = getattr(terrain, "cfg", None)
+    terrain_generator = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
+    anchors = build_course_anchors(
+        terrain.terrain_origins,
+        terrain_generator=terrain_generator,
+        tile_size=tile_size,
+        semantic_course_seed=semantic_course_seed,
+        layout_cfg=layout_cfg,
+    )
     obstacles = _ground_with_runtime_terrain_sampler(anchors, device=getattr(env, "device", "cpu"))
     for obstacle in obstacles:
         _spawn_grounded_shape(obstacle)
