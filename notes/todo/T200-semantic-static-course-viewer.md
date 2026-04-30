@@ -16,12 +16,11 @@
   - `cone`
 - `small` and `large` share the shape pool; slot shape choice is deterministic per `(stage, row, col, slot, semantic_class)`.
 - Compact runtime acceptance now explicitly requires both `capsule` and `cone`.
-- New design follow-up `T207` is active: replace center-clustered semantic anchors with full sub-terrain deterministic random layouts and footprint-based terrain grounding.
+- Follow-up `T207` is complete: full sub-terrain deterministic random layouts, footprint-based terrain grounding, and targeted runtime small/large scans are landed.
 - Remaining existing follow-up `T205`: full-grid interactive startup cost and one manual viewer confirmation.
 
 ## Open Children
 
-- T207: deterministic full-sub-terrain semantic layout and robust footprint grounding
 - T205: full-grid interactive viewer startup cost / manual semantic viewer confirmation
 
 ## Closed Children Archive
@@ -31,6 +30,7 @@
 - T203: semantic viewer env config landed; local tests pass
 - T204: viewer semantic scanner path / diagnostics / marker partitioning landed; local tests pass
 - T206: native semantic shape-pool landed for `semantic_course` + `semantic_raycaster`; local regression is green and compact runtime acceptance now requires `capsule` and `cone`
+- T207: deterministic full-sub-terrain semantic layout and robust footprint grounding landed; targeted runtime small/large scan support landed
 
 ## Related Logs
 
@@ -46,12 +46,14 @@
 - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](../log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
 - [2026-04-30-1514-semantic-course-random-layout-spec-review.md](../log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
 - [2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md](../log/2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md)
+- [2026-04-30-1548-semantic-course-layout-grounding-implementation.md](../log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md)
+- [2026-04-30-1619-semantic-course-random-layout-final-verification.md](../log/2026-04-30-1619-semantic-course-random-layout-final-verification.md)
 
 ## Git Refs
 
-- Last Feature Commit: `7bb89ed`
-- Last Verified Commit: `7bb89ed`
-- Current Work Ref: `working tree on top of 7bb89ed (2026-04-30 14:32 +0800); waiting on full-grid/manual viewer confirmation`
+- Last Feature Commit: `130c635`
+- Last Verified Commit: `130c635`
+- Current Work Ref: `working tree on top of 130c635 (2026-04-30 16:19 +0800); T207 complete; unrelated raw/NvStreamer dirty entries present`
 - Key Files:
   - [../../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md](../../docs/superpowers/specs/2026-04-29-semantic-static-course-viewer-design.md)
   - [../../docs/superpowers/specs/2026-04-30-semantic-native-shape-pool-design.md](../../docs/superpowers/specs/2026-04-30-semantic-native-shape-pool-design.md)
@@ -64,7 +66,6 @@
 
 ## Next Step
 
-- For `T207`, create the implementation plan for deterministic full-tile layout sampling, footprint terrain grounding, and targeted semantic-hit runtime tests.
 - Decide whether the full interactive viewer should keep the training-aligned full terrain grid or borrow the compact smoke strategy for startup practicality.
 - Run one manual semantic viewer confirmation pass when interactive validation is needed.
 
@@ -72,6 +73,7 @@
 
 ### T207 deterministic full-sub-terrain semantic layout / footprint grounding
 
+- status: done
 - why-created:
   - user observed semantic objects are clustered near the center plane of each sub-terrain
   - current `_STAGE_LAYOUTS` only spans roughly the central scanner window even though active sub-terrains are `8m x 8m`
@@ -88,8 +90,10 @@
   - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](../log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
   - [2026-04-30-1514-semantic-course-random-layout-spec-review.md](../log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
   - [2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md](../log/2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md)
+  - [2026-04-30-1548-semantic-course-layout-grounding-implementation.md](../log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md)
+  - [2026-04-30-1619-semantic-course-random-layout-final-verification.md](../log/2026-04-30-1619-semantic-course-random-layout-final-verification.md)
 - next:
-  - execute the embedded implementation plan below
+  - no T207 action; continue T205 full-grid/manual viewer confirmation when visual validation is needed
 
 #### T207 embedded implementation plan
 

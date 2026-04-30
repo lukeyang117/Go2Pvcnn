@@ -4,9 +4,11 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 ## Start Here
 
-- Current focus: T200 semantic static-course viewer is functionally landed; `T207` has an embedded implementation plan for deterministic full-sub-terrain layouts and footprint grounding; `T205` remains for full-grid/manual viewer confirmation.
+- Current focus: T200 semantic static-course viewer is functionally landed; `T207` deterministic random layout, footprint grounding, and targeted runtime scans are complete; `T205` remains for full-grid/manual viewer confirmation.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic course random layout final verification log](log/2026-04-30-1619-semantic-course-random-layout-final-verification.md)
+  - [semantic course layout/grounding implementation log](log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md)
   - [semantic course random layout embedded plan log](log/2026-04-30-1522-semantic-course-random-layout-embedded-plan.md)
   - [semantic course random layout spec review approval log](log/2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md)
   - [semantic course random layout spec review log](log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
@@ -22,7 +24,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
   - Do not migrate raw viewer/adapter CPU compatibility code into the training path.
   - Do not preserve legacy dynamic sub-batch replanning in the new `together` backend.
   - Keep viewer CPU logging/camera/visualization exceptions separate from the training-path guardrail.
-- Current git base: `d13a21a`
+- Current git base: `130c635`
 
 ## Status Legend
 
@@ -37,7 +39,6 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
-| T207 | User approved full sub-terrain semantic object spread, deterministic per-tile randomness, and upright footprint grounding; spec review passed and embedded implementation plan is recorded. | Execute T207 with master-agent orchestration and bounded sub-agent tasks. |
 | T205 | Compact semantic runtime and shape-pool acceptance are green, but full-grid interactive startup/manual confirmation are still open. | Decide whether to keep compact runtime smoke as the acceptance path and do one manual viewer confirmation when needed. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
 | T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
@@ -50,13 +51,12 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | --- | --- | --- | --- | --- | --- |
 | T000 | done | notes workflow | [T000](todo/T000-notes-workflow.md) | memory system bootstrapped and linked into existing notes | feature `7cf6c11`; verified `7cf6c11` |
 | T100 | verify | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | implementation landed and smoke-verified in `env_isaaclab`: together backend, manager/factory/reward wiring, viewer together core path, flat raw parity, static guardrail, 1-iteration train 32/128 envs | feature `pending`; verified `59 passed`, `36 passed`, CUDA smoke, cadence/full-N real env, train/play/viewer smoke |
-| T200 | verify | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | semantic viewer path landed, native shape pool landed, compact runtime acceptance green; `T207` random full-tile layout/grounding design is under review; full-grid manual confirmation still open | feature `7bb89ed`; verified `deea8ec`, `d13a21a` |
+| T200 | verify | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | semantic viewer path, native shape pool, deterministic random full-tile layout, footprint grounding, and targeted runtime scans are landed; full-grid manual confirmation still open under `T205` | feature `130c635`; verified `130c635` with runtime-output caveat |
 
 ## Open Leaves
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
-| T207 | T200 | doing | P1 | Current fixed anchors cluster semantic objects near tile centers; embedded plan defines layout, grounding, targeted runtime, and verification ownership. | [T200 branch](todo/T200-semantic-static-course-viewer.md#t207-embedded-implementation-plan) |
 | T205 | T200 | verify | P1 | Compact semantic correctness and shape-pool coverage are proven, but full-grid interactive startup cost and manual viewer confirmation remain open. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
 | T110 | T100 | verify | P0 | Core fix and headless zero-command smoke passed; interactive visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) |
 | T109 | T100 | verify | P0 | Regression fixed and headless viewer reached real playback; visual manual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) |
@@ -74,6 +74,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-30 16:19 | semantic course random layout final verification | pass with scoped caveat | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1619-semantic-course-random-layout-final-verification.md](log/2026-04-30-1619-semantic-course-random-layout-final-verification.md) |
+| 2026-04-30 15:48 | semantic course layout/grounding implementation | partial pass | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1548-semantic-course-layout-grounding-implementation.md](log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md) |
 | 2026-04-30 15:22 | semantic course random layout embedded plan | plan recorded | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-embedded-implementation-plan) | [2026-04-30-1522-semantic-course-random-layout-embedded-plan.md](log/2026-04-30-1522-semantic-course-random-layout-embedded-plan.md) |
 | 2026-04-30 15:18 | semantic course random layout spec review approval | approved | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md](log/2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md) |
 | 2026-04-30 15:14 | semantic course random layout spec review | issues incorporated | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1514-semantic-course-random-layout-spec-review.md](log/2026-04-30-1514-semantic-course-random-layout-spec-review.md) |
