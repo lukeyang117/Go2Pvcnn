@@ -44,6 +44,7 @@
 - [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](../log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
 - [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](../log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
 - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](../log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
+- [2026-04-30-1514-semantic-course-random-layout-spec-review.md](../log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
 
 ## Git Refs
 
@@ -80,8 +81,10 @@
   - sample local xy across most of each tile with margin, center safety, and minimum spacing
   - ground objects with footprint multi-point terrain samples plus a small embedding depth
   - no default guarantee that env0's initial `1.5m` scanner window sees all semantic objects
+  - spec review fixed seed/API defaults, tile-size resolution, targeted scan acceptance, exact grounding defaults, and fallback diagnostics
 - evidence:
   - [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](../log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
+  - [2026-04-30-1514-semantic-course-random-layout-spec-review.md](../log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
 - next:
   - write implementation plan after spec review and user spec approval
 

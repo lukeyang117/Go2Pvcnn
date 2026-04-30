@@ -7,6 +7,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - Current focus: T200 semantic static-course viewer is functionally landed; new `T207` design asks to spread semantic objects across each sub-terrain with deterministic random layouts and footprint-based grounding; `T205` remains for full-grid/manual viewer confirmation.
 - Read next:
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
+  - [semantic course random layout spec review log](log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
   - [semantic course random layout grounding design log](log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
   - [semantic native shape-pool compact runtime acceptance](log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
   - [semantic native shape-pool spec review log](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
@@ -34,7 +35,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
-| T207 | User approved full sub-terrain semantic object spread, deterministic per-tile randomness, and upright footprint grounding. | Review/approve the written spec, then create the implementation plan for `semantic_course.py` layout and grounding changes. |
+| T207 | User approved full sub-terrain semantic object spread, deterministic per-tile randomness, and upright footprint grounding; first spec-review issues were incorporated. | Review/approve the written spec, then create the implementation plan for `semantic_course.py` layout and grounding changes. |
 | T205 | Compact semantic runtime and shape-pool acceptance are green, but full-grid interactive startup/manual confirmation are still open. | Decide whether to keep compact runtime smoke as the acceptance path and do one manual viewer confirmation when needed. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
 | T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
@@ -71,6 +72,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-04-30 15:14 | semantic course random layout spec review | issues incorporated | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1514-semantic-course-random-layout-spec-review.md](log/2026-04-30-1514-semantic-course-random-layout-spec-review.md) |
 | 2026-04-30 15:08 | semantic course random layout grounding design | design recorded | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md) |
 | 2026-04-30 14:50 | T200 branch compact | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-30-1450-t200-branch-compact.md](log/2026-04-30-1450-t200-branch-compact.md) |
 | 2026-04-30 14:56 | notes compact-todo | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-30-1456-notes-compact-todo.md](log/2026-04-30-1456-notes-compact-todo.md) |
