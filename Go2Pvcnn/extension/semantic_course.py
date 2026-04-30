@@ -252,6 +252,40 @@ def bottom_to_center_offset(
     raise ValueError(f"Unsupported shape kind {shape_kind!r}.")
 
 
+def footprint_sample_offsets(
+    shape_kind: ShapeKind,
+    shape_params: dict[str, float | str | tuple[float, float, float]],
+) -> tuple[tuple[float, float], ...]:
+    """Return center plus eight support offsets for shape-aware terrain grounding."""
+    if shape_kind == "cuboid":
+        size = shape_params["size"]
+        half_x = 0.5 * float(size[0])  # type: ignore[index]
+        half_y = 0.5 * float(size[1])  # type: ignore[index]
+        diagonal_x = half_x
+        diagonal_y = half_y
+    elif shape_kind in ("sphere", "cylinder", "capsule", "cone"):
+        radius = float(shape_params["radius"])
+        half_x = radius
+        half_y = radius
+        diagonal_x = radius / math.sqrt(2.0)
+        diagonal_y = radius / math.sqrt(2.0)
+    else:
+        raise ValueError(f"Unsupported shape kind {shape_kind!r}.")
+    if half_x <= 0.0 or half_y <= 0.0:
+        raise ValueError(f"Footprint dimensions must be positive for {shape_kind!r}, got {shape_params!r}.")
+    return (
+        (0.0, 0.0),
+        (half_x, 0.0),
+        (-half_x, 0.0),
+        (0.0, half_y),
+        (0.0, -half_y),
+        (diagonal_x, diagonal_y),
+        (diagonal_x, -diagonal_y),
+        (-diagonal_x, diagonal_y),
+        (-diagonal_x, -diagonal_y),
+    )
+
+
 def _positive_pair(values: Any) -> tuple[float, float] | None:
     try:
         x = float(values[0])
@@ -517,13 +551,21 @@ def ground_course_anchors(
     anchors: list[CourseAnchor],
     *,
     terrain_height_at_xy,
+    grounding_cfg: SemanticCourseGroundingCfg = DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG,
 ) -> list[GroundedCourseObstacle]:
-    """Place cuboid centers on terrain height plus half obstacle height."""
+    """Place obstacle centers from robust footprint terrain height plus shape offset."""
     obstacles: list[GroundedCourseObstacle] = []
     for anchor in anchors:
         world_x, world_y = anchor.world_xy
-        terrain_z = float(terrain_height_at_xy(world_x, world_y))
-        center_z = terrain_z + anchor.ground_offset
+        sample_points = _footprint_world_xy(anchor)
+        terrain_heights = [float(terrain_height_at_xy(x, y)) for x, y in sample_points]
+        robust_ground_z = _robust_ground_height(
+            terrain_heights,
+            grounding_cfg=grounding_cfg,
+            context=f"{anchor.prim_path} footprint",
+            error_type=ValueError,
+        )
+        center_z = robust_ground_z - grounding_cfg.embed_depth_m + anchor.ground_offset
         obstacles.append(
             GroundedCourseObstacle(
                 row=anchor.row,
@@ -572,7 +614,6 @@ def spawn_semantic_course_prestartup(
     grounding_cfg: SemanticCourseGroundingCfg = DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG,
 ) -> None:
     """Prestartup event: create semantic-course geometry before sensor initialization."""
-    del grounding_cfg  # W2 will consume this when footprint grounding is implemented.
     scene = env.scene
     terrain = scene.terrain
     if terrain is None or terrain.terrain_origins is None:
@@ -590,7 +631,11 @@ def spawn_semantic_course_prestartup(
         semantic_course_seed=semantic_course_seed,
         layout_cfg=layout_cfg,
     )
-    obstacles = _ground_with_runtime_terrain_sampler(anchors, device=getattr(env, "device", "cpu"))
+    obstacles = _ground_with_runtime_terrain_sampler(
+        anchors,
+        device=getattr(env, "device", "cpu"),
+        grounding_cfg=grounding_cfg,
+    )
     for obstacle in obstacles:
         _spawn_grounded_shape(obstacle)
 
@@ -675,29 +720,92 @@ def _spawn_grounded_shape(obstacle: GroundedCourseObstacle) -> None:
     shape_cfg.func(obstacle.prim_path, shape_cfg, translation=obstacle.world_center)
 
 
-def _ground_with_runtime_terrain_sampler(anchors: list[CourseAnchor], *, device: str) -> list[GroundedCourseObstacle]:
+def _footprint_world_xy(anchor: CourseAnchor) -> tuple[tuple[float, float], ...]:
+    world_x, world_y = anchor.world_xy
+    return tuple(
+        (world_x + offset_x, world_y + offset_y)
+        for offset_x, offset_y in footprint_sample_offsets(anchor.shape_kind, anchor.shape_params)
+    )
+
+
+def _robust_ground_height(
+    heights: list[float],
+    *,
+    grounding_cfg: SemanticCourseGroundingCfg,
+    context: str,
+    error_type: type[Exception],
+) -> float:
+    finite_heights = [float(height) for height in heights if math.isfinite(float(height))]
+    if len(finite_heights) != len(heights):
+        raise error_type(f"Semantic-course grounding found non-finite terrain height for {context}.")
+    if not finite_heights:
+        raise error_type(f"Semantic-course grounding received no footprint heights for {context}.")
+    quantile = float(grounding_cfg.height_quantile)
+    if not math.isfinite(quantile) or quantile < 0.0 or quantile > 1.0:
+        raise error_type(f"grounding height_quantile must be in [0, 1], got {grounding_cfg.height_quantile!r}.")
+    embed_depth = float(grounding_cfg.embed_depth_m)
+    if not math.isfinite(embed_depth) or embed_depth < 0.0:
+        raise error_type(f"grounding embed_depth_m must be finite and non-negative, got {grounding_cfg.embed_depth_m!r}.")
+    if quantile == 1.0 or len(finite_heights) == 1:
+        return max(finite_heights)
+    ordered = sorted(finite_heights)
+    position = quantile * (len(ordered) - 1)
+    lower_index = int(math.floor(position))
+    upper_index = int(math.ceil(position))
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    alpha = position - lower_index
+    return ordered[lower_index] * (1.0 - alpha) + ordered[upper_index] * alpha
+
+
+def _ground_with_runtime_terrain_sampler(
+    anchors: list[CourseAnchor],
+    *,
+    device: str,
+    grounding_cfg: SemanticCourseGroundingCfg = DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG,
+) -> list[GroundedCourseObstacle]:
     if not anchors:
         return []
-    xy_points = [anchor.world_xy for anchor in anchors]
+    anchor_sample_counts: list[int] = []
+    xy_points: list[tuple[float, float]] = []
+    for anchor in anchors:
+        sample_points = _footprint_world_xy(anchor)
+        anchor_sample_counts.append(len(sample_points))
+        xy_points.extend(sample_points)
     heights = _sample_terrain_heights_world(xy_points, device=device)
-    return [
-        GroundedCourseObstacle(
-            row=anchor.row,
-            col=anchor.col,
-            stage=anchor.stage,
-            semantic_class=anchor.semantic_class,
-            slot_index=anchor.slot_index,
-            shape_kind=anchor.shape_kind,
-            shape_params=anchor.shape_params,
-            target_diameter=anchor.target_diameter,
-            target_height=anchor.target_height,
-            ground_offset=anchor.ground_offset,
-            local_xy=anchor.local_xy,
-            world_center=(anchor.world_xy[0], anchor.world_xy[1], heights[index] + anchor.ground_offset),
-            prim_path=anchor.prim_path,
+    obstacles: list[GroundedCourseObstacle] = []
+    height_index = 0
+    for anchor, sample_count in zip(anchors, anchor_sample_counts, strict=True):
+        anchor_heights = heights[height_index : height_index + sample_count]
+        height_index += sample_count
+        robust_ground_z = _robust_ground_height(
+            anchor_heights,
+            grounding_cfg=grounding_cfg,
+            context=f"{anchor.prim_path} footprint",
+            error_type=RuntimeError,
         )
-        for index, anchor in enumerate(anchors)
-    ]
+        obstacles.append(
+            GroundedCourseObstacle(
+                row=anchor.row,
+                col=anchor.col,
+                stage=anchor.stage,
+                semantic_class=anchor.semantic_class,
+                slot_index=anchor.slot_index,
+                shape_kind=anchor.shape_kind,
+                shape_params=anchor.shape_params,
+                target_diameter=anchor.target_diameter,
+                target_height=anchor.target_height,
+                ground_offset=anchor.ground_offset,
+                local_xy=anchor.local_xy,
+                world_center=(
+                    anchor.world_xy[0],
+                    anchor.world_xy[1],
+                    robust_ground_z - grounding_cfg.embed_depth_m + anchor.ground_offset,
+                ),
+                prim_path=anchor.prim_path,
+            )
+        )
+    return obstacles
 
 
 def _sample_terrain_heights_world(xy_points: list[tuple[float, float]], *, device: str) -> list[float]:

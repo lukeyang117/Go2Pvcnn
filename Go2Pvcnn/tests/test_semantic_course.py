@@ -33,11 +33,13 @@ from extension.semantic_course import (
     SHARED_NATIVE_SHAPE_POOL,
     SMALL_OBSTACLE_SIZE,
     SemanticCourseStage,
+    SemanticCourseGroundingCfg,
     bottom_to_center_offset,
     build_course_anchors,
     course_anchor_counts,
     deterministic_shape_key,
     ground_course_anchors,
+    footprint_sample_offsets,
     representative_rows,
     resolve_tile_size,
     select_shape_kind,
@@ -45,6 +47,7 @@ from extension.semantic_course import (
     semantic_scale_profile,
     set_scene_env_to_representative_stage,
     stage_for_row,
+    _ground_with_runtime_terrain_sampler,
     _shape_spawn_cfg,
 )
 
@@ -364,23 +367,131 @@ def test_grounding_offsets_are_shape_aware(shape_kind, shape_params, expected_of
     assert bottom_to_center_offset(shape_kind, shape_params) == pytest.approx(expected_offset)
 
 
-def test_ground_course_anchors_uses_surface_height_plus_shape_aware_offset():
+@pytest.mark.parametrize("shape_kind", SHARED_NATIVE_SHAPE_POOL)
+def test_footprint_sample_offsets_cover_center_and_eight_support_points(shape_kind):
+    shape_params = shape_params_for_profile(
+        shape_kind,
+        target_diameter=0.45,
+        target_height=0.55,
+    )
+
+    offsets = footprint_sample_offsets(shape_kind, shape_params)
+
+    assert len(offsets) == 9
+    assert (0.0, 0.0) in offsets
+    assert len(set(offsets)) == 9
+
+
+def test_ground_course_anchors_uses_footprint_max_height_not_center_height():
     terrain_origins = _terrain_origins(num_rows=10, num_cols=1)
     anchors = build_course_anchors(terrain_origins)
-    shape_kinds = ("sphere", "cuboid", "cylinder", "capsule", "cone")
-    selected = [next(anchor for anchor in anchors if anchor.shape_kind == shape_kind) for shape_kind in shape_kinds]
+    selected = [next(anchor for anchor in anchors if anchor.shape_kind == "cuboid")]
 
     grounded = ground_course_anchors(
         selected,
-        terrain_height_at_xy=lambda x, y: 0.25 + 0.01 * x - 0.02 * y,
+        terrain_height_at_xy=lambda x, y: 10.0
+        if (x, y) == selected[0].world_xy
+        else 10.4,
     )
 
-    for anchor, obstacle in zip(selected, grounded, strict=True):
-        expected_z = 0.25 + 0.01 * anchor.world_xy[0] - 0.02 * anchor.world_xy[1] + anchor.ground_offset
-        assert obstacle.world_center[:2] == anchor.world_xy
-        assert obstacle.world_center[2] == pytest.approx(expected_z)
-        assert obstacle.shape_kind == anchor.shape_kind
-        assert obstacle.shape_params == anchor.shape_params
+    obstacle = grounded[0]
+    expected_z = 10.4 - DEFAULT_GROUNDING_EMBED_DEPTH_M + selected[0].ground_offset
+    assert obstacle.world_center[:2] == selected[0].world_xy
+    assert obstacle.world_center[2] == pytest.approx(expected_z)
+    assert obstacle.shape_kind == selected[0].shape_kind
+    assert obstacle.shape_params == selected[0].shape_params
+
+
+@pytest.mark.parametrize("shape_kind", SHARED_NATIVE_SHAPE_POOL)
+def test_ground_course_anchors_default_formula_is_max_footprint_minus_embed_plus_shape_offset(shape_kind):
+    anchor = next(anchor for anchor in build_course_anchors(_terrain_origins()) if anchor.shape_kind == shape_kind)
+    footprint = footprint_sample_offsets(anchor.shape_kind, anchor.shape_params)
+    heights_by_xy = {
+        (anchor.world_xy[0] + dx, anchor.world_xy[1] + dy): 0.1 * index
+        for index, (dx, dy) in enumerate(footprint)
+    }
+
+    grounded = ground_course_anchors(
+        [anchor],
+        terrain_height_at_xy=lambda x, y: heights_by_xy[(x, y)],
+    )
+
+    expected_z = max(heights_by_xy.values()) - DEFAULT_GROUNDING_EMBED_DEPTH_M + anchor.ground_offset
+    assert grounded[0].world_center[2] == pytest.approx(expected_z)
+
+
+def test_ground_course_anchors_rejects_non_finite_footprint_heights():
+    anchor = build_course_anchors(_terrain_origins())[0]
+
+    with pytest.raises(ValueError, match="non-finite terrain height"):
+        ground_course_anchors([anchor], terrain_height_at_xy=lambda *_: math.nan)
+
+
+def test_ground_course_anchors_rejects_invalid_embed_depth():
+    anchor = build_course_anchors(_terrain_origins())[0]
+
+    with pytest.raises(ValueError, match="grounding embed_depth_m"):
+        ground_course_anchors(
+            [anchor],
+            terrain_height_at_xy=lambda *_: 0.0,
+            grounding_cfg=SemanticCourseGroundingCfg(embed_depth_m=-0.001),
+        )
+
+
+def test_runtime_grounding_batches_footprints_and_honors_grounding_cfg(monkeypatch):
+    anchors = build_course_anchors(_terrain_origins())[:2]
+    captured_xy_points = []
+
+    def fake_sample_terrain_heights_world(xy_points, *, device):
+        assert device == "cuda:0"
+        captured_xy_points.extend(xy_points)
+        heights = []
+        for anchor_index, _anchor in enumerate(anchors):
+            heights.extend([anchor_index + index * 0.1 for index in range(9)])
+        return heights
+
+    monkeypatch.setattr(
+        "extension.semantic_course._sample_terrain_heights_world",
+        fake_sample_terrain_heights_world,
+    )
+
+    obstacles = _ground_with_runtime_terrain_sampler(
+        anchors,
+        device="cuda:0",
+        grounding_cfg=SemanticCourseGroundingCfg(height_quantile=0.5, embed_depth_m=0.02),
+    )
+
+    expected_xy_points = [
+        (anchor.world_xy[0] + dx, anchor.world_xy[1] + dy)
+        for anchor in anchors
+        for dx, dy in footprint_sample_offsets(anchor.shape_kind, anchor.shape_params)
+    ]
+    assert captured_xy_points == expected_xy_points
+    assert len(captured_xy_points) == 9 * len(anchors)
+    assert obstacles[0].world_center[2] == pytest.approx(0.4 - 0.02 + anchors[0].ground_offset)
+    assert obstacles[1].world_center[2] == pytest.approx(1.4 - 0.02 + anchors[1].ground_offset)
+
+
+def test_uneven_fake_terrain_embeds_slightly_at_high_footprint_point():
+    anchor = next(anchor for anchor in build_course_anchors(_terrain_origins()) if anchor.shape_kind == "sphere")
+    center_x, center_y = anchor.world_xy
+    high_point = max(
+        ((center_x + dx, center_y + dy) for dx, dy in footprint_sample_offsets(anchor.shape_kind, anchor.shape_params)),
+        key=lambda xy: xy[0],
+    )
+
+    def fake_terrain(x, y):
+        if (x, y) == high_point:
+            return 0.5
+        if (x, y) == anchor.world_xy:
+            return 0.1
+        return 0.2
+
+    obstacle = ground_course_anchors([anchor], terrain_height_at_xy=fake_terrain)[0]
+    bottom_z = obstacle.world_center[2] - anchor.ground_offset
+
+    assert bottom_z == pytest.approx(0.5 - DEFAULT_GROUNDING_EMBED_DEPTH_M)
+    assert bottom_z > 0.1
 
 
 def test_spawn_cfg_dispatch_builds_matching_native_shape_cfgs():
