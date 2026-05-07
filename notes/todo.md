@@ -4,8 +4,16 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 ## Start Here
 
-- Current focus: T200 semantic static-course viewer is functionally landed; `T207` deterministic random layout, footprint grounding, and targeted runtime scans are complete; `T205` remains for full-grid/manual viewer confirmation.
+- Current focus: `T001a` `/inspire` skill design spec is written, repository memory is synced, and the final blocker-only subagent review recommends passing; user spec review is the next gate.
 - Read next:
+  - [inspire skill design spec](../docs/superpowers/specs/2026-05-07-inspire-skill-design.md)
+  - [inspire skill design branch](todo/T001-inspire-skill-design.md)
+  - [inspire skill design log](log/2026-05-07-1258-inspire-skill-design.md)
+  - [viewer persistent loop fix log](log/2026-05-06-2106-viewer-persistent-loop-fix.md)
+  - [IsaacLab livestream extension dedupe fix log](log/2026-05-06-2054-isaaclab-livestream-dedup-fix.md)
+  - [IsaacLab AppLauncher WebRTC migration guide](human/human-16-isaaclab-applauncher-webrtc-migration.md)
+  - [viewer WebRTC public IP fix log](log/2026-05-06-2011-viewer-webrtc-public-ip-fix.md)
+  - [viewer livestream black-screen triage log](log/2026-05-06-1945-viewer-livestream-black-screen-triage.md)
   - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
   - [semantic course random layout final verification log](log/2026-04-30-1619-semantic-course-random-layout-final-verification.md)
   - [semantic course layout/grounding implementation log](log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md)
@@ -39,6 +47,8 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
+| T001 | `/inspire` project-local skill design spec is written and under subagent requirement/acceptance review; user spec review is the next gate. | Review the design spec, confirm the workflow boundaries, then decide whether to proceed to skill implementation and todo writing. |
+| T111 | Server-side fixes for remote WebRTC endpoint, IsaacLab duplicate livestream extensions, and viewer auto-exit are implemented; actual browser visual confirmation remains. | Run remote viewer with `--webrtc-public-ip <server-ip>`; it should stay alive until `Ctrl-C`. If still black, check client/WebRTC/network after closing stale local visualization windows. |
 | T205 | Compact semantic runtime and shape-pool acceptance are green, but full-grid interactive startup/manual confirmation are still open. | Decide whether to keep compact runtime smoke as the acceptance path and do one manual viewer confirmation when needed. |
 | T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
 | T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
@@ -50,13 +60,17 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
 | T000 | done | notes workflow | [T000](todo/T000-notes-workflow.md) | memory system bootstrapped and linked into existing notes | feature `7cf6c11`; verified `7cf6c11` |
-| T100 | verify | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | implementation landed and smoke-verified in `env_isaaclab`: together backend, manager/factory/reward wiring, viewer together core path, flat raw parity, static guardrail, 1-iteration train 32/128 envs | feature `pending`; verified `59 passed`, `36 passed`, CUDA smoke, cadence/full-N real env, train/play/viewer smoke |
+| T001 | doing | local skill design / requirement-analysis workflow | [T001](todo/T001-inspire-skill-design.md) | `/inspire` design spec written; final blocker-only subagent review approves the design for user review; implementation has not started | feature `pending`; verified `design review approved` |
+| T100 | verify | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | implementation landed and smoke-verified in `env_isaaclab`: together backend, manager/factory/reward wiring, viewer together core path, flat raw parity, static guardrail, 1-iteration train 32/128 envs; `T112` semantic-aware together viewer/planner work is landed with focused verification and a remaining full-repo pytest dependency caveat | feature `pending`; verified `59 passed`, `36 passed`, CUDA smoke, cadence/full-N real env, train/play/viewer smoke |
 | T200 | verify | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | semantic viewer path, native shape pool, deterministic random full-tile layout, footprint grounding, and targeted runtime scans are landed; full-grid manual confirmation still open under `T205` | feature `130c635`; verified `130c635` with runtime-output caveat |
 
 ## Open Leaves
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
+| T001a | T001 | doing | P1 | `/inspire` design is now review-hardened and waiting on the user to review the written spec before any implementation work starts. | [T001 branch](todo/T001-inspire-skill-design.md#t001a-inspire-design-spec-review-gate) |
+| T112 | T100 | verify | P0 | Semantic-aware together planner, shared semantic terrain extractor, GPU-only semantic queries/costs, route candidates, viewer `terrain-row/terrain-col`, and manager-path compatibility are implemented; focused verification is green, while full repo pytest is still blocked by missing raw planner dependency checkout. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t112-semantic-aware-together-planner--viewer-rowcol-targeting) |
+| T111 | T100 | verify | P0 | Remote WebRTC endpoint fix, IsaacLab livestream-extension dedupe, and viewer persistent loop are implemented; server-side checks pass; browser-side visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) |
 | T205 | T200 | verify | P1 | Compact semantic correctness and shape-pool coverage are proven, but full-grid interactive startup cost and manual viewer confirmation remain open. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
 | T110 | T100 | verify | P0 | Core fix and headless zero-command smoke passed; interactive visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) |
 | T109 | T100 | verify | P0 | Regression fixed and headless viewer reached real playback; visual manual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) |
@@ -67,6 +81,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 - [todo/README.md](todo/README.md)
 - [T000-notes-workflow.md](todo/T000-notes-workflow.md)
+- [T001-inspire-skill-design.md](todo/T001-inspire-skill-design.md)
 - [T100-batched-together-planner-gpu-migration.md](todo/T100-batched-together-planner-gpu-migration.md)
 - [T200-semantic-static-course-viewer.md](todo/T200-semantic-static-course-viewer.md)
 
@@ -74,6 +89,12 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-07 12:58 | inspire skill design | pass; spec ready for user review | [T001/T001a](todo/T001-inspire-skill-design.md#t001a-inspire-design-spec-review-gate) | [2026-05-07-1258-inspire-skill-design.md](log/2026-05-07-1258-inspire-skill-design.md) |
+| 2026-05-06 23:40 | semantic-aware together viewer/planner implementation | focused pass with dependency caveat | [T100/T112](todo/T100-batched-together-planner-gpu-migration.md#t112-semantic-aware-together-planner--viewer-rowcol-targeting) | [2026-05-06-2340-semantic-aware-together-viewer-implementation.md](log/2026-05-06-2340-semantic-aware-together-viewer-implementation.md) |
+| 2026-05-06 21:06 | viewer persistent loop fix | pass with scoped caveat | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2106-viewer-persistent-loop-fix.md](log/2026-05-06-2106-viewer-persistent-loop-fix.md) |
+| 2026-05-06 20:54 | IsaacLab livestream extension dedupe fix | pass with scoped caveat | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2054-isaaclab-livestream-dedup-fix.md](log/2026-05-06-2054-isaaclab-livestream-dedup-fix.md) |
+| 2026-05-06 20:11 | viewer WebRTC public IP fix | pass with scoped caveat | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2011-viewer-webrtc-public-ip-fix.md](log/2026-05-06-2011-viewer-webrtc-public-ip-fix.md) |
+| 2026-05-06 19:45 | viewer livestream black-screen triage | diagnostic partial | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-1945-viewer-livestream-black-screen-triage.md](log/2026-05-06-1945-viewer-livestream-black-screen-triage.md) |
 | 2026-04-30 16:19 | semantic course random layout final verification | pass with scoped caveat | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1619-semantic-course-random-layout-final-verification.md](log/2026-04-30-1619-semantic-course-random-layout-final-verification.md) |
 | 2026-04-30 15:48 | semantic course layout/grounding implementation | partial pass | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1548-semantic-course-layout-grounding-implementation.md](log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md) |
 | 2026-04-30 15:22 | semantic course random layout embedded plan | plan recorded | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-embedded-implementation-plan) | [2026-04-30-1522-semantic-course-random-layout-embedded-plan.md](log/2026-04-30-1522-semantic-course-random-layout-embedded-plan.md) |
