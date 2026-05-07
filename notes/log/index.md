@@ -6,6 +6,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-05-07 14:04 | inspire skill implementation | repository tooling / local skill implementation | pass | package files `7`; implementation fix loops `3`; final blocker-only review approved | [T001](../todo/T001-inspire-skill-design.md) | [2026-05-07-1404-inspire-skill-implementation.md](2026-05-07-1404-inspire-skill-implementation.md) |
 | 2026-05-07 12:58 | inspire skill design | repository tooling / local skill design | pass | spec sections `16`; focused subagent reviews `3`; final blocker-only review approved | [T001/T001a](../todo/T001-inspire-skill-design.md#t001a-inspire-design-spec-review-gate) | [2026-05-07-1258-inspire-skill-design.md](2026-05-07-1258-inspire-skill-design.md) |
 | 2026-05-06 23:40 | semantic-aware together viewer/planner implementation | together semantic terrain/query + route costs + viewer row/col targeting | focused pass with dependency caveat | `py_compile` pass; together guardrail `5/5`; focused `--noconftest` pytest `16 passed`, `33 passed`, `11 passed`; full repo pytest still blocked by missing `scripts.go2fp` | [T100/T112](../todo/T100-batched-together-planner-gpu-migration.md#t112-semantic-aware-together-planner--viewer-rowcol-targeting) | [2026-05-06-2340-semantic-aware-together-viewer-implementation.md](2026-05-06-2340-semantic-aware-together-viewer-implementation.md) |
 | 2026-05-06 22:48 | human-16 IsaacLab AppLauncher WebRTC migration guide | notes/human T111 migration documentation | pass | added reusable `human-16`; indexed from `notes/index.md` and `notes/todo.md`; repository-relative links preserved | [T100/T111](../todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2248-human-16-isaaclab-applauncher-webrtc-migration-guide.md](2026-05-06-2248-human-16-isaaclab-applauncher-webrtc-migration-guide.md) |
@@ -91,6 +92,7 @@ This page indexes verification evidence. Keep it short enough to scan.
   - [2026-04-27-1349-notes-workflow-bootstrap.md](2026-04-27-1349-notes-workflow-bootstrap.md)
 - T001 inspire skill design:
   - [2026-05-07-1258-inspire-skill-design.md](2026-05-07-1258-inspire-skill-design.md)
+  - [2026-05-07-1404-inspire-skill-implementation.md](2026-05-07-1404-inspire-skill-implementation.md)
 
 ## Archived Logs
 
