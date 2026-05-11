@@ -6,12 +6,16 @@
 - The design fixes the main workflow as:
   - manual `/inspire` trigger
   - discussion first
+  - discussion replies stay sectioned and say what the next part will cover
   - explicit `生成设计` gate
   - `brainstorming`-governed design generation
   - subagent design review
   - design-state memory sync
-  - explicit `写 todo` gate
+  - explicit design and todo stage boundaries
+  - explicit `继续` / `下一阶段` after a completed stage starts the next stage immediately
   - todo-first execution breakdown
+  - no further execution approval after the user has approved entering implementation
+  - primary agent stays live and autonomous across normal subagent cycles during execution
   - subagent-only code changes and testing
 - Three narrow subagent review passes were used to harden requirement coverage and acceptance indicators.
 - Final blocker-only review recommends passing the design.
@@ -28,6 +32,7 @@
   - design-stage sync must explicitly include the relevant branch page, not only dashboard/log memory
 - Follow-up subagent patches closed all three issues.
 - Final blocker-only implementation review found no remaining blockers.
+- Follow-up refinement removed all post-entry execution approval prompts while keeping the design and todo stage stops.
 
 ## Open Children
 
@@ -45,12 +50,13 @@
 
 - [2026-05-07-1258-inspire-skill-design.md](../log/2026-05-07-1258-inspire-skill-design.md)
 - [2026-05-07-1404-inspire-skill-implementation.md](../log/2026-05-07-1404-inspire-skill-implementation.md)
+- [2026-05-08-1352-inspire-stage-gate-refinement.md](../log/2026-05-08-1352-inspire-stage-gate-refinement.md)
 
 ## Git Refs
 
 - Last Feature Commit: `pending (skill implementation stage)`
-- Last Verified Commit: `working tree verification at 2026-05-07 14:04 +0800`
-- Current Work Ref: `working tree on top of b94722f (2026-05-07 14:04 +0800); inspire skill implementation and notes update; unrelated planner/viewer/plugin dirt present`
+- Last Verified Commit: `working tree verification at 2026-05-08 13:52 +0800`
+- Current Work Ref: `working tree on top of 130c635 (2026-05-08 13:52 +0800); inspire stage-gate refinement with unrelated planner/viewer/plugin dirt present`
 - Key Files:
   - [../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md](../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md)
   - [../../.agents/skills/inspire/SKILL.md](../../.agents/skills/inspire/SKILL.md)
@@ -68,73 +74,19 @@
 ## Next Step
 
 - Use `/inspire` on a real requirement when you want to pressure-test the dialogue experience in practice.
+- Verify in a live `/inspire` session that `继续` / `下一阶段` after design or todo advances immediately and that execution never asks for further approval once it has started.
 
 ## Node Details
 
-### T001a inspire design spec review gate
+### Implementation Summary
 
-- status: done
-- why-created:
-  - the user approved the design section-by-section in conversation
-  - the written spec still needed explicit repository memory sync and requirement-focused review before implementation
-- evidence:
-  - [2026-05-07-1258-inspire-skill-design.md](../log/2026-05-07-1258-inspire-skill-design.md)
-- outcome:
-  - the user approved the written spec and authorized implementation
+- `T001a`: written spec review passed and the user approved implementation.
+- `T001b-T001c`: the core `SKILL.md` and supporting `references/` package were implemented.
+- `T001d`: validation confirmed the skill files exist, the approved workflow remains intact, and no standalone plan path was reintroduced.
+- `T001e`: follow-up review tightened actual `brainstorming` usage, required design-template fields, and branch-page memory sync.
+- `T001f`: final refinement removed post-entry execution approval prompts while preserving design/todo stage gates.
 
-### T001b inspire core skill file
+### Keep In Mind
 
-- status: done
-- why-created:
-  - the implementation needs one concise `SKILL.md` that enforces the `/inspire` trigger, discussion freeze rule, explicit transition gates, `brainstorming` handoff for design, and subagent-only execution boundaries
-- design-mapping:
-  - [../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md](../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md) sections 5, 6, 8, 9, 11, 12, 14
-- acceptance:
-  - `/inspire` manual trigger only
-  - discussion path only offers `继续分析 / 生成设计 / 结束`
-  - no implicit approval from direct user phrasing
-  - no standalone plan path
-  - implementation phase forbids primary-agent code edits
-
-### T001c inspire support references
-
-- status: done
-- why-created:
-  - the skill should keep `SKILL.md` focused and load detailed templates/contracts from `references/`
-- design-mapping:
-  - [../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md](../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md) section 13
-- acceptance:
-  - reference files exist for intake modes, analysis lenses, design template, design review checklist, todo-write contract, and delegation contract
-  - the files match the approved design boundaries and do not reintroduce standalone plan behavior
-
-### T001d inspire validation
-
-- status: done
-- why-created:
-  - the skill needs at least a minimum validation pass after implementation so it is not only documented but also checked against the approved behavior
-- design-mapping:
-  - [../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md](../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md) section 14
-- acceptance:
-  - skill files exist in the expected location
-  - wording and workflow still reflect the approved spec
-  - no `writing-plans` / standalone implementation-plan path remains
-  - the validation result is written to an official log
-
-### T001e inspire design-gate patch
-
-- status: done
-- why-created:
-  - review of the first implementation pass found that the design gate still allowed a weak interpretation of `brainstorming` entry
-  - the design template still treated some brainstorming-aligned content as soft guidance instead of hard required content
-- evidence:
-  - review finding: actual `brainstorming` workflow use must be a hard requirement
-  - review finding: `constraints`, `alternative approaches with trade-offs`, and `recommended design` must be hard-required in the template
-  - final blocker-only review: design-stage memory sync must explicitly include the relevant branch page, and the checklist must enforce it
-- design-mapping:
-  - [../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md](../../docs/superpowers/specs/2026-05-07-inspire-skill-design.md) sections 9, 13, 14
-- acceptance:
-  - `SKILL.md` makes actual `brainstorming` workflow use a hard requirement, not only a declaration
-  - `references/design-template.md` makes `constraints`, `alternative approaches with trade-offs`, and `recommended design` explicit required content
-  - design-stage memory sync explicitly includes both `notes/todo.md` and the relevant branch page
-  - `references/design-review-checklist.md` checks that design-state memory sync includes the branch page
-  - a fresh review confirms the design-gate mismatch is closed
+- `/inspire` remains a completed tooling branch, not an active architecture front.
+- If future work revisits `/inspire`, reopen a new child node instead of expanding this page again.

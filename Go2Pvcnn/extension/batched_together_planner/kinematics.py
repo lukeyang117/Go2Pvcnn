@@ -34,6 +34,9 @@ class TogetherKinematicsResult:
     joint_angles: Tensor
     joint_limit_violation: Tensor
     workspace_margin: Tensor
+    hip_world: Tensor
+    knee_world: Tensor
+    foot_world: Tensor
 
 
 def rpy_to_rot_matrix(root_rpy: Tensor) -> Tensor:
@@ -112,11 +115,56 @@ def evaluate_kinematics(root_pos: Tensor, root_rpy: Tensor, foot_pos: Tensor) ->
     plane_reach = torch.sqrt(px * px + lateral * lateral)
     reach_margin = thigh + calf - plane_reach
     workspace_margin = torch.minimum(side_clearance, reach_margin)
+    leg_angles = joint_angles.reshape(root_pos.shape[0], root_pos.shape[1], 4, 3)
+    hip_world, knee_world, foot_world = _forward_leg_keypoints_world(root_pos, rot_body_to_world, leg_angles, dtype=dtype)
     return TogetherKinematicsResult(
         joint_angles=joint_angles,
         joint_limit_violation=joint_limit_violation,
         workspace_margin=workspace_margin,
+        hip_world=hip_world,
+        knee_world=knee_world,
+        foot_world=foot_world,
     )
+
+
+def _forward_leg_keypoints_world(root_pos: Tensor, rot_body_to_world: Tensor, leg_angles: Tensor, *, dtype: torch.dtype) -> tuple[Tensor, Tensor, Tensor]:
+    device = root_pos.device
+    hip_offsets = HIP_OFFSETS_ARRAY.to(device=device, dtype=dtype).view(1, 1, 4, 3).expand_as(leg_angles[..., :1].expand(-1, -1, -1, 3))
+    side_signs = LEG_SIDE_SIGNS.to(device=device, dtype=dtype).view(1, 1, 4)
+    hip_angle = leg_angles[..., 0]
+    thigh_angle = leg_angles[..., 1]
+    calf_angle = leg_angles[..., 2]
+    d = torch.as_tensor(HIP_OFFSET_Y, device=device, dtype=dtype) * side_signs
+    cos_h = torch.cos(hip_angle)
+    sin_h = torch.sin(hip_angle)
+    thigh = torch.as_tensor(THIGH_LENGTH, device=device, dtype=dtype)
+    calf = torch.as_tensor(CALF_LENGTH, device=device, dtype=dtype)
+    knee_x = -thigh * torch.sin(thigh_angle)
+    knee_z = -thigh * torch.cos(thigh_angle)
+    calf_abs = thigh_angle + calf_angle
+    foot_x = knee_x - calf * torch.sin(calf_abs)
+    foot_z = knee_z - calf * torch.cos(calf_abs)
+    hip_y = d.expand_as(knee_x)
+    knee_body = torch.stack(
+        (
+            hip_offsets[..., 0] + knee_x,
+            hip_offsets[..., 1] + cos_h * hip_y - sin_h * knee_z,
+            hip_offsets[..., 2] + sin_h * hip_y + cos_h * knee_z,
+        ),
+        dim=-1,
+    )
+    foot_body = torch.stack(
+        (
+            hip_offsets[..., 0] + foot_x,
+            hip_offsets[..., 1] + cos_h * hip_y - sin_h * foot_z,
+            hip_offsets[..., 2] + sin_h * hip_y + cos_h * foot_z,
+        ),
+        dim=-1,
+    )
+    hip_world = torch.einsum("btij,btkj->btki", rot_body_to_world, hip_offsets) + root_pos.unsqueeze(2)
+    knee_world = torch.einsum("btij,btkj->btki", rot_body_to_world, knee_body) + root_pos.unsqueeze(2)
+    foot_world = torch.einsum("btij,btkj->btki", rot_body_to_world, foot_body) + root_pos.unsqueeze(2)
+    return hip_world, knee_world, foot_world
 
 
 __all__ = ["JOINT_LIMITS", "TogetherKinematicsResult", "evaluate_kinematics", "rpy_to_rot_matrix"]

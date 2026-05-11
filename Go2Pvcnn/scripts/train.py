@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import sys
 from datetime import datetime
@@ -102,8 +103,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--planner-backend",
         type=str,
         default="together",
-        choices=["together", "legacy"],
-        help="For teacher_elevation_trajectory: trajectory planner backend.",
+        choices=["together", "legacy", "mpc"],
+        help="For teacher_elevation_trajectory: trajectory planner backend (together/legacy/mpc).",
     )
 
     AppLauncher.add_app_launcher_args(parser)
@@ -469,7 +470,31 @@ def main() -> int:
     
     # Training configuration from agent module
     train_cfg = get_train_cfg(experiment_name)
-    
+    if experiment_name == "teacher_elevation_trajectory":
+        # 4096-env trajectory runs with CNN elevation maps can exceed 24GB cards when
+        # rollout horizon/minibatch are too large. Keep the CLI unchanged and apply a
+        # runtime memory guardrail on the trainer config.
+        num_envs = int(env_cfg.scene.num_envs)
+        if num_envs >= 4096 and int(train_cfg.get("num_steps_per_env", 0)) > 24:
+            old_steps = int(train_cfg["num_steps_per_env"])
+            train_cfg["num_steps_per_env"] = 24
+            print(
+                "[Runner][MemGuard] teacher_elevation_trajectory @ 4096 envs: "
+                f"num_steps_per_env {old_steps} -> {train_cfg['num_steps_per_env']}"
+            )
+        algorithm_cfg = train_cfg.get("algorithm", {})
+        if num_envs >= 4096 and isinstance(algorithm_cfg, dict):
+            total_batch = int(num_envs * int(train_cfg.get("num_steps_per_env", 24)))
+            target_mini_batch = 12_288
+            min_mini_batches = max(1, math.ceil(total_batch / target_mini_batch))
+            old_mini_batches = int(algorithm_cfg.get("num_mini_batches", 4))
+            if old_mini_batches < min_mini_batches:
+                algorithm_cfg["num_mini_batches"] = min_mini_batches
+                print(
+                    "[Runner][MemGuard] teacher_elevation_trajectory @ 4096 envs: "
+                    f"num_mini_batches {old_mini_batches} -> {min_mini_batches}"
+                )
+
     # Print configuration
     if rank == 0:
         print(f"[Runner] Configuration:")

@@ -26,7 +26,8 @@ Each discussion reply should make these elements easy to spot:
 2. lenses being applied
 3. interpretations or solution directions
 4. evidence gaps or unresolved constraints
-5. one focused follow-up question or the allowed next-step choices
+5. next discussion part: say what the next round will cover
+6. one focused follow-up question or the allowed next-step choices
 
 ## Guardrails
 
@@ -34,3 +35,4 @@ Each discussion reply should make these elements easy to spot:
 - Do not ask a bloated questionnaire.
 - Do not hide uncertainty.
 - Do not offer `写 todo` during discussion mode.
+- Do not end a discussion round without telling the user what the next part of the conversation is for.

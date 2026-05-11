@@ -3,43 +3,66 @@
 ## Current State
 
 - The native IsaacLab GPU migration is implemented under `Go2Pvcnn/extension/batched_together_planner/`.
-- Subagents implemented code/tests, while the main agent reviewed flow and verification.
-- The new backend aligns to the updated raw planner under `raw/kinematic_footsteps/scripts/go2fp/batch_planner/` for flat P0 parity while exposing a legacy-compatible training and reward interface.
 - Default backend should be `planner_backend = "together"`, with `planner_backend = "legacy"` available as a rollback path.
-- Raw timing contract is strict for the new backend: `35` frames, `dt = 0.02`, `0.7s` horizon, `event_cap = 2`.
-- Replanning semantics are fixed-shape full-batch: every planner call receives all envs `[N, ...]`; per-env replacement is decided by tensor masks and `torch.where`.
-- Hard revision from review: the together training path must not branch on GPU masks before a planner call. No `if torch.any(replan_mask)`, no `nonzero`, no dynamic sub-batch planner call.
-- User cadence decision: together should update trajectory only when velocity command changes, reset occurs, or the `0.7s` replan interval is reached.
+- T116 is the active architecture front: rewrite small-obstacle behavior around fixed `K=5`, pre-rollout global mode, command-relative routes, dynamic crossing geometry, and a shared `1.0s / 50-step` horizon. T116a-h established final authority; T116i is closed as the approved follow-up for nonzero speed candidates and hard-reason diagnostics.
+- Pre-T116 timing contract was `35` frames, `dt=0.02`, `0.7s`, `event_cap=2`; it is now historical and must not be treated as the implementation target.
+- Pre-T116 state/candidate work in `T113-T115` is historical evidence only. Carry forward its safety constraints, but do not continue the old `K=3`, `front_cross/rear_follow/clear`, or post-rollout classifier architecture.
+- Replanning semantics remain fixed-shape full-batch: every planner call receives all envs `[N, ...]`; per-env replacement is decided by tensor masks and `torch.where`.
+- Hard review rule still applies: the together training path must not branch on GPU masks before a planner call. No `if torch.any(replan_mask)`, no `nonzero`, no dynamic sub-batch planner call.
 - Together training cache must be GPU resident. The existing CPU-canonical cache converter remains legacy/reference-only.
 - Reward frame selection must come from the manager phase/current-reference snapshot, not from `episode_length_buf % horizon`.
 - Viewer may keep CPU logging/camera/visualization exceptions. Training path may not.
-- Viewer backend fix verified: `--planner-backend together` now calls the native together `plan_segment` path with the scripted/teleop command, while `legacy` keeps `batched_generate_trajectory`.
-- Final conda verification in `/home/lhy/anaconda3/envs/env_isaaclab` passed: full together suite `50 passed`, CUDA smoke at `N=1024/4096`, py_compile, diff check, together viewer headless smoke, and subagent train/play smoke for both together and legacy.
-- Continued testing passed: together 1-iteration training at `32` and `128` envs, legacy rollback 1-iteration training at `16` envs, real Isaac cadence/full-N checks, and updated regression tests for the new factory/default-together contract.
-- Human command guide [human-12-batched-planner-train-viewer-commands.md](../human/human-12-batched-planner-train-viewer-commands.md) now matches the current train/play/viewer CLI: `env_isaaclab` Python, explicit `--planner-backend together`, legacy rollback, and viewer `task/35/0.02` contract.
-- New viewer issue fixed to verification: launching the together viewer could make the displayed Go2 walk for a while and then lift into the air. Root cause was repeated viewer-style replan handoff/root-z accumulation, not a CLI startup problem.
-- New viewer stop-command issue under T110 is fixed to verification: together zero-command hold now rehomes feet, root height, and root roll/pitch while keeping root `xy` and yaw.
-- Follow-up viewer handoff fix under T110: hold-like zero-command segments now hand off terminal root z directly, so recovery plays once and then stays settled instead of repeating every `0.7s`.
+- Runtime acceptance for T116 must use `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`, headless, output-based checks, and timeout cleanup.
 
 ## Open Children
 
-- T110: together zero-command rehome / upright recovery is implemented and smoke-verified; manual interactive viewer confirmation remains useful.
-- T109: viewer together root-z ratchet / visual lift-off is fixed in code and awaiting manual visual confirmation.
-- T103: complex raw planner core semantic parity beyond flat P0.
-- T107: long training, env counts beyond 128, and multi-device Isaac runtime throughput.
+- T116: `K=5` mode-first small-obstacle crossing rewrite. T116a-h are closed and remain the authoritative baseline; T116i extends the same mainline.
+- T117: grouped together-planner test and todo cleanup after T116h is tracked in [T117-together-planner-test-and-todo-cleanup.md](T117-together-planner-test-and-todo-cleanup.md).
 
 ## Closed Children Archive
 
 - T101: architecture and fixed-shape runtime design implemented.
 - T102: module API/data structure design implemented with together result/cache contracts.
+- T103: complex raw parity remains a possible future broadening topic, but it is not active for T116.
 - T104: fixed-shape full-batch manager/cache blending implemented.
 - T105: env cfg, train/play/viewer backend factory switch implemented.
 - T106: A+B parity and behavior test matrix added for P0 flat/core/runtime cases.
+- T107: long-run performance/multi-device profiling remains deferred; T116 may add focused timing metrics only.
 - T108: static training-path guardrail added and passing.
+- T109/T110: viewer root-z and zero-command fixes are implemented; keep as runtime background only.
+- T111: remote WebRTC/server-side viewer fixes are implemented; browser visual confirmation is not part of T116.
+- T112: semantic-aware together planner/viewer implementation is historical input for T116.
+- T113/T114/T115: completed historical baselines. T116 supersedes their `K=3`, `front_cross/rear_follow/clear`, and post-rollout state-classifier architecture; preserve only carry-forward constraints/evidence.
+- T116a/T116b/T116c/T116d/T116e/T116f/T116g/T116h/T116i: implementation, deterministic cleanup, runtime diagnostics, final authority, and the nonzero-speed/hard-reason follow-up are all completed; detailed evidence stays in `Node Details` and logs.
 - Regression test contract drift after default-together/factory migration: fixed in `Go2Pvcnn/tests/test_batched_planner_runtime_path.py`.
 
 ## Related Logs
 
+### T116 Active Evidence
+
+- [2026-05-09-1641-k5-mode-first-cross-small-design.md](../log/2026-05-09-1641-k5-mode-first-cross-small-design.md)
+- [2026-05-09-1744-t116-plan-and-subagent-dispatch.md](../log/2026-05-09-1744-t116-plan-and-subagent-dispatch.md)
+- [2026-05-09-1816-t116a-contract-schema-horizon.md](../log/2026-05-09-1816-t116a-contract-schema-horizon.md)
+- [2026-05-09-1846-t116b-pre-rollout-classifier.md](../log/2026-05-09-1846-t116b-pre-rollout-classifier.md)
+- [2026-05-09-1904-t116c-mode-candidate-tables.md](../log/2026-05-09-1904-t116c-mode-candidate-tables.md)
+- [2026-05-09-1931-t116d-cross-small-gait.md](../log/2026-05-09-1931-t116d-cross-small-gait.md)
+- [2026-05-09-2042-t116e-barriers-selection.md](../log/2026-05-09-2042-t116e-barriers-selection.md)
+- [2026-05-09-2150-t116f-deterministic-guardrail-cleanup.md](../log/2026-05-09-2150-t116f-deterministic-guardrail-cleanup.md)
+- [2026-05-10-1953-t116g-env-isaacsim-runtime-diagnostics.md](../log/2026-05-10-1953-t116g-env-isaacsim-runtime-diagnostics.md)
+- [2026-05-10-2017-t116h-final-review-authority.md](../log/2026-05-10-2017-t116h-final-review-authority.md)
+- [2026-05-10-2043-compact-todo-together-planner-test-cleanup-scan.md](../log/2026-05-10-2043-compact-todo-together-planner-test-cleanup-scan.md)
+- [2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md](../log/2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md)
+- [2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md](../log/2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md)
+- [2026-05-10-2223-t116i-main-review-final-verification.md](../log/2026-05-10-2223-t116i-main-review-final-verification.md)
+
+### Historical Baselines And Carry-Forward Evidence
+
+- [2026-05-08-2239-t115f-final-authority.md](../log/2026-05-08-2239-t115f-final-authority.md)
+- [2026-05-08-2229-t115e-runtime-acceptance-cases.md](../log/2026-05-08-2229-t115e-runtime-acceptance-cases.md)
+- [2026-05-08-2209-t115d-runtime-harness-diagnostics.md](../log/2026-05-08-2209-t115d-runtime-harness-diagnostics.md)
+- [2026-05-08-2240-t115b-three-surface-crossing-validity.md](../log/2026-05-08-2240-t115b-three-surface-crossing-validity.md)
+- [2026-05-08-1251-t114-state-machine-touchdown-redesign.md](../log/2026-05-08-1251-t114-state-machine-touchdown-redesign.md)
+- [2026-05-07-1952-semantic-touchdown-bypass-collision-redesign.md](../log/2026-05-07-1952-semantic-touchdown-bypass-collision-redesign.md)
 - [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](../log/2026-04-28-1254-viewer-zero-command-handoff-idempotence.md)
 - [2026-04-28-1132-together-zero-command-rehome.md](../log/2026-04-28-1132-together-zero-command-rehome.md)
 - [2026-04-28-1007-viewer-together-root-z-ratchet.md](../log/2026-04-28-1007-viewer-together-root-z-ratchet.md)
@@ -50,6 +73,14 @@
 - [2026-04-27-1711-batched-together-cadence-decision.md](../log/2026-04-27-1711-batched-together-cadence-decision.md)
 - [2026-04-27-1630-batched-together-design-review-revisions.md](../log/2026-04-27-1630-batched-together-design-review-revisions.md)
 - [2026-04-27-1622-batched-together-planner-gpu-migration-design.md](../log/2026-04-27-1622-batched-together-planner-gpu-migration-design.md)
+
+### Viewer/Runtime Peripheral Evidence
+
+- [2026-05-06-2248-human-16-isaaclab-applauncher-webrtc-migration-guide.md](../log/2026-05-06-2248-human-16-isaaclab-applauncher-webrtc-migration-guide.md)
+- [2026-05-06-2106-viewer-persistent-loop-fix.md](../log/2026-05-06-2106-viewer-persistent-loop-fix.md)
+- [2026-05-06-2054-isaaclab-livestream-dedup-fix.md](../log/2026-05-06-2054-isaaclab-livestream-dedup-fix.md)
+- [2026-05-06-2011-viewer-webrtc-public-ip-fix.md](../log/2026-05-06-2011-viewer-webrtc-public-ip-fix.md)
+- [2026-05-06-1945-viewer-livestream-black-screen-triage.md](../log/2026-05-06-1945-viewer-livestream-black-screen-triage.md)
 
 ## Git Refs
 
@@ -71,289 +102,579 @@
 
 ## Next Step
 
-- Rerun the interactive together viewer manually and confirm both T109 lift-off and T110 zero-command crouch recovery are visually resolved.
-- Extend T103 with complex terrain/support/CEM parity cases beyond flat P0.
-- Extend T107 with multi-iteration train profiling, env counts beyond `128`, and multi-device scaling once the user wants performance numbers beyond smoke.
+- Keep T116i closed from [../../docs/superpowers/specs/2026-05-10-nonzero-speed-hard-reason-design.md](../../docs/superpowers/specs/2026-05-10-nonzero-speed-hard-reason-design.md): implementation removes `beta=0` from nonzero-command candidate tables, adds hard-reason tensors/rank costs, adds terminal-readable all-hard diagnostics, and has final main-agent review evidence.
+- Keep T117 as a separate notes/test cleanup front. Do not let T117 cleanup delete the T116i authority surfaces.
+- Treat `test_viewer_runtime_diagnostics.py`, `test_batched_together_core.py`, and `test_batched_together_guardrails.py` as the current authority surfaces unless a grouped cleanup decision explicitly changes that.
 
 ## Node Details
 
-### T110 zero-command rehome upright recovery
+### T116 K=5 mode-first small-obstacle crossing rewrite
 
-- why-created: The user reported that giving speed `0` in the together viewer lacks the raw-style "回正" effect; screenshot shows the robot ending crouched/twisted after stop.
-- observed-current-behavior-before-fix:
-  - `Go2Pvcnn/extension/batched_together_planner/parameterization.py` has `_hold_rehome_targets()` that moves feet toward root-frame nominal slots.
-  - The hold branch still uses `hold_root = root_pos[:, None, :]` and `hold_rpy = root_rpy[:, None, :]`, so root height and roll/pitch are frozen for the full horizon.
-  - Existing tests only allowed terminal roll/pitch to be unchanged, so they did not catch the missing recovery.
-- implemented-behavior:
-  - For zero command, keep current yaw and root `xy`.
-  - Move feet toward current-yaw nominal root-frame slots with support heights from the local terrain.
-  - Move root `z` toward support height plus nominal `hip_height`.
-  - Move root roll/pitch toward the support-plane or flat upright target.
-  - Keep full-contact / no-touchdown semantics for hold.
-- parallelism-constraints:
-  - Training hot path must remain batched over all envs.
-  - No per-env Python loops, comprehensions, NumPy/CPU packages, `.cpu()`, `.item()`, `nonzero`, dynamic sub-batch planner calls, or GPU-mask host branching.
-  - Use tensor masks and `torch.where`/broadcasting so mixed batches of zero and moving commands remain independent.
-- implementation-notes:
-  - Support-plane target uses vectorized four-foot midpoint cross product rather than `torch.linalg.svd`, avoiding solver/sync risk in the training hot path.
-  - Static guardrail now forbids `torch.linalg.svd` and `torch.svd` in together training files.
+- why-created: After `T113-T115`, the user found the planner still behaves reactively: small obstacles are often bypassed, crossing does not reliably look like a gait change, velocity refusal can choose the opposite lateral direction, and touchdowns/feet can still appear on or through semantic objects. The user clarified a new architecture: global mode is decided before rollout, candidates are speed choices rather than competing modes, ordinary small obstacles should use a dedicated crossing gait, and the rewrite should clean up old code in place instead of adding another planner path.
+- status: `done`
+- affected workflow:
+  - [../../Go2Pvcnn/extension/batched_together_planner/config.py](../../Go2Pvcnn/extension/batched_together_planner/config.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/schedule.py](../../Go2Pvcnn/extension/batched_together_planner/schedule.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/terrain.py](../../Go2Pvcnn/extension/batched_together_planner/terrain.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/parameterization.py](../../Go2Pvcnn/extension/batched_together_planner/parameterization.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/costs.py](../../Go2Pvcnn/extension/batched_together_planner/costs.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/planner.py](../../Go2Pvcnn/extension/batched_together_planner/planner.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/types.py](../../Go2Pvcnn/extension/batched_together_planner/types.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/manager.py](../../Go2Pvcnn/extension/batched_together_planner/manager.py)
+  - [../../Go2Pvcnn/extension/mdp/rewards_reference.py](../../Go2Pvcnn/extension/mdp/rewards_reference.py)
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py)
+  - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py](../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_core.py](../../Go2Pvcnn/tests/test_batched_together_core.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_guardrails.py](../../Go2Pvcnn/tests/test_batched_together_guardrails.py)
+  - [../../Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py](../../Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py)
+- approved design source:
+  - reviewed and ready for todo breakdown: [../../docs/superpowers/specs/2026-05-09-k5-mode-first-cross-small-design.md](../../docs/superpowers/specs/2026-05-09-k5-mode-first-cross-small-design.md)
+- hard constraints:
+  - fixed `K=5` candidate axis for every mode
+  - global mode is computed before rollout; candidates do not compete over mode
+  - pre-rollout mode classifier must replace old post-rollout state classifier before `expand_segment(...)`
+  - candidate contract is `c_k=(beta_k, route_k, J_k)` with no `valid_k`, no `HOLD`, and no `REFUSE_OR_HOLD`
+  - routes are relative to command direction, not base frame
+  - no semantic-obstacle case uses only center speed ladder from current command down to zero
+  - ordinary `small` obstacles use `APPROACH_SMALL` then a merged `CROSS_SMALL` gait; bypass is reserved for `large` or too-high/unusable `small`
+  - all modes share `1.0s`, `dt=0.02`, `50` steps, `event_cap=2`
+  - `CROSS_SMALL` plans complete four-leg crossing in one horizon using command-relative staggered crossing schedule and dynamic obstacle geometry
+  - small obstacle crossing must be tested for forward, backward, lateral-left, and lateral-right command directions
+  - `CROSS_SMALL` may return to `CRUISE` only after root/body and all four leg anchors clear the small back edge
+  - `APPROACH_SMALL` must obey no-premature-crossing inequalities for root/body/touchdowns
+  - `BYPASS_OBSTACLE` cannot count center/zero-speed as successful bypass when a safe non-center bypass exists
+  - dynamic touchdown/apex generation depends on current root, feet anchors, command direction, small front/back/top geometry, terrain support, and reachability
+  - small geometry must use fixed-grid GPU reductions, not `nonzero`/`argwhere`/`masked_select` or env loops
+  - implementation must modify existing together planner files; do not add a parallel planner code path
+  - obsolete `K=3`, 35-step, and `front_cross/rear_follow/clear` implementation details should be deleted or replaced, not kept as dormant compatibility code
+  - planner hot paths remain pure GPU / fixed shape / no NumPy / no CPU sync / no `argwhere` / no `masked_select` / no dynamic subbatch / no hot-path Python loop over env/candidate/leg
+  - `env_isaacsim` runtime tests must use `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`
+  - Isaac Lab runtime commands must be timeout-wrapped and cleaned up so they do not occupy GPU indefinitely
+- deterministic acceptance fixtures required by spec:
+  - `F1_cruise_no_semantic_k5_speed_ladder`
+  - `F2_cruise_uneven_terrain_selects_slower_center_speed`
+  - `F3_lateral_command_direction_guard`
+  - `F4_forward_command_no_backward_progress`
+  - `F5_approach_small_does_not_cross_or_touch`
+  - `F6_cross_small_four_leg_success_all_command_directions`
+  - `F7_cross_small_dynamic_geometry_changes_with_obstacle_position_and_direction`
+  - `F8_cross_small_rejects_touchdown_on_small`
+  - `F9_cross_small_rejects_per_leg_foot_path_collision`
+  - `F10_cross_small_rejects_base_body_thigh_calf_collision`
+  - `F11_too_high_small_uses_bypass`
+  - `F12_large_blocks_center_uses_bypass`
+  - `F13_k5_shape_consistency_all_modes`
+  - `F14_horizon_50_contract`
+- runtime acceptance cases required by spec:
+  - `R1_cruise_no_semantic_no_bypass`
+  - `R2_small_cross_runtime_four_leg_success_all_command_directions`
+  - `R3_small_cross_runtime_no_touchdown_on_small_all_directions`
+  - `R4_small_cross_runtime_no_foot_path_collision_all_directions`
+  - `R5_small_cross_runtime_no_base_body_leg_penetration_all_directions`
+  - `R6_large_runtime_bypass_direction_guard`
+  - `R7_lateral_runtime_no_opposite_direction_rejection_left_and_right`
+- required metrics:
+  - `mode`
+  - `selected_beta`
+  - `selected_route`
+  - `semantic_candidate_costs [B,5]`
+  - `direction_id`
+  - `command_direction_xy`
+  - `obstacle_s_l`
+  - `small_front_s`
+  - `small_back_s`
+  - `small_top_z`
+  - `small_relative_height`
+  - `root_to_front_s`
+  - `root_to_back_s`
+  - `approach_window_mask`
+  - `cross_window_mask`
+  - `too_high_small_mask`
+  - `touchdown_on_small_count`
+  - `foot_small_collision_count`
+  - `base_small_penetration_count`
+  - `body_min_clearance`
+  - `leg_min_clearance`
+  - `per_leg_touchdown_on_small_count`
+  - `per_leg_foot_small_collision_count`
+  - `per_leg_min_clearance_to_small`
+  - `per_leg_touchdown_beyond_small_back_edge`
+  - `touchdown_ground_gap_by_leg`
+  - `touchdown_semantic_by_leg`
+  - `touchdown_frame_by_leg`
+  - `command_leading_before_trailing_schedule_ok`
+  - `cross_small_success`
+  - `command_direction_violation`
+- next:
+  - implement the approved `T116i` follow-up without reopening old T113/T114/T115 architectures
+  - use T117 for post-completion test/todo cleanup rather than reopening T116 implementation leaves
+
+#### T116i nonzero speed candidates and hard-reason diagnostics
+
+- why-created: The user observed a viewer plan with `cmd=(+0.40,+0.00,+0.00)` but `delta=(+0.00,+0.00,+0.00)` and `standstill=True`. Code analysis showed this can happen because K=5 candidate tables still include `beta=0`, so a nonzero user command can select a no-speed candidate. The user also identified that if all candidates enter hard constraints, a flat large barrier loses useful distinction and the terminal output does not explain the hard reason.
+- status: `done`
+- execution-control: main agent controls flow and review; worker subagents own code/test edits. Main agent must not directly edit production/test code for this leaf.
+- approved design source:
+  - [../../docs/superpowers/specs/2026-05-10-nonzero-speed-hard-reason-design.md](../../docs/superpowers/specs/2026-05-10-nonzero-speed-hard-reason-design.md)
+- parent:
+  - T116 K=5 mode-first small-obstacle crossing rewrite
+- owner-write-scope:
+  - [../../Go2Pvcnn/extension/batched_together_planner/config.py](../../Go2Pvcnn/extension/batched_together_planner/config.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/costs.py](../../Go2Pvcnn/extension/batched_together_planner/costs.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/planner.py](../../Go2Pvcnn/extension/batched_together_planner/planner.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/types.py](../../Go2Pvcnn/extension/batched_together_planner/types.py)
+  - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_core.py](../../Go2Pvcnn/tests/test_batched_together_core.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_guardrails.py](../../Go2Pvcnn/tests/test_batched_together_guardrails.py)
+  - [../../Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py](../../Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py)
+  - [../../Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py](../../Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py)
+- hard constraints:
+  - keep fixed `K=5` for all modes
+  - remove `beta=0` from nonzero-command candidate tables instead of masking it only at selection time
+  - true standstill remains allowed only when the input command itself is zero
+  - no new planner source files
+  - planner hot paths remain GPU tensorized and fixed-shape; no NumPy, `.cpu()`, `.item()`, `.tolist()`, `nonzero`, `argwhere`, `masked_select`, env/candidate/leg Python loops, or dynamic subbatch in the hot path
+  - all-hard fallback must select by `candidate_hard_rank_cost` and keep `status=ALL_INFEASIBLE`
+  - viewer/test reporting may convert fixed tensors to strings, but production planner hot path stores tensors only
+  - IsaacSim runtime acceptance uses `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`, headless output, and timeout cleanup
+- required behavior:
+  - nonzero command candidate tables:
+    - `CRUISE beta=[1.00,0.80,0.60,0.40,0.20]`
+    - `APPROACH_SMALL beta=[0.80,0.65,0.50,0.35,0.20]`
+    - `CROSS_SMALL beta=[0.60,0.50,0.40,0.30,0.20]`
+    - `BYPASS_OBSTACLE beta=[0.60,0.40,0.60,0.40,0.20]`
+  - expose fixed-shape diagnostics:
+    - `candidate_hard_reason_mask [B,5,R]`
+    - `selected_hard_reason_mask [B,R]`
+    - `candidate_hard_rank_cost [B,5]`
+    - `selected_hard_rank_cost [B]`
+  - hard reasons include at least boundary/path, body/leg hard collision, crossing not grounded, touchdown/foot/base small violations, large obstacle violations, and direction violation
+  - terminal diagnostics for infeasible plans include selected reasons and per-candidate hard rank/reason summaries
+- deterministic acceptance:
+  - flat/no-semantic K=5 candidate table has no `beta=0`
+  - zero command still produces true hold/standstill through command hold path
+  - constructed all-hard fixture has `status=ALL_INFEASIBLE`, `selected_beta>0`, reason-mask shape `[B,5,R]`, rank-cost shape `[B,5]`, and selected index equals `argmin(candidate_hard_rank_cost)`
+- runtime acceptance:
+  - flat/no-semantic headless cases for forward/backward/lateral-left/lateral-right/yaw-left/yaw-right have `standstill=False` for nonzero commands, `selected_beta>0`, `mode=CRUISE`, center route for non-bypass, no direction violation, and no selected hard reason
+  - flat small-obstacle headless cases for forward/backward/lateral-left/lateral-right cross or approach-then-cross with `selected_beta>0`, no touchdown-on-small, no foot-small collision, no base/body/leg penetration, and successful `CROSS_SMALL` evidence
+  - if any headless runtime reaches `ALL_INFEASIBLE`, output must include `selected_hard_reasons`, `candidate_hard_rank`, and `candidate_hard_reasons`
+- related log:
+  - [../log/2026-05-10-2138-t116i-nonzero-speed-hard-reason-todo.md](../log/2026-05-10-2138-t116i-nonzero-speed-hard-reason-todo.md)
+  - [../log/2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md](../log/2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md)
+  - [../log/2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md](../log/2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md)
+  - [../log/2026-05-10-2223-t116i-main-review-final-verification.md](../log/2026-05-10-2223-t116i-main-review-final-verification.md)
+- implementation evidence:
+  - RED beta table: `1 failed, 3 deselected` because old K=5 tables still included `0.0`.
+  - RED hard reason/all-hard: `3 failed, 1 passed` because hard-reason result fields did not exist.
+  - GREEN deterministic: `Go2Pvcnn/tests/test_t116i_nonzero_speed_hard_reasons.py` -> `6 passed`.
+  - GREEN regression: `test_batched_together_core.py` + `test_batched_together_guardrails.py` -> `17 passed`.
+  - env_isaacsim selected path: timeout-wrapped T116i `headless or flat or small` subset -> `1 passed, 5 deselected`.
+  - hot-path prohibited-pattern grep across touched planner files returned no matches.
+- review-fix evidence:
+  - RED production viewer output: missing `_format_viewer_plan_line`.
+  - GREEN T116i default: `7 passed, 1 skipped`.
+  - GREEN core/guardrail: `17 passed`.
+  - env_isaacsim `headless or flat or small` collect-only: `2/8 tests collected (6 deselected)`.
+  - env_isaacsim small-only proof: `1 selected`, `test_t116i_headless_small_obstacle_crossing_runtime_all_directions`, exit code `0`.
+  - required env_isaacsim command exited `0`; quiet summary was suppressed after Isaac app shutdown.
+- final controller evidence:
+  - Read-only review subagent approved the final T116i scope with no blocking findings.
+  - Fresh main-agent T116i verification: `7 passed, 1 skipped`.
+  - Fresh main-agent core/guardrail regression: `17 passed`.
+  - Fresh `py_compile` and `git diff --check`: exit `0`.
+  - Fresh env_isaacsim `headless or flat or small` command: exit `0`, with collect-only proving flat + small tests selected.
+  - Post-runtime process check found no lingering Isaac/pytest processes.
+- implementation plan:
+  - [../../docs/superpowers/plans/2026-05-10-t116i-nonzero-speed-hard-reason.md](../../docs/superpowers/plans/2026-05-10-t116i-nonzero-speed-hard-reason.md)
+- dependencies:
+  - T116a-h final mainline
+- blocks:
+  - none; T116i is closed
+
+#### T116a contract/schema/horizon/K=5 rewrite
+
+- why-created: Every later T116 change depends on the public fixed-shape contract changing from old `K=3`/35-frame semantics to `K=5`/50-step semantics, and direct consumers must stop assuming `semantic_candidate_count == 3`.
+- status: `done`
+- owner-write-scope:
+  - [../../Go2Pvcnn/extension/batched_together_planner/config.py](../../Go2Pvcnn/extension/batched_together_planner/config.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/types.py](../../Go2Pvcnn/extension/batched_together_planner/types.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/planner.py](../../Go2Pvcnn/extension/batched_together_planner/planner.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/manager.py](../../Go2Pvcnn/extension/batched_together_planner/manager.py)
+  - [../../Go2Pvcnn/extension/mdp/rewards_reference.py](../../Go2Pvcnn/extension/mdp/rewards_reference.py)
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py)
+  - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_core.py](../../Go2Pvcnn/tests/test_batched_together_core.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_guardrails.py](../../Go2Pvcnn/tests/test_batched_together_guardrails.py)
+- do-not-touch:
+  - crossing mode classifier logic in `parameterization.py`
+  - cost barrier selection in `costs.py`
+  - runtime harness semantics beyond shape field passthrough
+- TDD red tests:
+  - `test_t116_f13_k5_shape_consistency_all_modes`
+  - `test_t116_f14_horizon_50_contract`
+  - `test_t116_candidate_axis_is_k5_and_no_k3_route_only_fallback`
+  - `test_t116_horizon_50_no_35_step_contract_in_hot_path`
+- implementation contract:
+  - `FIXED_HORIZON_S = 1.0`, `FIXED_HORIZON_STEPS = 50`, `FIXED_EVENT_CAP = 2`
+  - replace `semantic_candidate_count` with a T116 candidate count of `5`
+  - minimally update `planner.py` so the existing planning entrypoint can produce a fixed `[B, 5]` candidate axis without triggering the old `semantic_candidate_count == 3` route helper; do not implement new mode behavior in this leaf
+  - update direct 50-step consumers in `manager.py`, `rewards_reference.py`, `teacher_elevation_trajectory_env_cfg.py`, and `go2_foostep_planner.py`
+  - `TogetherPlannerResult.semantic_candidate_costs` must validate shape `[B, 5]`
+  - expose placeholder-safe new result fields needed by later leaves without CPU sync: `mode`, `selected_beta`, `selected_route`, `direction_id`, `small_front_s`, `small_back_s`, `small_top_z`, `command_direction_violation`, `cross_small_success`, per-leg touchdown/path/clearance masks
+  - old tests that assert shape `[B, 3]` or `35` frames must fail before implementation and pass after update
 - verification:
-  - Red test caught frozen terminal root z before implementation.
-  - `test_batched_together_core.py`, `test_batched_together_parity.py`, and `test_batched_together_guardrails.py`: `26 passed`.
-  - Runtime/viz subset: `29 passed`.
-  - Combined core/parity/guardrail/runtime/viz subset: `55 passed`.
-  - CUDA diagnostic recovered root rpy `[0.22, -0.16, 0.70] -> [0.0, 0.0, 0.70]` and root z `0.18 -> 0.30`.
-  - Headless viewer scripted forward then zero command reached playback with plan/actual near `z=+0.30` and `rpy=0`; process was timeout-terminated by design with no residual GPU compute process.
-  - Follow-up viewer handoff regression: repeated zero-command replans now show `0.4 -> 0.3` once, then `0.3 -> 0.3` on later segments instead of replaying the same recovery each cycle.
-
-### T101 architecture and fixed-shape runtime design
-
-- why-created: The new planner must be native IsaacLab GPU code, not a direct copy of raw CPU/viewer compatibility layers.
-- decision:
-  - Build `Go2Pvcnn/extension/batched_together_planner/` as a new backend.
-  - Keep `extension.batched_planner` as legacy rollback.
-  - Use a backend factory/attach helper rather than mixing legacy and together internals in one manager.
-- data-flow:
-  - Isaac tensors -> `TogetherTrajectoryManager.refresh_from_env()`
-  - `TogetherPlannerTerrain.from_ray_hits()`
-  - `plan_segment()`
-  - device-preserving adapter to `TogetherPlannerResult` / legacy-compatible output surface
-  - GPU resident reference cache
-  - manager-owned reward gather snapshot.
-- hard runtime rules:
-  - Planner calls always receive full `[N, ...]` tensors.
-  - `replan_mask [N]` controls whether a new result is accepted per env, not which envs are planned.
-  - The together training path must never branch on GPU tensor masks before planner call.
-  - Planner call cadence may be controlled only by host-known scalar state such as manager step token or a fixed host cadence.
-  - No dynamic shapes created from `replan_mask`.
-
-### T102 module API, manager protocol, and GPU cache ABI
-
-- requirement:
-  - New modules: `types.py`, `config.py`, `terrain.py`, `schedule.py`, `optimizer.py`, `parameterization.py`, `kinematics.py`, `costs.py`, `planner.py`, `adapter.py`, `manager.py`.
-  - Expose a legacy-compatible external surface without copying legacy internals.
-- manager protocol:
-  - `refresh_from_env(env) -> ReferenceTrajectoryCache`
-  - `current_reference() -> dict[str, Tensor]`
-  - `current_frame_ids() -> Tensor`
-  - `reset_envs(env_mask: Tensor) -> None`
-  - `mark_command_changed(...)` or equivalent host-side dirty token from command manager / command wrapper
-  - maintain `env.unwrapped._trajectory_reference_cache`
-  - same env step is idempotent: repeated reward terms read the same snapshot and do not advance phase twice.
-- GPU cache ABI:
-  - Together training path must not call the existing CPU-canonical `planner_result_to_reference_cache()` converter.
-  - Add a device-preserving cache adapter for together training.
-  - `ReferenceTrajectoryCache.is_ready()` shape contract may be reused, but canonical CPU status is not required for together training.
-  - Legacy/raw parity code may still use canonical CPU conversion.
-- result schema:
-  - Internal `TogetherPlannerResult` should include raw-like fields:
-    - `root_pos`
-    - `root_rpy`
-    - `foot_pos`
-    - `joint_angles`
-    - `contact_state`
-    - `touchdown_seq`
-    - `touchdown_mask`
-    - `cost_total`
-    - `cost_breakdown`
-    - `status`
-    - `feasible`
-    - `safe_fallback`
-    - IK diagnostics: `joint_limit_violation`, `workspace_margin`
-    - support diagnostics: selected `support_xy`, `support_height`, `support_slope` when available.
-  - Adapter maps result fields to reward-facing `root_pos_w`, `root_quat_w`, `joint_angles`, `foot_pos_root`, `contact_state`, `planned_touchdown_w`, `phase_index`, `valid_mask`.
-
-### T103 raw planner core semantic migration
-
-- requirement:
-  - Align to raw `batch_planner` semantics while excluding raw CPU/viewer boundaries.
-  - Do not migrate raw `adapter.py` NumPy conversion, raw terrain `height_at/local_window` CPU sampling, raw cache-key `.item()` logic, or viewer playback/logging into training hot path.
-- raw semantic contract:
-  - `config`: mirror raw `BatchPlannerConfig` fixed contract and tuning fields or provide explicit field-by-field parity tests.
-  - `schedule`: exact `contact_state` and `touchdown_mask` semantics; Isaac version must avoid raw `nonzero`/leg loops.
-  - `seeds/CEM`: preserve seed templates, command/state gates, CEM selection semantics, and cost ranking.
-  - `parameterization`: preserve root-frame template priority, swing phase, support stance reference, base-frame command integration, touchdown/support target rules.
-  - `terrain support`: preserve local patch height, geometry smoothing, slope, support relocation, and no low-ground fallback semantics using GPU batched queries.
-  - `costs`: preserve `J_td`, `J_swing`, `J_ik`, `J_base`, `J_vel` and total weighting.
-  - `IK`: preserve joint angle, joint-limit, and workspace-margin semantics.
-  - `fallback/rehome`: preserve zero-command recovery, safe fallback, and all-infeasible display/training-safe behavior.
-  - `result schema`: preserve raw field shape/meaning where exposed through together result.
-- guardrails from raw active work:
-  - T412 root-frame template-first is core planner behavior, not viewer-only.
-  - T409/T410 no support penetration and no low-ground fallback must remain semantic-free: no terrain labels, only command/state/heightmap/support/IK signals.
-  - T413 centralized config must be mirrored or parity-tested.
-  - T414 host-sync removal must be treated as a minimum bar, then tightened for Isaac training.
-
-### T104 fixed-shape full-batch manager/cache blending
-
-- requirement:
-  - Replace legacy dynamic sub-batch behavior for the `together` backend.
-  - No `nonzero -> index_select -> planner(sub_batch)` training path.
-  - No `if torch.any(replan_mask)` or `torch.allclose`/`torch.equal` GPU-tensor Python branch to decide planner execution.
-- design:
-  - Maintain `old_cache`, `new_cache`, `fallback_cache`, `phase_counter`, `replan_mask`, `new_ok_mask`, `replace_mask`, and `fallback_mask`.
-  - Planner attempts produce full `[N, 35, ...]` results only when a host-visible trigger fires:
-    - velocity command changed;
-    - reset occurred;
-    - the `0.7s` / `35` frame replan interval expired.
-  - Manager updates cache rows with `torch.where`.
-  - Phase resets to `0` where `replace_mask OR fallback_mask` is true; otherwise advances/clamps by tensor operation.
-  - Reward frame ids come from `TogetherTrajectoryManager.current_frame_ids()` / `current_reference()`, not `episode_length_buf % horizon`.
-  - Step idempotence guard uses a host step token, not GPU tensor equality.
-  - Command-change detection must be driven by a host-side dirty token, version counter, or explicit hook from command/reset handling. It must not compare GPU command tensors and branch on the resulting tensor.
-- trigger semantics:
-  - If a trigger fires, the planner still receives all env rows `[N, ...]`.
-  - Per-env `replan_mask` can mark which rows should accept the new result, but it cannot determine planner batch shape or planner execution.
-  - If only one env command changes, the planner call is still full `N`; unaffected envs normally keep old cache rows through `keep_mask`.
-- masks:
-  - `must_replace_mask = first_cache OR reset_mask OR cache_invalid`
-  - `soft_replan_mask = replan_mask AND NOT must_replace_mask`
-  - `new_ok_mask = result.feasible OR result.safe_fallback`
-  - `replace_mask = must_replace_mask AND new_ok_mask OR soft_replan_mask AND new_ok_mask`
-  - `fallback_mask = must_replace_mask AND NOT new_ok_mask`
-  - `keep_mask = NOT replace_mask AND NOT fallback_mask`
-- fallback rule:
-  - `fallback_mask` rows receive a GPU-generated current-state standstill/rehome cache, not an invalid planner row.
-  - `safe_fallback` is true only for finite, shape-valid, training-safe fallback rows whose IK/workspace diagnostics pass configured fallback thresholds.
-- cache blend shape rule:
-  - `[N, H, 3]` fields use mask shape `[N, 1, 1]`.
-  - `[N, H, 4]` fields use `[N, 1, 1]`.
-  - `[N, H, 4, 3]` fields use `[N, 1, 1, 1]`.
-  - `index_copy_`, masked row writes, and dynamic row gathering are forbidden in together training path.
-
-### T105 env cfg, train/play/viewer backend switch
-
-- requirement:
-  - Add `planner_backend = "together" | "legacy"` to `teacher_elevation_trajectory_env_cfg.py`.
-  - Default `together` uses `reference_trajectory_horizon = 35`, `plan_dt`/`dt = 0.02`.
-  - Viewer uses the same backend name but remains excluded from training-path CPU/static guardrails.
-- backend factory:
-  - Add a neutral factory such as `extension/trajectory_manager_factory.py`.
-  - `planner_backend="legacy"` attaches the existing `BatchedTrajectoryManager`.
-  - `planner_backend="together"` attaches `TogetherTrajectoryManager`.
-  - Invalid backend raises a clear error.
-  - `train.py`, `play.py`, and viewer attach helper should route through the factory or a shared attach helper.
-- isolation:
-  - Static together guardrail must not scan `extension/batched_planner/**` as if it were together code.
-  - Viewer CPU exceptions are limited to `extension/viz/**`.
-
-### T106 parity and behavior tests
-
-- requirement:
-  - A-level behavior alignment and B-level tensor parity are both required.
-  - Tests must be executable, not just narrative.
-- parity matrix:
-
-| Area | B-level fields | Exact/tolerance | P0 scenarios |
-| --- | --- | --- | --- |
-| schedule | `contact_state`, `touchdown_mask` | exact | flat zero/forward/lateral/yaw/combo, mixed batch |
-| kinematics | `joint_angles`, `joint_limit_violation`, `workspace_margin` | flat `1e-5` to `1e-4`; terrain measured | flat commands, all-infeasible fallback |
-| trajectory | `root_pos`, `root_rpy`, `foot_pos`, `touchdown_seq` | flat tight; terrain z/support 1-3 cm | forward/lateral/yaw, yaw=`pi/2`, stair turn |
-| costs | `cost_total`, `J_td`, `J_swing`, `J_ik`, `J_base`, `J_vel` | close on identical fixtures; trend on complex terrain | flat, step, rocky |
-| support query | `support_xy`, `support_height`, `support_slope` | XY <= 2-3 cm, support gap <= 5 cm | stair top/riser, stairs->rocky |
-| status | `status`, `feasible`, `safe_fallback` | exact semantics | feasible, all-infeasible, safe fallback |
-
-- A-level behavior:
-  - forward/lateral/yaw command response;
-  - base-frame command with yaw `pi/2`;
-  - zero-command root-frame template recovery;
-  - stair-turn event-root-frame touchdown template;
-  - stairs->rocky no low-ground fallback;
-  - no riser/support penetration;
-  - mixed full batch with different per-row commands.
-- raw guardrail thresholds to carry forward:
-  - `forward_mid` late segment amplitude `>= 0.60`;
-  - `forward_max` late segment amplitude `>= 0.52`;
-  - direction error should be recorded and must not regress without an explicit note.
-- together manager tests:
-  - reset/command-change/interval triggers still call planner with full `N`.
-  - no planner call occurs when no host trigger is pending and the interval has not expired.
-  - host command dirty token changes cause exactly one full-`N` planner attempt for the affected env step.
-  - old/new cache truth table covers `first_cache`, `reset`, `cache_invalid`, `soft_replan`, `feasible`, `safe_fallback`, and infeasible/no fallback.
-  - multiple reward terms in one step do not advance phase twice.
-  - accepted rows phase reset to `0`; kept rows phase advances/clamps.
-  - cache tensors stay on CUDA when CUDA is available.
-
-### T107 performance and scaling benchmarks
-
-- P0 smoke:
-  - `num_envs=1`
-  - `num_envs=32`
-  - `num_envs=128`
-  - check full-batch call size, cache shape, phase behavior, and no CPU transfer.
-- latest evidence:
-  - `num_envs=32`, `max_iterations=1`, together training passed with `Total steps: 1280`.
-  - `num_envs=128`, `max_iterations=1`, together training passed with `Total steps: 5120`.
-  - `num_envs=16`, `max_iterations=1`, legacy rollback training passed.
-  - Real Isaac env cadence test at `num_envs=4` recorded full-N planner call batch sizes `[4, 4, 4, 4]` for reset, one-env command dirty, interval, and command hook triggers.
-- Optional CUDA benchmark:
-  - `num_envs=1024`
-  - `num_envs=4096`
-  - use CUDA events/median timing where possible.
-  - record planner call count, batch size, GPU memory, and planner stage times.
-- benchmark meaning:
-  - Legacy partial-replan benchmarks are not together acceptance tests.
-  - Together benchmarks must measure fixed-shape full-batch behavior.
-
-### T108 static training-path guardrail
-
-- why-created: User explicitly requested code tests that detect forbidden CPU package use and forbidden loops in the training path.
-- test file:
-  - `Go2Pvcnn/tests/test_batched_together_guardrails.py`
-- scan manifest:
-  - `Go2Pvcnn/extension/batched_together_planner/**/*.py`
-  - backend factory / attach helper
-  - together-related `teacher_elevation_trajectory_env_cfg.py` wiring
-  - reward/cache gather changes introduced for together.
-- exclude:
-  - `Go2Pvcnn/extension/viz/**`
-  - `Go2Pvcnn/extension/batched_planner/**`
-  - raw bridge/reference-only code
-  - tests and benchmarks unless a specific guardrail test targets them.
-- forbidden in scanned training path:
-  - `import numpy`, `from numpy`, `np.`
-  - `.cpu()`
-  - `.item()`
-  - `.numpy()`
-  - `.tolist()`
-  - `.detach().cpu()`
-  - `bool(tensor...)`, `int(tensor...)`, `float(tensor...)` where the argument is tensor-derived
-  - `torch.equal`, `torch.allclose` for manager step idempotence or planner execution decisions
-  - `torch.cuda.synchronize`
-  - `nonzero`
-  - `index_select` for env/candidate dynamic sub-batches
-  - `index_copy_`
-  - `masked_select`
-  - `torch.split` / `chunk` over candidate/env hot-path dimensions
-  - dynamic planner call on a sub-batch.
-- `for` rule:
-  - No Python `for` loops in together hot-path files/functions.
-  - Hot path includes `plan_segment`, `refresh_from_env`, adapter/cache conversion, terrain query, schedule, optimizer, parameterization, costs, kinematics, and reward gather changes.
-  - Fixed CEM iteration loops are not automatically exempt; if CEM iteration remains, it must be vectorized/unrolled or explicitly approved by the user before implementation.
-- path coverage:
-  - If a future file is added under `batched_together_planner/` and is not covered by the scan manifest or an allowlist with reason, guardrail fails.
-
-### T109 viewer together root-z ratchet
-
-- why-created: User reported, with a viewer screenshot, that the robot "walks then flies" when launching the viewer.
-- status: `verify`; fixed by stabilizing together viewer handoff root z, but interactive visual confirmation remains.
-- scope:
-  - Primary affected workflow: `Go2Pvcnn/extension/viz/go2_foostep_planner.py` together viewer playback and segment handoff.
-  - Related planner workflow: `Go2Pvcnn/extension/batched_together_planner/parameterization.py` root z trajectory and raw single-segment parity.
-  - Training path must not gain CPU packages, NumPy, or dynamic sub-batch logic from this fix.
-- initial hypothesis:
-  - The together planner's single segment can end with a positive root-z bias.
-  - The viewer uses the last played frame as the next segment's initial state.
-  - Repeated walking replans can therefore accumulate base height even on flat terrain, producing visual lift-off.
-- implemented fix:
-  - Added `_together_handoff_root_pos()` in [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py).
-  - `_together_state_from_reference_result()` now reconstructs the next segment root z from current contact-foot support height plus the segment's initial support clearance.
-  - The fix is viewer-only and preserves raw/together single-segment parity.
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_core.py -q -k "t116_f13 or t116_f14 or schema_shape"`
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_guardrails.py -q -k "t116_candidate_axis or t116_horizon"`
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_viz_playback.py -q -k "t116 or together_n_frames or adapt_together"`
 - evidence:
-  - New regression reproduced `0.3964m` terminal z after 4 viewer-style replans before the fix.
-  - `Go2Pvcnn/tests/test_viz_playback.py`: `20 passed`.
-  - Together parity/core/runtime/guardrail set: `35 passed`.
-  - Headless viewer reached real together playback and was terminated by timeout; later standstill evidence stayed near `plan.z=+0.30`, `actual.z=+0.30`.
-- acceptance:
-  - Regression, relevant unit tests, parity/core/runtime/guardrail tests, py_compile, and headless viewer smoke evidence are complete.
-  - Remaining: manual interactive visual confirmation.
+  - [../log/2026-05-09-1816-t116a-contract-schema-horizon.md](../log/2026-05-09-1816-t116a-contract-schema-horizon.md)
+- outcome:
+  - fixed together contract is now `K=5`, `1.0s`, `50` steps, `event_cap=2`
+  - direct horizon consumers use 50-step defaults or early validation for together mode
+  - `semantic_candidate_costs` validates `[B,5]`
+  - T116 placeholder diagnostics are exposed on planner result and viewer adaptation
+  - `selected_route` is categorical route id with placeholder `CENTER=0`; `selected_route_offset` remains old float compatibility only
+  - behavior remains interface-only: no T116b classifier, T116c route table, T116d crossing gait, or T116e barrier/selection behavior was accepted as part of this leaf
+- dependencies:
+  - none
+- blocks:
+  - T116b
+  - T116c
+  - T116d
+  - T116e
+  - T116f
+  - T116g
+
+#### T116b pre-rollout mode classifier and GPU small geometry
+
+- why-created: T116 requires one global mode per env before rollout, based on root/feet/command/semantic geometry, not old post-rollout `front_cross/rear_follow/clear` labels.
+- status: `done`
+- owner-write-scope:
+  - [../../Go2Pvcnn/extension/batched_together_planner/terrain.py](../../Go2Pvcnn/extension/batched_together_planner/terrain.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/parameterization.py](../../Go2Pvcnn/extension/batched_together_planner/parameterization.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py](../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py)
+- do-not-touch:
+  - route table expansion in `planner.py`
+  - cost selection rules in `costs.py`
+  - runtime harness
+- TDD red tests:
+  - `test_t116_f5_approach_small_does_not_cross_or_touch`
+  - `test_t116_f7_cross_small_dynamic_geometry_changes_with_obstacle_position_and_direction`
+  - `test_t116_no_old_front_rear_clear_mode_contract_in_hot_path`
+- implementation contract:
+  - add/replace pre-rollout tensor classifier `classify_mode_and_geometry(...) -> mode_code [B], small_geometry, gate_masks`
+  - use command-frame `s/l` coordinates with `d = normalize(R(yaw)[vx, vy])` and `n = [-d_y, d_x]`
+  - compute small front/back/top/center with fixed-grid GPU reductions using `where`, `amin`, `amax`, `sum`, `clamp`
+  - no `nonzero`, `argwhere`, `masked_select`, `.cpu()`, `.item()`, env loops, or tensor truthiness
+  - mode set is exactly `CRUISE`, `APPROACH_SMALL`, `CROSS_SMALL`, `BYPASS_OBSTACLE`
+  - `large` in command corridor and too-high `small` must keep priority over any small `all_clear` condition
+  - `all_clear` is only a small-obstacle exit condition and must require body rear and all four anchors beyond small back edge
+  - multiple separated `small` obstacles must not be merged into one giant front/back envelope; use fixed-shape GPU logic to select the nearest/contiguous command-corridor small obstacle
+- verification:
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_semantic_planner.py -q -k "t116_f5 or t116_f7"`
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_guardrails.py -q -k "old_front_rear_clear or no_cpu_sync"`
+- review-gate blockers:
+  - first T116b spec review found `all_clear_mask` could reset large-only `BYPASS_OBSTACLE` to `CRUISE`; add a large-only classifier regression before starting T116c
+  - first T116b spec review found separated small obstacles could be reduced as one huge envelope; add a separated-small geometry regression before starting T116c
+  - T116b re-review found `all_clear_mask` could still reset too-high `small` from `BYPASS_OBSTACLE` to `CRUISE`; add a too-high-small all-clear priority regression before starting T116c
+- evidence:
+  - [../log/2026-05-09-1846-t116b-pre-rollout-classifier.md](../log/2026-05-09-1846-t116b-pre-rollout-classifier.md)
+- outcome:
+  - added `T116ModeGeometry` and `classify_mode_and_geometry(...)` with fixed-shape command-frame `s/l` geometry outputs
+  - mode code set is `CRUISE`, `APPROACH_SMALL`, `CROSS_SMALL`, `BYPASS_OBSTACLE`
+  - `large` and too-high `small` keep `BYPASS_OBSTACLE` priority over any small `all_clear` condition
+  - `all_clear` is scoped to active small interactions and requires body rear plus all four foot anchors beyond `small_back_s`
+  - separated small obstacles are handled by a nearest fixed-shape envelope instead of merging into one giant obstacle span
+  - scope remains classifier/helper only; `planner.py` mode consumption, candidate tables, routes, crossing schedule, touchdown/apex, and cost barriers are not implemented in T116b
+  - quality review accepted the fixed-window small selection as current T116b behavior, with a minor future note that it is heuristic rather than true connected components
+- dependencies:
+  - T116a
+- blocks:
+  - T116c
+  - T116d
+  - T116e
+
+#### T116c mode candidate tables, command-relative routes, and K=5 candidate expansion
+
+- why-created: Candidates must vary speed inside a preselected mode, not compete over old route-only states; route choices must be command-relative and flattened through a stable `[B,5] -> [B*5]` path before later crossing-generation and cost leaves consume them.
+- status: `done`
+- owner-write-scope:
+  - [../../Go2Pvcnn/extension/batched_together_planner/planner.py](../../Go2Pvcnn/extension/batched_together_planner/planner.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_core.py](../../Go2Pvcnn/tests/test_batched_together_core.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py](../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py)
+- do-not-touch:
+  - semantic geometry extraction internals except consuming `mode_code`
+  - touchdown/apex path generation details
+  - crossing schedule generation in `schedule.py`
+  - cost barrier selection rules in `costs.py`
+  - runtime harness
+- TDD red tests:
+  - `test_t116_f1_cruise_no_semantic_k5_speed_ladder`
+  - `test_t116_f3_lateral_command_direction_guard`
+  - `test_t116_f4_forward_command_no_backward_progress`
+  - `test_t116_f11_too_high_small_uses_bypass_table`
+  - `test_t116_f12_large_blocks_center_uses_bypass_table`
+- implementation contract:
+  - mode tables: `CRUISE [1.0,0.75,0.5,0.25,0.0]`, `APPROACH_SMALL [0.8,0.6,0.4,0.2,0.0]`, `CROSS_SMALL [0.5,0.35,0.2,0.1,0.0]`, `BYPASS_OBSTACLE routes [LEFT,LEFT,RIGHT,RIGHT,CENTER] beta [0.5,0.25,0.5,0.25,0.0]`
+  - gather tables by `mode_code`, flatten `[B,5] -> [B*5]`
+  - selected routes are command-relative; no body-frame left/right assumptions
+  - no semantic obstacle and no large obstacle uses center speed ladder only, with no left/right bypass
+  - this leaf may pass a placeholder phase table through the current schedule contract, but the true command-leading `CROSS_SMALL` schedule belongs to T116d
+- verification:
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_semantic_planner.py -q -k "t116_f1 or t116_f3 or t116_f4 or t116_f11 or t116_f12"`
+- evidence:
+  - [../log/2026-05-09-1904-t116c-mode-candidate-tables.md](../log/2026-05-09-1904-t116c-mode-candidate-tables.md)
+- outcome:
+  - `planner.py` now consumes `classify_mode_and_geometry(...)` before rollout and gathers fixed K=5 beta/route tables by one global `mode_code [B]`
+  - candidates vary speed/route inside the selected mode and flatten through `[B,5] -> [B*5]`
+  - CRUISE/APPROACH_SMALL/CROSS_SMALL use center route speed ladders; BYPASS_OBSTACLE uses `[LEFT, LEFT, RIGHT, RIGHT, CENTER]`
+  - route motion is injected command-relative through candidate commands; `selected_route` is the categorical T116 route diagnostic
+  - `selected_route_offset` remains a compatibility field and is not the authoritative route identity for T116
+  - no T116d crossing touchdown/apex/schedule or T116e barrier/selection behavior was added
+- follow-up:
+  - T116e must add final bypass/center-route barriers and selection rules; current costs may still choose a zero-center bypass candidate
+  - T116f should add black-box `plan_segment` assertions so table helper tests cannot pass if planner stops consuming the tables
+- dependencies:
+  - T116a
+  - T116b for final integration
+- blocks:
+  - T116d
+  - T116e
+
+#### T116d dynamic `CROSS_SMALL` touchdown/apex/foot-path generation
+
+- why-created: The user wants actual gait change for small obstacles; touchdowns must be generated beyond the small back edge on legal terrain, with apex and path clearance from current geometry.
+- status: `done`
+- owner-write-scope:
+  - [../../Go2Pvcnn/extension/batched_together_planner/schedule.py](../../Go2Pvcnn/extension/batched_together_planner/schedule.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/parameterization.py](../../Go2Pvcnn/extension/batched_together_planner/parameterization.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py](../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py)
+- do-not-touch:
+  - top-level candidate selection in `planner.py`
+  - cost weighting except exposing geometry needed for T116e
+  - runtime harness
+- TDD red tests:
+  - `test_t116_f6_cross_small_four_leg_success_all_command_directions`
+  - `test_t116_f8_cross_small_rejects_touchdown_on_small`
+  - `test_t116_f9_cross_small_rejects_per_leg_foot_path_collision`
+  - `test_t116_cross_small_schedule_staggers_command_leading_then_trailing`
+- implementation contract:
+  - for `CROSS_SMALL`, all four touchdown targets must satisfy `touchdown_s > small_back_s + margin`
+  - `CROSS_SMALL` schedule assigns earlier swing slots to command-leading legs by projection along command direction, without persisting hidden crossing progress state across replans
+  - touchdowns must be terrain semantic, grounded to selected support, and away from small boundary
+  - apex must use `small_center_xy` and `small_top_z + crossing_clearance`
+  - foot path and anchor-to-touchdown leg path must be generated from current anchor, apex, and touchdown
+  - four command directions are required: forward, backward, lateral-left, lateral-right
+  - if legal terrain beyond small is unavailable, `CROSS_SMALL` candidates must become infeasible rather than falling back to touchdown on small
+- verification:
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_semantic_planner.py -q -k "t116_f6 or t116_f8 or t116_f9"`
+- evidence:
+  - [../log/2026-05-09-1931-t116d-cross-small-gait.md](../log/2026-05-09-1931-t116d-cross-small-gait.md)
+- outcome:
+  - added command-relative `build_cross_small_schedule(...)` that swings command-leading legs before trailing legs using fixed 4-leg tensor ordering
+  - `planner.py` switches CROSS_SMALL candidates to the cross schedule while preserving the shared K=5 candidate axis
+  - CROSS_SMALL touchdowns are generated beyond selected `small_back_s + margin` and terrain support is queried instead of landing on semantic small
+  - swing apex is raised from `small_top_z` plus clearance/robot margins so positive fixtures clear the obstacle with real foot height
+  - per-leg diagnostics now report touchdown-on-small, foot-path small collisions, min clearance to small, touchdown beyond back edge, touchdown frame, and command-leading schedule validity
+  - quality review found and worker fixed a blocker where foot-path diagnostics previously self-masked collisions by lifting sampled path points before measuring clearance
+  - `cross_small_success` now depends on selected CROSS_SMALL mode, all four touchdowns beyond small back edge, zero touchdown-on-small, zero foot-path-small collision, and command-leading schedule validity
+  - no T116e cost barriers, final selection rules, full body/leg collision barriers, or runtime harness were implemented in this leaf
+- follow-up:
+  - T116e must use these diagnostics as hard/soft barriers and add whole-body/body-thigh-calf semantic/terrain collision selection rules
+  - T116f must keep the low-path collision regression and add final black-box coverage after all deterministic rewrites
+- dependencies:
+  - T116b
+  - T116c
+- blocks:
+  - T116e
+  - T116g
+
+#### T116e cost barriers, selection rules, direction guards, and per-leg diagnostics
+
+- why-created: Even with better candidate generation, final selection must reject touchdown-on-small, path/body/thigh/calf penetration, opposite-direction movement, and fake bypass success.
+- status: `done`
+- owner-write-scope:
+  - [../../Go2Pvcnn/extension/batched_together_planner/costs.py](../../Go2Pvcnn/extension/batched_together_planner/costs.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/planner.py](../../Go2Pvcnn/extension/batched_together_planner/planner.py)
+  - [../../Go2Pvcnn/extension/batched_together_planner/types.py](../../Go2Pvcnn/extension/batched_together_planner/types.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py](../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py)
+- do-not-touch:
+  - geometry classifier internals except consuming masks
+  - schedule table construction
+  - runtime harness
+- TDD red tests:
+  - `test_t116_f2_cruise_uneven_terrain_selects_slower_center_speed`
+  - `test_t116_f4_forward_command_no_backward_progress`
+  - `test_t116_f10_cross_small_rejects_base_body_thigh_calf_collision`
+  - `test_t116_f11_too_high_small_uses_bypass`
+  - `test_t116_f12_large_blocks_center_uses_bypass`
+- implementation contract:
+  - `J_barrier` or equivalent `+inf` barrier for hard violations
+  - `cross_small_success` iff per-leg touchdowns beyond back edge, grounded, foot path clear, root path clear, body/thigh/calf clear, final root/body beyond small back edge
+  - selected `CENTER`/zero-speed is not counted as successful bypass when safe non-center bypass exists
+  - direction guard is tensorized and reports `command_direction_violation`
+  - result diagnostics include `[B,5]` `semantic_candidate_costs`, `selected_beta`, `selected_route`, per-leg touchdown semantic/ground gap/frame/beyond-edge and min-clearance fields
+- verification:
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_semantic_planner.py -q -k "t116_f2 or t116_f4 or t116_f10 or t116_f11 or t116_f12"`
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_core.py -q -k "schema_shape"`
+- evidence:
+  - [../log/2026-05-09-2042-t116e-barriers-selection.md](../log/2026-05-09-2042-t116e-barriers-selection.md)
+- outcome:
+  - hard barriers now cover touchdown/path/body/thigh/calf/base semantic and terrain safety, including `large` semantic contacts and per-leg small foot-path clearance
+  - `CROSS_SMALL` success requires selected mode, grounded touchdowns, per-leg beyond-back-edge touchdowns, no touchdown/path small collision, base/body/leg clearance, final root/body beyond the small back edge, and command-leading schedule validity
+  - normal crossable small fixtures pass for forward/backward/lateral-left/lateral-right with nonzero selected beta, `feasible=True`, and `cross_small_success=True`
+  - thigh/calf collision remains a real hard criterion; foot-path clearance is additional evidence, not a substitute
+  - base XY overlap with `small` remains diagnostic-only unless penetration/clearance fails
+  - direction barriers are applied before candidate selection, and selected `feasible`, `safe_fallback`, `status`, `cost_total`, and `J_barrier` are coherent with the masked candidate costs
+  - spec review approved after two blocker-fix loops; quality review approved after the direction-mask diagnostic consistency fix
+- dependencies:
+  - T116a
+  - T116b
+  - T116c
+  - T116d
+- blocks:
+  - T116f
+  - T116g
+
+#### T116f deterministic and guardrail test rewrite on final deterministic code state
+
+- why-created: Old active tests still encode `K=3`, 35-frame, and `FRONT_CROSS -> REAR_FOLLOW -> CLEAR`; they must be deleted or rewritten so previous focused passes do not falsely certify the new code.
+- status: `done`
+- execution-owner: main agent serializes this leaf or applies it incrementally after each implementation leaf; do not dispatch this as a parallel worker while T116a-e are editing production/tests.
+- owner-write-scope:
+  - [../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py](../../Go2Pvcnn/tests/test_batched_together_semantic_planner.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_core.py](../../Go2Pvcnn/tests/test_batched_together_core.py)
+  - [../../Go2Pvcnn/tests/test_batched_together_guardrails.py](../../Go2Pvcnn/tests/test_batched_together_guardrails.py)
+- do-not-touch:
+  - production planner code except tiny naming/testability fixes approved by main agent
+  - runtime Isaac Lab harness
+- TDD red tests:
+  - all deterministic fixture names from `F1` through `F14`
+  - guardrails `test_t116_candidate_axis_is_k5_and_no_k3_route_only_fallback`, `test_t116_horizon_50_no_35_step_contract_in_hot_path`, `test_t116_no_old_front_rear_clear_mode_contract_in_hot_path`, `test_t116_no_cpu_sync_or_dynamic_geometry_extraction`
+- implementation contract:
+  - remove or rewrite old authoritative K=3/35/front-rear assertions
+  - preserve historical traceability test `test_t116_older_t113_t115_records_are_superseded_non_authoritative`
+  - guardrails must cover no `argwhere`, no `masked_select`, no `to("cpu")`, no tensor truthiness, no dynamic subbatch, no hot-path env/candidate/leg loops
+  - final deterministic pass must run all semantic/core/guardrail tests together after all deterministic code leaves
+- outcome:
+  - old active deterministic expectations were rewritten or demoted to historical evidence
+  - guardrails now reject active old `front_cross/rear_follow/clear` hot-path state contracts
+  - BYPASS route offsets now enter rollout/support/foothold generation instead of only candidate commands
+  - large-obstacle deterministic fixture no longer starts with the initial foot inside the large object
+  - `foot_large_collision_count > 0` remains a hard barrier; T116f did not pass by weakening obstacle safety
+  - F12 large-bypass test was narrowed to non-hard-barrier route candidate construction; final `feasible/status` acceptance is delegated to T116g runtime
+- verification:
+  - focused large/too-high deterministic subset: `5 passed, 30 deselected`
+  - full deterministic/core/guardrail union: `52 passed`
+  - guardrail full file: `9 passed`
+  - `py_compile` touched production/test files: pass
+  - spec compliance review: `APPROVED`
+  - code-quality re-review after F12 scope correction: `APPROVED`
+- dependencies:
+  - T116a
+  - T116b
+  - T116c
+  - T116d
+  - T116e
+- blocks:
+  - T116g
+  - T116h
+
+#### T116g `env_isaacsim` headless runtime diagnostics and acceptance tests
+
+- why-created: The user requires Isaac Lab headless output-based validation, not screenshots, including base path, feet path, touchdowns, body/thigh/calf collision, and four velocity directions.
+- status: `done`
+- owner-write-scope:
+  - [../../Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py](../../Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py)
+  - [../../Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py](../../Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py)
+  - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
+- do-not-touch:
+  - planner deterministic production code except diagnostics passthrough requested by main agent
+  - training-path CPU guardrails
+- TDD red tests:
+  - `test_r1_cruise_no_semantic_no_bypass`
+  - `test_r2_small_cross_runtime_four_leg_success_all_command_directions`
+  - `test_r3_small_cross_runtime_no_touchdown_on_small_all_directions`
+  - `test_r4_small_cross_runtime_no_foot_path_collision_all_directions`
+  - `test_r5_small_cross_runtime_no_base_body_leg_penetration_all_directions`
+  - `test_r6_large_runtime_bypass_direction_guard`
+  - `test_r7_lateral_runtime_no_opposite_direction_rejection_left_and_right`
+- carry-forward requirement from T116f:
+  - large-obstacle runtime acceptance must not stop at route selection; it must report and assert selected `feasible/status`, base path clearance, touchdown semantic ids, feet path clearance, body clearance, and thigh/calf clearance
+  - if large bypass remains `ALL_INFEASIBLE` in headless runtime, record it as a T116g blocker rather than counting deterministic route-candidate coverage as success
+- implementation contract:
+  - runtime cases use `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`
+  - no visual/screenshot acceptance
+  - output reports required diagnostics including direction id, command direction, obstacle geometry, selected beta/route, per-leg touchdown/clearance, `cross_small_success`, and `command_direction_violation`
+  - four-direction small cases must place the small obstacle in `+d` command corridor for forward/backward/lateral-left/lateral-right
+  - every runtime command must preserve exit code and be timeout-wrapped
+- verification:
+  - red evidence: local and `env_isaacsim` collection initially failed on stale `STATE_BYPASS` imports from the old front/rear/clear runtime schema
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "together_viewer_adapter or runtime_plan_diagnostics_builds or grounded_crossing_runtime_sequence_report"` -> `3 passed, 27 deselected`
+  - `timeout -s INT -k 20s 120s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_together_viewer_adapter_preserves_grounded_crossing_fields or test_runtime_plan_diagnostics_builds_grounded_crossing_wrapper or test_grounded_crossing_runtime_sequence_report_summarizes_acceptance_fields"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `3 passed, 26 deselected`, `EXIT_CODE:0`
+  - `timeout -s INT -k 20s 240s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r1_cruise_no_semantic_no_bypass"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - `timeout -s INT -k 20s 420s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r2_small_cross_runtime_four_leg_success_all_command_directions or test_r3_small_cross_runtime_no_touchdown_on_small_all_directions or test_r4_small_cross_runtime_no_foot_path_collision_all_directions or test_r5_small_cross_runtime_no_base_body_leg_penetration_all_directions"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - `timeout -s INT -k 20s 420s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r6_large_runtime_bypass_direction_guard or test_r7_lateral_runtime_no_opposite_direction_rejection_left_and_right"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - final same-state runtime union: `timeout -s INT -k 20s 420s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r1_cruise_no_semantic_no_bypass or test_r2_small_cross_runtime_four_leg_success_all_command_directions or test_r3_small_cross_runtime_no_touchdown_on_small_all_directions or test_r4_small_cross_runtime_no_foot_path_collision_all_directions or test_r5_small_cross_runtime_no_base_body_leg_penetration_all_directions or test_r6_large_runtime_bypass_direction_guard or test_r7_lateral_runtime_no_opposite_direction_rejection_left_and_right"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - `PYTHONPATH=Go2Pvcnn python -m py_compile Go2Pvcnn/extension/viz/go2_foostep_planner.py Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py` -> pass
+  - `rg -n "STATE_BYPASS|STATE_CLEAR|STATE_FRONT_CROSS|STATE_REAR_FOLLOW|front_cross|rear_follow|clear_requires_grounded_completion|runtime_bypass_selected_when_rear_not_groundable" Go2Pvcnn/extension/viz/go2_foostep_planner.py Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py` -> no matches
+- completion-notes:
+  - runtime fixture now surfaces T116 mode-first output metrics: `mode/status/feasible/safe_fallback`, beta/route, command-direction violation, cross-small success, per-leg touchdown/semantic/gap/clearance, base/body/leg clearance
+  - small runtime checks place the obstacle command-relative for forward/backward/lateral-left/lateral-right instead of reusing a world-x-only offset
+  - `R1-R7` are headless output assertions under `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`; no screenshot acceptance was used
+  - large runtime acceptance asserts selected feasible/status via `all(report.feasible_sequence)`, bypass mode, non-center route, and no command-direction violation
+- dependencies:
+  - T116f
+- blocks:
+  - T116h
+
+#### T116h final integration, authoritative rerun, review, and notes/log closure
+
+- why-created: The user explicitly warned that testing after partial changes is not authoritative; final code state must rerun all required deterministic, guardrail, and runtime checks together.
+- status: `done`
+- owner-write-scope:
+  - notes/log files for final evidence
+  - [../todo.md](../todo.md)
+  - [T100 branch](T100-batched-together-planner-gpu-migration.md)
+  - production/test code only for review-driven fixups
+- TDD red tests:
+  - none new; this is final authority and review closure
+- implementation contract:
+  - dispatch spec compliance reviewer and code quality reviewer over the final T116 diff
+  - fix Critical/Important review findings before final verification
+  - rerun deterministic semantic/core/guardrail union on final code state
+  - rerun bounded `env_isaacsim` runtime union with preserved exit code
+  - run py_compile or equivalent syntax check for touched production/test files
+  - record exact commands, results, metrics, and any caveats in a new log file
+- verification:
+  - review findings handled:
+    - classifier no longer reports `CRUISE` when a small obstacle is in the cross window but a foot is already on small; this remains `CROSS_SMALL` and is caught by diagnostics/costs
+    - large runtime R6 now verifies `status_sequence`, `safe_fallback_sequence`, touchdown semantics, foot collision, base/body/leg clearance, and non-center bypass route
+    - planner now emits command `direction_id` instead of hardcoded zero; runtime report checks lateral-left/right IDs
+    - too-high-small stop fallback test is renamed to avoid implying a successful bypass route when all lateral candidates are hard-barriered
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_semantic_planner.py -q -k "direction_id_reports_command_axis or too_high_small or cross_window_foot_on_small"` -> `5 passed, 32 deselected`
+  - `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "together_viewer_adapter or runtime_plan_diagnostics_builds or grounded_crossing_runtime_sequence_report"` -> `3 passed, 27 deselected`
+  - `timeout -s INT -k 20s 420s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r6_large_runtime_bypass_direction_guard"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - `timeout -s INT -k 20s 420s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r7_lateral_runtime_no_opposite_direction_rejection_left_and_right"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - final deterministic/core/guardrail union: `PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batched_together_semantic_planner.py Go2Pvcnn/tests/test_batched_together_core.py Go2Pvcnn/tests/test_batched_together_guardrails.py -q` -> `54 passed`
+  - final runtime union: `timeout -s INT -k 20s 420s bash -lc 'PYTHONPATH=/mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn:/mnt/mydisk/lhy/testPvcnnWithIsaacsim /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest --noconftest Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py -q -k "test_r1_cruise_no_semantic_no_bypass or test_r2_small_cross_runtime_four_leg_success_all_command_directions or test_r3_small_cross_runtime_no_touchdown_on_small_all_directions or test_r4_small_cross_runtime_no_foot_path_collision_all_directions or test_r5_small_cross_runtime_no_base_body_leg_penetration_all_directions or test_r6_large_runtime_bypass_direction_guard or test_r7_lateral_runtime_no_opposite_direction_rejection_left_and_right"; code=$?; echo EXIT_CODE:$code; exit $code'` -> `EXIT_CODE:0`
+  - `PYTHONPATH=Go2Pvcnn python -m py_compile Go2Pvcnn/extension/batched_together_planner/planner.py Go2Pvcnn/extension/batched_together_planner/parameterization.py Go2Pvcnn/extension/viz/go2_foostep_planner.py Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py Go2Pvcnn/tests/test_batched_together_semantic_planner.py` -> pass
+  - `git diff --check` -> pass
+- dependencies:
+  - T116a
+  - T116b
+  - T116c
+  - T116d
+  - T116e
+  - T116f
+  - T116g
+
+### Historical Context Index
+
+- Pre-`T116` detail has been compacted into [T100-pre-t116-history.md](T100-pre-t116-history.md).
+- Use that page when `T116` needs carry-forward constraints, baseline metrics, or old log paths from:
+  - `T101-T108` together backend foundation
+  - `T109-T111` viewer/runtime peripheral fixes
+  - `T112-T115` semantic/state-machine/grounded-crossing historical baselines
+- Do not treat those historical nodes as active implementation leaves unless a future task explicitly reopens them.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import field
+
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -11,6 +13,7 @@ from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
+from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.mdp.observations import downsampled_height_scan
 from extension.mdp.rewards_reference import (
     reference_contact_reward,
@@ -136,8 +139,8 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     planner_owned_reference_cache: bool = True
     use_batched_reference_trajectory: bool = True
     planner_backend: str = "together"
-    reference_trajectory_horizon: int = 35
-    reference_replan_interval_steps: int = 35
+    reference_trajectory_horizon: int = 50
+    reference_replan_interval_steps: int = 50
     plan_dt: float = 0.02
     replan_velocity_scales: list[float] = [1.0, 0.8, 0.6]
     replan_yaw_biases: list[float] = [0.0, 0.15, -0.15]
@@ -155,6 +158,7 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     # Optional: planner-owned timing/diagnostics (quiet by default).
     verbose_planner: bool = False
     verbose_planner_interval_steps: int = 250
+    mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
 
     def __post_init__(self):
         super().__post_init__()
@@ -172,8 +176,8 @@ class TeacherElevationTrajectoryEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
     planner_owned_reference_cache: bool = True
     use_batched_reference_trajectory: bool = True
     planner_backend: str = "together"
-    reference_trajectory_horizon: int = 35
-    reference_replan_interval_steps: int = 35
+    reference_trajectory_horizon: int = 50
+    reference_replan_interval_steps: int = 50
     plan_dt: float = 0.02
     replan_velocity_scales: list[float] = [1.0, 0.8, 0.6]
     replan_yaw_biases: list[float] = [0.0, 0.15, -0.15]
@@ -190,6 +194,7 @@ class TeacherElevationTrajectoryEnvCfg_PLAY(TeacherWithoutSemanticEnvCfg_PLAY):
     max_touchdown_xy_reach: float = 0.22
     verbose_planner: bool = False
     verbose_planner_interval_steps: int = 250
+    mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
 
     def __post_init__(self):
         super().__post_init__()

@@ -19,6 +19,8 @@ The user wants a project-local skill named `inspire` that creates an explicit di
 
 `/inspire` must also integrate with this repository's existing `notes/todo.md`, branch pages, and `notes/log/` workflow. Once work moves beyond discussion, execution should remain subagent-driven: the primary agent owns orchestration, todo/log maintenance, and review; subagents own code changes, testing, and structured result reporting.
 
+The user also wants to avoid repeated approval loops once a stage boundary has already been crossed. Design and todo may remain explicit stop points, but when the user says the next stage should begin, the workflow should advance immediately. After the implementation stage has been approved, execution should run autonomously without any further user approvals.
+
 ## 2. Goals
 
 ### In Scope
@@ -32,12 +34,13 @@ The user wants a project-local skill named `inspire` that creates an explicit di
   - general requirement discussion
 - Require explicit user approval before:
   - generating a design document
-  - writing todo nodes
-  - starting implementation
+  - moving past the design boundary into todo
+  - moving past the todo boundary into implementation
 - Generate a design document by explicitly entering the `brainstorming` workflow, while applying the repository-specific overrides from this spec.
 - Run a subagent review after each design draft, with the review focused on requirement coverage and test/acceptance-metric coverage.
 - Express implementation planning as todo nodes and child nodes, not as a separate plan document.
 - Keep the primary agent out of direct code editing during execution phases; code changes and testing belong to subagents.
+- Preserve stage-level pauses at design and todo, while removing all further approval prompts during execution.
 
 ### Out Of Scope
 
@@ -62,16 +65,18 @@ The design must preserve these confirmed requirements:
 4. Direct user phrasing must not be treated as implicit approval to implement.
 5. Before any implementation work, the agent must wait for explicit approval to:
    - generate a design
-   - write todo
-   - implement
+   - move from design into todo
+   - move from todo into implementation
 6. Design generation should follow `brainstorming` expectations and formatting.
 6a. When the user chooses `生成设计`, `inspire` should explicitly transition into the `brainstorming` design workflow rather than only imitating its style.
 7. After writing a design, the agent must use a subagent to review whether the previously discussed requirement points and test indicators were actually captured.
 8. There should be no standalone implementation plan document in this workflow.
 9. If the user later wants execution planning, the agent should write todo nodes rather than a plan doc.
-10. After todo writing, implementation and testing should still be performed by subagents, not by the primary agent.
-11. The primary agent should own orchestration, todo-state maintenance, log writing, and review.
-12. If results or metrics look strange, the primary agent should create a follow-up node and dispatch another subagent instead of directly editing code.
+10. Design and todo are valid stop points, but if the user explicitly says `继续`, `下一阶段`, or otherwise clearly advances the workflow, the agent should start the next stage immediately without asking the same approval question again.
+11. After todo writing, implementation and testing should still be performed by subagents, not by the primary agent.
+12. The primary agent should own orchestration, todo-state maintenance, log writing, and review.
+13. Once implementation begins, the workflow should not require any further user approval. The primary agent should choose the next ready leaf, wait for the subagent result, and continue orchestrating until complete or objectively blocked.
+14. If results or metrics look strange, the primary agent should create a follow-up node and dispatch another subagent instead of directly editing code.
 
 ## 4. Primary Use Cases
 
@@ -112,6 +117,7 @@ The user describes a desired direction in plain language and wants the agent to 
 -> classify input mode
 -> analyze from multiple lenses
 -> identify evidence gaps or ambiguity
+-> say what the next discussion part will cover
 -> ask one focused follow-up question or present a small set of options
 -> refine shared understanding
 -> present next-step choices
@@ -148,6 +154,7 @@ The available next-step choices after the design path are:
 
 `写 todo` is only valid after a design exists and the user accepts that design path as the basis for execution breakdown.
 The design path updates design-state repository memory, but it does not create implementation todo leaves until the user explicitly chooses `写 todo`.
+If the user says `继续` or `下一阶段` at this boundary, the workflow should treat that as approval to enter the todo stage immediately.
 
 ### 5.3 Todo Path
 
@@ -155,6 +162,7 @@ The design path updates design-state repository memory, but it does not create i
 user approves "写 todo"
 -> primary agent maps design into notes/todo system
 -> primary agent writes the official todo-stage log
+-> primary agent presents the recommended execution order / first ready leaf
 -> no standalone plan doc is written
 -> stop and wait for user
 ```
@@ -162,11 +170,13 @@ user approves "写 todo"
 ### 5.4 Execution Path
 
 ```text
-user explicitly approves implementation of a specific todo leaf
+user explicitly advances past the todo boundary into implementation
+-> primary agent selects the highest-priority ready leaf or ready leaf batch
 -> primary agent dispatches a subagent
 -> subagent edits code + runs tests/verification
 -> subagent returns structured results
 -> primary agent reviews, writes official log, updates todo status
+-> if another ready leaf remains and execution is still viable, continue automatically
 -> if metrics look strange, create follow-up leaf and dispatch another subagent
 ```
 
@@ -199,7 +209,7 @@ While the session remains in discussion mode, the agent must not:
 
 The only exception is after explicit user approval for a specific transition such as `生成设计` or `写 todo`.
 During discussion mode, `写 todo` is not a valid direct transition; it only becomes valid after the design phase has completed.
-User phrasing that sounds directional but does not explicitly approve a workflow transition or a todo leaf, such as "应该这样做" or "就改成这样", still does not count as approval.
+User phrasing that sounds directional but does not explicitly approve a workflow transition, such as "应该这样做" or "就改成这样", still does not count as approval.
 
 ### 6.3 Approval Rule
 
@@ -266,7 +276,8 @@ Each normal `/inspire` response should be structured around five elements:
 2. analysis lenses being applied
 3. possible causes, interpretations, or solution directions
 4. missing evidence, ambiguity, or unresolved constraints
-5. one focused follow-up question or a small set of next-step options
+5. what the next discussion part will cover
+6. one focused follow-up question or a small set of next-step options
 
 The conversation should avoid:
 
@@ -300,6 +311,10 @@ The design phase must additionally enforce:
 - the workflow explicitly uses `brainstorming` as the design-generation parent process
 - no standalone implementation plan document
 - no automatic todo writing immediately after design
+- design and todo remain stage boundaries, but repeated approval loops between stages are not reintroduced
+- once the user explicitly advances after a completed stage, the next stage starts immediately
+- implementation approval after todo is stage-level, not per-leaf
+- once execution starts, no further user approvals are required
 - required subagent review before the design is considered ready for user review
 - explicit stop after design review until the user chooses the next action
 
@@ -393,6 +408,7 @@ Each important todo leaf should capture:
 - current status
 
 The primary agent should treat `notes/todo.md` as the dashboard and the branch page as the durable problem memory. Todo writing is not complete if only one of those surfaces is updated.
+After todo writing is complete, the primary agent should make the recommended execution order and the first ready leaf easy to see so the next stage can begin immediately when the user asks for it.
 
 ## 12. Primary-Agent And Subagent Responsibilities
 
@@ -408,6 +424,8 @@ The primary agent owns:
 - todo writing and state maintenance
 - official `notes/log` writing
 - review of subagent implementation results
+- choosing and sequencing ready leaves after the implementation stage begins
+- continuing execution autonomously after the implementation stage begins
 - creation of follow-up nodes when results are strange or incomplete
 
 This includes official logs for:
@@ -521,6 +539,7 @@ The later implementation should be considered acceptable only if it can demonstr
 - reference-mapping requests are handled with reference-to-project mapping framing
 - generic-demand requests are handled with goal/constraint/success framing
 - each discussion response shows multiple analysis lenses rather than a single unexplained conclusion
+- each discussion response says what the next discussion part will cover
 - each discussion response ends with one focused follow-up question or a small next-step choice set
 
 ### 14.4 Design Path
@@ -532,6 +551,7 @@ The later implementation should be considered acceptable only if it can demonstr
 - the design review output uses the fixed six-section Chinese format defined in [10.2](#102-required-review-output)
 - the design review stays narrowly focused on requirement coverage, acceptance-indicator coverage, and implementation-critical ambiguity, without broad style critique
 - after design review, the workflow stops until the user explicitly chooses the next action
+- explicit `继续` / `下一阶段` language at this boundary is treated as approval to start todo immediately
 - if the design is substantively changed after review, another review is run before the design is treated as ready for user review
 - after review integration, the primary agent syncs design-state memory in `notes/todo.md` and the relevant branch page
 - the primary agent writes an official design-stage log after review integration
@@ -542,13 +562,16 @@ The later implementation should be considered acceptable only if it can demonstr
 - todo writing updates both `notes/todo.md` and the relevant branch page under `notes/todo/`
 - each important todo leaf records the mapped design section, applicable acceptance indicators, dependencies, and status
 - the primary agent writes an official todo-stage log after todo writing
+- the todo boundary shows the recommended execution order and the first ready leaf
 
 ### 14.6 Execution Orchestration
 
-- implementation begins only after the user explicitly approves work on a specific todo leaf
+- implementation begins only after the user explicitly advances past the todo boundary
 - implementation leaves are delegated to subagents
 - the primary agent does not directly edit code during the execution phase
 - subagents return structured results
+- the workflow does not require any further user approval once execution has started
+- the primary agent waits for subagent results and continues with the next ready leaf until complete or objectively blocked
 - the primary agent writes the official log
 - strange metrics create follow-up leaves and another delegation cycle
 
@@ -560,8 +583,9 @@ The later implementation should be considered acceptable only if it can demonstr
 | discuss before code edits | [5.1](#51-main-discussion-path), [6.2](#62-session-freeze-rule), [14.2](#142-discussion-freeze) |
 | support image / bug-log / reference / general requirement inputs | [4](#4-primary-use-cases), [7](#7-input-classification), [14.3](#143-input-handling) |
 | direct user tone must not imply approval | [6.3](#63-approval-rule) |
-| explicit approval needed for design, todo, implementation | [5](#5-workflow-overview), [6.2](#62-session-freeze-rule) |
+| explicit approval needed for design, then for each later stage boundary rather than each leaf | [5](#5-workflow-overview), [6.2](#62-session-freeze-rule), [14.4](#144-design-path), [14.5](#145-todo-first-planning), [14.6](#146-execution-orchestration) |
 | multiple-angle analysis + focused follow-up + deepen shared understanding | [5.1](#51-main-discussion-path), [7](#7-input-classification), [8](#8-discussion-output-contract), [14.3](#143-input-handling) |
+| each discussion round says what the next part will cover | [5.1](#51-main-discussion-path), [8](#8-discussion-output-contract), [14.3](#143-input-handling) |
 | design follows brainstorming style | [9.1](#91-brainstorming-alignment) |
 | design reviewed by subagent against requirement points and test indicators | [10](#10-design-review-contract), [14.4](#144-design-path) |
 | no standalone plan doc | [11](#11-todo-first-planning-contract), [14.5](#145-todo-first-planning) |
@@ -569,6 +593,8 @@ The later implementation should be considered acceptable only if it can demonstr
 | integrate approved downstream actions with todo dashboard, branch page, and official logs | [11](#11-todo-first-planning-contract), [12.1](#121-primary-agent), [14.5](#145-todo-first-planning), [14.6](#146-execution-orchestration) |
 | implementation and testing done by subagents | [5.4](#54-execution-path), [12.2](#122-subagents), [14.6](#146-execution-orchestration) |
 | primary agent maintains workflow, todo, log, and review | [12.1](#121-primary-agent), [14.6](#146-execution-orchestration) |
+| explicit `继续` / `下一阶段` at design or todo boundaries should start the next stage immediately | [5.2](#52-design-path), [5.3](#53-todo-path), [14.4](#144-design-path), [14.5](#145-todo-first-planning) |
+| implementation should not ask for any further approval once execution starts | [5.4](#54-execution-path), [12.1](#121-primary-agent), [14.6](#146-execution-orchestration) |
 | strange metrics trigger follow-up delegation, not direct primary-agent edits | [12.3](#123-strange-metric-escalation), [14.6](#146-execution-orchestration) |
 
 ## 16. Open Questions

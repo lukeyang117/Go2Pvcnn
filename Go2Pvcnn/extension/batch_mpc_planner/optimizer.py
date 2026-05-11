@@ -1,0 +1,59 @@
+"""Optimizer loop for dense MPC residual variables."""
+
+from __future__ import annotations
+
+import torch
+from torch import Tensor
+
+from .config import MpcPlannerCfg
+from .losses.registry import compute_total_loss
+from .variables import DecodedMpcTrajectory, MpcOptimizationVariables, decode_trajectory
+
+
+def optimize_variables(
+    nominal: dict[str, Tensor],
+    variables: MpcOptimizationVariables,
+    joint_angles: Tensor,
+    command: Tensor,
+    cfg: MpcPlannerCfg,
+) -> tuple[DecodedMpcTrajectory, Tensor, dict[str, Tensor], Tensor]:
+    """Run dense gradient optimization and return decoded trajectory."""
+    # RSL-RL rollout calls env.step() under torch.inference_mode(); local MPC
+    # optimization must explicitly re-enable autograd for backward().
+    with torch.inference_mode(False):
+        runtime = cfg.runtime
+        params = variables.parameters()
+        if runtime.optimizer != "adam":
+            raise ValueError(f"Unsupported optimizer {runtime.optimizer!r}; only 'adam' is supported")
+        optimizer = torch.optim.Adam(params, lr=float(runtime.lr))
+        finite_ok = torch.ones(
+            nominal["root_pos"].shape[0],
+            dtype=torch.bool,
+            device=nominal["root_pos"].device,
+        )
+        per_env_total = torch.zeros(
+            nominal["root_pos"].shape[0],
+            dtype=nominal["root_pos"].dtype,
+            device=nominal["root_pos"].device,
+        )
+        breakdown: dict[str, Tensor] = {}
+
+        with torch.enable_grad():
+            for _ in range(int(runtime.optimize_steps)):
+                optimizer.zero_grad(set_to_none=True)
+                decoded = decode_trajectory(nominal, variables, runtime)
+                total_scalar, per_env_total, breakdown = compute_total_loss(decoded, nominal, joint_angles, command, cfg)
+                finite_ok = torch.logical_and(finite_ok, torch.isfinite(per_env_total))
+                total_scalar.backward()
+                if runtime.grad_clip_norm > 0.0:
+                    torch.nn.utils.clip_grad_norm_(params, max_norm=float(runtime.grad_clip_norm))
+                optimizer.step()
+
+        decoded = decode_trajectory(nominal, variables, runtime)
+        _, per_env_total, breakdown = compute_total_loss(decoded, nominal, joint_angles, command, cfg)
+        finite_ok = torch.logical_and(finite_ok, torch.isfinite(per_env_total))
+        detached_breakdown = {name: value.detach() for name, value in breakdown.items()}
+        return decoded, per_env_total.detach(), detached_breakdown, finite_ok
+
+
+__all__ = ["optimize_variables"]

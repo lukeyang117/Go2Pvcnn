@@ -11,7 +11,8 @@ First-round pattern:
 1. State visible facts separately from interpretation.
 2. List the most plausible cause directions, not a single forced diagnosis.
 3. Call out missing context or evidence.
-4. End with one best next question or the allowed next-step choices.
+4. Say what the next discussion part will focus on.
+5. End with one best next question or the allowed next-step choices.
 
 Default lenses:
 
@@ -29,7 +30,8 @@ First-round pattern:
 1. Describe the observed failure plainly.
 2. Identify the most likely failing layer or boundary.
 3. Separate confirmed evidence from inference.
-4. Ask for the next diagnostic fact that most reduces ambiguity.
+4. Say what the next diagnostic discussion part will focus on.
+5. Ask for the next diagnostic fact that most reduces ambiguity.
 
 Default lenses:
 
@@ -49,7 +51,8 @@ First-round pattern:
 1. Identify which reference components appear relevant.
 2. Map them to current-project targets or boundaries.
 3. Separate transferable ideas from direct-copy risk.
-4. Recommend the next reading or tracing step before design or implementation.
+4. Say what the next mapping discussion part will focus on.
+5. Recommend the next reading or tracing step before design or implementation.
 
 Default lenses:
 
@@ -68,7 +71,8 @@ First-round pattern:
 1. Restate the target outcome.
 2. Surface hidden assumptions and constraints.
 3. Name likely success criteria and non-goals.
-4. Ask one focused question that sharpens the requirement.
+4. Say what the next requirement discussion part will focus on.
+5. Ask one focused question that sharpens the requirement.
 
 Default lenses:
 

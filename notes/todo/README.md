@@ -21,6 +21,13 @@ Branch pages should include:
 - `Next Step`
 - `Node Details`
 
+## Navigation Contract
+
+- [../todo.md](../todo.md) is the root Obsidian index for active roots.
+- Each branch page is a subtree index, not just a prose summary.
+- When compacting children, keep child ids, statuses, and destination links visible in `Open Children` or `Closed Children Archive`.
+- If a child gets its own page, keep a link back to the parent page anchor or owning branch page.
+
 ## Relationship Types
 
 - `child-of`

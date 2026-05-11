@@ -1,0 +1,45 @@
+3391,MarkQosNameValue,RivermaxEnabled,0
+3391,MarkQosNameValue,L4S Enabled (Downstream),0
+3391,MarkQosNameValue,DVS P4VirtualChangelist,35031330
+3391,MarkQosNameValue,Format,H264
+3391,MarkQosNameValue,HostName,U16-I3-A03-04-4
+3391,MarkQosNameValue,Windows Version,non-Windows
+3391,MarkQosNameValue,VideoEncoderClassId,0xC9B7
+3391,MarkQosNameValue,Streaming Mode,3840x2160p60
+3391,MarkQosNameValue,GPU Detail,Intel(R) UHD Graphics 770 (0x00004680) Direct3D11 vs_5_0 ps_5_0
+3391,MarkQosNameValue,L4S Enabled for Video (Downstream),0
+3391,MarkQosNameValue,L4S Enabled for Audio (Downstream),0
+3391,MarkQosNameValue,AdapterWidth,1280
+3391,MarkQosNameValue,AllTransitSelectionValuesForwarded,
+3391,MarkQosNameValue,IsCoProc,0
+3391,MarkQosNameValue,DVS Branch,gcomp/rel/gs_04_69
+3391,MarkQosNameValue,DriverBranch,NVIDIA UNIX x86_64 Kernel Module  560.35.03  Fri Aug 16 21:39:15 UTC 2024
+3391,MarkQosNameValue,AdapterRefreshRate,60.0
+3391,MarkQosNameValue,Device,NVIDIA GeForce RTX 4090
+3391,MarkQosNameValue,AdapterHeight,720
+3391,MarkQosNameValue,TransitSelectionValueForwarded,0
+3391,MarkQosNameValue,LtrEnabled,0
+3391,MarkQosNameValue,L4S Enabled (Upstream),0
+3391,MarkQosNameValue,SurfaceBitDepth,8
+3391,MarkQosNameValue,StreamProfileType,Gaming_LAN
+3391,MarkQosNameValue,TransitSelectionValueApplied,0
+3391,MarkQosNameValue,DriverVersion,560.35
+3391,MarkQosNameValue,DataChannelMode,DcSCTP
+3391,MarkQosNameValue,AllTransitSelectionValuesApplied,
+3391,MarkQosNameValue,EncoderInputSurfaceFormat,invalid_format
+3391,MarkQos,StreamServerBackendMode is 2
+3391,MarkQos,stream 0 nvtime::sessionStartTime[us] on server: 7094806234908
+3391,MarkQos,RL QOS disabled for stream: 0
+3391,MarkQos,Max Fps is 60
+3391,MarkQos,NvRtcClient Browser name: Chromium, Browser version: 138.0.7204.251
+3391,MarkQos,ClientGenericMapping: {ProcCpuUsage, TotalCpuUsage}
+3391,MarkQos,Stream[0]: Client display[-1] resolution : {physical : 1920x1080@60, logical : 1920x1080@60} at frame#0 topology: 0
+3391,MarkGsBlobStats,0x1B01000000000000000000001C01000000000000000000000C020000010000000000000000000000000000000000000000000202000001000000000000000FFE
+3967,MarkQosServerControlChannelStatsV0,10146416,0,785,3,233
+3967,MarkQosServerControlChannelStatsV0,10146416,0,797,1,5
+3967,MarkQosServerControlChannelStatsV0,10146416,0,798,1,1032
+3967,MarkQosServerControlChannelStatsV0,10146416,0,800,1,12
+3967,MarkQosServerControlChannelStatsV0,10146416,0,801,1,12
+3968,MarkQos,Number of delayed commands: 0
+3968,MarkQos,Audio drift stats - Ratio: 0.000000, Total Drift: 0 ms, Packet Count: 0
+3968,MarkGsBlobStats,0x19010000000000000C0005F0BFF621F3501E85AA05000000000F0000700800003C000000010000000000000002000000010000000F0000000F0000000F0000000000000000000000000000AD5803000100000001000000010000000D0000000000000000000000000000000000000000000000000000000000000000000000

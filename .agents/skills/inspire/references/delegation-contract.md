@@ -1,10 +1,10 @@
 # Delegation Contract
 
-Use this after the user explicitly approves implementation of a specific todo leaf.
+Use this after the user explicitly approves entering implementation after the todo stage. Once execution starts, do not require any further user approval.
 
 ## Role Boundary
 
-- primary agent: orchestration, approval gates, official notes/log updates, review, anomaly follow-up
+- primary agent: orchestration, execution autonomy after stage entry, official notes/log updates, review, anomaly follow-up
 - subagent: code edits, test execution, verification runs, structured result reporting
 
 The primary agent must not directly edit code during this execution phase.
@@ -13,7 +13,7 @@ The primary agent must not directly edit code during this execution phase.
 
 Give the subagent:
 
-- the exact todo leaf and parent context
+- the exact ready leaf or ready leaf batch and parent context
 - the relevant design sections
 - acceptance or test indicators for the leaf
 - file and module boundaries
@@ -31,6 +31,15 @@ The subagent should return:
 - `acceptance_coverage`: which leaf acceptance indicators were covered
 - `open_concerns`: remaining risks, caveats, or missing verification
 - `recommended_follow_up`: next action for the primary agent
+
+## Continuation Rule
+
+After a subagent returns, the primary agent should either:
+
+1. continue with the next ready leaf or ready leaf batch, or
+2. surface an objective blocker that prevents continued execution
+
+Do not ask the user for any further approval during execution.
 
 ## Strange-Metric Escalation
 

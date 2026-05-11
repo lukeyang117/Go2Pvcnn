@@ -132,6 +132,15 @@ DYNAMIC_SUBBATCH_KEYWORDS = {
     "masks",
 }
 
+T116_CONTRACT_FILES = (
+    TOGETHER_PLANNER_DIR / "config.py",
+    TOGETHER_PLANNER_DIR / "planner.py",
+    TOGETHER_PLANNER_DIR / "manager.py",
+    GO2PVCNN_ROOT / "extension" / "mdp" / "rewards_reference.py",
+    GO2PVCNN_ROOT / "go2_pvcnn" / "tasks" / "teacher_elevation_trajectory_env_cfg.py",
+    GO2PVCNN_ROOT / "extension" / "viz" / "go2_foostep_planner.py",
+)
+
 
 def _rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
@@ -306,6 +315,77 @@ class BatchedTogetherGuardrailsTest(unittest.TestCase):
                             violations.append(
                                 f"{_rel(scan_file.path)}:{node.lineno} dynamic subbatch keyword call to {name}"
                             )
+        self.assertEqual(violations, [])
+
+    def test_t116_candidate_axis_is_k5_and_no_k3_route_only_fallback(self):
+        config_text = (TOGETHER_PLANNER_DIR / "config.py").read_text(encoding="utf-8")
+        planner_text = (TOGETHER_PLANNER_DIR / "planner.py").read_text(encoding="utf-8")
+        self.assertIn("candidate_count: int = 5", config_text)
+        self.assertNotIn("semantic_candidate_count: int = 3", config_text)
+        self.assertNotIn("semantic_candidate_count must remain the fixed 3-route contract", planner_text)
+        self.assertNotIn("base.view(1, 3)", planner_text)
+        self.assertNotIn("fixed 3-route", planner_text)
+
+    def test_t116_horizon_50_no_35_step_contract_in_hot_path(self):
+        violations: list[str] = []
+        forbidden_literals = (
+            "FIXED_HORIZON_S = 0.7",
+            "FIXED_HORIZON_STEPS = 35",
+            "fixed 0.7s contract",
+            "fixed 35-frame contract",
+            "reference_trajectory_horizon: int = 35",
+            "reference_replan_interval_steps: int = 35",
+            'default=35, help="Planner horizon in frames."',
+            "getattr(self._cfg, \"reference_trajectory_horizon\", 35)",
+        )
+        for path in T116_CONTRACT_FILES:
+            text = path.read_text(encoding="utf-8")
+            for literal in forbidden_literals:
+                if literal in text:
+                    violations.append(f"{_rel(path)} keeps old T116 horizon contract literal: {literal}")
+        self.assertEqual(violations, [])
+
+    def test_t116_no_old_front_rear_clear_mode_contract_in_hot_path(self):
+        parameterization_text = (TOGETHER_PLANNER_DIR / "parameterization.py").read_text(encoding="utf-8")
+        costs_text = (TOGETHER_PLANNER_DIR / "costs.py").read_text(encoding="utf-8")
+        self.assertIn("T116_MODE_CRUISE", parameterization_text)
+        self.assertIn("T116_MODE_APPROACH_SMALL", parameterization_text)
+        self.assertIn("T116_MODE_CROSS_SMALL", parameterization_text)
+        self.assertIn("T116_MODE_BYPASS_OBSTACLE", parameterization_text)
+        old_literals = (
+            "T116_MODE_FRONT_CROSS",
+            "T116_MODE_REAR_FOLLOW",
+            "T116_MODE_CLEAR",
+            "STATE_FRONT_CROSS",
+            "STATE_REAR_FOLLOW",
+            "STATE_CLEAR",
+            "_corridor_state_summaries",
+            "candidate_state_tag == 3",
+            "candidate_state_tag == 4",
+            "candidate_state_tag == 5",
+            "candidate_state_tag == 6",
+        )
+        combined_hot_path_text = parameterization_text + "\n" + costs_text
+        for old_literal in old_literals:
+            self.assertNotIn(old_literal, combined_hot_path_text)
+
+    def test_t116_no_cpu_sync_or_dynamic_geometry_extraction(self):
+        tree = _parse(TOGETHER_PLANNER_DIR / "parameterization.py")
+        violations: list[str] = []
+        classifier_nodes = [
+            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "classify_mode_and_geometry"
+        ]
+        self.assertEqual(len(classifier_nodes), 1)
+        for node in ast.walk(classifier_nodes[0]):
+            if isinstance(node, ast.Call):
+                name = _call_name(node.func)
+                attr = node.func.attr if isinstance(node.func, ast.Attribute) else ""
+                if attr in {"cpu", "item", "numpy", "tolist", "nonzero", "masked_select"}:
+                    violations.append(f"classify_mode_and_geometry:{node.lineno} forbidden call {name or attr}")
+                if name in {"torch.nonzero", "torch.argwhere", "torch.masked_select"}:
+                    violations.append(f"classify_mode_and_geometry:{node.lineno} forbidden call {name}")
+            if isinstance(node, ast.For | ast.AsyncFor | ast.While):
+                violations.append(f"classify_mode_and_geometry:{node.lineno} forbidden loop {type(node).__name__}")
         self.assertEqual(violations, [])
 
 

@@ -7,7 +7,7 @@ import functools
 import torch
 
 
-VALID_PLANNER_BACKENDS = ("together", "legacy")
+VALID_PLANNER_BACKENDS = ("together", "legacy", "mpc")
 
 
 def planner_backend_from_cfg(cfg) -> str:
@@ -24,6 +24,10 @@ def create_trajectory_manager(cfg, *, device):
         from extension.batched_planner.manager import BatchedTrajectoryManager
 
         return BatchedTrajectoryManager(cfg, device=device)
+    if backend == "mpc":
+        from extension.batch_mpc_planner.manager import MpcTrajectoryManager
+
+        return MpcTrajectoryManager(cfg, device=device)
     from extension.batched_together_planner.manager import TogetherTrajectoryManager
 
     return TogetherTrajectoryManager(cfg, device=device)

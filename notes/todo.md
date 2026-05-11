@@ -4,35 +4,43 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 ## Start Here
 
-- Current focus: `/inspire` skill package is now implemented under `.agents/skills/inspire/`; design and implementation verification logs are recorded, and the next useful step is a real-world usage pass.
+- Current focus: T116 `K=5` mode-first small-obstacle crossing has now closed the `T116i` follow-up for nonzero speed candidate tables and hard-reason diagnostics.
+  - T116 supersedes the old active `K=3`, 35-step, `front_cross/rear_follow` small-crossing implementation details; old logs remain evidence, not the next target.
+  - Final authority was recorded in `T116g`/`T116h`; `T116i` extends that same mainline by removing nonzero `beta=0` candidates and adding fixed-shape hard-reason/rank diagnostics, with final review evidence recorded.
+  - Separate tooling front: T002 `compact-todo` has one live branch-compact pass plus a new tree/index hardening pass; grouped stale-test cleanup behavior is still the remaining pressure gap.
+  - New design front: T300 has completed subagent-driven implementation integration for `extension/batch_mpc_planner`; current state is runtime-acceptance verification.
+  - T300d now has `env_isaacsim` headless MPC selector evidence, runtime-counter instrumentation, and viewer direct-script MPC stabilization (entrypoint import-order + autograd replan fixes), but true 4096 counter extraction remains blocked by large-scale Isaac runtime instability.
 - Read next:
-  - [inspire skill design spec](../docs/superpowers/specs/2026-05-07-inspire-skill-design.md)
-  - [inspire skill design branch](todo/T001-inspire-skill-design.md)
-  - [inspire skill design log](log/2026-05-07-1258-inspire-skill-design.md)
-  - [inspire skill implementation log](log/2026-05-07-1404-inspire-skill-implementation.md)
-  - [viewer persistent loop fix log](log/2026-05-06-2106-viewer-persistent-loop-fix.md)
-  - [IsaacLab livestream extension dedupe fix log](log/2026-05-06-2054-isaaclab-livestream-dedup-fix.md)
-  - [IsaacLab AppLauncher WebRTC migration guide](human/human-16-isaaclab-applauncher-webrtc-migration.md)
-  - [viewer WebRTC public IP fix log](log/2026-05-06-2011-viewer-webrtc-public-ip-fix.md)
-  - [viewer livestream black-screen triage log](log/2026-05-06-1945-viewer-livestream-black-screen-triage.md)
-  - [semantic static-course viewer branch](todo/T200-semantic-static-course-viewer.md)
-  - [semantic course random layout final verification log](log/2026-04-30-1619-semantic-course-random-layout-final-verification.md)
-  - [semantic course layout/grounding implementation log](log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md)
-  - [semantic course random layout embedded plan log](log/2026-04-30-1522-semantic-course-random-layout-embedded-plan.md)
-  - [semantic course random layout spec review approval log](log/2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md)
-  - [semantic course random layout spec review log](log/2026-04-30-1514-semantic-course-random-layout-spec-review.md)
-  - [semantic course random layout grounding design log](log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md)
-  - [semantic native shape-pool compact runtime acceptance](log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md)
-  - [semantic native shape-pool spec review log](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md)
-  - [semantic native shape-pool design log](log/2026-04-30-1343-semantic-native-shape-pool-design.md)
-  - [semantic viewer empty-marker fix log](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md)
-  - [semantic static-course env_isaaclab compact runtime smoke](log/2026-04-29-2359-semantic-static-course-env-isaaclab-compact-runtime-smoke.md)
-  - [current train/viewer/play command guide](human/human-12-batched-planner-train-viewer-commands.md)
+  - [T300 unified dense MPC branch](todo/T300-unified-dense-mpc-backend.md)
+  - [T300 spec](../docs/superpowers/specs/2026-05-11-unified-dense-mpc-backend-design.md)
+  - [T300 spec hardening log](log/2026-05-11-1110-t300-spec-hardening.md)
+  - [T300 subagent review log](log/2026-05-11-1104-t300-subagent-design-review.md)
+  - [T300 design log](log/2026-05-11-1050-t300-unified-dense-mpc-backend-design.md)
+  - [T300d subagent integration log](log/2026-05-11-1157-t300d-subagent-implementation-review.md)
+  - [T300d env_isaacsim runtime log](log/2026-05-11-1243-t300d-env-isaacsim-mpc-headless-runtime.md)
+  - [T300d 4096 runtime counters attempt log](log/2026-05-11-1318-t300d-4096-runtime-counters-attempt.md)
+  - [T300d 4096 train max-iter1 success log](log/2026-05-11-1428-mpc-4096-train-maxiter1-success.md)
+  - [T300d viewer entrypoint + autograd replan fix log](log/2026-05-11-1505-t300d-mpc-viewer-entrypoint-and-autograd-replan-fix.md)
+  - [T300d terrain ray-shape OOM fix log](log/2026-05-11-1411-mpc-terrain-ray-shape-oom-fix.md)
+  - [T300d leg-order command-matrix recovery log](log/2026-05-11-2005-mpc-leg-order-command-matrix-recovery.md)
+  - [human-16 mpc command update log](log/2026-05-11-1343-human16-mpc-command-update.md)
+  - [T116i nonzero speed/hard-reason design](../docs/superpowers/specs/2026-05-10-nonzero-speed-hard-reason-design.md)
+  - [T116i main review/final verification log](log/2026-05-10-2223-t116i-main-review-final-verification.md)
+  - [T116i review-fix log](log/2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md)
+  - [T116i implementation log](log/2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md)
+  - [T116i todo log](log/2026-05-10-2138-t116i-nonzero-speed-hard-reason-todo.md)
+  - [T117 test/todo cleanup branch](todo/T117-together-planner-test-and-todo-cleanup.md)
+  - [T116h final authority log](log/2026-05-10-2017-t116h-final-review-authority.md)
+  - [T117 approved test deletion log](log/2026-05-10-2102-t117-approved-test-deletion.md)
   - [T100 batched together planner GPU migration](todo/T100-batched-together-planner-gpu-migration.md)
+  - [T100 pre-T116 historical context](todo/T100-pre-t116-history.md)
+  - Planner preread when editing implementation: [extension planner reading guide](human/human-08-extension-planner-reading-guide.md), [extension planner mapping](human/human-09-extension-planner-mapping.md), [train/viewer/play command guide](human/human-12-batched-planner-train-viewer-commands.md)
 - Avoid redoing:
   - Do not migrate raw viewer/adapter CPU compatibility code into the training path.
   - Do not preserve legacy dynamic sub-batch replanning in the new `together` backend.
   - Keep viewer CPU logging/camera/visualization exceptions separate from the training-path guardrail.
+  - Do not add a parallel new planner implementation for T116; modify existing together planner files in place and delete/rewrite obsolete old logic.
+  - Do not continue T113/T114/T115 as active architecture. They are historical baselines and evidence only for T116.
 - Current git base: `130c635`
 
 ## Status Legend
@@ -48,76 +56,70 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Leaf | Why Active Or Next | Suggested Action |
 | --- | --- | --- |
-| T111 | Server-side fixes for remote WebRTC endpoint, IsaacLab duplicate livestream extensions, and viewer auto-exit are implemented; actual browser visual confirmation remains. | Run remote viewer with `--webrtc-public-ip <server-ip>`; it should stay alive until `Ctrl-C`. If still black, check client/WebRTC/network after closing stale local visualization windows. |
-| T205 | Compact semantic runtime and shape-pool acceptance are green, but full-grid interactive startup/manual confirmation are still open. | Decide whether to keep compact runtime smoke as the acceptance path and do one manual viewer confirmation when needed. |
-| T110 | Zero-command together rehome is implemented and smoke-verified; manual visual confirmation remains useful. | Rerun interactive together viewer and confirm stop command visually recovers upright rather than crouching. |
-| T109 | Root-z ratchet is fixed in viewer handoff and covered by a regression test; interactive visual confirmation is still useful. | Rerun interactive together viewer under manual teleop and watch for any remaining visible lift-off. |
-| T103 | Complex raw terrain/support/CEM parity still needs broader scenarios beyond flat P0 parity. | Use [T100](todo/T100-batched-together-planner-gpu-migration.md#t103-raw-planner-core-semantic-migration) and extend parity cases. |
-| T107 | CUDA full-batch smoke, real cadence/full-N env test, and 1-iteration train at 32/128 envs pass; long-run throughput and multi-device remain open. | Run multi-iteration profiling and larger env counts when performance numbers are needed. |
+| T002b | One live branch-compact session passed and tree/Obsidian index preservation is now explicit; the remaining pressure gap is grouped stale-test review and decision batching across `Go2Pvcnn/tests/`. | Use compact sessions to keep grouped note/test cleanup behavior sharp as the tree shrinks around final T116 authority. |
+| T117 | T116 is closed through `T116h`; remaining work is lightweight note/index cleanup around final authority and reduced test surface. | Keep compressing non-T116 surfaces while preserving final authority and the new `T117` cleanup branch. |
+| T300d | Subagent-driven MPC implementation and runtime counters are integrated; baseline headless selectors pass, but 4096 runtime remains unstable. | Split out a lightweight large-scale runtime profile and rerun 4096 dirty-budget/timing counter acceptance. |
 
 ## Root Map
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
 | T000 | done | notes workflow | [T000](todo/T000-notes-workflow.md) | memory system bootstrapped and linked into existing notes | feature `7cf6c11`; verified `7cf6c11` |
-| T001 | done | local skill design / requirement-analysis workflow | [T001](todo/T001-inspire-skill-design.md) | `/inspire` skill package is implemented, review-hardened, and verified against the approved design | feature `pending`; verified `skill file tree + blocker-only review` |
-| T100 | verify | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | implementation landed and smoke-verified in `env_isaaclab`: together backend, manager/factory/reward wiring, viewer together core path, flat raw parity, static guardrail, 1-iteration train 32/128 envs; `T112` semantic-aware together viewer/planner work is landed with focused verification and a remaining full-repo pytest dependency caveat | feature `pending`; verified `59 passed`, `36 passed`, CUDA smoke, cadence/full-N real env, train/play/viewer smoke |
-| T200 | verify | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | semantic viewer path, native shape pool, deterministic random full-tile layout, footprint grounding, and targeted runtime scans are landed; full-grid manual confirmation still open under `T205` | feature `130c635`; verified `130c635` with runtime-output caveat |
+| T001 | done | local skill design / requirement-analysis workflow | [T001](todo/T001-inspire-skill-design.md) | `/inspire` skill package is implemented, review-hardened, and no longer active for T116 unless explicitly invoked | feature `pending`; verified `skill file tree + stage-gate grep checks` |
+| T002 | verify | local skill design / interactive memory and test grooming workflow | [T002](todo/T002-compact-todo-interactive-memory-and-test-grooming.md) | `compact-todo` skill body now preserves child-tree/Obsidian index paths during compaction; grouped stale-test review remains | feature `pending`; verified `skill readback + live branch-compact pressure pass + tree/index hardening readback` |
+| T100 | doing | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | T116i is closed with main review/final verification evidence; `T117` remains notes/test cleanup | feature `pending`; verified through `T116i` final review checks |
+| T300 | verify | unified dense MPC backend design and implementation | [T300](todo/T300-unified-dense-mpc-backend.md) | `batch_mpc_planner` integration + focused verification complete; awaiting runtime acceptance | feature `pending`; verified `focused mpc backend tests + py_compile` |
+| T200 | done | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | supporting semantic terrain work is background for T116, including small obstacle height reduction; no active T200 work is in the current front | feature `130c635`; verified `130c635` with runtime-output caveat |
 
 ## Open Leaves
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
-| T112 | T100 | verify | P0 | Semantic-aware together planner, shared semantic terrain extractor, GPU-only semantic queries/costs, route candidates, viewer `terrain-row/terrain-col`, and manager-path compatibility are implemented; focused verification is green, while full repo pytest is still blocked by missing raw planner dependency checkout. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t112-semantic-aware-together-planner--viewer-rowcol-targeting) |
-| T111 | T100 | verify | P0 | Remote WebRTC endpoint fix, IsaacLab livestream-extension dedupe, and viewer persistent loop are implemented; server-side checks pass; browser-side visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) |
-| T205 | T200 | verify | P1 | Compact semantic correctness and shape-pool coverage are proven, but full-grid interactive startup cost and manual viewer confirmation remain open. | [T200 branch](todo/T200-semantic-static-course-viewer.md) |
-| T110 | T100 | verify | P0 | Core fix and headless zero-command smoke passed; interactive visual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) |
-| T109 | T100 | verify | P0 | Regression fixed and headless viewer reached real playback; visual manual confirmation remains. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) |
-| T103 | T100 | verify | P1 | Flat raw tensor parity now passes; complex terrain/support/CEM scenarios still need expansion. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t103-raw-planner-core-semantic-migration) |
-| T107 | T100 | verify | P1 | CUDA benchmark, real cadence/full-N, and 1-iteration train at 32/128 envs pass; long multi-iteration training, env counts beyond 128, and multi-device are still not covered. | [T100 branch](todo/T100-batched-together-planner-gpu-migration.md#t107-performance-and-scaling-benchmarks) |
+| T002b | T002 | verify | P1 | One live branch-compact pass is complete; remaining verification is grouped stale-test cleanup behavior and decision batching for `Go2Pvcnn/tests/`. | [T002 branch](todo/T002-compact-todo-interactive-memory-and-test-grooming.md#t002b-live-usage-pressure-verification) |
+| T117 | T100/T116 | verify | P1 | Non-keep `Go2Pvcnn/tests/` surfaces were deleted with user approval; remaining work is note compression and new index organization for the reduced test tree. | [T117 branch](todo/T117-together-planner-test-and-todo-cleanup.md) |
+| T300d | T300 | verify | P0 | Subagent implementation/testing is merged; runtime counters exist and selector tests pass, but 4096 runtime counter extraction is blocked by Isaac high-scale instability. | [T300 branch node](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) + [spec](../docs/superpowers/specs/2026-05-11-unified-dense-mpc-backend-design.md) |
 
 ## Branch Pages
 
 - [todo/README.md](todo/README.md)
 - [T000-notes-workflow.md](todo/T000-notes-workflow.md)
 - [T001-inspire-skill-design.md](todo/T001-inspire-skill-design.md)
+- [T002-compact-todo-interactive-memory-and-test-grooming.md](todo/T002-compact-todo-interactive-memory-and-test-grooming.md)
 - [T100-batched-together-planner-gpu-migration.md](todo/T100-batched-together-planner-gpu-migration.md)
+- [T117-together-planner-test-and-todo-cleanup.md](todo/T117-together-planner-test-and-todo-cleanup.md)
+- [T100-pre-t116-history.md](todo/T100-pre-t116-history.md)
+- [T300-unified-dense-mpc-backend.md](todo/T300-unified-dense-mpc-backend.md)
 - [T200-semantic-static-course-viewer.md](todo/T200-semantic-static-course-viewer.md)
 
 ## Recent Logs
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
-| 2026-05-07 14:04 | inspire skill implementation | pass; package implemented and blocker-only review clean | [T001](todo/T001-inspire-skill-design.md) | [2026-05-07-1404-inspire-skill-implementation.md](log/2026-05-07-1404-inspire-skill-implementation.md) |
-| 2026-05-07 12:58 | inspire skill design | pass; spec ready for user review | [T001/T001a](todo/T001-inspire-skill-design.md#t001a-inspire-design-spec-review-gate) | [2026-05-07-1258-inspire-skill-design.md](log/2026-05-07-1258-inspire-skill-design.md) |
-| 2026-05-06 23:40 | semantic-aware together viewer/planner implementation | focused pass with dependency caveat | [T100/T112](todo/T100-batched-together-planner-gpu-migration.md#t112-semantic-aware-together-planner--viewer-rowcol-targeting) | [2026-05-06-2340-semantic-aware-together-viewer-implementation.md](log/2026-05-06-2340-semantic-aware-together-viewer-implementation.md) |
-| 2026-05-06 21:06 | viewer persistent loop fix | pass with scoped caveat | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2106-viewer-persistent-loop-fix.md](log/2026-05-06-2106-viewer-persistent-loop-fix.md) |
-| 2026-05-06 20:54 | IsaacLab livestream extension dedupe fix | pass with scoped caveat | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2054-isaaclab-livestream-dedup-fix.md](log/2026-05-06-2054-isaaclab-livestream-dedup-fix.md) |
-| 2026-05-06 20:11 | viewer WebRTC public IP fix | pass with scoped caveat | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-2011-viewer-webrtc-public-ip-fix.md](log/2026-05-06-2011-viewer-webrtc-public-ip-fix.md) |
-| 2026-05-06 19:45 | viewer livestream black-screen triage | diagnostic partial | [T100/T111](todo/T100-batched-together-planner-gpu-migration.md#t111-viewer-livestream-black-screen--glfw-disconnect-triage) | [2026-05-06-1945-viewer-livestream-black-screen-triage.md](log/2026-05-06-1945-viewer-livestream-black-screen-triage.md) |
-| 2026-04-30 16:19 | semantic course random layout final verification | pass with scoped caveat | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1619-semantic-course-random-layout-final-verification.md](log/2026-04-30-1619-semantic-course-random-layout-final-verification.md) |
-| 2026-04-30 15:48 | semantic course layout/grounding implementation | partial pass | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1548-semantic-course-layout-grounding-implementation.md](log/2026-04-30-1548-semantic-course-layout-grounding-implementation.md) |
-| 2026-04-30 15:22 | semantic course random layout embedded plan | plan recorded | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-embedded-implementation-plan) | [2026-04-30-1522-semantic-course-random-layout-embedded-plan.md](log/2026-04-30-1522-semantic-course-random-layout-embedded-plan.md) |
-| 2026-04-30 15:18 | semantic course random layout spec review approval | approved | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md](log/2026-04-30-1518-semantic-course-random-layout-spec-review-approval.md) |
-| 2026-04-30 15:14 | semantic course random layout spec review | issues incorporated | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1514-semantic-course-random-layout-spec-review.md](log/2026-04-30-1514-semantic-course-random-layout-spec-review.md) |
-| 2026-04-30 15:08 | semantic course random layout grounding design | design recorded | [T200/T207](todo/T200-semantic-static-course-viewer.md#t207-deterministic-full-sub-terrain-semantic-layout--footprint-grounding) | [2026-04-30-1508-semantic-course-random-layout-grounding-design.md](log/2026-04-30-1508-semantic-course-random-layout-grounding-design.md) |
-| 2026-04-30 14:50 | T200 branch compact | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-30-1450-t200-branch-compact.md](log/2026-04-30-1450-t200-branch-compact.md) |
-| 2026-04-30 14:56 | notes compact-todo | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-30-1456-notes-compact-todo.md](log/2026-04-30-1456-notes-compact-todo.md) |
-| 2026-04-30 14:32 | semantic native shape-pool compact runtime acceptance | pass with scoped caveat | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md](log/2026-04-30-1432-semantic-native-shape-pool-compact-runtime-acceptance.md) |
-| 2026-04-30 13:51 | semantic native shape-pool spec review | approved with refinements | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1351-semantic-native-shape-pool-spec-review.md](log/2026-04-30-1351-semantic-native-shape-pool-spec-review.md) |
-| 2026-04-30 13:43 | semantic native shape-pool design | design recorded | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-1343-semantic-native-shape-pool-design.md](log/2026-04-30-1343-semantic-native-shape-pool-design.md) |
-| 2026-04-30 02:15 | semantic viewer empty-marker fix | pass | [T200](todo/T200-semantic-static-course-viewer.md) | [2026-04-30-0215-semantic-viewer-empty-marker-fix.md](log/2026-04-30-0215-semantic-viewer-empty-marker-fix.md) |
-| 2026-04-28 12:54 | viewer zero-command handoff idempotence | pass with scoped caveat | [T100/T110](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1254-viewer-zero-command-handoff-idempotence.md](log/2026-04-28-1254-viewer-zero-command-handoff-idempotence.md) |
-| 2026-04-28 11:32 | together zero-command rehome recovery | pass with scoped caveat | [T100/T110](todo/T100-batched-together-planner-gpu-migration.md#t110-zero-command-rehome-upright-recovery) | [2026-04-28-1132-together-zero-command-rehome.md](log/2026-04-28-1132-together-zero-command-rehome.md) |
-| 2026-04-28 10:07 | viewer together root-z ratchet fix | pass with scoped caveat | [T100/T109](todo/T100-batched-together-planner-gpu-migration.md#t109-viewer-together-root-z-ratchet) | [2026-04-28-1007-viewer-together-root-z-ratchet.md](log/2026-04-28-1007-viewer-together-root-z-ratchet.md) |
-| 2026-04-28 09:52 | human-12 train/viewer/play command guide update | pass | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-28-0952-human-12-command-guide-update.md](log/2026-04-28-0952-human-12-command-guide-update.md) |
-| 2026-04-27 19:14 | batched together continued train/cadence/regression testing | pass with follow-up caveats | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-27-1914-batched-together-continued-testing.md](log/2026-04-27-1914-batched-together-continued-testing.md) |
-| 2026-04-27 18:36 | batched together env_isaaclab final verification | pass with scoped caveats | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-27-1836-batched-together-env-isaaclab-final-verification.md](log/2026-04-27-1836-batched-together-env-isaaclab-final-verification.md) |
-| 2026-04-27 18:28 | viewer together backend smoke | pass | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-27-1828-viewer-together-backend-smoke.md](log/2026-04-27-1828-viewer-together-backend-smoke.md) |
-| 2026-04-27 17:11 | batched together cadence decision | design decision recorded | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-27-1711-batched-together-cadence-decision.md](log/2026-04-27-1711-batched-together-cadence-decision.md) |
-| 2026-04-27 16:30 | batched together design review revisions | issues incorporated | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-27-1630-batched-together-design-review-revisions.md](log/2026-04-27-1630-batched-together-design-review-revisions.md) |
-| 2026-04-27 16:22 | batched together planner GPU migration design | design recorded | [T100](todo/T100-batched-together-planner-gpu-migration.md) | [2026-04-27-1622-batched-together-planner-gpu-migration-design.md](log/2026-04-27-1622-batched-together-planner-gpu-migration-design.md) |
-| 2026-04-27 13:49 | notes workflow bootstrap | pass | [T000](todo/T000-notes-workflow.md) | [2026-04-27-1349-notes-workflow-bootstrap.md](log/2026-04-27-1349-notes-workflow-bootstrap.md) |
+| 2026-05-11 20:05 | T300d MPC leg-order command-matrix recovery | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-2005-mpc-leg-order-command-matrix-recovery.md](log/2026-05-11-2005-mpc-leg-order-command-matrix-recovery.md) |
+| 2026-05-11 16:55 | T300d MPC long replan foot motion and yaw display fix | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1655-mpc-long-replan-foot-motion-and-yaw-display.md](log/2026-05-11-1655-mpc-long-replan-foot-motion-and-yaw-display.md) |
+| 2026-05-11 16:35 | T300d MPC gait-coupling loss minimal fix | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1635-mpc-gait-coupling-loss-minimal-fix.md](log/2026-05-11-1635-mpc-gait-coupling-loss-minimal-fix.md) |
+| 2026-05-11 15:43 | T300d MPC viewer forward static-joint IK fix | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1543-mpc-viewer-forward-static-joint-ik-fix.md](log/2026-05-11-1543-mpc-viewer-forward-static-joint-ik-fix.md) |
+| 2026-05-11 15:28 | T300d MPC viewer flying-feet order regression | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1528-mpc-viewer-flying-feet-order-regression.md](log/2026-05-11-1528-mpc-viewer-flying-feet-order-regression.md) |
+| 2026-05-11 15:05 | T300d MPC viewer entrypoint + replan autograd fix | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1505-t300d-mpc-viewer-entrypoint-and-autograd-replan-fix.md](log/2026-05-11-1505-t300d-mpc-viewer-entrypoint-and-autograd-replan-fix.md) |
+| 2026-05-11 14:28 | T300d MPC 4096 train command max-iter1 success | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1428-mpc-4096-train-maxiter1-success.md](log/2026-05-11-1428-mpc-4096-train-maxiter1-success.md) |
+| 2026-05-11 14:11 | T300d MPC terrain ray-shape OOM fix | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1411-mpc-terrain-ray-shape-oom-fix.md](log/2026-05-11-1411-mpc-terrain-ray-shape-oom-fix.md) |
+| 2026-05-11 13:43 | human-16 mpc command update | pass | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1343-human16-mpc-command-update.md](log/2026-05-11-1343-human16-mpc-command-update.md) |
+| 2026-05-11 13:18 | T300d 4096 runtime counters attempt | partial pass with 4096 runtime blocker | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1318-t300d-4096-runtime-counters-attempt.md](log/2026-05-11-1318-t300d-4096-runtime-counters-attempt.md) |
+| 2026-05-11 12:43 | T300d env_isaacsim MPC headless runtime verification | pass with runtime-output caveat | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1243-t300d-env-isaacsim-mpc-headless-runtime.md](log/2026-05-11-1243-t300d-env-isaacsim-mpc-headless-runtime.md) |
+| 2026-05-11 11:57 | T300d subagent implementation review/integration | pass (focused verification) | [T300/T300d](todo/T300-unified-dense-mpc-backend.md#t300d-subagent-driven-implementation-and-test-execution-for-extensionbatch_mpc_planner) | [2026-05-11-1157-t300d-subagent-implementation-review.md](log/2026-05-11-1157-t300d-subagent-implementation-review.md) |
+| 2026-05-11 11:10 | T300 spec hardening | pass (design hardened) | [T300/T300b](todo/T300-unified-dense-mpc-backend.md#t300b-subagent-review-convergence-and-spec-hardening-before-implementation-plan) | [2026-05-11-1110-t300-spec-hardening.md](log/2026-05-11-1110-t300-spec-hardening.md) |
+| 2026-05-11 11:04 | T300 subagent design review convergence | partial pass with P0 hardening blockers | [T300/T300b](todo/T300-unified-dense-mpc-backend.md#t300b-subagent-review-convergence-and-spec-hardening-before-implementation-plan) | [2026-05-11-1104-t300-subagent-design-review.md](log/2026-05-11-1104-t300-subagent-design-review.md) |
+| 2026-05-11 10:50 | T300 unified dense MPC backend design | design recorded | [T300/T300a](todo/T300-unified-dense-mpc-backend.md#t300a-written-spec-review-gate-and-implementation-plan-handoff) | [2026-05-11-1050-t300-unified-dense-mpc-backend-design.md](log/2026-05-11-1050-t300-unified-dense-mpc-backend-design.md) |
+| 2026-05-10 22:23 | T116i main review and final verification | pass with runtime-output caveat | [T100/T116i](todo/T100-batched-together-planner-gpu-migration.md#t116i-nonzero-speed-candidates-and-hard-reason-diagnostics) | [2026-05-10-2223-t116i-main-review-final-verification.md](log/2026-05-10-2223-t116i-main-review-final-verification.md) |
+| 2026-05-10 22:14 | T116i review fix viewer output and small runtime | pass with pytest-output caveat | [T100/T116i](todo/T100-batched-together-planner-gpu-migration.md#t116i-nonzero-speed-candidates-and-hard-reason-diagnostics) | [2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md](log/2026-05-10-2214-t116i-review-fix-viewer-output-small-runtime.md) |
+| 2026-05-10 21:56 | T116i nonzero speed and hard-reason implementation | pass with scoped runtime coverage | [T100/T116i](todo/T100-batched-together-planner-gpu-migration.md#t116i-nonzero-speed-candidates-and-hard-reason-diagnostics) | [2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md](log/2026-05-10-2156-t116i-nonzero-speed-hard-reason-implementation.md) |
+| 2026-05-10 21:39 | compact-todo tree/Obsidian index hardening | pass | [T002/T002c](todo/T002-compact-todo-interactive-memory-and-test-grooming.md#t002c-tree-preserving-child-compaction-and-obsidian-index-hardening) | [2026-05-10-2139-compact-todo-tree-obsidian-index-hardening.md](log/2026-05-10-2139-compact-todo-tree-obsidian-index-hardening.md) |
+| 2026-05-10 21:38 | T116i nonzero speed and hard-reason todo | todo recorded | [T100/T116i](todo/T100-batched-together-planner-gpu-migration.md#t116i-nonzero-speed-candidates-and-hard-reason-diagnostics) | [2026-05-10-2138-t116i-nonzero-speed-hard-reason-todo.md](log/2026-05-10-2138-t116i-nonzero-speed-hard-reason-todo.md) |
+| 2026-05-10 18:43 | compact-todo non-T116 subtree compression | pass | [T002/T002b](todo/T002-compact-todo-interactive-memory-and-test-grooming.md#t002b-live-usage-pressure-verification) | [2026-05-10-1843-compact-todo-non-t116-subtree-compression.md](log/2026-05-10-1843-compact-todo-non-t116-subtree-compression.md) |
+| 2026-05-10 21:02 | T117 approved test deletion | pass | [T117/T117c](todo/T117-together-planner-test-and-todo-cleanup.md#t117c-remove-non-mainline-parity-and-historical-traceability-surfaces) | [2026-05-10-2102-t117-approved-test-deletion.md](log/2026-05-10-2102-t117-approved-test-deletion.md) |
+| 2026-05-10 20:43 | compact-todo together-planner test cleanup scan | scan recorded | [T100/T117](todo/T100-batched-together-planner-gpu-migration.md#t117-together-planner-test-and-todo-cleanup-after-t116h) | [2026-05-10-2043-compact-todo-together-planner-test-cleanup-scan.md](log/2026-05-10-2043-compact-todo-together-planner-test-cleanup-scan.md) |
+| 2026-05-10 20:17 | T116h final review and authority | pass | [T100/T116h](todo/T100-batched-together-planner-gpu-migration.md#t116h-final-integration-authoritative-rerun-review-and-noteslog-closure) | [2026-05-10-2017-t116h-final-review-authority.md](log/2026-05-10-2017-t116h-final-review-authority.md) |
+| 2026-05-10 19:53 | T116g `env_isaacsim` runtime diagnostics | pass | [T100/T116g](todo/T100-batched-together-planner-gpu-migration.md#t116g-env_isaacsim-headless-runtime-diagnostics-and-acceptance-tests) | [2026-05-10-1953-t116g-env-isaacsim-runtime-diagnostics.md](log/2026-05-10-1953-t116g-env-isaacsim-runtime-diagnostics.md) |
 
 ## Maintenance
 

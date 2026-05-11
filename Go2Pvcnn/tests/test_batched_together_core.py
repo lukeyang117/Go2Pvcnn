@@ -48,26 +48,130 @@ def test_plan_segment_schema_shape_and_device() -> None:
 
     result = plan_segment(terrain, state, commands, cfg)
 
-    assert result.root_pos.shape == (3, 35, 3)
-    assert result.root_rpy.shape == (3, 35, 3)
-    assert result.foot_pos.shape == (3, 35, 4, 3)
-    assert result.joint_angles.shape == (3, 35, 12)
-    assert result.contact_state.shape == (3, 35, 4)
+    assert result.root_pos.shape == (3, 50, 3)
+    assert result.root_rpy.shape == (3, 50, 3)
+    assert result.foot_pos.shape == (3, 50, 4, 3)
+    assert result.joint_angles.shape == (3, 50, 12)
+    assert result.contact_state.shape == (3, 50, 4)
     assert result.touchdown_seq.shape == (3, 4, 2, 3)
     assert result.touchdown_mask.shape == (3, 4, 2)
     assert result.cost_total.shape == (3,)
     assert result.status.shape == (3,)
     assert result.feasible.shape == (3,)
     assert result.safe_fallback.shape == (3,)
-    assert result.joint_limit_violation.shape == (3, 35, 12)
-    assert result.workspace_margin.shape == (3, 35, 4)
-    assert result.support_xy.shape == (3, 35, 4, 2)
-    assert result.support_height.shape == (3, 35, 4)
-    assert result.support_slope.shape == (3, 35, 4)
+    assert result.joint_limit_violation.shape == (3, 50, 12)
+    assert result.workspace_margin.shape == (3, 50, 4)
+    assert result.support_xy.shape == (3, 50, 4, 2)
+    assert result.support_height.shape == (3, 50, 4)
+    assert result.support_slope.shape == (3, 50, 4)
+    assert result.state_mode is not None
+    assert result.small_strategy_outcome is not None
+    assert result.state_mode.shape == (3,)
+    assert result.small_strategy_outcome.shape == (3,)
     expected_device = commands.device
     assert result.root_pos.device == expected_device
     assert result.support_height.device == expected_device
-    assert set(result.cost_breakdown) == {"J_td", "J_swing", "J_ik", "J_base", "J_vel"}
+    assert {
+        "J_td",
+        "J_swing",
+        "J_ik",
+        "J_base",
+        "J_vel",
+        "J_semantic_touchdown",
+        "J_semantic_swing",
+        "J_semantic_body",
+        "J_route",
+        "J_pair_consistency",
+        "J_body_posture",
+        "J_path_clearance",
+        "J_collision_body",
+        "J_collision_leg",
+    } <= set(result.cost_breakdown)
+    assert result.selected_route_offset is not None
+    assert result.semantic_candidate_costs is not None
+    assert result.body_min_clearance is not None
+    assert result.leg_min_clearance is not None
+    assert result.touchdown_on_small_count is not None
+    assert result.front_foot_small_collision_count is not None
+    assert result.rear_foot_small_collision_count is not None
+    assert result.front_foot_min_clearance_to_small is not None
+    assert result.rear_foot_min_clearance_to_small is not None
+    assert result.base_small_penetration_count is not None
+    assert result.base_min_clearance_to_small is not None
+    assert result.base_path_crosses_small_flag is not None
+    assert result.selected_route_offset.shape == (3,)
+    assert result.semantic_candidate_costs.shape == (3, 5)
+    assert result.body_min_clearance.shape == (3,)
+    assert result.leg_min_clearance.shape == (3,)
+    assert result.touchdown_on_small_count.shape == (3,)
+    assert result.front_foot_small_collision_count.shape == (3,)
+    assert result.rear_foot_small_collision_count.shape == (3,)
+    assert result.front_foot_min_clearance_to_small.shape == (3,)
+    assert result.rear_foot_min_clearance_to_small.shape == (3,)
+    assert result.base_small_penetration_count.shape == (3,)
+    assert result.base_min_clearance_to_small.shape == (3,)
+    assert result.base_path_crosses_small_flag.shape == (3,)
+
+
+def test_t116_f13_k5_shape_consistency_all_modes() -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg = TogetherPlannerConfig()
+    terrain, state = _flat_fixture(device)
+    commands = torch.tensor([[0.0, 0.0, 0.0], [0.35, 0.0, 0.0], [0.0, 0.25, 0.2]], device=device)
+
+    result = plan_segment(terrain, state, commands, cfg)
+
+    assert getattr(cfg, "candidate_count") == 5
+    assert result.root_pos.shape == (3, 50, 3)
+    assert result.foot_pos.shape == (3, 50, 4, 3)
+    assert result.contact_state.shape == (3, 50, 4)
+    assert result.semantic_candidate_costs is not None
+    assert result.semantic_candidate_costs.shape == (3, 5)
+    assert result.mode is not None and result.mode.shape == (3,)
+    assert result.selected_beta is not None and result.selected_beta.shape == (3,)
+    assert result.selected_route is not None and result.selected_route.shape == (3,)
+    assert result.selected_route.dtype == torch.long
+    assert torch.equal(result.selected_route, torch.zeros((3,), device=device, dtype=torch.long))
+    nonzero_beta_ladder = torch.tensor((1.0, 0.8, 0.6, 0.4, 0.2), device=device, dtype=result.selected_beta.dtype)
+    assert torch.all(torch.any(torch.isclose(result.selected_beta[:, None], nonzero_beta_ladder[None, :]), dim=1))
+    assert result.small_front_s is not None
+    assert result.small_back_s is not None
+    assert torch.isinf(result.small_front_s).all()
+    assert torch.isinf(result.small_back_s).all()
+    assert result.direction_id is not None and result.direction_id.shape == (3,)
+    assert result.cross_small_success is not None and result.cross_small_success.shape == (3,)
+    assert result.command_direction_violation is not None and result.command_direction_violation.shape == (3,)
+    assert not torch.any(result.cross_small_success)
+    assert not torch.any(result.command_direction_violation)
+    assert result.per_leg_touchdown_on_small_count is not None
+    assert result.per_leg_touchdown_on_small_count.shape == (3, 4)
+    assert result.per_leg_foot_small_collision_count is not None
+    assert result.per_leg_foot_small_collision_count.shape == (3, 4)
+    assert result.per_leg_min_clearance_to_small is not None
+    assert result.per_leg_min_clearance_to_small.shape == (3, 4)
+    assert result.candidate_hard_reason_mask is not None
+    assert result.candidate_hard_reason_mask.shape == (3, 5, 13)
+    assert result.selected_hard_reason_mask is not None
+    assert result.selected_hard_reason_mask.shape == (3, 13)
+    assert result.candidate_hard_rank_cost is not None
+    assert result.candidate_hard_rank_cost.shape == (3, 5)
+    assert result.selected_candidate_index is not None
+    assert result.selected_candidate_index.shape == (3,)
+
+
+def test_t116_f14_horizon_50_contract() -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg = TogetherPlannerConfig()
+    terrain, state = _flat_fixture(device)
+    commands = torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.2, 0.0], [0.0, 0.0, 0.3]], device=device)
+
+    assert cfg.horizon_s == 1.0
+    assert cfg.dt == 0.02
+    assert cfg.horizon_steps == 50
+    assert cfg.event_cap == 2
+    result = plan_segment(terrain, state, commands, cfg)
+    assert result.root_pos.shape[1] == 50
+    assert result.contact_state.shape[1] == 50
 
 
 def test_zero_command_standstill_rehome_is_training_safe() -> None:
@@ -147,6 +251,15 @@ def test_mixed_command_batch_keeps_zero_row_and_moves_commanded_rows() -> None:
     assert result.root_pos[2, -1, 1] > result.root_pos[2, 0, 1]
     assert result.root_rpy[2, -1, 2] > result.root_rpy[2, 0, 2]
     assert torch.all(result.contact_state[0] == 1.0)
+    assert result.semantic_candidate_costs is not None
+    assert result.semantic_candidate_costs.shape == (3, 5)
+    assert result.mode is not None and result.mode.shape == (3,)
+    assert result.selected_beta is not None and result.selected_beta.shape == (3,)
+    assert result.selected_route is not None and result.selected_route.shape == (3,)
+    assert torch.all(result.feasible)
+    assert not torch.any(result.safe_fallback)
+    assert not torch.any(result.command_direction_violation)
+    assert torch.all(result.selected_beta[1:] > 0.0)
     assert torch.any(result.touchdown_mask[1])
 
 
@@ -175,11 +288,11 @@ def test_raw_fixed_schedule_exact_contact_and_touchdown_mask() -> None:
     commands = torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.0, 0.0]], device=device)
 
     schedule = build_fixed_schedule(2, cfg.horizon_steps, cfg.dt, device, torch.float32, commands, cfg)
-    times = torch.arange(35, device=device, dtype=torch.float32) * 0.02
+    times = torch.arange(cfg.horizon_steps, device=device, dtype=torch.float32) * 0.02
     offsets = torch.tensor([0.0, 0.5, 0.5, 0.0], device=device)
     expected_contact = (torch.remainder(times[:, None] * 2.0 + offsets[None, :], 1.0) < 0.55).to(torch.float32)
     expected_td = torch.tensor(
-        [[True, False], [True, False], [True, False], [True, False]],
+        [[True, False], [True, True], [True, True], [True, False]],
         device=device,
     )
 

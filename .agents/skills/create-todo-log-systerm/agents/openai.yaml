@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Todo Log Systerm"
+  short_description: "Bootstrap todo/log dashboards"
+  default_prompt: "Use $create-todo-log-systerm to add a dashboard-oriented todo/log memory system to this project."

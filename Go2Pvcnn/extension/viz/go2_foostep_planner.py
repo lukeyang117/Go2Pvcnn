@@ -20,11 +20,12 @@ from pathlib import Path
 
 import torch
 
-
 THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parents[2]
 if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
+
+from extension.batched_together_planner.types import HARD_REASON_NAMES, TogetherPlannerStatus
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,45 @@ class ViewerTrajectoryResult:
     planned_touchdown_w: torch.Tensor
     root_lin_vel_w: torch.Tensor | None = None
     root_ang_vel_w: torch.Tensor | None = None
+    status: torch.Tensor | None = None
+    feasible: torch.Tensor | None = None
+    safe_fallback: torch.Tensor | None = None
+    state_mode: torch.Tensor | None = None
+    small_strategy_outcome: torch.Tensor | None = None
+    mode: torch.Tensor | None = None
+    selected_beta: torch.Tensor | None = None
+    selected_route: torch.Tensor | None = None
+    direction_id: torch.Tensor | None = None
+    small_front_s: torch.Tensor | None = None
+    small_back_s: torch.Tensor | None = None
+    small_top_z: torch.Tensor | None = None
+    command_direction_violation: torch.Tensor | None = None
+    cross_small_success: torch.Tensor | None = None
+    body_min_clearance: torch.Tensor | None = None
+    leg_min_clearance: torch.Tensor | None = None
+    base_min_clearance_to_small: torch.Tensor | None = None
+    per_leg_touchdown_on_small_count: torch.Tensor | None = None
+    per_leg_foot_small_collision_count: torch.Tensor | None = None
+    per_leg_min_clearance_to_small: torch.Tensor | None = None
+    per_leg_touchdown_beyond_small_back_edge: torch.Tensor | None = None
+    touchdown_ground_gap_by_leg: torch.Tensor | None = None
+    touchdown_semantic_by_leg: torch.Tensor | None = None
+    touchdown_frame_by_leg: torch.Tensor | None = None
+    front_touchdown_ground_gap: torch.Tensor | None = None
+    rear_touchdown_ground_gap: torch.Tensor | None = None
+    touchdown_on_small_count: torch.Tensor | None = None
+    front_foot_small_collision_count: torch.Tensor | None = None
+    rear_foot_small_collision_count: torch.Tensor | None = None
+    base_small_penetration_count: torch.Tensor | None = None
+    base_path_crosses_small_flag: torch.Tensor | None = None
+    candidate_hard_reason_mask: torch.Tensor | None = None
+    selected_hard_reason_mask: torch.Tensor | None = None
+    candidate_hard_rank_cost: torch.Tensor | None = None
+    selected_hard_rank_cost: torch.Tensor | None = None
+    selected_candidate_index: torch.Tensor | None = None
+    hard_reason_mask: torch.Tensor | None = None
+    hard_reason_names: tuple[str, ...] | None = None
+    status_names: tuple[str, ...] | None = None
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -53,18 +93,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["task"],
         help="Use the terrain generator exactly as defined by teacher_elevation_trajectory env config.",
     )
-    parser.add_argument("--n-frames", type=int, default=35, help="Planner horizon in frames.")
+    parser.add_argument("--n-frames", type=int, default=50, help="Planner horizon in frames.")
     parser.add_argument("--plan-dt", type=float, default=0.02, help="Planner integration step.")
     parser.add_argument(
         "--planner-backend",
         type=str,
         default="together",
-        choices=["together", "legacy"],
+        choices=["together", "legacy", "mpc"],
         help="Trajectory manager backend used by the task attachment path.",
     )
-    parser.add_argument("--vx-scale", type=float, default=0.4, help="Teleop forward/backward speed.")
+    parser.add_argument("--vx-scale", type=float, default=1.0, help="Teleop forward/backward speed.")
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
-    parser.add_argument("--yaw-scale", type=float, default=0.3, help="Teleop yaw-rate command.")
+    parser.add_argument("--yaw-scale", type=float, default=1, help="Teleop yaw-rate command.")
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")
     parser.add_argument("--heightmap-viz-stride", type=int, default=10, help="Subsample stride for heightmap markers.")
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
@@ -82,12 +122,100 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0,
         help="How many replan cycles to apply --scripted-command for (0 disables scripted playback).",
     )
+    parser.add_argument(
+        "--terrain-row",
+        type=int,
+        default=0,
+        help="Generated terrain row used for env0 reset/spawn targeting.",
+    )
+    parser.add_argument(
+        "--terrain-col",
+        type=int,
+        default=0,
+        help="Generated terrain column used for env0 reset/spawn targeting.",
+    )
+    parser.add_argument(
+        "--webrtc-public-ip",
+        type=str,
+        default=None,
+        help="Public endpoint address advertised by Isaac WebRTC livestream. Defaults to PUBLIC_IP or SSH server IP.",
+    )
+    parser.add_argument(
+        "--webrtc-port",
+        type=int,
+        default=49100,
+        help="WebRTC livestream port advertised by Isaac Kit.",
+    )
+    parser.add_argument(
+        "--no-webrtc-auto-public-ip",
+        action="store_true",
+        default=False,
+        help="Disable SSH-based PUBLIC_IP inference for remote WebRTC livestream.",
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
 
 def _parse_args() -> argparse.Namespace:
     return build_arg_parser().parse_args()
+
+
+def _append_kit_arg(args_cli: argparse.Namespace, kit_arg: str) -> None:
+    existing = str(getattr(args_cli, "kit_args", "") or "").strip()
+    args_cli.kit_args = f"{existing} {kit_arg}".strip() if existing else kit_arg
+
+
+def _ssh_server_ip_from_env() -> str | None:
+    # SSH_CONNECTION: "<client-ip> <client-port> <server-ip> <server-port>"
+    parts = os.environ.get("SSH_CONNECTION", "").split()
+    if len(parts) >= 3:
+        candidate = parts[2].strip()
+        if candidate and not candidate.startswith("127.") and candidate not in {"::1", "localhost"}:
+            return candidate
+    return None
+
+
+def _configure_webrtc_endpoint(args_cli: argparse.Namespace) -> None:
+    if getattr(args_cli, "livestream", -1) != 2:
+        return
+
+    explicit_public_ip = (getattr(args_cli, "webrtc_public_ip", None) or "").strip()
+    existing_public_ip = os.environ.get("PUBLIC_IP", "").strip()
+    inferred_public_ip = None
+    source = None
+
+    if explicit_public_ip:
+        inferred_public_ip = explicit_public_ip
+        source = "cli"
+    elif existing_public_ip:
+        inferred_public_ip = existing_public_ip
+        source = "env"
+    elif not getattr(args_cli, "no_webrtc_auto_public_ip", False):
+        inferred_public_ip = _ssh_server_ip_from_env()
+        if inferred_public_ip:
+            source = "ssh"
+
+    if inferred_public_ip:
+        os.environ["PUBLIC_IP"] = inferred_public_ip
+        print(
+            "[INFO][go2_foostep_planner.py] WebRTC public endpoint "
+            f"PUBLIC_IP={inferred_public_ip} source={source}.",
+            flush=True,
+        )
+    else:
+        print(
+            "[WARN][go2_foostep_planner.py] WebRTC PUBLIC_IP is not set; IsaacLab will advertise 127.0.0.1. "
+            "Remote browsers usually need PUBLIC_IP=<server-ip> or --webrtc-public-ip <server-ip>.",
+            flush=True,
+        )
+
+    webrtc_port = int(getattr(args_cli, "webrtc_port", 49100))
+    if webrtc_port != 49100:
+        _append_kit_arg(args_cli, f"--/app/livestream/port={webrtc_port}")
+        print(
+            f"[INFO][go2_foostep_planner.py] WebRTC livestream port override: {webrtc_port}.",
+            flush=True,
+        )
 
 
 def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
@@ -98,6 +226,7 @@ def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
             "for WebRTC rendering.",
             flush=True,
         )
+    _configure_webrtc_endpoint(args_cli)
     return args_cli
 
 
@@ -232,6 +361,13 @@ def _format_command_values(values: torch.Tensor) -> str:
     return f"({command[0,0]:+0.2f}, {command[0,1]:+0.2f}, {command[0,2]:+0.2f})"
 
 
+def _format_hard_reason_mask(mask: torch.Tensor, *, names: tuple[str, ...] | None = None) -> str:
+    values = torch.as_tensor(mask, dtype=torch.bool).reshape(-1)
+    reason_names = tuple(HARD_REASON_NAMES) if names is None else tuple(names)
+    enabled_names = [name for name, enabled in zip(reason_names, values.tolist()) if enabled]
+    return "|".join(enabled_names) if enabled_names else "none"
+
+
 def _parse_scripted_command(spec: str | None, *, device: torch.device) -> torch.Tensor | None:
     if spec is None:
         return None
@@ -314,7 +450,32 @@ def _reorder_feet_by_quadrant(foot_pos_w: torch.Tensor, root_pos_w: torch.Tensor
     return foot_pos_w.gather(1, gather_index)
 
 
-def _read_actual_kinematic_state(base_env, foot_ids: list[int] | torch.Tensor) -> dict[str, torch.Tensor]:
+def _reorder_feet_to_planner_order(robot, foot_ids_t: torch.Tensor, foot_pos_w: torch.Tensor) -> torch.Tensor:
+    body_names = getattr(robot, "body_names", None)
+    if not body_names:
+        return foot_pos_w
+    name_to_local_index: dict[str, int] = {}
+    for local_idx, body_id in enumerate(foot_ids_t.detach().cpu().tolist()):
+        if not (0 <= int(body_id) < len(body_names)):
+            return foot_pos_w
+        body_name = _normalize_joint_name(body_names[int(body_id)])
+        name_to_local_index[body_name] = int(local_idx)
+    order: list[int] = []
+    for planner_name in ("fl_foot", "fr_foot", "rl_foot", "rr_foot"):
+        local_idx = name_to_local_index.get(planner_name)
+        if local_idx is None:
+            return foot_pos_w
+        order.append(local_idx)
+    order_t = torch.as_tensor(order, dtype=torch.long, device=foot_pos_w.device)
+    return foot_pos_w.index_select(1, order_t)
+
+
+def _read_actual_kinematic_state(
+    base_env,
+    foot_ids: list[int] | torch.Tensor,
+    *,
+    reorder_by_quadrant: bool = False,
+) -> dict[str, torch.Tensor]:
     robot = base_env.scene["robot"]
     joint_pos_planner = _joint_pos_robot_to_planner(
         robot,
@@ -323,8 +484,10 @@ def _read_actual_kinematic_state(base_env, foot_ids: list[int] | torch.Tensor) -
     body_pos_w = torch.as_tensor(robot.data.body_pos_w[:1], dtype=torch.float64).clone()
     foot_ids_t = torch.as_tensor(_foot_id_list(foot_ids), dtype=torch.long, device=body_pos_w.device)
     foot_pos_w = body_pos_w.index_select(1, foot_ids_t)
-    root_pos_w = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float64).clone()
-    foot_pos_w = _reorder_feet_by_quadrant(foot_pos_w, root_pos_w)
+    foot_pos_w = _reorder_feet_to_planner_order(robot, foot_ids_t, foot_pos_w)
+    if reorder_by_quadrant:
+        root_pos_w = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float64).clone()
+        foot_pos_w = _reorder_feet_by_quadrant(foot_pos_w, root_pos_w)
     return {
         "joint_pos_planner": joint_pos_planner,
         "foot_pos_w": foot_pos_w,
@@ -803,6 +966,11 @@ def _build_together_planner_cfg(env_cfg):
     base = TogetherPlannerConfig()
     horizon_steps = int(getattr(env_cfg, "reference_trajectory_horizon", base.horizon_steps))
     dt = float(getattr(env_cfg, "plan_dt", base.dt))
+    if horizon_steps != int(base.horizon_steps):
+        raise ValueError(
+            f"together backend requires --n-frames={int(base.horizon_steps)} "
+            f"for the fixed T116 horizon, got {horizon_steps}"
+        )
     return replace(
         base,
         horizon_s=float(horizon_steps) * dt,
@@ -815,6 +983,130 @@ def _build_together_planner_cfg(env_cfg):
         support_search_radius=float(getattr(env_cfg, "support_search_radius", base.support_search_radius)),
         support_search_step=float(getattr(env_cfg, "support_search_step", base.support_search_step)),
     )
+
+
+def _build_mpc_planner_cfg(env_cfg):
+    from extension.batch_mpc_planner.config import planner_cfg_from_task_cfg
+
+    cfg = planner_cfg_from_task_cfg(env_cfg)
+    cfg.runtime.dt = float(getattr(env_cfg, "plan_dt", cfg.runtime.dt))
+    cfg.runtime.horizon_steps = int(getattr(env_cfg, "reference_trajectory_horizon", cfg.runtime.horizon_steps))
+    return cfg
+
+
+def _selected_terrain_origin(scene, *, terrain_row: int, terrain_col: int) -> torch.Tensor:
+    terrain = getattr(scene, "terrain", None)
+    terrain_origins = getattr(terrain, "terrain_origins", None) if terrain is not None else None
+    if terrain_origins is None:
+        raise RuntimeError("Viewer terrain-row/terrain-col targeting requires generated terrain origins.")
+
+    origins = torch.as_tensor(terrain_origins)
+    if origins.ndim != 3 or origins.shape[-1] < 3:
+        raise RuntimeError(f"Expected terrain_origins shape [rows, cols, 3], got {tuple(origins.shape)}")
+
+    num_rows = int(origins.shape[0])
+    num_cols = int(origins.shape[1])
+    row = int(terrain_row)
+    col = int(terrain_col)
+    if row < 0 or row >= num_rows:
+        raise ValueError(f"--terrain-row must be in [0, {num_rows}), got {row}")
+    if col < 0 or col >= num_cols:
+        raise ValueError(f"--terrain-col must be in [0, {num_cols}), got {col}")
+    return origins[row, col].clone()
+
+
+def _apply_viewer_terrain_selection(scene, *, env_id: int, terrain_row: int, terrain_col: int) -> torch.Tensor:
+    terrain = getattr(scene, "terrain", None)
+    selected_origin = _selected_terrain_origin(scene, terrain_row=terrain_row, terrain_col=terrain_col)
+
+    if terrain is not None:
+        terrain_levels = getattr(terrain, "terrain_levels", None)
+        if terrain_levels is not None:
+            terrain_levels[env_id] = int(terrain_row)
+
+        terrain_types = getattr(terrain, "terrain_types", None)
+        if terrain_types is not None:
+            terrain_types[env_id] = int(terrain_col)
+
+        env_origins = getattr(terrain, "env_origins", None)
+        if env_origins is not None:
+            env_origins[env_id] = selected_origin.to(device=env_origins.device, dtype=env_origins.dtype)
+
+    scene_env_origins = getattr(scene, "env_origins", None)
+    if scene_env_origins is not None:
+        scene_env_origins[env_id] = selected_origin.to(device=scene_env_origins.device, dtype=scene_env_origins.dtype)
+
+    return selected_origin
+
+
+def _viewer_scanner_refresh_steps(
+    scanner,
+    *,
+    physics_dt: float,
+    minimum_steps: int = 1,
+    extra_steps: int = 4,
+) -> int:
+    scanner_cfg = getattr(scanner, "cfg", None)
+    update_period = float(getattr(scanner_cfg, "update_period", 0.0))
+    dt = float(physics_dt)
+    if not math.isfinite(update_period) or not math.isfinite(dt) or dt <= 0.0:
+        return max(1, int(minimum_steps))
+    return max(int(minimum_steps), int(math.ceil(update_period / dt)) + max(1, int(extra_steps)))
+
+
+def _refresh_viewer_scanner(
+    base_env,
+    scanner,
+    *,
+    minimum_steps: int = 1,
+    extra_steps: int = 4,
+) -> int:
+    steps = _viewer_scanner_refresh_steps(
+        scanner,
+        physics_dt=float(base_env.physics_dt),
+        minimum_steps=minimum_steps,
+        extra_steps=extra_steps,
+    )
+    for _ in range(steps):
+        base_env.sim.render()
+        if hasattr(base_env.scene, "update"):
+            base_env.scene.update(float(base_env.physics_dt))
+    return steps
+
+
+def _reset_viewer_env(
+    env,
+    *,
+    base_env,
+    zero_actions: torch.Tensor,
+    warmup_steps: int,
+    terrain_row: int,
+    terrain_col: int,
+    scanner=None,
+) -> torch.Tensor:
+    selected_origin = _apply_viewer_terrain_selection(
+        base_env.scene,
+        env_id=0,
+        terrain_row=terrain_row,
+        terrain_col=terrain_col,
+    )
+    env.reset()
+    selected_origin = _apply_viewer_terrain_selection(
+        base_env.scene,
+        env_id=0,
+        terrain_row=terrain_row,
+        terrain_col=terrain_col,
+    )
+    warmup_step_count = max(0, int(warmup_steps))
+    for _ in range(warmup_step_count):
+        env.step(zero_actions)
+    if scanner is not None:
+        _refresh_viewer_scanner(
+            base_env,
+            scanner,
+            minimum_steps=max(1, warmup_step_count),
+        )
+    return selected_origin
 
 
 def _compute_stable_scan_ranges(scanner, *, env_id: int = 0) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -869,6 +1161,21 @@ def _compute_together_local_terrain(scanner, *, env_id: int = 0):
         ray_hits.unsqueeze(0),
         world_x_range=world_x_range,
         world_y_range=world_y_range,
+    )
+    return terrain, ray_hits
+
+
+def _compute_mpc_local_terrain(scanner, *, env_id: int = 0):
+    from extension.batch_mpc_planner.terrain import build_mpc_terrain_from_scanner
+
+    ray_hits = scanner.data.ray_hits_w[env_id].to(dtype=torch.float32)
+    semantic_map = _scanner_semantic_map(scanner, env_id=env_id)
+    world_x_range, world_y_range = _compute_stable_scan_ranges(scanner, env_id=env_id)
+    terrain = build_mpc_terrain_from_scanner(
+        ray_hits.unsqueeze(0),
+        world_x_range=world_x_range,
+        world_y_range=world_y_range,
+        semantic_map=semantic_map,
     )
     return terrain, ray_hits
 
@@ -965,6 +1272,108 @@ def _format_semantic_diagnostics(diagnostics: dict[str, float | int]) -> str:
     )
 
 
+def _format_viewer_status(result) -> str:
+    status = getattr(result, "status", None)
+    if status is None:
+        return ""
+    status_value = int(torch.as_tensor(status).reshape(-1)[0].item())
+    status_names = getattr(result, "status_names", None)
+    if status_names is not None and 0 <= status_value < len(status_names):
+        return f"status={status_names[status_value]}"
+    try:
+        status_name = TogetherPlannerStatus(status_value).name
+    except ValueError:
+        status_name = str(status_value)
+    return f"status={status_name}"
+
+
+def _format_viewer_hard_reason_diagnostics(result) -> str:
+    hard_reason_mask = getattr(result, "hard_reason_mask", None)
+    if hard_reason_mask is not None:
+        hard_reason_t = torch.as_tensor(hard_reason_mask, dtype=torch.bool)
+        if hard_reason_t.ndim == 1:
+            hard_reason_t = hard_reason_t.unsqueeze(0)
+        status = getattr(result, "status", None)
+        all_infeasible = False
+        if status is not None:
+            status_value = int(torch.as_tensor(status).reshape(-1)[0].item())
+            status_names = getattr(result, "status_names", None)
+            if status_names is not None and 0 <= status_value < len(status_names):
+                all_infeasible = str(status_names[status_value]) == "ALL_INFEASIBLE"
+            else:
+                all_infeasible = status_value == int(TogetherPlannerStatus.ALL_INFEASIBLE)
+        selected = hard_reason_t.reshape(-1, hard_reason_t.shape[-1])[0]
+        selected_nonempty = bool(torch.any(selected).item())
+        if not all_infeasible and not selected_nonempty:
+            return ""
+        reason_names = tuple(getattr(result, "hard_reason_names", tuple(HARD_REASON_NAMES)))
+        return f"hard_reasons={_format_hard_reason_mask(selected, names=reason_names)}"
+
+    selected_mask = getattr(result, "selected_hard_reason_mask", None)
+    candidate_mask = getattr(result, "candidate_hard_reason_mask", None)
+    candidate_rank = getattr(result, "candidate_hard_rank_cost", None)
+    selected_rank = getattr(result, "selected_hard_rank_cost", None)
+    if selected_mask is None or candidate_mask is None or candidate_rank is None or selected_rank is None:
+        return ""
+
+    selected_mask_t = torch.as_tensor(selected_mask, dtype=torch.bool)
+    candidate_mask_t = torch.as_tensor(candidate_mask, dtype=torch.bool)
+    candidate_rank_t = torch.as_tensor(candidate_rank, dtype=torch.float64)
+    selected_rank_t = torch.as_tensor(selected_rank, dtype=torch.float64)
+    status = getattr(result, "status", None)
+    all_infeasible = False
+    if status is not None:
+        all_infeasible = int(torch.as_tensor(status).reshape(-1)[0].item()) == int(TogetherPlannerStatus.ALL_INFEASIBLE)
+    selected_nonempty = bool(torch.any(selected_mask_t.reshape(-1, selected_mask_t.shape[-1])[0]).item())
+    if not all_infeasible and not selected_nonempty:
+        return ""
+
+    selected_reasons = _format_hard_reason_mask(selected_mask_t.reshape(-1, selected_mask_t.shape[-1])[0], names=tuple(HARD_REASON_NAMES))
+    candidate_reasons = [
+        _format_hard_reason_mask(
+            candidate_mask_t.reshape(-1, candidate_mask_t.shape[-2], candidate_mask_t.shape[-1])[0, idx],
+            names=tuple(HARD_REASON_NAMES),
+        )
+        for idx in range(candidate_mask_t.shape[-2])
+    ]
+    rank_values = [f"{float(value):0.3f}" for value in candidate_rank_t.reshape(-1, candidate_rank_t.shape[-1])[0].tolist()]
+    return (
+        f"selected_hard_reasons={selected_reasons} "
+        f"selected_hard_rank_cost={float(selected_rank_t.reshape(-1)[0].item()):0.3f} "
+        f"candidate_hard_rank=[{','.join(rank_values)}] "
+        f"candidate_hard_reasons=[{';'.join(candidate_reasons)}]"
+    )
+
+
+def _format_viewer_plan_line(
+    *,
+    backend: str,
+    cycle: int,
+    command: torch.Tensor,
+    result,
+    semantic_diagnostics: dict[str, float | int],
+) -> str:
+    summary = _trajectory_motion_summary(result)
+    parts = [
+        "[Viewer][Plan]",
+        f"backend={backend}",
+        f"cycle={cycle}",
+        f"cmd={_format_command_values(command)}",
+        f"delta=({summary['dx']:+0.2f}, {summary['dy']:+0.2f}, {summary['dz']:+0.2f})",
+        f"dyaw={summary['dyaw']:+0.2f}",
+        f"standstill={summary['standstill']}",
+    ]
+    status_text = _format_viewer_status(result)
+    if status_text:
+        parts.append(status_text)
+    if semantic_diagnostics:
+        parts.append(_format_semantic_diagnostics(semantic_diagnostics))
+    hard_text = _format_viewer_hard_reason_diagnostics(result)
+    if hard_text:
+        parts.append(hard_text)
+    return " ".join(parts)
+
+
 def _make_zero_actions(env) -> torch.Tensor:
     import gymnasium as gym
 
@@ -982,8 +1391,8 @@ def _update_camera(env, *, root_pos: torch.Tensor, root_yaw: torch.Tensor, dista
         dtype=root_pos.dtype,
         device=root_pos.device,
     )
-    camera_position = (root_pos + camera_offset).cpu().numpy()
-    target_position = (root_pos + torch.tensor([0.0, 0.0, 0.35], device=root_pos.device)).cpu().numpy()
+    camera_position = (root_pos + camera_offset).detach().cpu().numpy()
+    target_position = (root_pos + torch.tensor([0.0, 0.0, 0.35], device=root_pos.device)).detach().cpu().numpy()
     env.sim.set_camera_view(camera_position, target_position)
 
 
@@ -1005,6 +1414,51 @@ def _together_state_from_env(env, foot_ids: list[int]):
     return _legacy_state_to_together_state(_planner_state_from_env(env, foot_ids))
 
 
+def _mpc_state_from_env(env, foot_ids: list[int]):
+    from extension.batch_mpc_planner.types import MpcRobotState
+    from extension.convention import extract_roll_pitch_batch, extract_yaw_batch
+
+    robot = env.scene["robot"]
+    root_quat = torch.as_tensor(robot.data.root_quat_w[:1], dtype=torch.float64)
+    roll, pitch = extract_roll_pitch_batch(root_quat)
+    yaw = extract_yaw_batch(root_quat)
+    # Keep viewer MPC joint ordering consistent with legacy/together playback
+    # contract so direct playback does not scramble leg pose.
+    joint_pos_planner = _joint_pos_robot_to_planner(
+        robot,
+        torch.as_tensor(robot.data.joint_pos[:1], dtype=torch.float64),
+    )
+    foot_ids_t = torch.as_tensor(_foot_id_list(foot_ids), dtype=torch.long, device=robot.data.body_pos_w.device)
+    foot_pos = torch.as_tensor(robot.data.body_pos_w[:1], dtype=torch.float64).index_select(1, foot_ids_t)
+    foot_vel = torch.as_tensor(robot.data.body_lin_vel_w[:1], dtype=torch.float64).index_select(1, foot_ids_t)
+    foot_pos = _reorder_feet_to_planner_order(robot, foot_ids_t, foot_pos)
+    foot_vel = _reorder_feet_to_planner_order(robot, foot_ids_t, foot_vel)
+    return MpcRobotState(
+        root_pos=torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float64),
+        root_rpy=torch.stack((roll, pitch, yaw), dim=-1),
+        joint_angles=joint_pos_planner,
+        foot_pos=foot_pos,
+        foot_vel=foot_vel,
+    )
+
+
+def _mpc_state_from_reference_result(result, *, frame_idx: int):
+    from extension.batch_mpc_planner.types import MpcRobotState
+
+    frame = int(frame_idx)
+    root_pos = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float64).detach()
+    root_quat = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float64).detach()
+    joint_angles = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float64).detach()
+    foot_pos = torch.as_tensor(result.foot_pos_w[:, frame], dtype=torch.float64).detach()
+    return MpcRobotState(
+        root_pos=root_pos,
+        root_rpy=_quat_wxyz_to_rpy(root_quat),
+        joint_angles=joint_angles,
+        foot_pos=foot_pos,
+        foot_vel=torch.zeros_like(foot_pos),
+    )
+
+
 def _adapt_together_result_for_viewer(result) -> ViewerTrajectoryResult:
     from extension.convention import euler_to_quat_batch
 
@@ -1016,6 +1470,25 @@ def _adapt_together_result_for_viewer(result) -> ViewerTrajectoryResult:
     planned_touchdown_w = torch.as_tensor(result.touchdown_seq[:, :, 0, :], device=root_pos_w.device, dtype=root_pos_w.dtype).contiguous()
     num_frames = int(root_pos_w.shape[1])
     zeros_vel = torch.zeros_like(root_pos_w)
+
+    def optional_result_tensor(name: str, *, dtype=None):
+        value = getattr(result, name, None)
+        if value is None:
+            return None
+        if dtype is None:
+            return torch.as_tensor(value, device=root_pos_w.device)
+        return torch.as_tensor(value, device=root_pos_w.device, dtype=dtype)
+
+    mode = optional_result_tensor("mode")
+    state_mode = optional_result_tensor("state_mode")
+    if mode is None:
+        mode = state_mode
+    if state_mode is None:
+        state_mode = mode
+    small_strategy_outcome = optional_result_tensor("small_strategy_outcome")
+    if small_strategy_outcome is None:
+        small_strategy_outcome = mode
+
     return ViewerTrajectoryResult(
         num_frames=num_frames,
         root_pos_w=root_pos_w,
@@ -1027,6 +1500,155 @@ def _adapt_together_result_for_viewer(result) -> ViewerTrajectoryResult:
         planned_touchdown_w=planned_touchdown_w,
         root_lin_vel_w=zeros_vel,
         root_ang_vel_w=zeros_vel.clone(),
+        status=optional_result_tensor("status"),
+        feasible=optional_result_tensor("feasible", dtype=torch.bool),
+        safe_fallback=optional_result_tensor("safe_fallback", dtype=torch.bool),
+        state_mode=state_mode,
+        small_strategy_outcome=small_strategy_outcome,
+        mode=mode,
+        selected_beta=optional_result_tensor("selected_beta", dtype=root_pos_w.dtype),
+        selected_route=optional_result_tensor("selected_route"),
+        direction_id=optional_result_tensor("direction_id"),
+        small_front_s=(
+            None
+            if getattr(result, "small_front_s", None) is None
+            else torch.as_tensor(result.small_front_s, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        small_back_s=(
+            None
+            if getattr(result, "small_back_s", None) is None
+            else torch.as_tensor(result.small_back_s, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        small_top_z=(
+            None
+            if getattr(result, "small_top_z", None) is None
+            else torch.as_tensor(result.small_top_z, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        command_direction_violation=(
+            None
+            if getattr(result, "command_direction_violation", None) is None
+            else torch.as_tensor(result.command_direction_violation, device=root_pos_w.device, dtype=torch.bool)
+        ),
+        cross_small_success=(
+            None
+            if getattr(result, "cross_small_success", None) is None
+            else torch.as_tensor(result.cross_small_success, device=root_pos_w.device, dtype=torch.bool)
+        ),
+        body_min_clearance=optional_result_tensor("body_min_clearance", dtype=root_pos_w.dtype),
+        leg_min_clearance=optional_result_tensor("leg_min_clearance", dtype=root_pos_w.dtype),
+        base_min_clearance_to_small=optional_result_tensor("base_min_clearance_to_small", dtype=root_pos_w.dtype),
+        per_leg_touchdown_on_small_count=(
+            None
+            if getattr(result, "per_leg_touchdown_on_small_count", None) is None
+            else torch.as_tensor(result.per_leg_touchdown_on_small_count, device=root_pos_w.device)
+        ),
+        per_leg_foot_small_collision_count=(
+            None
+            if getattr(result, "per_leg_foot_small_collision_count", None) is None
+            else torch.as_tensor(result.per_leg_foot_small_collision_count, device=root_pos_w.device)
+        ),
+        per_leg_min_clearance_to_small=(
+            None
+            if getattr(result, "per_leg_min_clearance_to_small", None) is None
+            else torch.as_tensor(result.per_leg_min_clearance_to_small, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        per_leg_touchdown_beyond_small_back_edge=(
+            None
+            if getattr(result, "per_leg_touchdown_beyond_small_back_edge", None) is None
+            else torch.as_tensor(result.per_leg_touchdown_beyond_small_back_edge, device=root_pos_w.device, dtype=torch.bool)
+        ),
+        touchdown_ground_gap_by_leg=(
+            None
+            if getattr(result, "touchdown_ground_gap_by_leg", None) is None
+            else torch.as_tensor(result.touchdown_ground_gap_by_leg, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        touchdown_semantic_by_leg=(
+            None
+            if getattr(result, "touchdown_semantic_by_leg", None) is None
+            else torch.as_tensor(result.touchdown_semantic_by_leg, device=root_pos_w.device)
+        ),
+        touchdown_frame_by_leg=(
+            None
+            if getattr(result, "touchdown_frame_by_leg", None) is None
+            else torch.as_tensor(result.touchdown_frame_by_leg, device=root_pos_w.device)
+        ),
+        front_touchdown_ground_gap=(
+            None
+            if getattr(result, "front_touchdown_ground_gap", None) is None
+            else torch.as_tensor(result.front_touchdown_ground_gap, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        rear_touchdown_ground_gap=(
+            None
+            if getattr(result, "rear_touchdown_ground_gap", None) is None
+            else torch.as_tensor(result.rear_touchdown_ground_gap, device=root_pos_w.device, dtype=root_pos_w.dtype)
+        ),
+        touchdown_on_small_count=(
+            None
+            if getattr(result, "touchdown_on_small_count", None) is None
+            else torch.as_tensor(result.touchdown_on_small_count, device=root_pos_w.device)
+        ),
+        front_foot_small_collision_count=(
+            None
+            if getattr(result, "front_foot_small_collision_count", None) is None
+            else torch.as_tensor(result.front_foot_small_collision_count, device=root_pos_w.device)
+        ),
+        rear_foot_small_collision_count=(
+            None
+            if getattr(result, "rear_foot_small_collision_count", None) is None
+            else torch.as_tensor(result.rear_foot_small_collision_count, device=root_pos_w.device)
+        ),
+        base_small_penetration_count=(
+            None
+            if getattr(result, "base_small_penetration_count", None) is None
+            else torch.as_tensor(result.base_small_penetration_count, device=root_pos_w.device)
+        ),
+        base_path_crosses_small_flag=(
+            None
+            if getattr(result, "base_path_crosses_small_flag", None) is None
+            else torch.as_tensor(result.base_path_crosses_small_flag, device=root_pos_w.device, dtype=torch.bool)
+        ),
+        candidate_hard_reason_mask=optional_result_tensor("candidate_hard_reason_mask", dtype=torch.bool),
+        selected_hard_reason_mask=optional_result_tensor("selected_hard_reason_mask", dtype=torch.bool),
+        candidate_hard_rank_cost=optional_result_tensor("candidate_hard_rank_cost", dtype=root_pos_w.dtype),
+        selected_hard_rank_cost=optional_result_tensor("selected_hard_rank_cost", dtype=root_pos_w.dtype),
+        selected_candidate_index=optional_result_tensor("selected_candidate_index"),
+    )
+
+
+def _adapt_mpc_result_for_viewer(result) -> ViewerTrajectoryResult:
+    from extension.batch_mpc_planner.types import MPC_HARD_REASON_NAMES, MpcPlannerStatus
+    from extension.convention import euler_to_quat_batch
+
+    root_pos_w = torch.as_tensor(result.root_pos).detach().contiguous()
+    root_rpy = torch.as_tensor(result.root_rpy, device=root_pos_w.device, dtype=root_pos_w.dtype).detach()
+    root_quat_w = euler_to_quat_batch(root_rpy[..., 0], root_rpy[..., 1], root_rpy[..., 2]).contiguous()
+    foot_pos_w = torch.as_tensor(result.foot_pos, device=root_pos_w.device, dtype=root_pos_w.dtype).detach().contiguous()
+    foot_pos_root = (foot_pos_w - root_pos_w.unsqueeze(2)).contiguous()
+    touchdown_w = torch.as_tensor(result.planned_touchdown_w, device=root_pos_w.device, dtype=root_pos_w.dtype).detach()
+    if touchdown_w.ndim == 4:
+        touchdown_w = touchdown_w[:, 0]
+    elif not (touchdown_w.ndim == 3 and tuple(touchdown_w.shape[-2:]) == (4, 3)):
+        touchdown_w = torch.as_tensor(result.touchdown_seq[:, :, 0, :], device=root_pos_w.device, dtype=root_pos_w.dtype).detach()
+    hard_mask = getattr(result, "hard_reason_mask", None)
+    hard_reason_mask = None if hard_mask is None else torch.as_tensor(hard_mask, device=root_pos_w.device, dtype=torch.bool).detach()
+    zeros_vel = torch.zeros_like(root_pos_w)
+    return ViewerTrajectoryResult(
+        num_frames=int(root_pos_w.shape[1]),
+        root_pos_w=root_pos_w,
+        root_quat_w=root_quat_w,
+        joint_angles=torch.as_tensor(result.joint_angles, device=root_pos_w.device, dtype=root_pos_w.dtype).detach().contiguous(),
+        foot_pos_w=foot_pos_w,
+        foot_pos_root=foot_pos_root,
+        contact_state=torch.as_tensor(result.contact_state, device=root_pos_w.device).detach().contiguous(),
+        planned_touchdown_w=touchdown_w.contiguous(),
+        root_lin_vel_w=zeros_vel,
+        root_ang_vel_w=zeros_vel.clone(),
+        status=torch.as_tensor(result.status, device=root_pos_w.device).detach(),
+        feasible=torch.as_tensor(result.feasible, device=root_pos_w.device, dtype=torch.bool).detach(),
+        safe_fallback=torch.as_tensor(result.safe_fallback, device=root_pos_w.device, dtype=torch.bool).detach(),
+        hard_reason_mask=hard_reason_mask,
+        hard_reason_names=tuple(MPC_HARD_REASON_NAMES),
+        status_names=tuple(status.name for status in MpcPlannerStatus),
     )
 
 
@@ -1040,6 +1662,7 @@ def _plan_viewer_trajectory(
     dt: float,
     legacy_cfg,
     together_cfg,
+    mpc_cfg,
 ):
     backend_name = str(backend).lower()
     if backend_name == "legacy":
@@ -1062,6 +1685,17 @@ def _plan_viewer_trajectory(
                 state,
                 command,
                 cfg=together_cfg,
+            )
+        )
+    if backend_name == "mpc":
+        from extension.batch_mpc_planner.planner import plan_segment
+
+        return _adapt_mpc_result_for_viewer(
+            plan_segment(
+                terrain,
+                state,
+                command,
+                cfg=mpc_cfg,
             )
         )
     raise ValueError(f"Unsupported planner backend: {backend!r}")
@@ -1092,6 +1726,7 @@ def main() -> int:
     planner_cfg.dt = float(args_cli.plan_dt)
     planner_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
     together_planner_cfg = _build_together_planner_cfg(env_cfg)
+    mpc_planner_cfg = _build_mpc_planner_cfg(env_cfg)
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
@@ -1111,9 +1746,22 @@ def main() -> int:
     print("[Viewer] Playback mode: kinematic (no physics)", flush=True)
     _print_help()
 
-    env.reset()
-    for _ in range(max(0, int(args_cli.warmup_steps))):
-        env.step(zero_actions)
+    selected_origin = _reset_viewer_env(
+        env,
+        base_env=base_env,
+        zero_actions=zero_actions,
+        warmup_steps=int(args_cli.warmup_steps),
+        terrain_row=int(args_cli.terrain_row),
+        terrain_col=int(args_cli.terrain_col),
+        scanner=scanner,
+    )
+    print(
+        "[Viewer] Terrain tile override: "
+        f"row={int(args_cli.terrain_row)} "
+        f"col={int(args_cli.terrain_col)} "
+        f"origin={_format_xyz(selected_origin)}",
+        flush=True,
+    )
 
     result = None
     playback_frame = 0
@@ -1135,7 +1783,7 @@ def main() -> int:
         last_actual_summary = None
         last_kinematic_summary = None
         try:
-            while simulation_app.is_running():
+            while True:
                 teleop_cmd = teleop.poll()
                 active_cmd = teleop_cmd
                 if scripted_command is not None and scripted_cycles_remaining > 0:
@@ -1145,9 +1793,22 @@ def main() -> int:
                     )
 
                 if active_cmd.reset_requested:
-                    env.reset()
-                    for _ in range(max(0, int(args_cli.warmup_steps))):
-                        env.step(zero_actions)
+                    selected_origin = _reset_viewer_env(
+                        env,
+                        base_env=base_env,
+                        zero_actions=zero_actions,
+                        warmup_steps=int(args_cli.warmup_steps),
+                        terrain_row=int(args_cli.terrain_row),
+                        terrain_col=int(args_cli.terrain_col),
+                        scanner=scanner,
+                    )
+                    print(
+                        "[Viewer][Reset] "
+                        f"row={int(args_cli.terrain_row)} "
+                        f"col={int(args_cli.terrain_col)} "
+                        f"origin={_format_xyz(selected_origin)}",
+                        flush=True,
+                    )
                     result = None
                     playback_frame = 0
                     last_cmd = None
@@ -1177,16 +1838,25 @@ def main() -> int:
                         frame = min(playback_frame - 1, result.num_frames - 1)
                         if args_cli.planner_backend == "together":
                             state = _together_state_from_reference_result(result, frame_idx=frame)
+                        elif args_cli.planner_backend == "mpc":
+                            # Use the current simulated state for MPC replan handoff.
+                            # This avoids cycle-to-cycle drift from repeatedly feeding
+                            # back planned states that can diverge from applied playback.
+                            state = _mpc_state_from_env(base_env, foot_ids)
                         else:
                             state = _planner_state_from_reference_result(result, frame_idx=frame)
                     else:
                         if args_cli.planner_backend == "together":
                             state = _together_state_from_env(base_env, foot_ids)
+                        elif args_cli.planner_backend == "mpc":
+                            state = _mpc_state_from_env(base_env, foot_ids)
                         else:
                             state = _planner_state_from_env(base_env, foot_ids)
 
                     if args_cli.planner_backend == "together":
                         terrain, ray_hits = _compute_together_local_terrain(scanner)
+                    elif args_cli.planner_backend == "mpc":
+                        terrain, ray_hits = _compute_mpc_local_terrain(scanner)
                     else:
                         terrain, ray_hits = _compute_local_terrain(scanner)
 
@@ -1199,6 +1869,7 @@ def main() -> int:
                         dt=args_cli.plan_dt,
                         legacy_cfg=planner_cfg,
                         together_cfg=together_planner_cfg,
+                        mpc_cfg=mpc_planner_cfg,
                     )
                     summary = _trajectory_motion_summary(result)
                     semantic_map = _scanner_semantic_map(scanner)
@@ -1208,14 +1879,13 @@ def main() -> int:
                         int(args_cli.heightmap_viz_stride),
                     )
                     print(
-                        "[Viewer][Plan] "
-                        f"backend={args_cli.planner_backend} "
-                        f"cycle={plan_cycle} "
-                        f"cmd={_format_command_values(active_cmd.values)} "
-                        f"delta=({summary['dx']:+0.2f}, {summary['dy']:+0.2f}, {summary['dz']:+0.2f}) "
-                        f"dyaw={summary['dyaw']:+0.2f} "
-                        f"standstill={summary['standstill']} "
-                        f"{_format_semantic_diagnostics(semantic_diag)}",
+                        _format_viewer_plan_line(
+                            backend=args_cli.planner_backend,
+                            cycle=plan_cycle,
+                            command=active_cmd.values,
+                            result=result,
+                            semantic_diagnostics=semantic_diag,
+                        ),
                         flush=True,
                     )
                     playback_frame = 0
@@ -1304,6 +1974,7 @@ def main() -> int:
                     yaw_rate = float(active_cmd.values[0, 2].item())
                     actual = _read_actual_base_state(base_env)
                     actual_pos = actual["root_pos_w"][0]
+                    actual_rpy_wxyz = actual["rpy_if_wxyz"][0]
                     actual_rpy_xyzw = actual["rpy_if_xyzw"][0]
                     status = (
                         f"\rcycle={max(plan_cycle - 1, 0)} "
@@ -1312,13 +1983,16 @@ def main() -> int:
                         f"yaw={yaw_rate:+0.2f} | "
                         f"plan=({root_pos[0]:+0.2f}, {root_pos[1]:+0.2f}, {root_pos[2]:+0.2f}) "
                         f"actual=({actual_pos[0]:+0.2f}, {actual_pos[1]:+0.2f}, {actual_pos[2]:+0.2f}) "
-                        f"actual_rpy_xyzw=({actual_rpy_xyzw[0]:+0.2f}, {actual_rpy_xyzw[1]:+0.2f}, {actual_rpy_xyzw[2]:+0.2f}) "
+                        f"actual_rpy_wxyz=({actual_rpy_wxyz[0]:+0.2f}, {actual_rpy_wxyz[1]:+0.2f}, {actual_rpy_wxyz[2]:+0.2f}) "
+                        f"actual_rpy_xyzw_dbg=({actual_rpy_xyzw[0]:+0.2f}, {actual_rpy_xyzw[1]:+0.2f}, {actual_rpy_xyzw[2]:+0.2f}) "
                         f"frame={display_frame}/{result.num_frames}"
                     )
                     if status != last_status:
                         sys.stdout.write(status)
                         sys.stdout.flush()
                         last_status = status
+        except KeyboardInterrupt:
+            print("\n[Viewer] Ctrl-C received; shutting down.", flush=True)
         finally:
             print()
             env.close()

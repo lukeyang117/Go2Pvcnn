@@ -17,7 +17,7 @@ from .adapter import (
     together_result_to_reference_cache,
 )
 from .config import TogetherPlannerConfig
-from .planner import plan_segment
+from .planner import build_together_terrain_from_scanner, plan_segment
 from .terrain import TogetherPlannerTerrain
 from .types import TogetherRobotState
 
@@ -71,7 +71,7 @@ class TogetherTrajectoryManager:
         return 0.02
 
     def _horizon(self) -> int:
-        return int(getattr(self._cfg, "reference_trajectory_horizon", 35))
+        return int(getattr(self._cfg, "reference_trajectory_horizon", TogetherPlannerConfig().horizon_steps))
 
     def _interval(self) -> int:
         return int(getattr(self._cfg, "reference_replan_interval_steps", self._horizon()))
@@ -87,6 +87,7 @@ class TogetherTrajectoryManager:
         return replace(
             base,
             dt=float(getattr(self._cfg, "plan_dt", base.dt)),
+            horizon_s=float(self._horizon()) * float(getattr(self._cfg, "plan_dt", base.dt)),
             horizon_steps=self._horizon(),
             step_freq=float(getattr(self._cfg, "step_freq", base.step_freq)),
             swing_height=float(getattr(self._cfg, "step_height", base.swing_height)),
@@ -142,11 +143,16 @@ class TogetherTrajectoryManager:
         root = self._env_root(env)
         scanner = self._named_get(root.scene.sensors, self._scanner_name())
         ray_hits = torch.as_tensor(scanner.data.ray_hits_w, dtype=torch.float64, device=self._device)
+        semantic_map_value = getattr(scanner.data, "semantic_map", None)
+        semantic_map = None
+        if semantic_map_value is not None:
+            semantic_map = torch.as_tensor(semantic_map_value, dtype=torch.long, device=self._device)
         world_x_range, world_y_range = self._terrain_ranges_from_scanner(scanner)
-        return TogetherPlannerTerrain.from_ray_hits(
+        return build_together_terrain_from_scanner(
             ray_hits,
             world_x_range=world_x_range,
             world_y_range=world_y_range,
+            semantic_map=semantic_map,
         )
 
     def _commands_from_env(self, env) -> Tensor:

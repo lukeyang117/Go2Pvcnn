@@ -191,3 +191,24 @@ When closing a task, include:
 - what metrics or constraints were checked
 - whether todo/log/notes were aligned
 - what remains unverified
+
+
+## Subagent polling loop rule
+
+After spawning subagents, the main agent must enter a polling loop.
+
+The main agent must check subagent status about every 2 minutes until all required subagents are complete.
+
+The main agent must not end the turn while required subagents are still running.
+
+Polling loop:
+
+1. Check subagent status.
+2. If any subagent is complete, read and integrate its output.
+3. Update the todo/task ledger.
+4. If all required subagents are complete, proceed to the next todo.
+5. If some required subagents are still running, continue independent work if possible.
+6. Check subagent status again after about 2 minutes.
+7. Repeat until subagents complete or a real blocker is found.
+
+The main agent must not ask the user to say "continue" for subagent status checks.

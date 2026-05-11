@@ -7,6 +7,10 @@ Use this only after the user explicitly chooses `生成设计`. The primary agen
 - discussion-first behavior remains the gate into this design
 - no standalone implementation plan document
 - no automatic todo writing after design
+- design and todo remain explicit stage boundaries
+- once the user explicitly advances past a completed stage, the next stage starts immediately without repeated approval
+- implementation approval after todo is stage-level, not per-leaf
+- once execution starts, it runs without further user approval until completion or objective blocker
 - required subagent review before the design is ready for user review
 - explicit stop after design review until the user chooses the next action
 
@@ -77,3 +81,5 @@ After this path, offer only:
 - `修改 design`
 - `写 todo`
 - `结束`
+
+If the user says `继续` or `下一阶段` after the design boundary, treat that as approval to enter the todo stage.

@@ -60,17 +60,17 @@ cd /home/lhy/testPvcnnWithIsaacsim
 推荐直接使用 IsaacLab conda 环境里的 Python：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python
 ```
 
-不要用 `base` 环境直接跑训练；当前验证以 `/home/lhy/anaconda3/envs/env_isaaclab/bin/python` 为准。
+不要用 `base` 环境直接跑训练；当前验证以 `/home/lhy/anaconda3/envs/env_isaacsim/bin/python` 为准。
 
 ## 训练命令
 
 最小 headless smoke：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/train.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
   --headless \
   --device cuda:0 \
   --num_envs 32 \
@@ -82,7 +82,7 @@ cd /home/lhy/testPvcnnWithIsaacsim
 常用单卡训练：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/train.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
   --headless \
   --device cuda:0 \
   --num_envs 2048 \
@@ -96,7 +96,7 @@ cd /home/lhy/testPvcnnWithIsaacsim
 legacy 回滚训练：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/train.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
   --headless \
   --device cuda:0 \
   --num_envs 512 \
@@ -108,7 +108,7 @@ legacy 回滚训练：
 分布式训练：
 
 ```bash
-GPU_IDS=0,1 /home/lhy/anaconda3/envs/env_isaaclab/bin/python -m torch.distributed.run \
+GPU_IDS=0,1 /home/lhy/anaconda3/envs/env_isaacsim/bin/python -m torch.distributed.run \
   --standalone \
   --nnodes=1 \
   --nproc_per_node=2 \
@@ -126,7 +126,7 @@ GPU_IDS=0,1 /home/lhy/anaconda3/envs/env_isaaclab/bin/python -m torch.distribute
 恢复训练：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/train.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
   --headless \
   --device cuda:0 \
   --experiment teacher_elevation_trajectory \
@@ -139,7 +139,7 @@ GPU_IDS=0,1 /home/lhy/anaconda3/envs/env_isaaclab/bin/python -m torch.distribute
 打印 planner 诊断：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/train.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
   --headless \
   --device cuda:0 \
   --num_envs 32 \
@@ -154,7 +154,7 @@ GPU_IDS=0,1 /home/lhy/anaconda3/envs/env_isaaclab/bin/python -m torch.distribute
 headless scripted smoke：
 
 ```bash
-timeout -s INT -k 20s 60s /home/lhy/anaconda3/envs/env_isaaclab/bin/python \
+timeout -s INT -k 20s 60s /home/lhy/anaconda3/envs/env_isaacsim/bin/python \
   Go2Pvcnn/extension/viz/go2_foostep_planner.py \
   --headless \
   --device cuda:0 \
@@ -171,7 +171,7 @@ timeout -s INT -k 20s 60s /home/lhy/anaconda3/envs/env_isaaclab/bin/python \
 本地交互 viewer：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
   --device cuda:0 \
   --num_envs 1 \
   --terrain task \
@@ -181,19 +181,22 @@ timeout -s INT -k 20s 60s /home/lhy/anaconda3/envs/env_isaaclab/bin/python \
 远程 WebRTC viewer：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
   --headless \
   --livestream 2 \
-  --device cuda:0 \
+  --webrtc-public-ip 172.31.179.75 \
+  --device cuda:2 \
   --num_envs 1 \
   --terrain task \
   --planner-backend together
 ```
 
+远程服务器上 `--webrtc-public-ip` 要填浏览器能访问到的服务器地址；不填时 viewer 会优先使用 `PUBLIC_IP`，再尝试从 `SSH_CONNECTION` 推断服务器 IP。默认 WebRTC port 是 `49100`；需要换端口时用 `--webrtc-port <port>`。
+
 legacy viewer 回滚：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
   --headless \
   --device cuda:0 \
   --num_envs 1 \
@@ -214,7 +217,7 @@ teleop 键位：
 基础回放：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/play.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory \
   --planner-backend together \
   --run_dir 2026-04-27_19-13-54 \
@@ -226,7 +229,7 @@ teleop 键位：
 短视频 smoke：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/play.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --headless \
   --device cuda:0 \
   --num_envs 1 \
@@ -242,7 +245,7 @@ teleop 键位：
 远程 WebRTC 回放：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/play.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory \
   --planner-backend together \
   --run_dir 2026-04-27_19-13-54 \
@@ -256,7 +259,7 @@ teleop 键位：
 legacy 回放：
 
 ```bash
-/home/lhy/anaconda3/envs/env_isaaclab/bin/python Go2Pvcnn/scripts/play.py \
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory \
   --planner-backend legacy \
   --run_dir 2026-04-27_19-13-54 \
@@ -309,6 +312,10 @@ viewer 侧：
   scripted command 保持的重规划 cycle 数。
 - `--livestream`
   Isaac Sim WebRTC 模式，通常用 `2`。
+- `--webrtc-public-ip`
+  远程 WebRTC 对外地址。服务器远程浏览器黑屏时优先显式设置它，避免 IsaacLab 默认广告 `127.0.0.1`。
+- `--webrtc-port`
+  WebRTC livestream 端口，默认 `49100`。
 
 env cfg 侧关键字段：
 
@@ -326,7 +333,7 @@ env cfg 侧关键字段：
 
 ## 当前已验证证据
 
-截至 `2026-04-27` 的 `env_isaaclab` 验证：
+截至 `2026-04-27` 的 `env_isaacsim` 验证：
 
 - together `32` env, `max_iterations=1`：通过
 - together `128` env, `max_iterations=1`：通过

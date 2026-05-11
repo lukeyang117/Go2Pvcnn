@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compact Todo"
+  short_description: "Compact todo/log memory dashboards"
+  default_prompt: "Use $compact-todo to turn this repository's todo/log memory into a concise dashboard with branch memory and log archives."

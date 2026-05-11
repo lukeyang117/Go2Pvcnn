@@ -19,6 +19,11 @@
 - [2026-04-27-1349-notes-workflow-bootstrap.md](../log/2026-04-27-1349-notes-workflow-bootstrap.md)
 - [2026-04-30-1456-notes-compact-todo.md](../log/2026-04-30-1456-notes-compact-todo.md)
 - [2026-04-30-1450-t200-branch-compact.md](../log/2026-04-30-1450-t200-branch-compact.md)
+- [2026-05-06-1532-local-skill-installation.md](../log/2026-05-06-1532-local-skill-installation.md)
+- [2026-05-06-1542-create-todo-log-skill-hardening.md](../log/2026-05-06-1542-create-todo-log-skill-hardening.md)
+- [2026-05-06-1939-superpowers-plugin-download.md](../log/2026-05-06-1939-superpowers-plugin-download.md)
+- [2026-05-06-1949-superpowers-plugin-marketplace-registration.md](../log/2026-05-06-1949-superpowers-plugin-marketplace-registration.md)
+- [2026-05-06-2026-superpowers-skills-project-install.md](../log/2026-05-06-2026-superpowers-skills-project-install.md)
 
 ## Git Refs
 

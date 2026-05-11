@@ -13,6 +13,9 @@ Every inspire design draft requires a focused subagent review. Keep the review n
 - Did the design require subagent review before user-facing design approval?
 - Did the design path require syncing design-state memory in both `notes/todo.md` and the relevant branch page under `notes/todo/` before the design is presented as ready?
 - Did the design use todo-first breakdown instead of a standalone implementation plan?
+- Did the design keep design and todo as stage boundaries while treating explicit `继续` / `下一阶段` language as enough to continue?
+- Did the design avoid requiring per-leaf approval after the user has approved entering the execution stage?
+- Did the design make execution fully autonomous after stage entry, with no further user approvals required?
 - Did the design keep the primary agent on orchestration/notes/log/review only?
 - Did the design keep subagents on code changes and testing during execution?
 - Did the design include testing and acceptance indicators that would catch the wrong implementation?
