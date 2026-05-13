@@ -17,6 +17,7 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -38,6 +39,7 @@ class ViewerTrajectoryResult:
     foot_pos_root: torch.Tensor
     contact_state: torch.Tensor
     planned_touchdown_w: torch.Tensor
+    touchdown_seq: torch.Tensor | None = None
     root_lin_vel_w: torch.Tensor | None = None
     root_ang_vel_w: torch.Tensor | None = None
     status: torch.Tensor | None = None
@@ -1459,6 +1461,91 @@ def _mpc_state_from_reference_result(result, *, frame_idx: int):
     )
 
 
+def _mpc_foot_rel_body(state) -> torch.Tensor:
+    root = torch.as_tensor(state.root_pos, dtype=torch.float32, device=state.foot_pos.device)
+    rpy = torch.as_tensor(state.root_rpy, dtype=torch.float32, device=state.foot_pos.device)
+    foot = torch.as_tensor(state.foot_pos, dtype=torch.float32, device=state.foot_pos.device)
+    rel = foot - root.unsqueeze(1)
+    yaw = rpy[:, 2]
+    cy = torch.cos(yaw).unsqueeze(-1)
+    sy = torch.sin(yaw).unsqueeze(-1)
+    rel_body_xy = torch.stack(
+        (
+            cy * rel[..., 0] + sy * rel[..., 1],
+            -sy * rel[..., 0] + cy * rel[..., 1],
+        ),
+        dim=-1,
+    )
+    return torch.cat((rel_body_xy, rel[..., 2:3]), dim=-1)
+
+
+def _mpc_yaw_dominance(command: torch.Tensor, *, device) -> torch.Tensor:
+    cmd = torch.as_tensor(command, dtype=torch.float32, device=device)
+    lin = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
+    yaw = torch.abs(cmd[:, 2])
+    return yaw / torch.clamp(lin + yaw, min=1.0e-6)
+
+
+def _mpc_viewer_memory_for_state(memory, state, command: torch.Tensor, runtime_cfg):
+    from extension.batch_mpc_planner.types import MpcFootholdMemory
+
+    if not bool(getattr(runtime_cfg, "foothold_memory_enabled", True)):
+        return None
+    foot = torch.as_tensor(state.foot_pos, dtype=torch.float32, device=state.foot_pos.device)
+    if memory is None or getattr(memory, "stance_anchor_w", None) is None:
+        memory = SimpleNamespace(
+            stance_anchor_w=foot.clone(),
+            running_foot_rel_body=_mpc_foot_rel_body(state).detach().clone(),
+            prev_contact_state=torch.ones((foot.shape[0], 4), dtype=torch.bool, device=foot.device),
+            prev_yaw_dominance=torch.zeros(foot.shape[0], dtype=torch.float32, device=foot.device),
+            yaw_entry_steps=torch.full((foot.shape[0],), 10_000, dtype=torch.long, device=foot.device),
+        )
+    yaw_dom = _mpc_yaw_dominance(command, device=foot.device)
+    prev = memory.prev_yaw_dominance.to(device=foot.device)
+    old_steps = memory.yaw_entry_steps.to(device=foot.device)
+    enter = torch.logical_and(
+        yaw_dom > float(getattr(runtime_cfg, "foothold_yaw_entry_enter_threshold", 0.55)),
+        prev <= float(getattr(runtime_cfg, "foothold_yaw_entry_exit_threshold", 0.35)),
+    )
+    stay = yaw_dom > float(getattr(runtime_cfg, "foothold_yaw_entry_enter_threshold", 0.55))
+    new_steps = torch.where(enter, torch.zeros_like(old_steps), torch.where(stay, old_steps + 1, torch.full_like(old_steps, 10_000)))
+    memory.prev_yaw_dominance = yaw_dom.detach().clone()
+    memory.yaw_entry_steps = new_steps.detach().clone()
+    ramp = torch.clamp(
+        (new_steps.to(dtype=torch.float32) + 1.0) / float(getattr(runtime_cfg, "foothold_yaw_entry_ramp_steps", 4)),
+        min=0.0,
+        max=1.0,
+    )
+    ramp = torch.where(new_steps >= 10_000, torch.ones_like(ramp), ramp)
+    return memory, MpcFootholdMemory(
+        foot_rel_body_seed=memory.running_foot_rel_body.to(device=foot.device),
+        stance_anchor_w=memory.stance_anchor_w.to(device=foot.device),
+        yaw_entry_ramp=ramp,
+    )
+
+
+def _update_mpc_viewer_memory(memory, state, result, runtime_cfg):
+    if memory is None or not bool(getattr(runtime_cfg, "foothold_memory_enabled", True)):
+        return memory
+    frame_idx = int(result.num_frames) - 1
+    last_contact = torch.as_tensor(result.contact_state[:, frame_idx], dtype=torch.bool, device=state.foot_pos.device)
+    prior = memory.prev_contact_state.to(device=last_contact.device)
+    touchdown_last = torch.logical_and(last_contact, torch.logical_not(prior))
+    foot = torch.as_tensor(state.foot_pos, dtype=torch.float32, device=state.foot_pos.device)
+    anchor = memory.stance_anchor_w.to(device=foot.device)
+    update_anchor = torch.logical_or(last_contact, touchdown_last).unsqueeze(-1)
+    memory.stance_anchor_w = torch.where(update_anchor, foot, anchor).detach().clone()
+    memory.prev_contact_state = last_contact.detach().clone()
+    current_rel = _mpc_foot_rel_body(state)
+    running = memory.running_foot_rel_body.to(device=current_rel.device)
+    touchdown_mask = touchdown_last.unsqueeze(-1).to(dtype=current_rel.dtype)
+    contact_mask = last_contact.unsqueeze(-1).to(dtype=current_rel.dtype)
+    blended = torch.lerp(running, current_rel, float(getattr(runtime_cfg, "foothold_touchdown_blend", 0.35)) * touchdown_mask)
+    blended = torch.lerp(blended, current_rel, float(getattr(runtime_cfg, "foothold_contact_blend", 0.10)) * contact_mask)
+    memory.running_foot_rel_body = blended.detach().clone()
+    return memory
+
+
 def _adapt_together_result_for_viewer(result) -> ViewerTrajectoryResult:
     from extension.convention import euler_to_quat_batch
 
@@ -1498,6 +1585,11 @@ def _adapt_together_result_for_viewer(result) -> ViewerTrajectoryResult:
         foot_pos_root=foot_pos_root,
         contact_state=torch.as_tensor(result.contact_state, device=root_pos_w.device).contiguous(),
         planned_touchdown_w=planned_touchdown_w,
+        touchdown_seq=(
+            None
+            if getattr(result, "touchdown_seq", None) is None
+            else torch.as_tensor(result.touchdown_seq, device=root_pos_w.device, dtype=root_pos_w.dtype).contiguous()
+        ),
         root_lin_vel_w=zeros_vel,
         root_ang_vel_w=zeros_vel.clone(),
         status=optional_result_tensor("status"),
@@ -1641,6 +1733,11 @@ def _adapt_mpc_result_for_viewer(result) -> ViewerTrajectoryResult:
         foot_pos_root=foot_pos_root,
         contact_state=torch.as_tensor(result.contact_state, device=root_pos_w.device).detach().contiguous(),
         planned_touchdown_w=touchdown_w.contiguous(),
+        touchdown_seq=(
+            None
+            if getattr(result, "touchdown_seq", None) is None
+            else torch.as_tensor(result.touchdown_seq, device=root_pos_w.device, dtype=root_pos_w.dtype).detach().contiguous()
+        ),
         root_lin_vel_w=zeros_vel,
         root_ang_vel_w=zeros_vel.clone(),
         status=torch.as_tensor(result.status, device=root_pos_w.device).detach(),
@@ -1663,6 +1760,7 @@ def _plan_viewer_trajectory(
     legacy_cfg,
     together_cfg,
     mpc_cfg,
+    mpc_memory=None,
 ):
     backend_name = str(backend).lower()
     if backend_name == "legacy":
@@ -1696,6 +1794,7 @@ def _plan_viewer_trajectory(
                 state,
                 command,
                 cfg=mpc_cfg,
+                memory=mpc_memory,
             )
         )
     raise ValueError(f"Unsupported planner backend: {backend!r}")
@@ -1717,7 +1816,7 @@ def main() -> int:
 
     import gymnasium as gym
 
-    import go2_pvcnn.tasks.register_envs  # noqa: F401,F403
+    import go2_pvcnn.tasks.register_envs  # noqa: F401
     from extension.convention import extract_yaw_batch
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -1767,6 +1866,7 @@ def main() -> int:
     playback_frame = 0
     last_cmd = None
     plan_cycle = 0
+    mpc_foothold_memory = None
     scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
     scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
 
@@ -1813,6 +1913,7 @@ def main() -> int:
                     playback_frame = 0
                     last_cmd = None
                     plan_cycle = 0
+                    mpc_foothold_memory = None
 
                 need_replan = _viewer_loop_need_replan(
                     result=result,
@@ -1857,8 +1958,15 @@ def main() -> int:
                         terrain, ray_hits = _compute_together_local_terrain(scanner)
                     elif args_cli.planner_backend == "mpc":
                         terrain, ray_hits = _compute_mpc_local_terrain(scanner)
+                        mpc_foothold_memory, mpc_plan_memory = _mpc_viewer_memory_for_state(
+                            mpc_foothold_memory,
+                            state,
+                            active_cmd.values,
+                            mpc_planner_cfg.runtime,
+                        )
                     else:
                         terrain, ray_hits = _compute_local_terrain(scanner)
+                        mpc_plan_memory = None
 
                     result = _plan_viewer_trajectory(
                         backend=args_cli.planner_backend,
@@ -1870,7 +1978,15 @@ def main() -> int:
                         legacy_cfg=planner_cfg,
                         together_cfg=together_planner_cfg,
                         mpc_cfg=mpc_planner_cfg,
+                        mpc_memory=mpc_plan_memory if args_cli.planner_backend == "mpc" else None,
                     )
+                    if args_cli.planner_backend == "mpc":
+                        mpc_foothold_memory = _update_mpc_viewer_memory(
+                            mpc_foothold_memory,
+                            state,
+                            result,
+                            mpc_planner_cfg.runtime,
+                        )
                     summary = _trajectory_motion_summary(result)
                     semantic_map = _scanner_semantic_map(scanner)
                     height_points_by_class, semantic_diag = _subsample_semantic_height_points(

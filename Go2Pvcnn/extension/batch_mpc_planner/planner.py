@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from .config import MpcPlannerCfg, validate_mpc_config
@@ -10,7 +11,7 @@ from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
 from .kinematics import solve_joint_angles_from_trajectory
 from .nominal import build_nominal_trajectory
 from .optimizer import optimize_variables
-from .types import MPC_HARD_REASON_COUNT, MpcPlannerResult, MpcPlannerStatus, MpcPlannerTerrain, MpcRobotState
+from .types import MPC_HARD_REASON_COUNT, MpcFootholdMemory, MpcPlannerResult, MpcPlannerStatus, MpcPlannerTerrain, MpcRobotState
 from .variables import MpcOptimizationVariables, init_optimization_variables
 
 
@@ -50,6 +51,42 @@ def _extract_touchdown_seq(
     return touchdown_seq, planned_touchdown_w
 
 
+def _terrain_height_at(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
+    height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32, device=points_xy.device)
+    if height_map.ndim == 2:
+        height_map = height_map.unsqueeze(0)
+    points_xy = torch.as_tensor(points_xy, dtype=torch.float32, device=height_map.device)
+    batch = int(height_map.shape[0])
+    if points_xy.ndim == 2:
+        points_xy = points_xy.unsqueeze(0)
+    if int(points_xy.shape[0]) == 1 and batch > 1:
+        points_xy = points_xy.expand(batch, -1, -1)
+    x0, x1 = terrain.world_x_range
+    y0, y1 = terrain.world_y_range
+    xs = points_xy[..., 0].clamp(float(x0), float(x1))
+    ys = points_xy[..., 1].clamp(float(y0), float(y1))
+    x_norm = (xs - float(x0)) / max(float(x1) - float(x0), 1.0e-6) * 2.0 - 1.0
+    y_norm = (float(y1) - ys) / max(float(y1) - float(y0), 1.0e-6) * 2.0 - 1.0
+    sample_grid = torch.stack((x_norm, y_norm), dim=-1).unsqueeze(2)
+    sampled = F.grid_sample(
+        height_map.unsqueeze(1),
+        sample_grid,
+        mode="bilinear",
+        align_corners=True,
+        padding_mode="border",
+    )
+    return sampled[:, 0, :, 0]
+
+
+def _ground_contact_feet_to_terrain(terrain: MpcPlannerTerrain, foot_pos: Tensor, contact_state: Tensor) -> Tensor:
+    batch = int(foot_pos.shape[0])
+    terrain_z = _terrain_height_at(terrain, foot_pos[..., :2].reshape(batch, -1, 2)).reshape(foot_pos.shape[:3])
+    grounded = foot_pos.clone()
+    grounded_z = torch.where(contact_state, terrain_z.to(dtype=grounded.dtype, device=grounded.device), grounded[..., 2])
+    grounded[..., 2] = grounded_z
+    return grounded
+
+
 def plan_segment(
     terrain: MpcPlannerTerrain,
     state: MpcRobotState,
@@ -57,20 +94,21 @@ def plan_segment(
     *,
     cfg: MpcPlannerCfg,
     warm_start: MpcOptimizationVariables | None = None,
+    memory: MpcFootholdMemory | None = None,
 ) -> MpcPlannerResult:
     """Plan one horizon for a batch of environments."""
-    del terrain  # scaffold: terrain losses are wired through loss registry placeholders.
     validate_mpc_config(cfg)
-    nominal = build_nominal_trajectory(state, command, cfg.runtime)
+    nominal = build_nominal_trajectory(state, command, cfg.runtime, memory=memory)
     joint_seed = torch.as_tensor(state.joint_angles, dtype=nominal["root_pos"].dtype, device=nominal["root_pos"].device)
     joint_seed_seq = joint_seed.unsqueeze(1).expand(joint_seed.shape[0], cfg.runtime.horizon_steps, joint_seed.shape[1]).contiguous()
     variables = init_optimization_variables(nominal, cfg.runtime, warm_start=warm_start)
     decoded, cost_total, loss_breakdown, finite_ok = optimize_variables(nominal, variables, joint_seed_seq, command, cfg)
-    joint_seq = solve_joint_angles_from_trajectory(decoded.root_pos, decoded.root_rpy, decoded.foot_pos)
 
     contact_state = decoded.contact_prob > float(cfg.runtime.contact_threshold)
+    foot_pos = _ground_contact_feet_to_terrain(terrain, decoded.foot_pos, contact_state)
+    joint_seq = solve_joint_angles_from_trajectory(decoded.root_pos, decoded.root_rpy, foot_pos)
     touchdown_seq, planned_touchdown_w = _extract_touchdown_seq(
-        decoded.foot_pos,
+        foot_pos,
         contact_state,
         event_cap=cfg.runtime.touchdown_event_cap,
     )
@@ -92,7 +130,7 @@ def plan_segment(
     if cfg.diagnostics.enabled:
         hard_reason_mask = evaluate_hard_reasons(
             root_pos=decoded.root_pos,
-            foot_pos=decoded.foot_pos,
+            foot_pos=foot_pos,
             joint_angles=joint_seq,
             contact_state=contact_state,
             command=torch.as_tensor(command, dtype=decoded.root_pos.dtype, device=decoded.root_pos.device),
@@ -110,7 +148,7 @@ def plan_segment(
     return MpcPlannerResult(
         root_pos=decoded.root_pos,
         root_rpy=decoded.root_rpy,
-        foot_pos=decoded.foot_pos,
+        foot_pos=foot_pos,
         joint_angles=joint_seq,
         contact_state=contact_state,
         touchdown_seq=touchdown_seq,

@@ -21,7 +21,14 @@ from .adapter import (
 from .config import MpcPlannerCfg, planner_cfg_from_task_cfg
 from .planner import plan_segment
 from .terrain import build_mpc_terrain_from_scanner, subset_mpc_terrain
-from .types import MpcRobotState
+from .types import MpcFootholdMemory, MpcRobotState
+
+
+def _yaw_dominance(command: Tensor) -> Tensor:
+    cmd = torch.as_tensor(command, dtype=torch.float32, device=command.device)
+    lin = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
+    yaw = torch.abs(cmd[:, 2])
+    return yaw / torch.clamp(lin + yaw, min=1.0e-6)
 
 
 def _normalize_body_name(name: str) -> str:
@@ -43,6 +50,11 @@ class MpcTrajectoryManager:
         self._pending_reset_mask: Tensor | None = None
         self._pending_command_mask: Tensor | None = None
         self._last_replan_step: Tensor | None = None
+        self._stance_anchor_w: Tensor | None = None
+        self._running_foot_rel_body: Tensor | None = None
+        self._prev_contact_state: Tensor | None = None
+        self._prev_yaw_dominance: Tensor | None = None
+        self._yaw_entry_steps: Tensor | None = None
         self._foot_body_ids: Tensor | None = None
         self._last_refresh_step_token = None
         self._manager_step = 0
@@ -85,6 +97,115 @@ class MpcTrajectoryManager:
             self._pending_command_mask = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
         if self._last_replan_step is None or int(self._last_replan_step.shape[0]) != num_envs:
             self._last_replan_step = torch.full((num_envs,), -10_000, dtype=torch.long, device=self._device)
+        if self._stance_anchor_w is None or int(self._stance_anchor_w.shape[0]) != num_envs:
+            self._stance_anchor_w = torch.zeros((num_envs, 4, 3), dtype=torch.float32, device=self._device)
+        if self._running_foot_rel_body is None or int(self._running_foot_rel_body.shape[0]) != num_envs:
+            self._running_foot_rel_body = torch.zeros((num_envs, 4, 3), dtype=torch.float32, device=self._device)
+        if self._prev_contact_state is None or int(self._prev_contact_state.shape[0]) != num_envs:
+            self._prev_contact_state = torch.ones((num_envs, 4), dtype=torch.bool, device=self._device)
+        if self._prev_yaw_dominance is None or int(self._prev_yaw_dominance.shape[0]) != num_envs:
+            self._prev_yaw_dominance = torch.zeros(num_envs, dtype=torch.float32, device=self._device)
+        if self._yaw_entry_steps is None or int(self._yaw_entry_steps.shape[0]) != num_envs:
+            self._yaw_entry_steps = torch.full((num_envs,), 10_000, dtype=torch.long, device=self._device)
+
+    @staticmethod
+    def _foot_rel_body(state: MpcRobotState) -> Tensor:
+        root = torch.as_tensor(state.root_pos, dtype=torch.float32, device=state.foot_pos.device)
+        rpy = torch.as_tensor(state.root_rpy, dtype=torch.float32, device=state.foot_pos.device)
+        foot = torch.as_tensor(state.foot_pos, dtype=torch.float32, device=state.foot_pos.device)
+        rel = foot - root.unsqueeze(1)
+        yaw = rpy[:, 2]
+        cy = torch.cos(yaw).unsqueeze(-1)
+        sy = torch.sin(yaw).unsqueeze(-1)
+        rel_body_xy = torch.stack(
+            (
+                cy * rel[..., 0] + sy * rel[..., 1],
+                -sy * rel[..., 0] + cy * rel[..., 1],
+            ),
+            dim=-1,
+        )
+        return torch.cat((rel_body_xy, rel[..., 2:3]), dim=-1)
+
+    def _initialize_foothold_memory(self, states: MpcRobotState, env_ids: Tensor | None = None) -> None:
+        if self._stance_anchor_w is None or self._running_foot_rel_body is None or self._prev_contact_state is None:
+            return
+        foot = torch.as_tensor(states.foot_pos, dtype=torch.float32, device=self._device)
+        rel_body = self._foot_rel_body(states).to(dtype=torch.float32, device=self._device)
+        contact = torch.ones((foot.shape[0], 4), dtype=torch.bool, device=self._device)
+        if env_ids is None:
+            self._stance_anchor_w = foot.clone()
+            self._running_foot_rel_body = rel_body.clone()
+            self._prev_contact_state = contact
+            if self._prev_yaw_dominance is not None:
+                self._prev_yaw_dominance.zero_()
+            if self._yaw_entry_steps is not None:
+                self._yaw_entry_steps.fill_(10_000)
+            return
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device)
+        self._stance_anchor_w.index_copy_(0, ids, foot)
+        self._running_foot_rel_body.index_copy_(0, ids, rel_body)
+        self._prev_contact_state.index_copy_(0, ids, contact)
+        if self._prev_yaw_dominance is not None:
+            self._prev_yaw_dominance.index_fill_(0, ids, 0.0)
+        if self._yaw_entry_steps is not None:
+            self._yaw_entry_steps.index_fill_(0, ids, 10_000)
+
+    def _foothold_memory_for(self, env_ids: Tensor, command: Tensor, cfg: MpcPlannerCfg) -> MpcFootholdMemory | None:
+        if not bool(cfg.runtime.foothold_memory_enabled):
+            return None
+        if self._running_foot_rel_body is None or self._stance_anchor_w is None:
+            return None
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device)
+        yaw_dom = _yaw_dominance(command).to(dtype=torch.float32, device=self._device)
+        if self._prev_yaw_dominance is None or self._yaw_entry_steps is None:
+            ramp = torch.ones_like(yaw_dom)
+        else:
+            prev = self._prev_yaw_dominance.index_select(0, ids)
+            old_steps = self._yaw_entry_steps.index_select(0, ids)
+            enter = torch.logical_and(
+                yaw_dom > float(cfg.runtime.foothold_yaw_entry_enter_threshold),
+                prev <= float(cfg.runtime.foothold_yaw_entry_exit_threshold),
+            )
+            stay = yaw_dom > float(cfg.runtime.foothold_yaw_entry_enter_threshold)
+            new_steps = torch.where(enter, torch.zeros_like(old_steps), torch.where(stay, old_steps + 1, torch.full_like(old_steps, 10_000)))
+            self._yaw_entry_steps.index_copy_(0, ids, new_steps)
+            self._prev_yaw_dominance.index_copy_(0, ids, yaw_dom)
+            ramp = torch.clamp(
+                (new_steps.to(dtype=torch.float32) + 1.0) / float(cfg.runtime.foothold_yaw_entry_ramp_steps),
+                min=0.0,
+                max=1.0,
+            )
+            ramp = torch.where(new_steps >= 10_000, torch.ones_like(ramp), ramp)
+        return MpcFootholdMemory(
+            foot_rel_body_seed=self._running_foot_rel_body.index_select(0, ids),
+            stance_anchor_w=self._stance_anchor_w.index_select(0, ids),
+            yaw_entry_ramp=ramp,
+        )
+
+    def _update_foothold_memory(self, states: MpcRobotState, result, env_ids: Tensor, cfg: MpcPlannerCfg) -> None:
+        if not bool(cfg.runtime.foothold_memory_enabled):
+            return
+        if self._stance_anchor_w is None or self._running_foot_rel_body is None or self._prev_contact_state is None:
+            return
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device)
+        frame_idx = int(result.foot_pos.shape[1]) - 1
+        last_contact = torch.as_tensor(result.contact_state[:, frame_idx], dtype=torch.bool, device=self._device)
+        prior_contact = self._prev_contact_state.index_select(0, ids)
+        touchdown_last = torch.logical_and(last_contact, torch.logical_not(prior_contact))
+        last_foot = torch.as_tensor(states.foot_pos, dtype=torch.float32, device=self._device)
+        anchor_prev = self._stance_anchor_w.index_select(0, ids)
+        update_anchor = torch.logical_or(last_contact, touchdown_last).unsqueeze(-1)
+        anchor_new = torch.where(update_anchor, last_foot, anchor_prev)
+        self._stance_anchor_w.index_copy_(0, ids, anchor_new)
+        self._prev_contact_state.index_copy_(0, ids, last_contact.detach().clone())
+
+        current_rel = self._foot_rel_body(states).to(dtype=torch.float32, device=self._device)
+        running_prev = self._running_foot_rel_body.index_select(0, ids)
+        touchdown_mask = touchdown_last.unsqueeze(-1).to(dtype=current_rel.dtype)
+        contact_mask = last_contact.unsqueeze(-1).to(dtype=current_rel.dtype)
+        blended = torch.lerp(running_prev, current_rel, float(cfg.runtime.foothold_touchdown_blend) * touchdown_mask)
+        blended = torch.lerp(blended, current_rel, float(cfg.runtime.foothold_contact_blend) * contact_mask)
+        self._running_foot_rel_body.index_copy_(0, ids, blended.detach().clone())
 
     def _foot_ids(self, robot) -> Tensor:
         if self._foot_body_ids is None:
@@ -261,6 +382,7 @@ class MpcTrajectoryManager:
         if not cache_valid:
             states_full = self._state_from_env(env)
             self._cache = standstill_cache_from_state(states_full, horizon=horizon)
+            self._initialize_foothold_memory(states_full)
         assert self._cache is not None
 
         replace_mask = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
@@ -280,7 +402,22 @@ class MpcTrajectoryManager:
             )
             sub_command = command.index_select(0, selected_ids)
             sub_terrain = subset_mpc_terrain(terrain, selected_ids)
-            result = plan_segment(sub_terrain, sub_states, sub_command, cfg=cfg)
+            reset_or_first_sub = torch.logical_or(
+                self._pending_reset_mask.index_select(0, selected_ids),
+                first_mask.index_select(0, selected_ids),
+            )
+            if bool(torch.any(reset_or_first_sub).item()):
+                reset_ids = selected_ids[reset_or_first_sub]
+                reset_sub_states = MpcRobotState(
+                    root_pos=states.root_pos.index_select(0, reset_ids),
+                    root_rpy=states.root_rpy.index_select(0, reset_ids),
+                    foot_pos=states.foot_pos.index_select(0, reset_ids),
+                    joint_angles=states.joint_angles.index_select(0, reset_ids),
+                    foot_vel=states.foot_vel.index_select(0, reset_ids) if states.foot_vel is not None else None,
+                )
+                self._initialize_foothold_memory(reset_sub_states, reset_ids)
+            memory = self._foothold_memory_for(selected_ids, sub_command, cfg)
+            result = plan_segment(sub_terrain, sub_states, sub_command, cfg=cfg, memory=memory)
 
             sub_new_cache = mpc_result_to_reference_cache(result)
             sub_fallback_cache = standstill_cache_from_state(sub_states, horizon=horizon)
@@ -306,6 +443,7 @@ class MpcTrajectoryManager:
             )
             if counters_enabled:
                 planner_ms = (self._profile_now(sync=timing_sync) - plan_t0) * 1000.0
+            self._update_foothold_memory(sub_states, result, selected_ids, cfg)
         else:
             self._cache = old_cache
 
@@ -374,6 +512,20 @@ class MpcTrajectoryManager:
             self._pending_reset_mask = torch.zeros_like(mask)
         self._pending_reset_mask = torch.logical_or(self._pending_reset_mask, mask)
         self._phase_counter = torch.where(mask, torch.zeros_like(self._phase_counter), self._phase_counter)
+        if self._stance_anchor_w is not None:
+            self._stance_anchor_w = torch.where(mask[:, None, None], torch.zeros_like(self._stance_anchor_w), self._stance_anchor_w)
+        if self._running_foot_rel_body is not None:
+            self._running_foot_rel_body = torch.where(
+                mask[:, None, None],
+                torch.zeros_like(self._running_foot_rel_body),
+                self._running_foot_rel_body,
+            )
+        if self._prev_contact_state is not None:
+            self._prev_contact_state = torch.where(mask[:, None], torch.ones_like(self._prev_contact_state), self._prev_contact_state)
+        if self._prev_yaw_dominance is not None:
+            self._prev_yaw_dominance = torch.where(mask, torch.zeros_like(self._prev_yaw_dominance), self._prev_yaw_dominance)
+        if self._yaw_entry_steps is not None:
+            self._yaw_entry_steps = torch.where(mask, torch.full_like(self._yaw_entry_steps, 10_000), self._yaw_entry_steps)
 
     def mark_command_changed(self, env_mask: Tensor | None = None, *_, **__) -> None:
         if env_mask is None:

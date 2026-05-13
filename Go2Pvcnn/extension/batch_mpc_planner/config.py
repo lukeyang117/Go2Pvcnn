@@ -49,6 +49,16 @@ class MpcRuntimeCfg:
     nominal_yaw_stride_scale: float = 1.0
     nominal_backward_stride_scale: float = 0.70
     nominal_yaw_stride_atten: float = 0.35
+    foothold_memory_enabled: bool = True
+    foothold_linear_gate_start: float = 0.35
+    foothold_linear_gate_span: float = 0.45
+    foothold_yaw_gate_start: float = 0.35
+    foothold_yaw_gate_span: float = 0.45
+    foothold_yaw_entry_ramp_steps: int = 4
+    foothold_yaw_entry_enter_threshold: float = 0.55
+    foothold_yaw_entry_exit_threshold: float = 0.35
+    foothold_touchdown_blend: float = 0.35
+    foothold_contact_blend: float = 0.10
 
 
 @dataclass
@@ -233,6 +243,66 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
         float,
         runtime.nominal_yaw_stride_atten,
     )
+    runtime.foothold_memory_enabled = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_memory_enabled",
+        bool,
+        runtime.foothold_memory_enabled,
+    )
+    runtime.foothold_linear_gate_start = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_linear_gate_start",
+        float,
+        runtime.foothold_linear_gate_start,
+    )
+    runtime.foothold_linear_gate_span = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_linear_gate_span",
+        float,
+        runtime.foothold_linear_gate_span,
+    )
+    runtime.foothold_yaw_gate_start = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_yaw_gate_start",
+        float,
+        runtime.foothold_yaw_gate_start,
+    )
+    runtime.foothold_yaw_gate_span = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_yaw_gate_span",
+        float,
+        runtime.foothold_yaw_gate_span,
+    )
+    runtime.foothold_yaw_entry_ramp_steps = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_yaw_entry_ramp_steps",
+        int,
+        runtime.foothold_yaw_entry_ramp_steps,
+    )
+    runtime.foothold_yaw_entry_enter_threshold = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_yaw_entry_enter_threshold",
+        float,
+        runtime.foothold_yaw_entry_enter_threshold,
+    )
+    runtime.foothold_yaw_entry_exit_threshold = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_yaw_entry_exit_threshold",
+        float,
+        runtime.foothold_yaw_entry_exit_threshold,
+    )
+    runtime.foothold_touchdown_blend = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_touchdown_blend",
+        float,
+        runtime.foothold_touchdown_blend,
+    )
+    runtime.foothold_contact_blend = _copy_if_has(
+        task_cfg,
+        "mpc_foothold_contact_blend",
+        float,
+        runtime.foothold_contact_blend,
+    )
     leg_phase = getattr(task_cfg, "mpc_leg_phase_offsets", None)
     if leg_phase is not None:
         runtime.leg_phase_offsets = tuple(float(v) for v in leg_phase)
@@ -325,6 +395,12 @@ def validate_mpc_config(cfg: MpcPlannerCfg) -> None:
         raise ValueError("runtime.touchdown_event_cap must be positive")
     if len(cfg.runtime.leg_phase_offsets) != 4:
         raise ValueError("runtime.leg_phase_offsets must contain 4 phase offsets")
+    if cfg.runtime.foothold_linear_gate_span <= 0.0:
+        raise ValueError("runtime.foothold_linear_gate_span must be positive")
+    if cfg.runtime.foothold_yaw_gate_span <= 0.0:
+        raise ValueError("runtime.foothold_yaw_gate_span must be positive")
+    if cfg.runtime.foothold_yaw_entry_ramp_steps <= 0:
+        raise ValueError("runtime.foothold_yaw_entry_ramp_steps must be positive")
 
 
 __all__ = [

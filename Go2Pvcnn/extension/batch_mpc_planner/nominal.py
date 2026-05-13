@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .config import MpcRuntimeCfg
-from .types import MpcRobotState
+from .types import MpcFootholdMemory, MpcRobotState
 
 
 def _as_command(command: Tensor, *, device: torch.device) -> Tensor:
@@ -19,12 +19,107 @@ def _as_command(command: Tensor, *, device: torch.device) -> Tensor:
     return cmd[:, :3]
 
 
+def _yaw_dominance(command: Tensor, *, like: Tensor) -> Tensor:
+    cmd = torch.as_tensor(command, dtype=like.dtype, device=like.device)
+    lin = torch.linalg.vector_norm(cmd[:, :2], dim=-1, keepdim=True)
+    yaw = torch.abs(cmd[:, 2:3])
+    return yaw / torch.clamp(lin + yaw, min=1.0e-6)
+
+
+def _soft_gate(value: Tensor, *, start: float, span: float) -> Tensor:
+    return torch.clamp((value - float(start)) / max(float(span), 1.0e-6), min=0.0, max=1.0)
+
+
+def _foot_pos_from_body_rel(state: MpcRobotState, rel_body: Tensor) -> Tensor:
+    root = torch.as_tensor(state.root_pos, dtype=torch.float32, device=state.foot_pos.device)
+    rpy = torch.as_tensor(state.root_rpy, dtype=torch.float32, device=state.foot_pos.device)
+    rel_body = torch.as_tensor(rel_body, dtype=torch.float32, device=state.foot_pos.device)
+    yaw = rpy[:, 2]
+    cy = torch.cos(yaw).unsqueeze(-1)
+    sy = torch.sin(yaw).unsqueeze(-1)
+    rel_world_xy = torch.stack(
+        (
+            cy * rel_body[..., 0] - sy * rel_body[..., 1],
+            sy * rel_body[..., 0] + cy * rel_body[..., 1],
+        ),
+        dim=-1,
+    )
+    rel_world = torch.cat((rel_world_xy, rel_body[..., 2:3]), dim=-1)
+    return root.unsqueeze(1) + rel_world
+
+
+def _memory_seed_state(state: MpcRobotState, command: Tensor, runtime_cfg: MpcRuntimeCfg, memory: MpcFootholdMemory | None) -> MpcRobotState:
+    if memory is None or memory.foot_rel_body_seed is None:
+        return state
+    foot_pos0 = torch.as_tensor(state.foot_pos, dtype=torch.float32, device=state.foot_pos.device)
+    linear_dom = 1.0 - _yaw_dominance(command, like=foot_pos0)
+    linear_weight = _soft_gate(
+        linear_dom,
+        start=float(runtime_cfg.foothold_linear_gate_start),
+        span=float(runtime_cfg.foothold_linear_gate_span),
+    ).to(dtype=foot_pos0.dtype, device=foot_pos0.device)
+    seeded_foot = _foot_pos_from_body_rel(state, memory.foot_rel_body_seed).to(dtype=foot_pos0.dtype, device=foot_pos0.device)
+    blended_foot = torch.lerp(foot_pos0, seeded_foot, linear_weight[:, None, :])
+    return MpcRobotState(
+        root_pos=state.root_pos,
+        root_rpy=state.root_rpy,
+        joint_angles=state.joint_angles,
+        foot_pos=blended_foot.to(dtype=state.foot_pos.dtype, device=state.foot_pos.device),
+        foot_vel=state.foot_vel,
+    )
+
+
+def _apply_foothold_memory(
+    nominal: dict[str, Tensor],
+    command: Tensor,
+    runtime_cfg: MpcRuntimeCfg,
+    memory: MpcFootholdMemory | None,
+) -> dict[str, Tensor]:
+    if memory is None or memory.stance_anchor_w is None:
+        return nominal
+    contact = nominal["contact_logits"] > 0.0
+    yaw_dom = _yaw_dominance(command, like=nominal["foot_pos"])
+    yaw_weight = _soft_gate(
+        yaw_dom,
+        start=float(runtime_cfg.foothold_yaw_gate_start),
+        span=float(runtime_cfg.foothold_yaw_gate_span),
+    ).to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device)
+    if memory.yaw_entry_ramp is not None:
+        ramp = torch.as_tensor(memory.yaw_entry_ramp, dtype=yaw_weight.dtype, device=yaw_weight.device).reshape(-1, 1)
+        yaw_weight = yaw_weight * ramp
+    anchor_t = torch.as_tensor(
+        memory.stance_anchor_w,
+        dtype=nominal["foot_pos"].dtype,
+        device=nominal["foot_pos"].device,
+    ).unsqueeze(1)
+    yaw_weight_btlf = yaw_weight.view(yaw_weight.shape[0], 1, 1, 1)
+    replacement = torch.lerp(nominal["foot_pos"], anchor_t, yaw_weight_btlf)
+    nominal["foot_pos"] = torch.where(contact.unsqueeze(-1), replacement, nominal["foot_pos"])
+
+    linear_dom = 1.0 - yaw_dom
+    linear_z_weight = _soft_gate(
+        linear_dom,
+        start=float(runtime_cfg.foothold_linear_gate_start),
+        span=float(runtime_cfg.foothold_linear_gate_span),
+    ).to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device)
+    linear_z_weight_btlf = linear_z_weight.view(linear_z_weight.shape[0], 1, 1, 1)
+    z_weight = torch.maximum(yaw_weight_btlf, linear_z_weight_btlf)
+    grounded_z = torch.lerp(nominal["foot_pos"][..., 2:3], anchor_t[..., 2:3], z_weight)
+    nominal["foot_pos"][..., 2:3] = torch.where(contact.unsqueeze(-1), grounded_z, nominal["foot_pos"][..., 2:3])
+    return nominal
+
+
 def build_nominal_trajectory(
     state: MpcRobotState,
     command: Tensor,
     runtime_cfg: MpcRuntimeCfg,
+    memory: MpcFootholdMemory | None = None,
 ) -> dict[str, Tensor]:
     """Build a differentiable nominal seed for root/foot/contact."""
+    root_pos0_raw = torch.as_tensor(state.root_pos, dtype=torch.float32)
+    cmd = _as_command(command, device=root_pos0_raw.device)
+    if bool(runtime_cfg.foothold_memory_enabled):
+        state = _memory_seed_state(state, cmd, runtime_cfg, memory)
     root_pos0 = torch.as_tensor(state.root_pos, dtype=torch.float32)
     root_rpy0 = torch.as_tensor(state.root_rpy, dtype=torch.float32, device=root_pos0.device)
     foot_pos0 = torch.as_tensor(state.foot_pos, dtype=torch.float32, device=root_pos0.device)
@@ -115,12 +210,15 @@ def build_nominal_trajectory(
     foot_rel_world = torch.cat((foot_rel_world_xy, foot_rel_body[..., 2:3]), dim=-1)
     foot_pos = root_pos.unsqueeze(2) + foot_rel_world
 
-    return {
+    nominal = {
         "root_pos": root_pos,
         "root_rpy": root_rpy,
         "foot_pos": foot_pos,
         "contact_logits": contact_logits,
     }
+    if bool(runtime_cfg.foothold_memory_enabled):
+        nominal = _apply_foothold_memory(nominal, cmd, runtime_cfg, memory)
+    return nominal
 
 
 __all__ = ["build_nominal_trajectory"]
