@@ -178,6 +178,8 @@ target_world_xy =
 
 This preserves whether each leg is currently forward or rearward relative to the root at the time it swings. It prevents every leg from being pulled to the same root-frame x distance at cycle boundaries.
 
+This block is a conceptual per-leg description. The implementation must compute all `[B,4]` leg targets with tensor `gather`/broadcast operations and must not loop over envs or legs in the runtime path.
+
 Target z uses terrain height only:
 
 ```text
@@ -224,6 +226,17 @@ foot_pos_residual[B,T,4,3]
 swing_center_raw[B,4]
 swing_width_raw[B,4]
 ```
+
+Raw swing parameters must be mapped to valid cyclic window values on device:
+
+```text
+swing_center = wrap01(swing_center_prior + center_scale * tanh(swing_center_raw))
+swing_width = min_width + (max_width - min_width) * sigmoid(swing_width_raw)
+swing_start = wrap01(swing_center - 0.5 * swing_width)
+swing_end = wrap01(swing_center + 0.5 * swing_width)
+```
+
+All circular distances, start/end comparisons, and time interpolation must use the same wrap convention so windows crossing the horizon boundary stay continuous.
 
 `decode_trajectory()` returns:
 
@@ -382,6 +395,7 @@ relu(td_slope - max_touchdown_slope)^2
 ```text
 ||touchdown_xy - support_xy|| + relu(abs(touchdown_z - support_z) - tolerance)
 + invalid_support_penalty * invalid_support
++ support_slope_weight * relu(support_slope - max_support_slope)^2
 ```
 
 `touchdown_semantic_loss`:
@@ -392,6 +406,8 @@ small_weight * I(td_semantic == 1)
 ```
 
 Touchdowns must not be planned onto small, big, or large obstacles. Large/big obstacle collision receives higher weight. Final diagnostics may mark any touchdown on semantic id `1` or `2` as infeasible.
+
+In the current semantic scanner contract, semantic id `2` covers big/large obstacles. If future scanner ids split big and large, touchdown semantic loss must penalize every non-terrain obstacle id, not only ids `1` and `2`.
 
 ### 8.4 Swing Trajectory Losses
 
@@ -405,6 +421,8 @@ Touchdowns must not be planned onto small, big, or large obstacles. Large/big ob
 - compares swing start-to-end displacement with expected body-frame displacement
 - uses the root frame at swing start/touchdown timing
 - covers pure yaw, so yaw commands still generate meaningful foot swing targets
+
+`swing_direction_loss` replaces the old `swing_stride_loss`. Do not keep the old stride implementation in the active loss registry.
 
 Expected body displacement:
 
@@ -629,6 +647,7 @@ Update `Go2Pvcnn/tests/test_batch_mpc_backend.py` to verify:
 - no `MpcFootholdMemory`
 - no output-side `_ground_contact_feet_to_terrain`
 - no old contact schedule/touchdown support losses in breakdown
+- no `_command_adaptive_weights`, old `swing_clearance_loss`, old `terrain_clearance_loss`, old `obstacle_margin_loss`, or old `swing_stride_loss` terms remain in the active registry or breakdown
 - new breakdown terms exist:
   - `swing_window`
   - `diagonal_pair`
