@@ -83,6 +83,12 @@ class ViewerTrajectoryResult:
     status_names: tuple[str, ...] | None = None
 
 
+@dataclass(frozen=True)
+class ViewerResetSnapshot:
+    joint_pos: torch.Tensor
+    joint_vel: torch.Tensor
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
 
@@ -542,6 +548,115 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
         robot.write_joint_pos_to_sim(joint_pos)
     elif hasattr(robot, "write_joint_position_to_sim"):
         robot.write_joint_position_to_sim(joint_pos)
+
+
+def _viewer_capture_reset_snapshot(base_env) -> ViewerResetSnapshot:
+    robot = base_env.scene["robot"]
+    return ViewerResetSnapshot(
+        joint_pos=torch.as_tensor(robot.data.joint_pos[:1], dtype=torch.float32).clone(),
+        joint_vel=torch.as_tensor(robot.data.joint_vel[:1], dtype=torch.float32).clone(),
+    )
+
+
+def _viewer_zero_base_command(base_env, *, command_name: str = "base_velocity") -> None:
+    command_manager = getattr(base_env, "command_manager", None)
+    if command_manager is None or not hasattr(command_manager, "get_command"):
+        return
+    try:
+        command = command_manager.get_command(command_name)
+    except Exception:
+        return
+    if command is None:
+        return
+    command.zero_()
+
+
+def _viewer_apply_joint_reset_snapshot(
+    base_env,
+    snapshot: ViewerResetSnapshot,
+    *,
+    root_pos_w: torch.Tensor,
+    root_quat_w: torch.Tensor,
+) -> None:
+    robot = base_env.scene["robot"]
+    root_pose = torch.cat([root_pos_w, root_quat_w], dim=-1)
+    root_vel = torch.zeros((root_pose.shape[0], 6), dtype=root_pose.dtype, device=root_pose.device)
+    if hasattr(robot, "write_root_pose_to_sim"):
+        robot.write_root_pose_to_sim(root_pose)
+    elif hasattr(robot, "write_root_state_to_sim"):
+        robot.write_root_state_to_sim(torch.cat([root_pose, root_vel], dim=-1))
+    if hasattr(robot, "write_root_velocity_to_sim"):
+        robot.write_root_velocity_to_sim(root_vel)
+    if hasattr(robot, "write_joint_state_to_sim"):
+        robot.write_joint_state_to_sim(snapshot.joint_pos, snapshot.joint_vel)
+    elif hasattr(robot, "write_joint_pos_to_sim"):
+        robot.write_joint_pos_to_sim(snapshot.joint_pos)
+    elif hasattr(robot, "write_joint_position_to_sim"):
+        robot.write_joint_position_to_sim(snapshot.joint_pos)
+    if hasattr(base_env.scene, "write_data_to_sim"):
+        base_env.scene.write_data_to_sim()
+    base_env.sim.render()
+    if hasattr(base_env.scene, "update"):
+        base_env.scene.update(float(base_env.physics_dt))
+
+
+def _viewer_ground_robot_from_scanner(
+    base_env,
+    scanner,
+    foot_ids,
+    *,
+    root_pos_xy: torch.Tensor | None = None,
+    root_quat_w: torch.Tensor | None = None,
+) -> float:
+    from extension.batch_mpc_planner.terrain import height_at
+
+    robot = base_env.scene["robot"]
+    if root_pos_xy is not None or root_quat_w is not None:
+        current_root_pos = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float32).clone()
+        current_root_quat = torch.as_tensor(robot.data.root_quat_w[:1], dtype=torch.float32).clone()
+        if root_pos_xy is not None:
+            current_root_pos[:, :2] = torch.as_tensor(root_pos_xy, dtype=current_root_pos.dtype, device=current_root_pos.device)
+        if root_quat_w is not None:
+            current_root_quat = torch.as_tensor(root_quat_w, dtype=current_root_quat.dtype, device=current_root_quat.device).clone()
+        root_pose = torch.cat([current_root_pos, current_root_quat], dim=-1)
+        if hasattr(robot, "write_root_pose_to_sim"):
+            robot.write_root_pose_to_sim(root_pose)
+        elif hasattr(robot, "write_root_state_to_sim"):
+            zero_vel = torch.zeros((1, 6), dtype=root_pose.dtype, device=root_pose.device)
+            robot.write_root_state_to_sim(torch.cat([root_pose, zero_vel], dim=-1))
+        if hasattr(robot, "write_root_velocity_to_sim"):
+            robot.write_root_velocity_to_sim(torch.zeros((1, 6), dtype=root_pose.dtype, device=root_pose.device))
+        if hasattr(base_env.scene, "write_data_to_sim"):
+            base_env.scene.write_data_to_sim()
+        base_env.sim.render()
+        if hasattr(base_env.scene, "update"):
+            base_env.scene.update(float(base_env.physics_dt))
+    foot_ids_t = torch.as_tensor(_foot_id_list(foot_ids), dtype=torch.long, device=robot.data.body_pos_w.device)
+    foot_pos_w = torch.as_tensor(robot.data.body_pos_w[:1], dtype=torch.float32).index_select(1, foot_ids_t)
+    foot_xy = foot_pos_w[..., :2]
+    foot_z = foot_pos_w[..., 2]
+    terrain, _ = _compute_mpc_local_terrain(scanner, env_id=0)
+    terrain_z = height_at(terrain, foot_xy).to(dtype=foot_z.dtype, device=foot_z.device)
+    z_shift = (terrain_z - foot_z).mean(dim=1, keepdim=True)
+    if torch.allclose(z_shift, torch.zeros_like(z_shift), atol=1.0e-5, rtol=0.0):
+        return 0.0
+    root_pos = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float32).clone()
+    root_quat = torch.as_tensor(robot.data.root_quat_w[:1], dtype=torch.float32).clone()
+    root_pose = torch.cat([root_pos, root_quat], dim=-1)
+    root_pose[:, 2] += z_shift[:, 0]
+    if hasattr(robot, "write_root_pose_to_sim"):
+        robot.write_root_pose_to_sim(root_pose)
+    elif hasattr(robot, "write_root_state_to_sim"):
+        zero_vel = torch.zeros((1, 6), dtype=root_pose.dtype, device=root_pose.device)
+        robot.write_root_state_to_sim(torch.cat([root_pose, zero_vel], dim=-1))
+    if hasattr(robot, "write_root_velocity_to_sim"):
+        robot.write_root_velocity_to_sim(torch.zeros((1, 6), dtype=root_pose.dtype, device=root_pose.device))
+    if hasattr(base_env.scene, "write_data_to_sim"):
+        base_env.scene.write_data_to_sim()
+    base_env.sim.render()
+    if hasattr(base_env.scene, "update"):
+        base_env.scene.update(float(base_env.physics_dt))
+    return float(z_shift[0, 0].item())
 
 
 def _viewer_direct_playback_step(base_env, result, *, frame_idx: int, sync_scene: bool = True) -> str:
@@ -1085,7 +1200,15 @@ def _reset_viewer_env(
     terrain_row: int,
     terrain_col: int,
     scanner=None,
+    reset_snapshot: ViewerResetSnapshot | None = None,
+    foot_ids=None,
 ) -> torch.Tensor:
+    preserved_root_pos = None
+    preserved_root_quat = None
+    if reset_snapshot is not None:
+        robot = base_env.scene["robot"]
+        preserved_root_pos = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float32).clone()
+        preserved_root_quat = torch.as_tensor(robot.data.root_quat_w[:1], dtype=torch.float32).clone()
     selected_origin = _apply_viewer_terrain_selection(
         base_env.scene,
         env_id=0,
@@ -1093,6 +1216,7 @@ def _reset_viewer_env(
         terrain_col=terrain_col,
     )
     env.reset()
+    _viewer_zero_base_command(base_env)
     selected_origin = _apply_viewer_terrain_selection(
         base_env.scene,
         env_id=0,
@@ -1102,12 +1226,37 @@ def _reset_viewer_env(
     warmup_step_count = max(0, int(warmup_steps))
     for _ in range(warmup_step_count):
         env.step(zero_actions)
+    if reset_snapshot is not None and preserved_root_pos is not None and preserved_root_quat is not None:
+        _viewer_apply_joint_reset_snapshot(
+            base_env,
+            reset_snapshot,
+            root_pos_w=preserved_root_pos,
+            root_quat_w=preserved_root_quat,
+        )
     if scanner is not None:
         _refresh_viewer_scanner(
             base_env,
             scanner,
             minimum_steps=max(1, warmup_step_count),
         )
+        if (
+            reset_snapshot is not None
+            and foot_ids is not None
+            and preserved_root_pos is not None
+            and preserved_root_quat is not None
+        ):
+            _viewer_ground_robot_from_scanner(
+                base_env,
+                scanner,
+                foot_ids,
+                root_pos_xy=preserved_root_pos[:, :2],
+                root_quat_w=preserved_root_quat,
+            )
+            _refresh_viewer_scanner(
+                base_env,
+                scanner,
+                minimum_steps=1,
+            )
     return selected_origin
 
 
@@ -1777,7 +1926,9 @@ def main() -> int:
         terrain_row=int(args_cli.terrain_row),
         terrain_col=int(args_cli.terrain_col),
         scanner=scanner,
+        foot_ids=foot_ids,
     )
+    reset_snapshot = _viewer_capture_reset_snapshot(base_env)
     print(
         "[Viewer] Terrain tile override: "
         f"row={int(args_cli.terrain_row)} "
@@ -1824,6 +1975,8 @@ def main() -> int:
                         terrain_row=int(args_cli.terrain_row),
                         terrain_col=int(args_cli.terrain_col),
                         scanner=scanner,
+                        reset_snapshot=reset_snapshot,
+                        foot_ids=foot_ids,
                     )
                     print(
                         "[Viewer][Reset] "
