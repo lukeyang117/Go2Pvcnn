@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from ..kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_trajectory
+
 _JOINT_LIMITS = torch.tensor(
     (
         (-1.0472, 1.0472),
@@ -23,23 +25,44 @@ _JOINT_LIMITS = torch.tensor(
     dtype=torch.float32,
 )
 
-def joint_limit_loss(
-    joint_angles: Tensor,
+
+def solve_ik_for_loss(root_pos: Tensor, root_rpy: Tensor, foot_pos: Tensor) -> Tensor:
+    return solve_joint_angles_from_trajectory(root_pos, root_rpy, foot_pos, clamp_to_limits=False)
+
+
+def joint_limit_loss_from_root_foot(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    foot_pos: Tensor,
     *,
-    joint_limit_rad: float,
     joint_limit_margin_rad: float,
 ) -> Tensor:
-    # Legacy global abs-limit guardrail.
-    over_abs = torch.relu(torch.abs(joint_angles) - float(joint_limit_rad))
-
-    # Prefer staying away from true per-joint hardware limits by a small margin.
+    joint_angles = solve_ik_for_loss(root_pos, root_rpy, foot_pos)
     limits = _JOINT_LIMITS.to(device=joint_angles.device, dtype=joint_angles.dtype)
     lower = limits[:, 0].view(1, 1, -1) + float(joint_limit_margin_rad)
     upper = limits[:, 1].view(1, 1, -1) - float(joint_limit_margin_rad)
     over_lower = torch.relu(lower - joint_angles)
     over_upper = torch.relu(joint_angles - upper)
-    over_limits = over_lower + over_upper
-    return (over_abs + over_limits).mean(dim=(1, 2))
+    return (over_lower.square() + over_upper.square()).mean(dim=(1, 2))
 
 
-__all__ = ["joint_limit_loss"]
+def ik_fk_residual_loss(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    foot_pos: Tensor,
+    contact_prob: Tensor,
+    *,
+    contact_weight: float,
+) -> Tensor:
+    """Penalize foot targets that cannot be reproduced after IK + FK."""
+    solved = solve_joint_angles_from_trajectory(root_pos, root_rpy, foot_pos, clamp_to_limits=True)
+    fk_foot = fk_feet_from_joint_angles(root_pos, root_rpy, solved)
+    residual = torch.linalg.vector_norm(fk_foot - foot_pos, dim=-1)
+    base = residual.mean(dim=(1, 2))
+    contact_w = contact_prob.to(dtype=residual.dtype)
+    contact_mass = torch.clamp(contact_w.sum(dim=(1, 2)), min=1.0)
+    contact = (contact_w * residual).sum(dim=(1, 2)) / contact_mass
+    return base + float(contact_weight) * contact
+
+
+__all__ = ["ik_fk_residual_loss", "joint_limit_loss_from_root_foot", "solve_ik_for_loss"]

@@ -6,12 +6,30 @@ import torch
 from torch import Tensor
 
 from ..config import MpcPlannerCfg
+from ..types import MpcPlannerTerrain, MpcRobotState
 from ..variables import DecodedMpcTrajectory
-from .contact import contact_binary_loss, contact_schedule_tracking_loss, contact_transition_loss, support_stability_loss
-from .gait_coupling import root_frame_drift_loss, root_frame_follow_loss, stance_slip_loss, swing_stride_loss
-from .kinematics import joint_limit_loss
+from .contact import contact_binary_loss, contact_transition_loss, support_stability_loss
+from .gait_coupling import (
+    diagonal_pair_loss,
+    phase_prior_loss,
+    root_foot_center_loss,
+    root_height_loss,
+    support_plane_roll_pitch_loss,
+    swing_center_urgency_order_loss,
+    swing_direction_loss,
+    swing_window_loss,
+)
+from .kinematics import ik_fk_residual_loss, joint_limit_loss_from_root_foot
 from .smoothness import foot_smoothness_loss, root_smoothness_loss
-from .terrain_clearance import obstacle_margin_loss, swing_clearance_loss, terrain_clearance_loss
+from .terrain_clearance import (
+    finite_horizon_touchdown_phase,
+    sample_time,
+    semantic_obstacle_loss,
+    stance_ground_loss,
+    swing_clearance_terrain_loss,
+    touchdown_semantic_loss,
+    touchdown_surface_loss,
+)
 from .tracking import command_tracking_loss, progress_direction_loss
 
 
@@ -28,39 +46,12 @@ def _weighted(enabled: bool, weight: float | Tensor, value: Tensor, breakdown: d
     return out
 
 
-def _command_adaptive_weights(command: Tensor, *, like: Tensor) -> dict[str, Tensor]:
-    cmd = torch.as_tensor(command, dtype=like.dtype, device=like.device)
-    if cmd.ndim != 2 or int(cmd.shape[1]) < 3:
-        zeros = torch.zeros((like.shape[0],), dtype=like.dtype, device=like.device)
-        ones = torch.ones_like(zeros)
-        return {
-            "motion": ones,
-            "swing": ones,
-            "follow": ones,
-        }
-    lin_speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    abs_vx = torch.abs(cmd[:, 0])
-    abs_vy = torch.abs(cmd[:, 1])
-    abs_w = torch.abs(cmd[:, 2])
-    eps = torch.full_like(lin_speed, 1.0e-6)
-    lateral_ratio = abs_vy / torch.clamp(lin_speed, min=eps)
-    forward_ratio = abs_vx / torch.clamp(lin_speed, min=eps)
-    yaw_ratio = abs_w / (lin_speed + abs_w + eps)
-    motion = 1.0 + 1.50 * lateral_ratio + 1.00 * yaw_ratio
-    swing = 1.0 + 0.75 * forward_ratio + 0.75 * lateral_ratio + 0.50 * yaw_ratio
-    follow = 1.0 + 2.00 * lateral_ratio + 1.50 * yaw_ratio
-    return {
-        "motion": motion,
-        "swing": swing,
-        "follow": follow,
-    }
-
-
 def compute_total_loss(
     decoded: DecodedMpcTrajectory,
     nominal: dict[str, Tensor],
-    joint_angles: Tensor,
+    state: MpcRobotState,
     command: Tensor,
+    terrain: MpcPlannerTerrain,
     cfg: MpcPlannerCfg,
 ) -> tuple[Tensor, Tensor, dict[str, Tensor]]:
     """Return scalar loss, per-env loss, and term breakdown."""
@@ -68,9 +59,15 @@ def compute_total_loss(
     runtime = cfg.runtime
     breakdown: dict[str, Tensor] = {}
     per_env = torch.zeros(decoded.root_pos.shape[0], dtype=decoded.root_pos.dtype, device=decoded.root_pos.device)
-    cmd_weights = _command_adaptive_weights(command, like=per_env)
 
-    track = command_tracking_loss(decoded.root_pos, decoded.root_rpy, command, runtime.dt)
+    track = command_tracking_loss(
+        decoded.root_pos,
+        decoded.root_rpy,
+        command,
+        runtime.dt,
+        vel_weight=losses.tracking.vel_weight,
+        yaw_weight=losses.tracking.yaw_weight,
+    )
     per_env = per_env + _weighted(losses.tracking.enabled, losses.tracking.weight, track, breakdown, "tracking")
 
     root_s = root_smoothness_loss(decoded.root_pos, decoded.root_rpy)
@@ -83,103 +80,192 @@ def compute_total_loss(
     support = support_stability_loss(
         decoded.contact_prob,
         min_support_legs=losses.contact_regularization.min_support_legs,
+        contact_threshold=runtime.contact_threshold,
     )
     contact_loss = (
         losses.contact_regularization.binary_weight * cbin
         + losses.contact_regularization.transition_weight * ctran
         + support
     )
-    contact_reg_weight = losses.contact_regularization.weight * cmd_weights["motion"]
     per_env = per_env + _weighted(
         losses.contact_regularization.enabled,
-        contact_reg_weight,
+        losses.contact_regularization.weight,
         contact_loss,
         breakdown,
         "contact_regularization",
     )
-    nominal_contact_prob = torch.sigmoid(nominal["contact_logits"] / float(runtime.contact_temperature))
-    contact_schedule = contact_schedule_tracking_loss(
-        decoded.contact_prob,
-        nominal_contact_prob,
-        min_support_prob=losses.contact_schedule.min_support_prob,
-    )
-    contact_sched_weight = losses.contact_schedule.weight * cmd_weights["motion"]
-    per_env = per_env + _weighted(
-        losses.contact_schedule.enabled,
-        contact_sched_weight,
-        contact_schedule,
-        breakdown,
-        "contact_schedule",
-    )
 
-    swing = swing_clearance_loss(decoded.foot_pos, decoded.contact_prob, losses.swing_clearance.min_clearance_m)
-    swing_weight = losses.swing_clearance.weight * cmd_weights["swing"]
-    per_env = per_env + _weighted(losses.swing_clearance.enabled, swing_weight, swing, breakdown, "swing_clearance")
+    window = swing_window_loss(decoded.swing_width, nominal, runtime)
+    window = window + losses.swing_window.phase_prior_weight * phase_prior_loss(decoded.swing_center, decoded.swing_width, nominal)
+    per_env = per_env + _weighted(losses.swing_window.enabled, losses.swing_window.weight, window, breakdown, "swing_window")
 
-    stance_slip = stance_slip_loss(
-        decoded.contact_prob,
-        decoded.foot_pos,
-        slip_tolerance_m_per_step=losses.stance_slip.slip_tolerance_m_per_step,
-    )
-    stance_weight = losses.stance_slip.weight * cmd_weights["motion"]
-    per_env = per_env + _weighted(losses.stance_slip.enabled, stance_weight, stance_slip, breakdown, "stance_slip")
+    diagonal = diagonal_pair_loss(decoded.swing_center, decoded.swing_width)
+    per_env = per_env + _weighted(losses.diagonal_pair.enabled, losses.diagonal_pair.weight, diagonal, breakdown, "diagonal_pair")
 
-    swing_stride = swing_stride_loss(
-        decoded.contact_prob,
-        decoded.foot_pos,
+    urgency = swing_center_urgency_order_loss(
+        decoded.swing_center,
+        decoded.swing_width,
+        state,
         command,
-        min_swing_span_m=losses.swing_stride.min_swing_span_m,
-        command_speed_deadzone_mps=losses.swing_stride.command_speed_deadzone_mps,
+        runtime,
+        terrain=terrain,
+        nominal=nominal,
     )
-    swing_stride_weight = losses.swing_stride.weight * cmd_weights["swing"]
-    per_env = per_env + _weighted(losses.swing_stride.enabled, swing_stride_weight, swing_stride, breakdown, "swing_stride")
+    per_env = per_env + _weighted(
+        losses.swing_center_urgency.enabled,
+        losses.swing_center_urgency.weight,
+        urgency,
+        breakdown,
+        "swing_center_urgency",
+    )
 
-    root_drift = root_frame_drift_loss(
+    stance = stance_ground_loss(terrain, decoded.foot_pos, decoded.contact_prob)
+    per_env = per_env + _weighted(losses.stance_ground.enabled, losses.stance_ground.weight, stance, breakdown, "stance_ground")
+
+    swing_clear = swing_clearance_terrain_loss(
+        terrain,
+        decoded.foot_pos,
+        decoded.swing_prob,
+        min_clearance_m=losses.swing_clearance_terrain.min_clearance_m,
+    )
+    per_env = per_env + _weighted(
+        losses.swing_clearance_terrain.enabled,
+        losses.swing_clearance_terrain.weight,
+        swing_clear,
+        breakdown,
+        "swing_clearance_terrain",
+    )
+
+    touchdown_phase = finite_horizon_touchdown_phase(decoded.swing_center, decoded.swing_width)
+    touchdown_w = sample_time(decoded.foot_pos, touchdown_phase, cyclic=False)
+    td_surface = touchdown_surface_loss(
+        terrain,
+        touchdown_w,
+        slope_sample_step=losses.touchdown_surface.slope_sample_step_m,
+        support_search_radius=losses.touchdown_surface.support_search_radius_m,
+        support_search_step=losses.touchdown_surface.support_search_step_m,
+        max_slope=losses.touchdown_surface.max_slope,
+        max_support_slope=losses.touchdown_surface.max_support_slope,
+        support_height_tolerance=losses.touchdown_surface.support_height_tolerance_m,
+        ground_weight=losses.touchdown_surface.ground_weight,
+        slope_weight=losses.touchdown_surface.slope_weight,
+        support_distance_weight=losses.touchdown_surface.support_distance_weight,
+        support_height_weight=losses.touchdown_surface.support_height_weight,
+        support_slope_weight=losses.touchdown_surface.support_slope_weight,
+        invalid_support_weight=losses.touchdown_surface.invalid_support_weight,
+    )
+    per_env = per_env + _weighted(
+        losses.touchdown_surface.enabled,
+        losses.touchdown_surface.weight,
+        td_surface,
+        breakdown,
+        "touchdown_surface",
+    )
+
+    td_sem = touchdown_semantic_loss(
+        terrain,
+        touchdown_w[..., :2],
+        touchdown_w[..., 2],
+        small_weight=losses.touchdown_semantic.small_weight,
+        large_weight=losses.touchdown_semantic.large_weight,
+    ).to(dtype=per_env.dtype, device=per_env.device)
+    per_env = per_env + _weighted(
+        losses.touchdown_semantic.enabled,
+        losses.touchdown_semantic.weight,
+        td_sem,
+        breakdown,
+        "touchdown_semantic",
+    )
+
+    obstacle = semantic_obstacle_loss(
+        terrain,
         decoded.root_pos,
+        decoded.root_rpy,
         decoded.foot_pos,
-        min_rel_m=losses.root_frame_drift.min_rel_m,
-        max_rel_m=losses.root_frame_drift.max_rel_m,
+        decoded.contact_prob,
+        decoded.swing_prob,
+        small_weight=losses.semantic_obstacle.small_weight,
+        large_weight=losses.semantic_obstacle.large_weight,
+        body_weight=losses.semantic_obstacle.body_weight,
+        foot_weight=losses.semantic_obstacle.foot_weight,
+        body_stencil_radius_m=losses.semantic_obstacle.body_stencil_radius_m,
     )
-    root_drift_weight = losses.root_frame_drift.weight * cmd_weights["follow"]
-    per_env = per_env + _weighted(losses.root_frame_drift.enabled, root_drift_weight, root_drift, breakdown, "root_frame_drift")
+    per_env = per_env + _weighted(
+        losses.semantic_obstacle.enabled,
+        losses.semantic_obstacle.weight,
+        obstacle,
+        breakdown,
+        "semantic_obstacle",
+    )
 
-    root_follow = root_frame_follow_loss(
+    swing_dir = swing_direction_loss(
         decoded.root_pos,
+        decoded.root_rpy,
         decoded.foot_pos,
-        rel_change_tolerance_m_per_step=losses.root_frame_follow.rel_change_tolerance_m_per_step,
+        decoded.swing_center,
+        decoded.swing_width,
+        command,
+        runtime,
     )
-    root_follow_weight = losses.root_frame_follow.weight * cmd_weights["follow"]
-    per_env = per_env + _weighted(losses.root_frame_follow.enabled, root_follow_weight, root_follow, breakdown, "root_frame_follow")
+    per_env = per_env + _weighted(losses.swing_direction.enabled, losses.swing_direction.weight, swing_dir, breakdown, "swing_direction")
 
-    terrain = terrain_clearance_loss(decoded.foot_pos, losses.terrain_clearance.min_clearance_m)
-    per_env = per_env + _weighted(losses.terrain_clearance.enabled, losses.terrain_clearance.weight, terrain, breakdown, "terrain_clearance")
-
-    small_obs = obstacle_margin_loss(
-        decoded.foot_pos,
-        losses.obstacle_small.body_margin_m,
-        losses.obstacle_small.foot_margin_m,
-    )
-    per_env = per_env + _weighted(losses.obstacle_small.enabled, losses.obstacle_small.weight, small_obs, breakdown, "obstacle_small")
-
-    large_obs = obstacle_margin_loss(
-        decoded.foot_pos,
-        losses.obstacle_large.body_margin_m,
-        losses.obstacle_large.foot_margin_m,
-    )
-    per_env = per_env + _weighted(losses.obstacle_large.enabled, losses.obstacle_large.weight, large_obs, breakdown, "obstacle_large")
-
-    progress = progress_direction_loss(decoded.root_pos, command, losses.progress.min_progress_m)
+    progress = progress_direction_loss(decoded.root_pos, decoded.root_rpy, command, losses.progress.min_progress_m)
     per_env = per_env + _weighted(losses.progress.enabled, losses.progress.weight, progress, breakdown, "progress")
 
-    kin = joint_limit_loss(
-        joint_angles,
-        joint_limit_rad=losses.kinematics.joint_limit_rad,
+    kin = joint_limit_loss_from_root_foot(
+        decoded.root_pos,
+        decoded.root_rpy,
+        decoded.foot_pos,
         joint_limit_margin_rad=losses.kinematics.joint_limit_margin_rad,
     )
-    per_env = per_env + _weighted(losses.kinematics.enabled, losses.kinematics.weight, kin, breakdown, "kinematics")
+    per_env = per_env + _weighted(losses.kinematics.enabled, losses.kinematics.weight, kin, breakdown, "ik_joint_limit")
 
-    touchdown = torch.linalg.norm(decoded.foot_pos[:, :, :, :] - nominal["foot_pos"], dim=-1).mean(dim=(1, 2))
-    per_env = per_env + _weighted(losses.touchdown_support.enabled, losses.touchdown_support.weight, touchdown, breakdown, "touchdown_support")
+    ik_fk = ik_fk_residual_loss(
+        decoded.root_pos,
+        decoded.root_rpy,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        contact_weight=losses.ik_fk_residual.contact_weight,
+    )
+    per_env = per_env + _weighted(
+        losses.ik_fk_residual.enabled,
+        losses.ik_fk_residual.weight,
+        ik_fk,
+        breakdown,
+        "ik_fk_residual",
+    )
+
+    root_center = root_foot_center_loss(decoded.root_pos, decoded.foot_pos)
+    per_env = per_env + _weighted(
+        losses.root_foot_center.enabled,
+        losses.root_foot_center.weight,
+        root_center,
+        breakdown,
+        "root_foot_center",
+    )
+
+    root_h = root_height_loss(decoded.root_pos, nominal)
+    per_env = per_env + _weighted(
+        losses.root_height.enabled,
+        losses.root_height.weight,
+        root_h,
+        breakdown,
+        "root_height",
+    )
+
+    plane = support_plane_roll_pitch_loss(
+        decoded.root_rpy,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        swing_weight=losses.support_plane_rp.swing_weight,
+    )
+    per_env = per_env + _weighted(
+        losses.support_plane_rp.enabled,
+        losses.support_plane_rp.weight,
+        plane,
+        breakdown,
+        "support_plane_rp",
+    )
 
     per_env = torch.nan_to_num(per_env, nan=1e6, posinf=1e6, neginf=1e6)
     breakdown = {name: torch.nan_to_num(value, nan=1e6, posinf=1e6, neginf=1e6) for name, value in breakdown.items()}

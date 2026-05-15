@@ -56,7 +56,13 @@ def _rpy_to_rot_matrix(root_rpy: Tensor) -> Tensor:
     return torch.stack((row0, row1, row2), dim=-2)
 
 
-def solve_joint_angles_from_trajectory(root_pos: Tensor, root_rpy: Tensor, foot_pos_w: Tensor) -> Tensor:
+def solve_joint_angles_from_trajectory(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    foot_pos_w: Tensor,
+    *,
+    clamp_to_limits: bool = True,
+) -> Tensor:
     """Solve per-frame Go2 leg IK from world-frame root pose and foot targets."""
     if root_pos.ndim != 3 or int(root_pos.shape[-1]) != 3:
         raise ValueError("root_pos must have shape [B, T, 3]")
@@ -95,10 +101,43 @@ def solve_joint_angles_from_trajectory(root_pos: Tensor, root_rpy: Tensor, foot_
     thigh_angle = alpha - beta
 
     joint_raw = torch.stack((hip_angle, thigh_angle, calf_angle), dim=-1).reshape(root_pos.shape[0], root_pos.shape[1], 12)
+    if not bool(clamp_to_limits):
+        return joint_raw
     limits = _JOINT_LIMITS.to(device=device, dtype=dtype)
     lower = limits[:, 0].view(1, 1, 12)
     upper = limits[:, 1].view(1, 1, 12)
     return joint_raw.clamp(min=lower, max=upper)
 
 
-__all__ = ["solve_joint_angles_from_trajectory"]
+def fk_feet_from_joint_angles(root_pos: Tensor, root_rpy: Tensor, joint_angles: Tensor) -> Tensor:
+    """Forward-kinematics foot positions from world root pose and planner-order joints."""
+    leg_angles = joint_angles.reshape(root_pos.shape[0], root_pos.shape[1], 4, 3)
+    h = leg_angles[..., 0]
+    theta_t = leg_angles[..., 1]
+    theta_c = leg_angles[..., 2]
+    side_signs = _LEG_SIDE_SIGNS.to(device=root_pos.device, dtype=root_pos.dtype).view(1, 1, 4)
+    d = torch.as_tensor(HIP_OFFSET_Y, device=root_pos.device, dtype=root_pos.dtype) * side_signs
+    thigh = torch.as_tensor(THIGH_LENGTH, device=root_pos.device, dtype=root_pos.dtype)
+    calf = torch.as_tensor(CALF_LENGTH, device=root_pos.device, dtype=root_pos.dtype)
+
+    knee_x = -thigh * torch.sin(theta_t)
+    knee_z = -thigh * torch.cos(theta_t)
+    calf_abs = theta_t + theta_c
+    foot_x = knee_x - calf * torch.sin(calf_abs)
+    foot_z = knee_z - calf * torch.cos(calf_abs)
+    cos_h = torch.cos(h)
+    sin_h = torch.sin(h)
+    hip_offsets = HIP_OFFSETS_ARRAY.to(device=root_pos.device, dtype=root_pos.dtype).view(1, 1, 4, 3)
+    foot_body = torch.stack(
+        (
+            hip_offsets[..., 0] + foot_x,
+            hip_offsets[..., 1] + cos_h * d - sin_h * foot_z,
+            hip_offsets[..., 2] + sin_h * d + cos_h * foot_z,
+        ),
+        dim=-1,
+    )
+    rot_body_to_world = _rpy_to_rot_matrix(root_rpy)
+    return torch.einsum("btij,btkj->btki", rot_body_to_world, foot_body) + root_pos.unsqueeze(2)
+
+
+__all__ = ["fk_feet_from_joint_angles", "solve_joint_angles_from_trajectory"]

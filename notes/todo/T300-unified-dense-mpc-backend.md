@@ -6,11 +6,12 @@
 - The approved design direction is:
   - `planner_backend="mpc"` (new backend, not replacing `together`)
   - no old mode classifier/table in the new core
-  - dense optimization variables:
+  - T300e replaces the original dense contact-logit design with continuous swing-window variables:
     - `root_pos_residual [B,T,3]`
     - `root_rpy_residual [B,T,3]`
     - `foot_pos_residual [B,T,4,3]`
-    - `contact_logits [B,T,4]`
+    - `swing_center_raw [B,4]`
+    - `swing_width_raw [B,4]`
   - touchdown sequence derived from foot trajectory + contact transitions
   - per-loss reward-style tunable config
   - diagnostics layer with `enabled` switch
@@ -71,10 +72,74 @@
     - focused backend suite `python -m pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q` passed (`12 passed`)
     - IsaacLab headless MPC smoke on `cuda:2` passed
   - remaining risk is narrowed to high-scale runtime diagnostics/counter stability, longer-run visual behavior, and possible future integration of terrain height into optimizer losses rather than output-only grounding
+  - 2026-05-13 user reported current code still shows airborne feet and yaw feet not returning/alternating; new standalone IsaacLab probe [../../Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py](../../Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py) reproduces both failure surfaces:
+    - planned stance output remains grounded against the terrain height map (`planned air ratio=0`)
+    - actual post-playback stance gaps are nonzero and can be large (`actual air ratio 0.4062-1.0000`, max gap up to `0.3656m`)
+    - yaw swing alternation is asymmetric: `FL/FR` stay in front, `RR` stays behind, and front/rear switches are mostly `0`
+    - this points at yaw swing target/contact phase semantics plus playback/IK realization, not only planner output z grounding
+  - 2026-05-13 all-speed extension of the standalone probe tested forward/backward, lateral, yaw, slow/fast variants, and linear+yaw combinations:
+    - pure forward/back/lateral are comparatively clean (`actual air ratio mean=0.0677`, max gap `0.0657m`)
+    - yaw-speed sweep is the dominant failure (`actual air ratio mean=0.7448`, max gap `0.6449m`)
+    - linear+yaw combinations inherit the issue (`actual air ratio mean=0.4323`, high front-extension inconsistency)
+    - next fix should be yaw-specific but gated by forward/back/lateral preservation metrics
+  - 2026-05-13 command-switch matrix tested forward/back/lateral/yaw transitions:
+    - switching into yaw is bad (`actual air ratio mean=0.4062`)
+    - switching out of yaw is worse (`actual air ratio mean=0.7500`)
+    - yaw left/right reversal is worst among tested switches (`actual air ratio mean=0.8667`, max gap `0.3606m`)
+    - forward/backward switching is clean; lateral left/right switching has a smaller but real degradation
+  - 2026-05-13 front/back-only alternation probe shows root-relative front/rear sign is not a useful failure criterion for forward/backward:
+    - front legs stay in front and rear legs stay behind, which is anatomical rather than the yaw failure
+    - forward/backward stance-ground metrics are much cleaner than yaw
+    - if forward/backward alternation needs measurement, use per-leg nominal-anchor fore/aft excursion rather than root sign crossing
+  - 2026-05-13 pair-wise forward/backward alternation metric now measures the user-requested front-leg and rear-leg left/right alternation:
+    - forward front pair is biased toward `FL` leading (`0.7948`) over `FR` (`0.1262`)
+    - forward rear pair is biased toward `RR` leading (`0.5777`) over `RL` (`0.2699`)
+    - `forward_fast` has no front-pair alternation (`FL=1.0000`, `FR=0.0000`, switches `0`)
+    - normal backward is more balanced, but `backward_fast` has a strong `FR/RL` diagonal bias
+  - 2026-05-13 root-cause minimal verification points to IK/FK feasibility as the largest direct cause of yaw airborne feet:
+    - yaw actual air `0.871`, IK/FK contact err `0.2423m`, actual-plan foot err `0.2423m`
+    - actual-FK foot err, root write err, and joint write err are all `0`, so viewer playback write is not the primary cause
+    - yaw has much higher joint saturation/near-limit ratios than linear, and pure yaw has `swing_stride_active=0`
+    - nominal-only metrics also confirm pair-wise phase bias before optimizer
+  - 2026-05-13 temporary `ik_fk_residual` runtime variants were tested in IsaacLab headless without changing production defaults:
+    - fresh 10-cycle multi-direction matrix produced `540` cycle rows, `54` runtime segment summaries, and `0` exceptions
+    - `ikfk8` reduced yaw IK/FK contact err from `0.2463m` to `0.0685m`, yaw actual-plan contact err from `0.2463m` to `0.0685m`, and yaw actual air ratio from `0.8714` to `0.3714`
+    - linear stayed clean (`IK/FK contact err 0.0288m -> 0.0019m`, air remains `0`)
+    - mixed commands improved strongly (`actual-plan contact err 0.1181m -> 0.0070m`)
+    - actual-FK err remained `0`, reinforcing that Isaac playback follows FK and the main mismatch is planned foot reachability
+    - yaw-right and yaw-switch tail remain residual failures, so IK/FK residual is useful but not a complete yaw gait fix
+  - 2026-05-15 T300e continuous swing-window redesign is implemented in active `batch_mpc_planner` code:
+    - `contact_logits` is removed from optimizer variables and decode; `swing_center/swing_width` now produce continuous `swing_prob/contact_prob`.
+    - nominal construction now uses current IsaacLab state/scanner, body-frame command integration, world-frame foot nominal, random diagonal prior, terrain-height touchdown target, and swing-time root-frame touchdown target math.
+    - terrain helpers now sample scanner height/semantic/slope/support on GPU and account for scanner pose/yaw.
+    - loss registry now samples terrain/semantic maps directly and includes stance-ground, swing clearance terrain, touchdown surface/semantic, semantic obstacle, swing direction, swing-center urgency, IK joint limit, IK/FK residual, root-foot center, and support-plane roll/pitch terms.
+    - `MpcFootholdMemory`, manager/viewer memory paths, and `_ground_contact_feet_to_terrain` output-side grounding are removed.
+    - focused local verification passed: backend `32 passed`, targeted `py_compile` exit `0`, runtime headless collect-only `12 tests collected`.
+    - IsaacLab runtime probes are not executed in this shell because `python -c "import isaaclab"` raises `ModuleNotFoundError`.
+  - 2026-05-15 runtime follow-up for T300e fixed the first real-runtime regressions:
+    - flat-terrain touchdown/support losses now use safe differentiable norms, fixing NaN gradients that caused all-NaN root/foot/joint output and downstream all-false contact.
+    - zero-command output now explicitly holds current root/rpy/feet/joints and all-stance contacts.
+    - support-plane roll/pitch is now estimated in the root yaw frame, with red-green backend coverage for yaw `pi/2`.
+    - `env_isaacsim` root-cause probe on `cuda:2` completed with `253` JSONL rows; NaN/contact-collapse did not recur.
+    - backend suite now passes `35` tests and targeted `py_compile` exits `0`.
+    - residual risk remains: broad runtime probe still shows backward-fast/mixed IK/FK and stance-airborne issues, and one command-matrix pytest selector has ambiguous console output.
+  - 2026-05-15 second runtime follow-up for T300e narrowed those residuals:
+    - IK/FK residual now matches the clamped joint output contract used by `plan_segment`.
+    - default IK/FK residual weight is now `8.0`, based on the `ikfk1/4/8` runtime sweep.
+    - stance/swing terrain losses normalize by active probability mass, stance/touchdown ground errors use centimeter-scale smooth L1, and a `root_height` loss keeps root z near nominal/current height.
+    - backend suite now passes `39` tests; targeted `py_compile` and `git diff --check` exit `0`.
+    - targeted `env_isaacsim` probe on `cuda:2` shows mixed-yaw and normal backward clean, while `backward_fast` remains residual (`actual_last_stance_airborne_ratio_mean=0.75`, mean max gap `0.2497m`).
+  - 2026-05-15 final targeted T300e runtime acceptance cleaned the remaining blockers:
+    - support stability now penalizes sub-threshold per-leg contact probabilities against `runtime.contact_threshold`, with default `min_support_legs=2`.
+    - IK/FK residual now adds a contact-mass-normalized term so sparse contact/touchdown reachability errors are not diluted.
+    - nominal post-touchdown stance frames now lock to the computed touchdown target instead of returning to stale replan-start foot anchors.
+    - wrap-around touchdown events now use finite-horizon endpoint sampling for touchdown losses/export, so phase-end touchdowns no longer wrap back to frame `0`.
+    - backend suite now passes `43` tests; targeted `py_compile`, command-matrix pytest selector, root-cause probe, and `git diff --check` have clean artifacts in the acceptance log.
+    - targeted `env_isaacsim` probe on `cuda:2` reports `backward_fast` actual last-stance airborne ratio mean `0.0`, mean max gap `0.00043m`, max gap `0.00171m`; mixed-yaw targeted commands stayed at `0.0` actual last-stance airborne ratio.
 
 ## Open Children
 
-- [T300d](../todo.md#open-leaves): production MPC foothold memory/grounding is implemented and awaiting user visual inspection.
+- [T300e](T300e-mpc-continuous-swing-window-plan.md): continuous swing-window MPC redesign is implemented; targeted `env_isaacsim` acceptance now cleans mixed-yaw, normal/backward-fast stance grounding, and command-matrix evidence. Broader long-horizon viewer/yaw and 4096 counter confidence remain open.
 
 ## Closed Children Archive
 
@@ -104,12 +169,23 @@
 - [2026-05-13-0932-mpc-mixed-sequence-long-horizon-sweep.md](../log/2026-05-13-0932-mpc-mixed-sequence-long-horizon-sweep.md)
 - [2026-05-13-1025-mpc-touchdown-grounding-probe.md](../log/2026-05-13-1025-mpc-touchdown-grounding-probe.md)
 - [2026-05-13-1253-mpc-dir15-dir19-production-grounding.md](../log/2026-05-13-1253-mpc-dir15-dir19-production-grounding.md)
+- [2026-05-13-1757-mpc-yaw-gait-failure-probe.md](../log/2026-05-13-1757-mpc-yaw-gait-failure-probe.md)
+- [2026-05-13-1810-mpc-all-speed-gait-probe.md](../log/2026-05-13-1810-mpc-all-speed-gait-probe.md)
+- [2026-05-13-1815-mpc-command-switch-gait-probe.md](../log/2026-05-13-1815-mpc-command-switch-gait-probe.md)
+- [2026-05-13-1835-mpc-forward-backward-alternation-probe.md](../log/2026-05-13-1835-mpc-forward-backward-alternation-probe.md)
+- [2026-05-13-1843-mpc-forward-backward-pair-alternation.md](../log/2026-05-13-1843-mpc-forward-backward-pair-alternation.md)
+- [2026-05-13-1910-mpc-root-cause-minimal-verification.md](../log/2026-05-13-1910-mpc-root-cause-minimal-verification.md)
+- [2026-05-13-2023-mpc-ikfk-residual-headless-comparison.md](../log/2026-05-13-2023-mpc-ikfk-residual-headless-comparison.md)
+- [2026-05-15-1755-mpc-continuous-swing-window-implementation.md](../log/2026-05-15-1755-mpc-continuous-swing-window-implementation.md)
+- [2026-05-15-1903-mpc-continuous-window-runtime-fix.md](../log/2026-05-15-1903-mpc-continuous-window-runtime-fix.md)
+- [2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md](../log/2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md)
+- [2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
 
 ## Git Refs
 
 - Last Feature Commit: `pending`
-- Last Verified Commit: `pending`
-- Current Work Ref: `working tree on top of e90e3a4 (dir15/dir19 production foothold memory + terrain grounding)`
+- Last Verified Commit: `65f0d99` plus working tree changes verified through [2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
+- Current Work Ref: `working tree on top of 65f0d99 (T300e continuous swing-window MPC redesign)`
 - Key Files:
   - [../../docs/superpowers/specs/2026-05-11-unified-dense-mpc-backend-design.md](../../docs/superpowers/specs/2026-05-11-unified-dense-mpc-backend-design.md)
   - [../log/2026-05-11-1050-t300-unified-dense-mpc-backend-design.md](../log/2026-05-11-1050-t300-unified-dense-mpc-backend-design.md)
@@ -118,8 +194,9 @@
 
 ## Next Step
 
-- User visual inspection of `go2_foostep_planner.py --planner-backend mpc` with production foothold memory and terrain grounding.
-- If visual artifacts remain, investigate terrain-height-in-loss and IK/contact smoothness before launching another broad drift sweep.
+- Broaden T300e runtime confidence after targeted acceptance:
+  - re-run longer yaw/viewer and command-switch behavior with [../../Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py](../../Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py) and selected [../../Go2Pvcnn/tests/test_mpc_runtime_headless.py](../../Go2Pvcnn/tests/test_mpc_runtime_headless.py) opt-in cases
+  - keep 4096 runtime counter/throughput extraction as the remaining scale-stability issue
 
 ## Node Details
 
@@ -198,6 +275,30 @@
   - 2026-05-13 mixed/sequence sweep validated that focus change: `dir10` still dominates discrete switch drift, but mixed-command and yaw-segment tests expose a new side effect, while `dir14` soft weighting helps the boundary cases without fully fixing yaw-anchor aggressiveness
   - 2026-05-13 touchdown-grounding probe added real-runtime `touchdown_ground_gap_mean / touchdown_airborne_ratio / touchdown_airborne_max_gap` and found a second major failure mode: planned touchdowns remain airborne and gap can grow over repeated replans; short evidence suggests `dir14` helps gap magnitude more than baseline but does not actually ground touchdowns
   - 2026-05-13 production `dir15 + dir19` implementation adds manager foothold memory, soft command gates, yaw-entry ramp, terrain-grounded contact foot z, and viewer direct-path memory; fresh `py_compile`, focused backend, and IsaacLab headless smoke passed
+  - 2026-05-13 user visual inspection found forward/lateral acceptable but yaw rotation still has bad foot alternation/flying feet; IsaacLab reproduction confirmed touchdown grounding and diagonal pairing are fixed while yaw foot error and max foot-step spikes remain high
+  - 2026-05-13 yawfix direction sweep tested five short-screen directions across pure and mixed commands, then ran a 30-cycle top-candidate sweep:
+    - `yawfix4_body_relative_yaw_anchor` is the best current direction (`pure yaw foot_err 0.1119 -> 0.0989`, `transition_err 0.0313 -> 0.0124`, sequence `foot_step_max 8.9070 -> 4.7506`)
+    - pure forward/backward/lateral stayed effectively unchanged
+    - remaining risk is touchdown jump increase and local regressions on mixed diagonal yaw and `lateral_left -> yaw_right -> lateral_left`
+    - production implementation should combine yaw-gated body-relative anchor blending with a touchdown-continuity/jump limiter rather than copying the test-layer variant directly
+  - 2026-05-13 yawfix4-plus long sweep tested yaw gate, touchdown cap, early stance hold, command ramp, near-touchdown mask, and a full guarded combo over 24-cycle broad and 48-cycle top matrices:
+    - 24-cycle still favored original `yawfix4`, with `yawfix4a/yawfix4d` close and `yawfix4f` conservative
+    - 48-cycle reversed the short-horizon conclusion: `yawfix4/a/d` reduce sequence peak steps (`14.1656 -> 7.6353/8.6567/8.8291`) but worsen pure-yaw `step_max`, touchdown jump, and drift
+    - pure forward/backward/lateral and touchdown grounding remained OK across the tested variants
+    - no local nominal-mask variant is production-ready; next direction should change yaw-mode anchor-memory lifecycle rather than adding more masks around `yawfix4`
+  - 2026-05-13 production yaw anchor-memory implementation now adds a fixed yaw-mode body-foot seed, stable-contact anchor updates, yaw-entry seed rebase, nominal XY displacement cap, and viewer direct-path parity:
+    - focused red-green tests now cover fixed yaw seed lifecycle and nominal displacement cap
+    - backend suite reports `14 passed`
+    - short IsaacLab smoke on `cuda:2` passed with touchdown grounding preserved (`gap=0`, `air=0`) and low short-horizon yaw/lateral-yaw step peaks
+    - long 48-cycle production acceptance remains the next unverified step before final visual judgment
+  - 2026-05-13 standalone yaw gait failure probe reproduced the remaining current-code issue:
+    - planned stance feet remain grounded (`planned air ratio=0`)
+    - actual playback stance feet can be airborne (`actual air ratio 0.4062-1.0000`)
+    - yaw front/back alternation is missing: `FL/FR` remain front, `RR` remains rear, and switches are mostly `0`
+  - 2026-05-13 all-speed standalone probe shows the current failure is yaw-dominant rather than uniformly present across commands:
+    - pure linear/lateral actual air ratio mean `0.0677`
+    - yaw speed sweep actual air ratio mean `0.7448`
+    - linear+yaw combo actual air ratio mean `0.4323`
 - residual risk:
   - true 4096-env throughput/timing counter extraction remains unstable in current semantic viewer runtime diagnostics path:
     - high-scale PhysX pair-capacity pressure and/or CUDA device-side asserts
@@ -223,3 +324,9 @@
   - [2026-05-13-0932-mpc-mixed-sequence-long-horizon-sweep.md](../log/2026-05-13-0932-mpc-mixed-sequence-long-horizon-sweep.md)
   - [2026-05-13-1025-mpc-touchdown-grounding-probe.md](../log/2026-05-13-1025-mpc-touchdown-grounding-probe.md)
   - [2026-05-13-1253-mpc-dir15-dir19-production-grounding.md](../log/2026-05-13-1253-mpc-dir15-dir19-production-grounding.md)
+  - [2026-05-13-1352-mpc-yaw-foot-alternation-reproduction.md](../log/2026-05-13-1352-mpc-yaw-foot-alternation-reproduction.md)
+  - [2026-05-13-1429-mpc-yawfix-direction-sweep.md](../log/2026-05-13-1429-mpc-yawfix-direction-sweep.md)
+  - [2026-05-13-1611-mpc-yawfix4plus-long-sweep.md](../log/2026-05-13-1611-mpc-yawfix4plus-long-sweep.md)
+  - [2026-05-13-1633-mpc-yaw-anchor-memory-production.md](../log/2026-05-13-1633-mpc-yaw-anchor-memory-production.md)
+  - [2026-05-13-1757-mpc-yaw-gait-failure-probe.md](../log/2026-05-13-1757-mpc-yaw-gait-failure-probe.md)
+  - [2026-05-13-1810-mpc-all-speed-gait-probe.md](../log/2026-05-13-1810-mpc-all-speed-gait-probe.md)

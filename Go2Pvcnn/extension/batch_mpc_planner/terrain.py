@@ -5,9 +5,14 @@ from __future__ import annotations
 import math
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from .types import MpcPlannerTerrain
+
+
+def _safe_norm(value: Tensor, *, dim: int, eps: float = 1.0e-12) -> Tensor:
+    return torch.sqrt(torch.sum(value.square(), dim=dim) + float(eps))
 
 
 def _reshape_ray_hits(ray_hits_w: Tensor) -> Tensor:
@@ -87,6 +92,8 @@ def build_mpc_terrain_from_scanner(
     world_x_range: tuple[float, float],
     world_y_range: tuple[float, float],
     semantic_map: Tensor | None = None,
+    sensor_pos_w: Tensor | None = None,
+    sensor_yaw: Tensor | None = None,
 ) -> MpcPlannerTerrain:
     hits = torch.nan_to_num(_reshape_ray_hits(ray_hits_w), nan=0.0, posinf=0.0, neginf=0.0)
     height_map = hits[..., 2].to(dtype=torch.float32).contiguous()
@@ -102,6 +109,8 @@ def build_mpc_terrain_from_scanner(
         semantic_map=sem,
         world_x_range=world_x_range,
         world_y_range=world_y_range,
+        sensor_pos_w=None if sensor_pos_w is None else torch.as_tensor(sensor_pos_w, dtype=torch.float32, device=height_map.device).contiguous(),
+        sensor_yaw=None if sensor_yaw is None else torch.as_tensor(sensor_yaw, dtype=torch.float32, device=height_map.device).contiguous(),
     )
 
 
@@ -125,7 +134,167 @@ def subset_mpc_terrain(terrain: MpcPlannerTerrain, env_ids: Tensor) -> MpcPlanne
         semantic_map=sem,
         world_x_range=terrain.world_x_range,
         world_y_range=terrain.world_y_range,
+        sensor_pos_w=terrain.sensor_pos_w.index_select(0, ids) if terrain.sensor_pos_w is not None else None,
+        sensor_yaw=terrain.sensor_yaw.index_select(0, ids) if terrain.sensor_yaw is not None else None,
     )
 
 
-__all__ = ["build_mpc_terrain_from_scanner", "subset_mpc_terrain"]
+def _batched_query_xy(terrain: MpcPlannerTerrain, points_xy: Tensor) -> tuple[Tensor, tuple[int, ...], bool]:
+    height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32)
+    device = height_map.device
+    points = torch.as_tensor(points_xy, dtype=torch.float32, device=device)
+    if points.shape[-1] != 2:
+        raise ValueError(f"points_xy must end in 2, got {tuple(points.shape)}")
+    single_batch = False
+    if points.ndim == 2:
+        points = points.unsqueeze(0)
+        single_batch = True
+    original_shape = tuple(points.shape[:-1])
+    batch = int(height_map.shape[0]) if height_map.ndim == 3 else 1
+    if int(points.shape[0]) == 1 and batch > 1:
+        points = points.expand(batch, *points.shape[1:])
+        original_shape = tuple(points.shape[:-1])
+        single_batch = False
+    if int(points.shape[0]) != batch:
+        raise ValueError(f"points batch {int(points.shape[0])} must match terrain batch {batch}")
+    return points.reshape(batch, -1, 2), original_shape, single_batch
+
+
+def _world_to_grid(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
+    x0, x1 = terrain.world_x_range
+    y0, y1 = terrain.world_y_range
+    if terrain.sensor_pos_w is not None:
+        sensor_pos = torch.as_tensor(terrain.sensor_pos_w, dtype=points_xy.dtype, device=points_xy.device)
+        if sensor_pos.ndim == 1:
+            sensor_pos = sensor_pos.view(1, -1)
+        sensor_xy = sensor_pos[:, None, :2]
+        delta = points_xy - sensor_xy
+        if terrain.sensor_yaw is None:
+            yaw = torch.zeros((points_xy.shape[0],), dtype=points_xy.dtype, device=points_xy.device)
+        else:
+            yaw = torch.as_tensor(terrain.sensor_yaw, dtype=points_xy.dtype, device=points_xy.device).reshape(-1)
+        cy = torch.cos(yaw).view(-1, 1)
+        sy = torch.sin(yaw).view(-1, 1)
+        query_xy = torch.stack(
+            (cy * delta[..., 0] + sy * delta[..., 1], -sy * delta[..., 0] + cy * delta[..., 1]),
+            dim=-1,
+        )
+    else:
+        query_xy = points_xy
+    xs = query_xy[..., 0].clamp(float(x0), float(x1))
+    ys = query_xy[..., 1].clamp(float(y0), float(y1))
+    x_norm = (xs - float(x0)) / max(float(x1) - float(x0), 1.0e-6) * 2.0 - 1.0
+    y_norm = (float(y1) - ys) / max(float(y1) - float(y0), 1.0e-6) * 2.0 - 1.0
+    return torch.stack((x_norm, y_norm), dim=-1)
+
+
+def height_at(terrain: MpcPlannerTerrain, points_xy: Tensor, mode: str = "bilinear") -> Tensor:
+    """Sample terrain height at world-frame xy points."""
+    height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32)
+    if height_map.ndim == 2:
+        height_map = height_map.unsqueeze(0)
+    points, original_shape, single_batch = _batched_query_xy(terrain, points_xy)
+    grid = _world_to_grid(terrain, points).unsqueeze(2)
+    sampled = F.grid_sample(
+        height_map.unsqueeze(1),
+        grid,
+        mode=str(mode),
+        align_corners=True,
+        padding_mode="border",
+    )
+    out = sampled[:, 0, :, 0].reshape(original_shape)
+    return out.squeeze(0) if single_batch else out
+
+
+def semantic_at(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
+    """Nearest-neighbor sample semantic ids at world-frame xy points."""
+    height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32)
+    if height_map.ndim == 2:
+        height_map = height_map.unsqueeze(0)
+    points, original_shape, single_batch = _batched_query_xy(terrain, points_xy)
+    if terrain.semantic_map is None:
+        out = torch.zeros(original_shape, dtype=torch.long, device=points.device)
+        return out.squeeze(0) if single_batch else out
+    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.float32, device=points.device)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    grid = _world_to_grid(terrain, points).unsqueeze(2)
+    sampled = F.grid_sample(
+        semantic.unsqueeze(1),
+        grid,
+        mode="nearest",
+        align_corners=True,
+        padding_mode="border",
+    )
+    out = sampled[:, 0, :, 0].round().to(dtype=torch.long).reshape(original_shape)
+    return out.squeeze(0) if single_batch else out
+
+
+def slope_at(terrain: MpcPlannerTerrain, points_xy: Tensor, sample_step: float = 0.03) -> Tensor:
+    """Estimate terrain slope magnitude by finite differences."""
+    points = torch.as_tensor(points_xy, dtype=torch.float32, device=terrain.height_map.device)
+    step = float(sample_step)
+    dx = torch.tensor([step, 0.0], dtype=points.dtype, device=points.device)
+    dy = torch.tensor([0.0, step], dtype=points.dtype, device=points.device)
+    hx0 = height_at(terrain, points - dx)
+    hx1 = height_at(terrain, points + dx)
+    hy0 = height_at(terrain, points - dy)
+    hy1 = height_at(terrain, points + dy)
+    dzdx = (hx1 - hx0) / max(2.0 * step, 1.0e-6)
+    dzdy = (hy1 - hy0) / max(2.0 * step, 1.0e-6)
+    return torch.sqrt(dzdx.square() + dzdy.square() + 1.0e-12)
+
+
+def support_at(
+    terrain: MpcPlannerTerrain,
+    points_xy: Tensor,
+    search_radius: float,
+    search_step: float,
+    max_support_slope: float,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Find nearby semantic-terrain support points with finite fallback."""
+    points, original_shape, single_batch = _batched_query_xy(terrain, points_xy)
+    device = points.device
+    dtype = points.dtype
+    radius = float(search_radius)
+    step = max(float(search_step), 1.0e-6)
+    offsets_1d = torch.arange(-radius, radius + 0.5 * step, step, dtype=dtype, device=device)
+    oy, ox = torch.meshgrid(offsets_1d, offsets_1d, indexing="ij")
+    offsets = torch.stack((ox.reshape(-1), oy.reshape(-1)), dim=-1)
+    candidates = points.unsqueeze(2) + offsets.view(1, 1, -1, 2)
+    candidate_shape = candidates.shape
+    flat_candidates = candidates.reshape(candidate_shape[0], -1, 2)
+    cand_z = height_at(terrain, flat_candidates).reshape(candidate_shape[:3])
+    cand_slope = slope_at(terrain, flat_candidates, sample_step=step).reshape(candidate_shape[:3])
+    cand_semantic = semantic_at(terrain, flat_candidates).reshape(candidate_shape[:3])
+    legal = torch.logical_and(cand_semantic == 0, cand_slope <= float(max_support_slope))
+    dist = _safe_norm(offsets, dim=-1).view(1, 1, -1)
+    score = dist + cand_slope + torch.where(legal, torch.zeros_like(cand_slope), torch.full_like(cand_slope, 1.0e6))
+    idx = score.argmin(dim=-1)
+    invalid = torch.logical_not(legal.any(dim=-1))
+    gather_xy = idx[..., None, None].expand(-1, -1, 1, 2)
+    support_xy = candidates.gather(2, gather_xy).squeeze(2)
+    support_z = cand_z.gather(2, idx.unsqueeze(-1)).squeeze(-1)
+    support_slope = cand_slope.gather(2, idx.unsqueeze(-1)).squeeze(-1)
+    query_z = height_at(terrain, points.reshape(points.shape[0], -1, 2)).reshape(points.shape[:2])
+    support_xy = torch.where(invalid.unsqueeze(-1), points, support_xy)
+    support_z = torch.where(invalid, query_z, support_z)
+    query_slope = slope_at(terrain, points.reshape(points.shape[0], -1, 2), sample_step=step).reshape(points.shape[:2])
+    support_slope = torch.where(invalid, query_slope, support_slope)
+    support_xy = support_xy.reshape(*original_shape, 2)
+    support_z = support_z.reshape(original_shape)
+    support_slope = support_slope.reshape(original_shape)
+    invalid = invalid.reshape(original_shape)
+    if single_batch:
+        return support_xy.squeeze(0), support_z.squeeze(0), support_slope.squeeze(0), invalid.squeeze(0)
+    return support_xy, support_z, support_slope, invalid
+
+
+__all__ = [
+    "build_mpc_terrain_from_scanner",
+    "height_at",
+    "semantic_at",
+    "slope_at",
+    "subset_mpc_terrain",
+    "support_at",
+]

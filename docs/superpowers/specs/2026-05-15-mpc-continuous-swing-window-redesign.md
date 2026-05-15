@@ -145,6 +145,20 @@ At replan start, anchors come from current IsaacLab foot positions:
 stance_anchor_w = foot_pos0_w
 ```
 
+For a leg whose swing touchdown happens inside the current horizon, post-touchdown stance frames must lock to that newly computed touchdown target:
+
+```text
+touchdown_phase = clamp(swing_center + 0.5 * swing_width, 0.0, 1.0)
+touchdown_idx = finite_horizon_index(touchdown_phase)
+
+if frame_idx >= touchdown_idx and touchdown_phase >= swing_start:
+    foot_nom_w[t, leg] = touchdown_target_w[leg]
+```
+
+This prevents high-speed commands from forcing stance legs back to stale replan-start foot positions after they have already landed.
+
+Important wrap-around endpoint rule: `swing_end` remains cyclic for contact-window decoding, but touchdown loss/export sampling is finite-horizon. If a swing lands exactly at the cycle boundary, use `touchdown_phase = 1.0` and sample the last horizon frame, not phase `0.0`. Otherwise the touchdown target silently becomes the stale replan-start foot point.
+
 No `MpcFootholdMemory` is used.
 
 ### 5.6 Swing Touchdown Target
@@ -337,6 +351,13 @@ compute_total_loss(decoded, nominal, state, command, terrain, cfg)
 - lower priority than terrain, IK, and semantic feasibility
 - lower priority than swing-order urgency, so the random nominal first pair can be overridden
 
+`support_stability_loss`:
+
+- must be aligned with the final exported contact threshold
+- uses the top `min_support_legs` contact probabilities per frame
+- penalizes those top probabilities if they remain below `contact_threshold`
+- default `min_support_legs = 2`, so diffuse probabilities such as four legs at `0.30` are not treated as valid support when boolean export would produce no stance feet
+
 `swing_center_urgency_order_loss`:
 
 - computes a per-leg urgency score from current foot geometry and command-induced expected displacement
@@ -397,16 +418,19 @@ This replaces the old placeholder `swing_clearance_loss` and `terrain_clearance_
 Touchdown is the event at swing end:
 
 ```text
-touchdown_phase = (swing_center + 0.5 * swing_width) % 1.0
+touchdown_phase = finite_horizon_touchdown_phase(swing_center, swing_width)
+finite_horizon_touchdown_phase = clamp(swing_center + 0.5 * swing_width, 0.0, 1.0)
 ```
 
 Touchdown world position is sampled by differentiable time interpolation from `decoded.foot_pos`:
 
 ```text
-touchdown_w[B,4,3] = sample_time(decoded.foot_pos, touchdown_phase)
+touchdown_w[B,4,3] = sample_time(decoded.foot_pos, touchdown_phase, cyclic=False)
 touchdown_xy = touchdown_w[..., :2]
 touchdown_z = touchdown_w[..., 2]
 ```
+
+The contact window may still use cyclic `swing_end = wrap01(swing_center + 0.5 * swing_width)`, but touchdown loss and planner export must not wrap endpoint `1.0` to `0.0`.
 
 Then sample terrain:
 
@@ -510,6 +534,11 @@ fk_foot = FK(decoded.root_pos, decoded.root_rpy, ik_joint)
 ||fk_foot - decoded.foot_pos||
 ```
 
+The residual has two pieces:
+
+- a whole-trajectory base mean to keep all targets generally reachable
+- a contact-weighted residual normalized by active contact probability mass, so sparse stance/touchdown reachability errors are not diluted by non-contact frames
+
 This directly targets previous yaw failures where planned foot targets were not reproducible after IK/FK.
 
 ### 8.7 Root Support Geometry Losses
@@ -589,6 +618,7 @@ Important output rules:
 - `joint_angles` is solved from optimized root/foot via IK.
 - `touchdown_seq` comes from swing window touchdown positions.
 - `planned_touchdown_w` expands touchdown positions for cache consumers.
+- touchdown extraction uses finite-horizon endpoint sampling, so a touchdown at phase `1.0` samples the last horizon frame rather than wrapping to frame `0`.
 - `contact_state` is thresholded from continuous `contact_prob`.
 
 ## 10. Manager And Interface Changes

@@ -82,6 +82,17 @@ def _long_drift_variants() -> tuple[_LongDriftVariant, ...]:
         "dir18_soft_gate_z_anchor_disp_cap_proxy": "dir15 plus anchor displacement cap to suppress long-horizon yaw overshoot",
         "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy": "dir15 plus multi-replan yaw-entry ramp for mixed-to-yaw transitions",
         "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy": "dir15 plus displacement cap and yaw-entry ramp",
+        "yawfix1_horizon_anchor_blend": "yaw stance anchor influence ramps within the horizon to reduce abrupt foot jumps",
+        "yawfix2_foot_spike_loss": "yaw-dominant extra foot velocity/acceleration spike penalty",
+        "yawfix3_touchdown_continuity_loss": "yaw-dominant touchdown frames are penalized for jumping away from the previous anchor",
+        "yawfix4_body_relative_yaw_anchor": "yaw target mixes world stance anchor with root-yaw-rotated body footprint",
+        "yawfix5_early_stance_guard": "yaw anchor influence is reduced on touchdown/early-stance frames",
+        "yawfix4a_yaw_gate_body_anchor": "yawfix4 with a stricter yaw-dominant gate to protect linear/lateral commands",
+        "yawfix4b_touchdown_jump_limiter": "yawfix4 with body-anchor displacement capped around touchdown distances",
+        "yawfix4c_early_stance_hold": "yawfix4 with touchdown and early-stance anchor influence reduced",
+        "yawfix4d_command_ramp": "yawfix4 with multi-replan yaw entry ramp for command switches",
+        "yawfix4e_near_touchdown_mask": "yawfix4 applied mainly near touchdown/stance instead of every contact frame",
+        "yawfix4f_full_guarded_combo": "yawfix4 with yaw gate, command ramp, touchdown cap, and early-stance hold",
     }
     variants: list[_LongDriftVariant] = []
     for raw_name in requested.split(","):
@@ -468,11 +479,195 @@ def _patched_mpc_nominal_builder(builder):
     import extension.batch_mpc_planner.planner as mpc_planner_module
 
     original = mpc_planner_module.build_nominal_trajectory
-    mpc_planner_module.build_nominal_trajectory = builder
+
+    def compatible_builder(state, command, terrain, runtime_cfg):
+        return builder(state, command, terrain, runtime_cfg)
+
+    mpc_planner_module.build_nominal_trajectory = compatible_builder
     try:
         yield
     finally:
         mpc_planner_module.build_nominal_trajectory = original
+
+
+@contextmanager
+def _patched_mpc_loss(extra_loss_fn):
+    import extension.batch_mpc_planner.optimizer as optimizer_module
+    import extension.batch_mpc_planner.losses.registry as registry_module
+
+    original_registry = registry_module.compute_total_loss
+    original_optimizer = optimizer_module.compute_total_loss
+
+    def wrapped(decoded, nominal, state, command, terrain, cfg):
+        total_scalar, per_env, breakdown = original_registry(decoded, nominal, state, command, terrain, cfg)
+        extra = extra_loss_fn(decoded, nominal, state, command, terrain, cfg)
+        extra = torch.as_tensor(extra, dtype=per_env.dtype, device=per_env.device)
+        per_env = per_env + extra
+        breakdown["yawfix_extra"] = extra
+        return per_env.mean(), per_env, breakdown
+
+    registry_module.compute_total_loss = wrapped
+    optimizer_module.compute_total_loss = wrapped
+    try:
+        yield
+    finally:
+        registry_module.compute_total_loss = original_registry
+        optimizer_module.compute_total_loss = original_optimizer
+
+
+def _yawfix_anchor_weight(nominal: dict[str, torch.Tensor], command: torch.Tensor, *, yaw_threshold_start: float = 0.35) -> torch.Tensor:
+    yaw_dom = _yaw_dominance(command, like=nominal["foot_pos"])
+    return torch.clamp((yaw_dom - float(yaw_threshold_start)) / 0.45, min=0.0, max=1.0).to(
+        dtype=nominal["foot_pos"].dtype,
+        device=nominal["foot_pos"].device,
+    )
+
+
+_YAWFIX4_DERIVED_VARIANTS = {
+    "yawfix4_body_relative_yaw_anchor",
+    "yawfix4a_yaw_gate_body_anchor",
+    "yawfix4b_touchdown_jump_limiter",
+    "yawfix4c_early_stance_hold",
+    "yawfix4d_command_ramp",
+    "yawfix4e_near_touchdown_mask",
+    "yawfix4f_full_guarded_combo",
+}
+
+
+def _with_yawfix_anchor_nominal(
+    original_builder,
+    state,
+    command,
+    terrain,
+    runtime_cfg,
+    memory,
+    shared: SimpleNamespace,
+    variant_name: str,
+):
+    nominal = original_builder(state, command, terrain, runtime_cfg)
+    anchor = getattr(shared, "stance_anchor_w", None)
+    if anchor is None:
+        return nominal
+    contact = nominal["contact_prior"] > 0.5
+    yaw_weight = _yawfix_anchor_weight(nominal, command)
+    anchor_t = anchor.to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device).unsqueeze(1)
+    effective = yaw_weight[:, None, None, :]
+
+    if variant_name == "yawfix1_horizon_anchor_blend":
+        horizon = int(nominal["foot_pos"].shape[1])
+        time_ramp = torch.linspace(
+            0.15,
+            1.0,
+            horizon,
+            dtype=nominal["foot_pos"].dtype,
+            device=nominal["foot_pos"].device,
+        ).view(1, horizon, 1, 1)
+        effective = effective * time_ramp
+    elif variant_name in _YAWFIX4_DERIVED_VARIANTS:
+        rel_body = getattr(shared, "running_foot_rel_body", None)
+        if rel_body is not None:
+            body_anchor = _foot_pos_from_body_rel(state, rel_body).to(
+                dtype=nominal["foot_pos"].dtype,
+                device=nominal["foot_pos"].device,
+            ).unsqueeze(1)
+            body_blend = 0.45
+            if variant_name in {"yawfix4a_yaw_gate_body_anchor", "yawfix4f_full_guarded_combo"}:
+                yaw_weight = _yawfix_anchor_weight(nominal, command, yaw_threshold_start=0.50)
+                linear_dom = _linear_dominance(command, like=nominal["foot_pos"]).to(
+                    dtype=nominal["foot_pos"].dtype,
+                    device=nominal["foot_pos"].device,
+                )
+                linear_guard = torch.clamp((0.70 - linear_dom) / 0.35, min=0.0, max=1.0)
+                yaw_weight = yaw_weight * linear_guard
+                effective = yaw_weight[:, None, None, :]
+                body_blend = 0.38
+            if variant_name in {"yawfix4d_command_ramp", "yawfix4f_full_guarded_combo"}:
+                yaw_scalar = float(yaw_weight.mean().item())
+                prev_yaw_scalar = float(getattr(shared, "yawfix4_prev_yaw_weight", 0.0))
+                if yaw_scalar > 0.10:
+                    if prev_yaw_scalar <= 0.10:
+                        yaw_entry_steps = 0
+                    else:
+                        yaw_entry_steps = int(getattr(shared, "yawfix4_yaw_entry_steps", 0)) + 1
+                    ramp_scalar = min(1.0, float(yaw_entry_steps + 1) / 5.0)
+                else:
+                    yaw_entry_steps = 999
+                    ramp_scalar = 1.0
+                shared.yawfix4_prev_yaw_weight = yaw_scalar
+                shared.yawfix4_yaw_entry_steps = yaw_entry_steps
+                effective = effective * torch.full_like(effective, ramp_scalar)
+            anchor_t = torch.lerp(anchor_t, body_anchor, body_blend)
+            if variant_name in {"yawfix4b_touchdown_jump_limiter", "yawfix4f_full_guarded_combo"}:
+                delta = anchor_t - nominal["foot_pos"]
+                dist = torch.linalg.vector_norm(delta[..., :2], dim=-1, keepdim=True)
+                cap = torch.clamp(0.095 / torch.clamp(dist, min=1.0e-6), max=1.0)
+                capped_xy = nominal["foot_pos"][..., :2] + delta[..., :2] * cap
+                anchor_z = anchor_t[..., 2:3].expand_as(nominal["foot_pos"][..., 2:3])
+                anchor_t = torch.cat((capped_xy, anchor_z), dim=-1)
+            if variant_name in {"yawfix4c_early_stance_hold", "yawfix4f_full_guarded_combo"}:
+                prev_contact = torch.cat((contact[:, :1], contact[:, :-1]), dim=1)
+                touchdown = torch.logical_and(contact, torch.logical_not(prev_contact))
+                early = torch.logical_or(touchdown, torch.cat((touchdown[:, :-1], torch.zeros_like(touchdown[:, :1])), dim=1))
+                effective = torch.where(early.unsqueeze(-1), effective * 0.20, effective)
+            if variant_name == "yawfix4e_near_touchdown_mask":
+                prev_contact = torch.cat((contact[:, :1], contact[:, :-1]), dim=1)
+                next_contact = torch.cat((contact[:, 1:], contact[:, -1:]), dim=1)
+                touchdown = torch.logical_and(contact, torch.logical_not(prev_contact))
+                pre_touchdown = torch.logical_and(next_contact, torch.logical_not(contact))
+                near_touchdown = torch.logical_or(touchdown, pre_touchdown)
+                near_touchdown = torch.logical_or(
+                    near_touchdown,
+                    torch.cat((touchdown[:, :-1], torch.zeros_like(touchdown[:, :1])), dim=1),
+                )
+                mask = torch.where(
+                    near_touchdown.unsqueeze(-1),
+                    torch.ones_like(effective),
+                    torch.full_like(effective, 0.35),
+                )
+                effective = effective * mask
+    elif variant_name == "yawfix5_early_stance_guard":
+        prev_contact = torch.cat((contact[:, :1], contact[:, :-1]), dim=1)
+        touchdown = torch.logical_and(contact, torch.logical_not(prev_contact))
+        early = torch.logical_or(touchdown, torch.cat((touchdown[:, :-1], torch.zeros_like(touchdown[:, :1])), dim=1))
+        effective = torch.where(early.unsqueeze(-1), effective * 0.25, effective)
+
+    replacement = torch.lerp(nominal["foot_pos"], anchor_t, effective)
+    nominal["foot_pos"] = torch.where(contact.unsqueeze(-1), replacement, nominal["foot_pos"])
+    nominal["foot_pos"][..., 2:3] = torch.where(
+        contact.unsqueeze(-1),
+        torch.lerp(nominal["foot_pos"][..., 2:3], anchor_t[..., 2:3], effective),
+        nominal["foot_pos"][..., 2:3],
+    )
+    return nominal
+
+
+def _yawfix_foot_spike_extra_loss(decoded, nominal, state, command, terrain, cfg):
+    del nominal, state, terrain, cfg
+    if int(decoded.foot_pos.shape[1]) < 3:
+        return torch.zeros(decoded.foot_pos.shape[0], dtype=decoded.foot_pos.dtype, device=decoded.foot_pos.device)
+    yaw = _yaw_dominance(command, like=decoded.foot_pos).view(-1)
+    dfoot = decoded.foot_pos[:, 1:] - decoded.foot_pos[:, :-1]
+    dnorm = torch.linalg.vector_norm(dfoot, dim=-1)
+    accel = dfoot[:, 1:] - dfoot[:, :-1]
+    anorm = torch.linalg.vector_norm(accel, dim=-1)
+    spike = torch.relu(dnorm - 0.055).square().mean(dim=(1, 2))
+    acc = torch.relu(anorm - 0.060).square().mean(dim=(1, 2))
+    return yaw * (14.0 * spike + 8.0 * acc)
+
+
+def _yawfix_touchdown_continuity_extra_loss(decoded, nominal, state, command, cfg, shared: SimpleNamespace):
+    del nominal, state, cfg
+    anchor = getattr(shared, "stance_anchor_w", None)
+    if anchor is None or int(decoded.foot_pos.shape[1]) < 2:
+        return torch.zeros(decoded.foot_pos.shape[0], dtype=decoded.foot_pos.dtype, device=decoded.foot_pos.device)
+    yaw = _yaw_dominance(command, like=decoded.foot_pos).view(-1)
+    contact = decoded.contact_prob > 0.5
+    touchdown = torch.logical_and(contact[:, 1:], torch.logical_not(contact[:, :-1]))
+    anchor_t = anchor.to(dtype=decoded.foot_pos.dtype, device=decoded.foot_pos.device).unsqueeze(1)
+    jump = torch.linalg.vector_norm(decoded.foot_pos[:, 1:] - anchor_t, dim=-1)
+    denom = torch.clamp(touchdown.to(dtype=decoded.foot_pos.dtype).sum(dim=(1, 2)), min=1.0)
+    excess = torch.relu(jump - 0.075).square() * touchdown.to(dtype=decoded.foot_pos.dtype)
+    return yaw * 20.0 * (excess.sum(dim=(1, 2)) / denom)
 
 
 @contextmanager
@@ -481,29 +676,23 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
     losses = cfg.losses
     old_values = {
         "diagnostics_enabled": bool(cfg.diagnostics.enabled),
-        "stance_weight": float(losses.stance_slip.weight),
-        "stance_tol": float(losses.stance_slip.slip_tolerance_m_per_step),
-        "root_drift_weight": float(losses.root_frame_drift.weight),
-        "root_follow_weight": float(losses.root_frame_follow.weight),
-        "root_follow_tol": float(losses.root_frame_follow.rel_change_tolerance_m_per_step),
-        "touchdown_weight": float(losses.touchdown_support.weight),
+        "stance_ground_weight": float(losses.stance_ground.weight),
+        "root_center_weight": float(losses.root_foot_center.weight),
+        "support_plane_weight": float(losses.support_plane_rp.weight),
+        "touchdown_surface_weight": float(losses.touchdown_surface.weight),
     }
 
     try:
         if variant_name == "dir4_stronger_stance_loss":
-            losses.stance_slip.weight = 4.0
-            losses.stance_slip.slip_tolerance_m_per_step = 0.0015
-            losses.root_frame_drift.weight = 3.5
-            losses.root_frame_follow.weight = 2.5
-            losses.root_frame_follow.rel_change_tolerance_m_per_step = 0.010
-            losses.touchdown_support.weight = 1.25
+            losses.stance_ground.weight = 4.0
+            losses.root_foot_center.weight = 3.5
+            losses.support_plane_rp.weight = 2.5
+            losses.touchdown_surface.weight = 1.25
         if variant_name == "dir8_moderate_stance_loss":
-            losses.stance_slip.weight = 1.8
-            losses.stance_slip.slip_tolerance_m_per_step = 0.0025
-            losses.root_frame_drift.weight = 2.2
-            losses.root_frame_follow.weight = 1.4
-            losses.root_frame_follow.rel_change_tolerance_m_per_step = 0.016
-            losses.touchdown_support.weight = 0.65
+            losses.stance_ground.weight = 1.8
+            losses.root_foot_center.weight = 2.2
+            losses.support_plane_rp.weight = 1.4
+            losses.touchdown_surface.weight = 0.65
         if variant_name == "dir5_diagnostics_only":
             cfg.diagnostics.enabled = True
 
@@ -512,12 +701,12 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
 
             original_builder = nominal_module.build_nominal_trajectory
 
-            def phase_builder(state, command, runtime_cfg, memory=None):
+            def phase_builder(state, command, terrain, runtime_cfg):
                 original_offsets = tuple(float(v) for v in runtime_cfg.leg_phase_offsets)
                 phase_shift = float(getattr(shared, "phase_shift", 0.0))
                 runtime_cfg.leg_phase_offsets = tuple((v + phase_shift) % 1.0 for v in original_offsets)
                 try:
-                    return original_builder(state, command, runtime_cfg)
+                    return original_builder(state, command, terrain, runtime_cfg)
                 finally:
                     runtime_cfg.leg_phase_offsets = original_offsets
 
@@ -528,12 +717,12 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
 
             original_builder = nominal_module.build_nominal_trajectory
 
-            def anchor_nominal_builder(state, command, runtime_cfg, memory=None):
-                nominal = original_builder(state, command, runtime_cfg)
+            def anchor_nominal_builder(state, command, terrain, runtime_cfg):
+                nominal = original_builder(state, command, terrain, runtime_cfg)
                 anchor = getattr(shared, "stance_anchor_w", None)
                 if anchor is None:
                     return nominal
-                contact = nominal["contact_logits"] > 0.0
+                contact = nominal["contact_prior"] > 0.5
                 anchor_t = anchor.to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device).unsqueeze(1)
                 nominal["foot_pos"] = torch.where(contact.unsqueeze(-1), anchor_t, nominal["foot_pos"])
                 return nominal
@@ -545,12 +734,12 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
 
             original_builder = nominal_module.build_nominal_trajectory
 
-            def yaw_anchor_nominal_builder(state, command, runtime_cfg, memory=None):
-                nominal = original_builder(state, command, runtime_cfg)
+            def yaw_anchor_nominal_builder(state, command, terrain, runtime_cfg):
+                nominal = original_builder(state, command, terrain, runtime_cfg)
                 anchor = getattr(shared, "stance_anchor_w", None)
                 if anchor is None:
                     return nominal
-                contact = nominal["contact_logits"] > 0.0
+                contact = nominal["contact_prior"] > 0.5
                 yaw_weight = (_yaw_dominance(command, like=nominal["foot_pos"]) > 0.60).to(
                     dtype=nominal["foot_pos"].dtype,
                     device=nominal["foot_pos"].device,
@@ -582,7 +771,7 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
 
             original_builder = nominal_module.build_nominal_trajectory
 
-            def linear_seed_nominal_builder(state, command, runtime_cfg, memory=None):
+            def linear_seed_nominal_builder(state, command, terrain, runtime_cfg):
                 original_swing_height = float(runtime_cfg.nominal_swing_height_m)
                 if variant_name == "dir16_soft_gate_z_anchor_low_swing_proxy":
                     runtime_cfg.nominal_swing_height_m = 0.022
@@ -633,7 +822,7 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
                             linear_weight[:, None, :],
                         )
                         seed_state = _clone_mpc_state(state, foot_pos=blended_foot)
-                    nominal = original_builder(seed_state, command, runtime_cfg)
+                    nominal = original_builder(seed_state, command, terrain, runtime_cfg)
                 finally:
                     runtime_cfg.nominal_swing_height_m = original_swing_height
                 if variant_name in {
@@ -650,7 +839,7 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
                 }:
                     anchor = getattr(shared, "stance_anchor_w", None)
                     if anchor is not None:
-                        contact = nominal["contact_logits"] > 0.0
+                        contact = nominal["contact_prior"] > 0.5
                         yaw_dom = _yaw_dominance(command, like=nominal["foot_pos"])
                         if variant_name == "dir13_strict_gate_yaw_anchor_linear_seed_proxy":
                             yaw_weight = _binary_gate(yaw_dom, threshold=0.75)
@@ -754,16 +943,58 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
 
             with _patched_mpc_nominal_builder(linear_seed_nominal_builder):
                 yield
+        elif variant_name in {
+            "yawfix1_horizon_anchor_blend",
+            "yawfix4_body_relative_yaw_anchor",
+            "yawfix5_early_stance_guard",
+            "yawfix4a_yaw_gate_body_anchor",
+            "yawfix4b_touchdown_jump_limiter",
+            "yawfix4c_early_stance_hold",
+            "yawfix4d_command_ramp",
+            "yawfix4e_near_touchdown_mask",
+            "yawfix4f_full_guarded_combo",
+        }:
+            import extension.batch_mpc_planner.nominal as nominal_module
+
+            original_builder = nominal_module.build_nominal_trajectory
+
+            def yawfix_nominal_builder(state, command, terrain, runtime_cfg):
+                return _with_yawfix_anchor_nominal(
+                    original_builder,
+                    state,
+                    command,
+                    terrain,
+                    runtime_cfg,
+                    memory,
+                    shared,
+                    variant_name,
+                )
+
+            with _patched_mpc_nominal_builder(yawfix_nominal_builder):
+                yield
+        elif variant_name == "yawfix2_foot_spike_loss":
+            with _patched_mpc_loss(_yawfix_foot_spike_extra_loss):
+                yield
+        elif variant_name == "yawfix3_touchdown_continuity_loss":
+            with _patched_mpc_loss(
+                lambda decoded, nominal, state, command, terrain, cfg: _yawfix_touchdown_continuity_extra_loss(
+                    decoded,
+                    nominal,
+                    state,
+                    command,
+                    cfg,
+                    shared,
+                )
+            ):
+                yield
         else:
             yield
     finally:
         cfg.diagnostics.enabled = old_values["diagnostics_enabled"]
-        losses.stance_slip.weight = old_values["stance_weight"]
-        losses.stance_slip.slip_tolerance_m_per_step = old_values["stance_tol"]
-        losses.root_frame_drift.weight = old_values["root_drift_weight"]
-        losses.root_frame_follow.weight = old_values["root_follow_weight"]
-        losses.root_frame_follow.rel_change_tolerance_m_per_step = old_values["root_follow_tol"]
-        losses.touchdown_support.weight = old_values["touchdown_weight"]
+        losses.stance_ground.weight = old_values["stance_ground_weight"]
+        losses.root_foot_center.weight = old_values["root_center_weight"]
+        losses.support_plane_rp.weight = old_values["support_plane_weight"]
+        losses.touchdown_surface.weight = old_values["touchdown_surface_weight"]
 
 
 @pytest.fixture(scope="module")
@@ -892,7 +1123,10 @@ def test_mpc_runtime_yaw_playback_wxyz_rpy_matches_plan(real_semantic_mpc_runtim
     plan_rpy = runtime._viewer._quat_wxyz_to_rpy(plan.root_quat)
 
     torch.testing.assert_close(actual["rpy_if_wxyz"], plan_rpy, atol=2.0e-4, rtol=2.0e-4)
-    assert float(actual["rpy_if_wxyz"][0, :2].abs().max().item()) < 1.0e-3
+    # T300e intentionally lets MPC estimate roll/pitch from the support plane;
+    # this guard verifies playback preserves that planned orientation without
+    # allowing runaway tilt.
+    assert float(actual["rpy_if_wxyz"][0, :2].abs().max().item()) < 2.0e-2
 
 
 def test_mpc_runtime_command_matrix_tracks_motion_and_limits_drift(real_semantic_mpc_runtime):

@@ -8,13 +8,12 @@ from dataclasses import dataclass, field
 
 @dataclass
 class MpcRuntimeCfg:
-    horizon_steps: int = 80
+    horizon_steps: int = 25
     dt: float = 0.02
     optimize_steps: int = 24
     lr: float = 1e-2
     optimizer: str = "adam"
     grad_clip_norm: float = 10.0
-    contact_temperature: float = 0.20
     contact_threshold: float = 0.55
     replan_interval_steps: int = 50
     max_stale_steps: int = 100
@@ -40,25 +39,19 @@ class MpcRuntimeCfg:
     optimizer_unroll_graph: bool = False
     profile_4096_required: bool = True
     step_freq: float = 2.0
-    duty_factor: float = 0.55
+    duty_factor: float = 0.5
     leg_phase_offsets: tuple[float, float, float, float] = (0.0, 0.5, 0.5, 0.0)
     touchdown_event_cap: int = 2
-    nominal_stride_scale: float = 0.9
-    nominal_max_stride_m: float = 0.18
-    nominal_swing_height_m: float = 0.045
-    nominal_yaw_stride_scale: float = 1.0
-    nominal_backward_stride_scale: float = 0.70
-    nominal_yaw_stride_atten: float = 0.35
-    foothold_memory_enabled: bool = True
-    foothold_linear_gate_start: float = 0.35
-    foothold_linear_gate_span: float = 0.45
-    foothold_yaw_gate_start: float = 0.35
-    foothold_yaw_gate_span: float = 0.45
-    foothold_yaw_entry_ramp_steps: int = 4
-    foothold_yaw_entry_enter_threshold: float = 0.55
-    foothold_yaw_entry_exit_threshold: float = 0.35
-    foothold_touchdown_blend: float = 0.35
-    foothold_contact_blend: float = 0.10
+    nominal_stride_scale: float = 0.5
+    nominal_swing_height_m: float = 0.10
+    nominal_yaw_stride_scale: float = 0.5
+    swing_window_min_width: float = 0.30
+    swing_window_max_width: float = 0.70
+    swing_window_center_scale: float = 0.60
+    swing_window_temperature: float = 40.0
+    swing_center_urgency_temperature: float = 0.10
+    swing_center_reachability_weight: float = 0.25
+    swing_center_touchdown_proxy_weight: float = 0.25
 
 
 @dataclass
@@ -77,28 +70,6 @@ class MpcLossTermCfg:
 
 
 @dataclass
-class MpcStanceSlipLossCfg(MpcLossTermCfg):
-    slip_tolerance_m_per_step: float = 0.004
-
-
-@dataclass
-class MpcSwingStrideLossCfg(MpcLossTermCfg):
-    min_swing_span_m: float = 0.045
-    command_speed_deadzone_mps: float = 0.08
-
-
-@dataclass
-class MpcRootFrameDriftLossCfg(MpcLossTermCfg):
-    min_rel_m: float = 0.18
-    max_rel_m: float = 0.68
-
-
-@dataclass
-class MpcRootFrameFollowLossCfg(MpcLossTermCfg):
-    rel_change_tolerance_m_per_step: float = 0.025
-
-
-@dataclass
 class MpcTrackingLossCfg(MpcLossTermCfg):
     vel_weight: float = 1.0
     yaw_weight: float = 0.5
@@ -114,26 +85,81 @@ class MpcSmoothnessLossCfg(MpcLossTermCfg):
 class MpcContactRegularizationLossCfg(MpcLossTermCfg):
     binary_weight: float = 1.0
     transition_weight: float = 0.5
-    min_support_legs: int = 1
-    max_airborne_steps: int = 10
+    min_support_legs: int = 2
 
 
 @dataclass
-class MpcContactScheduleLossCfg(MpcLossTermCfg):
-    min_support_prob: float = 0.35
+class MpcSwingWindowLossCfg(MpcLossTermCfg):
+    width_prior_weight: float = 0.20
+    phase_prior_weight: float = 0.10
+
+
+@dataclass
+class MpcDiagonalPairLossCfg(MpcLossTermCfg):
+    pair_center_weight: float = 1.0
+    half_cycle_weight: float = 1.0
+    width_match_weight: float = 0.25
+
+
+@dataclass
+class MpcSwingCenterUrgencyLossCfg(MpcLossTermCfg):
+    pass
 
 
 @dataclass
 class MpcClearanceLossCfg(MpcLossTermCfg):
-    min_clearance_m: float = 0.04
+    min_clearance_m: float = 0.05
 
 
 @dataclass
-class MpcObstacleLossCfg(MpcLossTermCfg):
-    body_margin_m: float = 0.04
-    foot_margin_m: float = 0.04
-    repulsion_radius_m: float = 0.20
-    sample_count: int = 9
+class MpcTouchdownSurfaceLossCfg(MpcLossTermCfg):
+    ground_weight: float = 1.0
+    slope_weight: float = 1.0
+    support_distance_weight: float = 1.0
+    support_height_weight: float = 1.0
+    support_slope_weight: float = 1.0
+    invalid_support_weight: float = 10.0
+    max_slope: float = 0.60
+    slope_sample_step_m: float = 0.03
+    support_search_radius_m: float = 0.12
+    support_search_step_m: float = 0.03
+    support_height_tolerance_m: float = 0.03
+    max_support_slope: float = 0.60
+
+
+@dataclass
+class MpcTouchdownSemanticLossCfg(MpcLossTermCfg):
+    small_weight: float = 10.0
+    large_weight: float = 50.0
+
+
+@dataclass
+class MpcSemanticObstacleLossCfg(MpcLossTermCfg):
+    small_weight: float = 1.0
+    large_weight: float = 5.0
+    body_weight: float = 1.0
+    foot_weight: float = 1.0
+    body_stencil_radius_m: float = 0.16
+
+
+@dataclass
+class MpcSwingDirectionLossCfg(MpcLossTermCfg):
+    pass
+
+
+@dataclass
+class MpcRootFootCenterLossCfg(MpcLossTermCfg):
+    pass
+
+
+@dataclass
+class MpcRootHeightLossCfg(MpcLossTermCfg):
+    pass
+
+
+@dataclass
+class MpcSupportPlaneLossCfg(MpcLossTermCfg):
+    swing_weight: float = 0.20
 
 
 @dataclass
@@ -143,8 +169,12 @@ class MpcProgressLossCfg(MpcLossTermCfg):
 
 @dataclass
 class MpcKinematicsLossCfg(MpcLossTermCfg):
-    joint_limit_rad: float = 2.6
     joint_limit_margin_rad: float = 0.10
+
+
+@dataclass
+class MpcIkFkResidualLossCfg(MpcLossTermCfg):
+    contact_weight: float = 2.0
 
 
 @dataclass
@@ -152,17 +182,20 @@ class MpcLossesCfg:
     tracking: MpcTrackingLossCfg = field(default_factory=MpcTrackingLossCfg)
     smoothness: MpcSmoothnessLossCfg = field(default_factory=MpcSmoothnessLossCfg)
     contact_regularization: MpcContactRegularizationLossCfg = field(default_factory=MpcContactRegularizationLossCfg)
-    contact_schedule: MpcContactScheduleLossCfg = field(default_factory=lambda: MpcContactScheduleLossCfg(enabled=True, weight=0.8))
-    stance_slip: MpcStanceSlipLossCfg = field(default_factory=lambda: MpcStanceSlipLossCfg(enabled=True, weight=0.9))
-    swing_stride: MpcSwingStrideLossCfg = field(default_factory=lambda: MpcSwingStrideLossCfg(enabled=True, weight=1.1))
-    root_frame_drift: MpcRootFrameDriftLossCfg = field(default_factory=lambda: MpcRootFrameDriftLossCfg(enabled=True, weight=1.4))
-    root_frame_follow: MpcRootFrameFollowLossCfg = field(default_factory=lambda: MpcRootFrameFollowLossCfg(enabled=True, weight=0.8))
-    swing_clearance: MpcClearanceLossCfg = field(default_factory=MpcClearanceLossCfg)
-    terrain_clearance: MpcClearanceLossCfg = field(default_factory=lambda: MpcClearanceLossCfg(enabled=True, weight=0.8))
-    obstacle_small: MpcObstacleLossCfg = field(default_factory=MpcObstacleLossCfg)
-    obstacle_large: MpcObstacleLossCfg = field(default_factory=lambda: MpcObstacleLossCfg(enabled=True, weight=1.2))
-    touchdown_support: MpcLossTermCfg = field(default_factory=lambda: MpcLossTermCfg(enabled=True, weight=0.25))
+    swing_window: MpcSwingWindowLossCfg = field(default_factory=lambda: MpcSwingWindowLossCfg(enabled=True, weight=0.8))
+    diagonal_pair: MpcDiagonalPairLossCfg = field(default_factory=lambda: MpcDiagonalPairLossCfg(enabled=True, weight=1.0))
+    swing_center_urgency: MpcSwingCenterUrgencyLossCfg = field(default_factory=lambda: MpcSwingCenterUrgencyLossCfg(enabled=True, weight=1.0))
+    stance_ground: MpcLossTermCfg = field(default_factory=lambda: MpcLossTermCfg(enabled=True, weight=3.0))
+    swing_clearance_terrain: MpcClearanceLossCfg = field(default_factory=lambda: MpcClearanceLossCfg(enabled=True, weight=2.0))
+    touchdown_surface: MpcTouchdownSurfaceLossCfg = field(default_factory=lambda: MpcTouchdownSurfaceLossCfg(enabled=True, weight=2.0))
+    touchdown_semantic: MpcTouchdownSemanticLossCfg = field(default_factory=lambda: MpcTouchdownSemanticLossCfg(enabled=True, weight=2.0))
+    semantic_obstacle: MpcSemanticObstacleLossCfg = field(default_factory=lambda: MpcSemanticObstacleLossCfg(enabled=True, weight=1.0))
+    swing_direction: MpcSwingDirectionLossCfg = field(default_factory=lambda: MpcSwingDirectionLossCfg(enabled=True, weight=1.0))
+    root_foot_center: MpcRootFootCenterLossCfg = field(default_factory=lambda: MpcRootFootCenterLossCfg(enabled=True, weight=1.0))
+    root_height: MpcRootHeightLossCfg = field(default_factory=lambda: MpcRootHeightLossCfg(enabled=True, weight=3.0))
+    support_plane_rp: MpcSupportPlaneLossCfg = field(default_factory=lambda: MpcSupportPlaneLossCfg(enabled=True, weight=1.0))
     kinematics: MpcKinematicsLossCfg = field(default_factory=MpcKinematicsLossCfg)
+    ik_fk_residual: MpcIkFkResidualLossCfg = field(default_factory=lambda: MpcIkFkResidualLossCfg(enabled=True, weight=8.0))
     progress: MpcProgressLossCfg = field(default_factory=MpcProgressLossCfg)
 
 
@@ -203,18 +236,12 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     runtime = out.runtime
     runtime.horizon_steps = _copy_if_has(task_cfg, "reference_trajectory_horizon", int, runtime.horizon_steps)
     runtime.dt = _copy_if_has(task_cfg, "plan_dt", float, runtime.dt)
-    runtime.replan_interval_steps = _copy_if_has(
-        task_cfg,
-        "reference_replan_interval_steps",
-        int,
-        runtime.replan_interval_steps,
-    )
+    runtime.replan_interval_steps = _copy_if_has(task_cfg, "reference_replan_interval_steps", int, runtime.replan_interval_steps)
     runtime.max_stale_steps = _copy_if_has(task_cfg, "mpc_max_stale_steps", int, runtime.max_stale_steps)
     runtime.max_dirty_envs_per_step = _copy_if_has(task_cfg, "mpc_max_dirty_envs_per_step", int, runtime.max_dirty_envs_per_step)
     runtime.optimize_steps = _copy_if_has(task_cfg, "mpc_optimize_steps", int, runtime.optimize_steps)
     runtime.lr = _copy_if_has(task_cfg, "mpc_lr", float, runtime.lr)
     runtime.contact_threshold = _copy_if_has(task_cfg, "mpc_contact_threshold", float, runtime.contact_threshold)
-    runtime.contact_temperature = _copy_if_has(task_cfg, "mpc_contact_temperature", float, runtime.contact_temperature)
     runtime.command_hard_lin_delta = _copy_if_has(task_cfg, "mpc_command_hard_lin_delta", float, runtime.command_hard_lin_delta)
     runtime.command_hard_yaw_delta = _copy_if_has(task_cfg, "mpc_command_hard_yaw_delta", float, runtime.command_hard_yaw_delta)
     runtime.command_soft_lin_delta = _copy_if_has(task_cfg, "mpc_command_soft_lin_delta", float, runtime.command_soft_lin_delta)
@@ -223,85 +250,17 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     runtime.duty_factor = _copy_if_has(task_cfg, "mpc_duty_factor", float, runtime.duty_factor)
     runtime.touchdown_event_cap = _copy_if_has(task_cfg, "mpc_touchdown_event_cap", int, runtime.touchdown_event_cap)
     runtime.nominal_stride_scale = _copy_if_has(task_cfg, "mpc_nominal_stride_scale", float, runtime.nominal_stride_scale)
-    runtime.nominal_max_stride_m = _copy_if_has(task_cfg, "mpc_nominal_max_stride_m", float, runtime.nominal_max_stride_m)
     runtime.nominal_swing_height_m = _copy_if_has(task_cfg, "mpc_nominal_swing_height_m", float, runtime.nominal_swing_height_m)
-    runtime.nominal_yaw_stride_scale = _copy_if_has(
+    runtime.nominal_yaw_stride_scale = _copy_if_has(task_cfg, "mpc_nominal_yaw_stride_scale", float, runtime.nominal_yaw_stride_scale)
+    runtime.swing_window_min_width = _copy_if_has(task_cfg, "mpc_swing_window_min_width", float, runtime.swing_window_min_width)
+    runtime.swing_window_max_width = _copy_if_has(task_cfg, "mpc_swing_window_max_width", float, runtime.swing_window_max_width)
+    runtime.swing_window_center_scale = _copy_if_has(task_cfg, "mpc_swing_window_center_scale", float, runtime.swing_window_center_scale)
+    runtime.swing_window_temperature = _copy_if_has(task_cfg, "mpc_swing_window_temperature", float, runtime.swing_window_temperature)
+    runtime.swing_center_urgency_temperature = _copy_if_has(
         task_cfg,
-        "mpc_nominal_yaw_stride_scale",
+        "mpc_swing_center_urgency_temperature",
         float,
-        runtime.nominal_yaw_stride_scale,
-    )
-    runtime.nominal_backward_stride_scale = _copy_if_has(
-        task_cfg,
-        "mpc_nominal_backward_stride_scale",
-        float,
-        runtime.nominal_backward_stride_scale,
-    )
-    runtime.nominal_yaw_stride_atten = _copy_if_has(
-        task_cfg,
-        "mpc_nominal_yaw_stride_atten",
-        float,
-        runtime.nominal_yaw_stride_atten,
-    )
-    runtime.foothold_memory_enabled = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_memory_enabled",
-        bool,
-        runtime.foothold_memory_enabled,
-    )
-    runtime.foothold_linear_gate_start = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_linear_gate_start",
-        float,
-        runtime.foothold_linear_gate_start,
-    )
-    runtime.foothold_linear_gate_span = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_linear_gate_span",
-        float,
-        runtime.foothold_linear_gate_span,
-    )
-    runtime.foothold_yaw_gate_start = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_yaw_gate_start",
-        float,
-        runtime.foothold_yaw_gate_start,
-    )
-    runtime.foothold_yaw_gate_span = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_yaw_gate_span",
-        float,
-        runtime.foothold_yaw_gate_span,
-    )
-    runtime.foothold_yaw_entry_ramp_steps = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_yaw_entry_ramp_steps",
-        int,
-        runtime.foothold_yaw_entry_ramp_steps,
-    )
-    runtime.foothold_yaw_entry_enter_threshold = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_yaw_entry_enter_threshold",
-        float,
-        runtime.foothold_yaw_entry_enter_threshold,
-    )
-    runtime.foothold_yaw_entry_exit_threshold = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_yaw_entry_exit_threshold",
-        float,
-        runtime.foothold_yaw_entry_exit_threshold,
-    )
-    runtime.foothold_touchdown_blend = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_touchdown_blend",
-        float,
-        runtime.foothold_touchdown_blend,
-    )
-    runtime.foothold_contact_blend = _copy_if_has(
-        task_cfg,
-        "mpc_foothold_contact_blend",
-        float,
-        runtime.foothold_contact_blend,
+        runtime.swing_center_urgency_temperature,
     )
     leg_phase = getattr(task_cfg, "mpc_leg_phase_offsets", None)
     if leg_phase is not None:
@@ -317,62 +276,40 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     _override_loss_term(task_cfg, prefix="mpc_loss_tracking", loss_term=losses.tracking)
     _set_if_has(task_cfg, "mpc_loss_tracking_vel_weight", float, losses.tracking, "vel_weight")
     _set_if_has(task_cfg, "mpc_loss_tracking_yaw_weight", float, losses.tracking, "yaw_weight")
-
     _override_loss_term(task_cfg, prefix="mpc_loss_smoothness", loss_term=losses.smoothness)
     _set_if_has(task_cfg, "mpc_loss_smoothness_root_weight", float, losses.smoothness, "root_weight")
     _set_if_has(task_cfg, "mpc_loss_smoothness_foot_weight", float, losses.smoothness, "foot_weight")
-
     _override_loss_term(task_cfg, prefix="mpc_loss_contact_regularization", loss_term=losses.contact_regularization)
     _set_if_has(task_cfg, "mpc_loss_contact_binary_weight", float, losses.contact_regularization, "binary_weight")
     _set_if_has(task_cfg, "mpc_loss_contact_transition_weight", float, losses.contact_regularization, "transition_weight")
     _set_if_has(task_cfg, "mpc_loss_contact_min_support_legs", int, losses.contact_regularization, "min_support_legs")
-    _set_if_has(task_cfg, "mpc_loss_contact_max_airborne_steps", int, losses.contact_regularization, "max_airborne_steps")
-    _override_loss_term(task_cfg, prefix="mpc_loss_contact_schedule", loss_term=losses.contact_schedule)
-    _set_if_has(task_cfg, "mpc_loss_contact_schedule_min_support_prob", float, losses.contact_schedule, "min_support_prob")
-
-    _override_loss_term(task_cfg, prefix="mpc_loss_stance_slip", loss_term=losses.stance_slip)
-    _set_if_has(task_cfg, "mpc_loss_stance_slip_tolerance_m_per_step", float, losses.stance_slip, "slip_tolerance_m_per_step")
-    _override_loss_term(task_cfg, prefix="mpc_loss_swing_stride", loss_term=losses.swing_stride)
-    _set_if_has(task_cfg, "mpc_loss_swing_stride_min_swing_span_m", float, losses.swing_stride, "min_swing_span_m")
+    _override_loss_term(task_cfg, prefix="mpc_loss_swing_window", loss_term=losses.swing_window)
+    _override_loss_term(task_cfg, prefix="mpc_loss_diagonal_pair", loss_term=losses.diagonal_pair)
+    _override_loss_term(task_cfg, prefix="mpc_loss_swing_center_urgency", loss_term=losses.swing_center_urgency)
+    _override_loss_term(task_cfg, prefix="mpc_loss_stance_ground", loss_term=losses.stance_ground)
+    _override_loss_term(task_cfg, prefix="mpc_loss_swing_clearance_terrain", loss_term=losses.swing_clearance_terrain)
     _set_if_has(
         task_cfg,
-        "mpc_loss_swing_stride_command_speed_deadzone_mps",
+        "mpc_loss_swing_clearance_terrain_min_clearance_m",
         float,
-        losses.swing_stride,
-        "command_speed_deadzone_mps",
+        losses.swing_clearance_terrain,
+        "min_clearance_m",
     )
-    _override_loss_term(task_cfg, prefix="mpc_loss_root_frame_drift", loss_term=losses.root_frame_drift)
-    _set_if_has(task_cfg, "mpc_loss_root_frame_drift_min_rel_m", float, losses.root_frame_drift, "min_rel_m")
-    _set_if_has(task_cfg, "mpc_loss_root_frame_drift_max_rel_m", float, losses.root_frame_drift, "max_rel_m")
-    _override_loss_term(task_cfg, prefix="mpc_loss_root_frame_follow", loss_term=losses.root_frame_follow)
-    _set_if_has(
-        task_cfg,
-        "mpc_loss_root_frame_follow_rel_change_tolerance_m_per_step",
-        float,
-        losses.root_frame_follow,
-        "rel_change_tolerance_m_per_step",
-    )
-    _override_loss_term(task_cfg, prefix="mpc_loss_swing_clearance", loss_term=losses.swing_clearance)
-    _set_if_has(task_cfg, "mpc_loss_swing_clearance_min_clearance_m", float, losses.swing_clearance, "min_clearance_m")
-    _override_loss_term(task_cfg, prefix="mpc_loss_terrain_clearance", loss_term=losses.terrain_clearance)
-    _set_if_has(task_cfg, "mpc_loss_terrain_clearance_min_clearance_m", float, losses.terrain_clearance, "min_clearance_m")
-
-    _override_loss_term(task_cfg, prefix="mpc_loss_obstacle_small", loss_term=losses.obstacle_small)
-    _set_if_has(task_cfg, "mpc_loss_obstacle_small_body_margin_m", float, losses.obstacle_small, "body_margin_m")
-    _set_if_has(task_cfg, "mpc_loss_obstacle_small_foot_margin_m", float, losses.obstacle_small, "foot_margin_m")
-    _set_if_has(task_cfg, "mpc_loss_obstacle_small_repulsion_radius_m", float, losses.obstacle_small, "repulsion_radius_m")
-    _set_if_has(task_cfg, "mpc_loss_obstacle_small_sample_count", int, losses.obstacle_small, "sample_count")
-
-    _override_loss_term(task_cfg, prefix="mpc_loss_obstacle_large", loss_term=losses.obstacle_large)
-    _set_if_has(task_cfg, "mpc_loss_obstacle_large_body_margin_m", float, losses.obstacle_large, "body_margin_m")
-    _set_if_has(task_cfg, "mpc_loss_obstacle_large_foot_margin_m", float, losses.obstacle_large, "foot_margin_m")
-    _set_if_has(task_cfg, "mpc_loss_obstacle_large_repulsion_radius_m", float, losses.obstacle_large, "repulsion_radius_m")
-    _set_if_has(task_cfg, "mpc_loss_obstacle_large_sample_count", int, losses.obstacle_large, "sample_count")
-
-    _override_loss_term(task_cfg, prefix="mpc_loss_touchdown_support", loss_term=losses.touchdown_support)
+    _override_loss_term(task_cfg, prefix="mpc_loss_touchdown_surface", loss_term=losses.touchdown_surface)
+    _set_if_has(task_cfg, "mpc_loss_touchdown_surface_max_slope", float, losses.touchdown_surface, "max_slope")
+    _override_loss_term(task_cfg, prefix="mpc_loss_touchdown_semantic", loss_term=losses.touchdown_semantic)
+    _set_if_has(task_cfg, "mpc_loss_touchdown_semantic_small_weight", float, losses.touchdown_semantic, "small_weight")
+    _set_if_has(task_cfg, "mpc_loss_touchdown_semantic_large_weight", float, losses.touchdown_semantic, "large_weight")
+    _override_loss_term(task_cfg, prefix="mpc_loss_semantic_obstacle", loss_term=losses.semantic_obstacle)
+    _override_loss_term(task_cfg, prefix="mpc_loss_swing_direction", loss_term=losses.swing_direction)
+    _override_loss_term(task_cfg, prefix="mpc_loss_root_foot_center", loss_term=losses.root_foot_center)
+    _override_loss_term(task_cfg, prefix="mpc_loss_root_height", loss_term=losses.root_height)
+    _override_loss_term(task_cfg, prefix="mpc_loss_support_plane_rp", loss_term=losses.support_plane_rp)
+    _set_if_has(task_cfg, "mpc_loss_support_plane_rp_swing_weight", float, losses.support_plane_rp, "swing_weight")
     _override_loss_term(task_cfg, prefix="mpc_loss_kinematics", loss_term=losses.kinematics)
-    _set_if_has(task_cfg, "mpc_loss_kinematics_joint_limit_rad", float, losses.kinematics, "joint_limit_rad")
     _set_if_has(task_cfg, "mpc_loss_kinematics_joint_limit_margin_rad", float, losses.kinematics, "joint_limit_margin_rad")
+    _override_loss_term(task_cfg, prefix="mpc_loss_ik_fk_residual", loss_term=losses.ik_fk_residual)
+    _set_if_has(task_cfg, "mpc_loss_ik_fk_residual_contact_weight", float, losses.ik_fk_residual, "contact_weight")
     _override_loss_term(task_cfg, prefix="mpc_loss_progress", loss_term=losses.progress)
     _set_if_has(task_cfg, "mpc_loss_progress_min_progress_m", float, losses.progress, "min_progress_m")
     return out
@@ -385,8 +322,6 @@ def validate_mpc_config(cfg: MpcPlannerCfg) -> None:
         raise ValueError("runtime.dt must be positive")
     if cfg.runtime.optimize_steps < 0:
         raise ValueError("runtime.optimize_steps must be >= 0")
-    if cfg.runtime.contact_temperature <= 0.0:
-        raise ValueError("runtime.contact_temperature must be positive")
     if cfg.runtime.max_dirty_envs_per_step <= 0:
         raise ValueError("runtime.max_dirty_envs_per_step must be positive")
     if cfg.runtime.selection_mode not in ("fixed_topk_priority",):
@@ -395,12 +330,18 @@ def validate_mpc_config(cfg: MpcPlannerCfg) -> None:
         raise ValueError("runtime.touchdown_event_cap must be positive")
     if len(cfg.runtime.leg_phase_offsets) != 4:
         raise ValueError("runtime.leg_phase_offsets must contain 4 phase offsets")
-    if cfg.runtime.foothold_linear_gate_span <= 0.0:
-        raise ValueError("runtime.foothold_linear_gate_span must be positive")
-    if cfg.runtime.foothold_yaw_gate_span <= 0.0:
-        raise ValueError("runtime.foothold_yaw_gate_span must be positive")
-    if cfg.runtime.foothold_yaw_entry_ramp_steps <= 0:
-        raise ValueError("runtime.foothold_yaw_entry_ramp_steps must be positive")
+    if not 0.0 < cfg.runtime.duty_factor < 1.0:
+        raise ValueError("runtime.duty_factor must be in (0, 1)")
+    if cfg.runtime.swing_window_min_width <= 0.0:
+        raise ValueError("runtime.swing_window_min_width must be positive")
+    if cfg.runtime.swing_window_max_width <= cfg.runtime.swing_window_min_width:
+        raise ValueError("runtime.swing_window_max_width must exceed swing_window_min_width")
+    if cfg.runtime.swing_window_center_scale <= 0.0:
+        raise ValueError("runtime.swing_window_center_scale must be positive")
+    if cfg.runtime.swing_window_temperature <= 0.0:
+        raise ValueError("runtime.swing_window_temperature must be positive")
+    if cfg.runtime.swing_center_urgency_temperature <= 0.0:
+        raise ValueError("runtime.swing_center_urgency_temperature must be positive")
 
 
 __all__ = [

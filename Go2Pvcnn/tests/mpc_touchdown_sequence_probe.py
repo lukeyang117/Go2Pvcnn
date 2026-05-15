@@ -29,6 +29,53 @@ from Go2Pvcnn.tests.test_mpc_runtime_headless import (
 )
 
 
+def _viewer_plan_with_memory(runtime, viewer, terrain, state, command, memory):
+    result = viewer._plan_viewer_trajectory(
+        backend=runtime.planner_backend,
+        terrain=terrain,
+        state=state,
+        command=command,
+        requested_n_frames=runtime.requested_n_frames,
+        dt=runtime.plan_dt,
+        legacy_cfg=runtime.planner_cfg,
+        together_cfg=runtime.together_planner_cfg,
+        mpc_cfg=runtime.mpc_planner_cfg,
+    )
+    return result, memory
+
+
+def _contact_pattern_metrics(contact: torch.Tensor) -> dict[str, float]:
+    contact = torch.as_tensor(contact, dtype=torch.bool)
+    swing = torch.logical_not(contact)
+    swing_count = swing.sum(dim=-1).to(dtype=torch.float32)
+    two_swing = swing_count == 2
+    if bool(two_swing.any().item()):
+        fl, fr, rl, rr = swing[..., 0], swing[..., 1], swing[..., 2], swing[..., 3]
+        diag = torch.logical_or(fl & rr, fr & rl) & two_swing
+        lateral = torch.logical_or(fl & rl, fr & rr) & two_swing
+        front_hind = torch.logical_or(fl & fr, rl & rr) & two_swing
+        denom = torch.clamp(two_swing.to(dtype=torch.float32).sum(), min=1.0)
+        diag_ratio = float(diag.to(dtype=torch.float32).sum().item() / denom.item())
+        lateral_ratio = float(lateral.to(dtype=torch.float32).sum().item() / denom.item())
+        front_hind_ratio = float(front_hind.to(dtype=torch.float32).sum().item() / denom.item())
+    else:
+        diag_ratio = 0.0
+        lateral_ratio = 0.0
+        front_hind_ratio = 0.0
+    total = float(swing_count.numel())
+    return {
+        "swing_count_mean": float(swing_count.mean().item()),
+        "swing_count_max": float(swing_count.max().item()),
+        "single_swing_ratio": float((swing_count == 1).to(dtype=torch.float32).sum().item() / total),
+        "two_swing_ratio": float((swing_count == 2).to(dtype=torch.float32).sum().item() / total),
+        "triple_or_more_swing_ratio": float((swing_count >= 3).to(dtype=torch.float32).sum().item() / total),
+        "all_stance_ratio": float((swing_count == 0).to(dtype=torch.float32).sum().item() / total),
+        "diagonal_swing_pair_ratio": diag_ratio,
+        "lateral_swing_pair_ratio": lateral_ratio,
+        "front_hind_swing_pair_ratio": front_hind_ratio,
+    }
+
+
 def main() -> int:
     output_path = Path("/tmp/mpc_joint_metrics.jsonl")
     runtime = None
@@ -85,6 +132,7 @@ def main() -> int:
                         prev_touchdown_w=None,
                         prev_contact_first=None,
                     )
+                    mpc_foothold_memory = None
                     seq_reports = []
                     with _long_drift_variant_context(runtime, variant_name, shared):
                         for segment_name in segment_names:
@@ -114,20 +162,20 @@ def main() -> int:
                             phase_discontinuity_series = []
                             contact_flip_count = 0
                             transition_foot_err_series = []
+                            foot_step_max_series = []
+                            touchdown_jump_max_series = []
+                            contact_pattern_series = []
 
                             for cycle_idx in range(cycles):
                                 handle.write(json.dumps({"kind": "progress", "variant": variant_name, "seq": seq_name, "segment": segment_name, "cycle": cycle_idx, "stage": "plan_start"}, ensure_ascii=False) + "\n")
                                 handle.flush()
-                                result = viewer._plan_viewer_trajectory(
-                                    backend=runtime.planner_backend,
-                                    terrain=terrain,
-                                    state=state,
-                                    command=command,
-                                    requested_n_frames=runtime.requested_n_frames,
-                                    dt=runtime.plan_dt,
-                                    legacy_cfg=runtime.planner_cfg,
-                                    together_cfg=runtime.together_planner_cfg,
-                                    mpc_cfg=runtime.mpc_planner_cfg,
+                                result, mpc_foothold_memory = _viewer_plan_with_memory(
+                                    runtime,
+                                    viewer,
+                                    terrain,
+                                    state,
+                                    command,
+                                    mpc_foothold_memory,
                                 )
                                 handle.write(json.dumps({
                                     "kind": "progress",
@@ -146,7 +194,9 @@ def main() -> int:
                                 rpy = viewer._quat_wxyz_to_rpy(torch.as_tensor(result.root_quat_w, dtype=torch.float64))
                                 rel = foot - root.unsqueeze(2)
                                 rel_radius_series.append(float(torch.linalg.vector_norm(rel[:, -1], dim=-1).mean().item()))
-                                foot_step_series.append(float(torch.linalg.vector_norm(foot[:, 1:] - foot[:, :-1], dim=-1).mean().item()))
+                                foot_step = torch.linalg.vector_norm(foot[:, 1:] - foot[:, :-1], dim=-1)
+                                foot_step_series.append(float(foot_step.mean().item()))
+                                foot_step_max_series.append(float(foot_step.max().item()))
                                 root_dx_series.append(float((root[0, -1, 0] - root[0, 0, 0]).item()))
                                 root_dy_series.append(float((root[0, -1, 1] - root[0, 0, 1]).item()))
                                 root_dyaw_series.append(float((rpy[0, -1, 2] - rpy[0, 0, 2]).item()))
@@ -161,8 +211,11 @@ def main() -> int:
                                 if bool(touchdown.any().item()):
                                     td_delta = torch.linalg.vector_norm(foot[:, 1:] - anchor.unsqueeze(1), dim=-1)
                                     touchdown_jump_series.append(float(td_delta[touchdown].mean().item()))
+                                    touchdown_jump_max_series.append(float(td_delta[touchdown].max().item()))
                                 else:
                                     touchdown_jump_series.append(0.0)
+                                    touchdown_jump_max_series.append(0.0)
+                                contact_pattern_series.append(_contact_pattern_metrics(contact))
 
                                 handle.write(json.dumps({"kind": "progress", "variant": variant_name, "seq": seq_name, "segment": segment_name, "cycle": cycle_idx, "stage": "touchdown_metric_start"}, ensure_ascii=False) + "\n")
                                 handle.flush()
@@ -275,11 +328,13 @@ def main() -> int:
                                 "root_rel_foot_err_mean": sum(root_rel_foot_err_series) / len(root_rel_foot_err_series),
                                 "transition_foot_err_mean": sum(transition_foot_err_series) / len(transition_foot_err_series),
                                 "foot_step_mean": sum(foot_step_series) / len(foot_step_series),
+                                "foot_step_max": max(foot_step_max_series),
                                 "dx_mean": sum(root_dx_series) / len(root_dx_series),
                                 "dy_mean": sum(root_dy_series) / len(root_dy_series),
                                 "dyaw_mean": sum(root_dyaw_series) / len(root_dyaw_series),
                                 "stance_anchor_error": sum(stance_anchor_err_series) / len(stance_anchor_err_series),
                                 "touchdown_jump_distance": sum(touchdown_jump_series) / len(touchdown_jump_series),
+                                "touchdown_jump_max": max(touchdown_jump_max_series),
                                 "touchdown_ground_gap_mean": sum(td_gap_series) / len(td_gap_series),
                                 "touchdown_airborne_ratio": sum(td_airborne_ratio_series) / len(td_airborne_ratio_series),
                                 "touchdown_airborne_max_gap": sum(td_airborne_max_gap_series) / len(td_airborne_max_gap_series),
@@ -300,6 +355,9 @@ def main() -> int:
                                 ),
                                 "contact_flip_count": float(contact_flip_count),
                             }
+                            if contact_pattern_series:
+                                for key in contact_pattern_series[0]:
+                                    report[key] = sum(m[key] for m in contact_pattern_series) / len(contact_pattern_series)
                             seq_reports.append(report)
                             handle.write(json.dumps(report, ensure_ascii=False) + "\n")
                             handle.flush()
@@ -315,6 +373,7 @@ def main() -> int:
                         "mean_transition_foot_err": sum(r["transition_foot_err_mean"] for r in seq_reports) / len(seq_reports),
                         "mean_root_rel_foot_err": sum(r["root_rel_foot_err_mean"] for r in seq_reports) / len(seq_reports),
                         "mean_foot_step": sum(r["foot_step_mean"] for r in seq_reports) / len(seq_reports),
+                        "max_foot_step": max(r["foot_step_max"] for r in seq_reports),
                         "mean_dx": sum(r["dx_mean"] for r in seq_reports) / len(seq_reports),
                         "mean_dy": sum(r["dy_mean"] for r in seq_reports) / len(seq_reports),
                         "mean_dyaw": sum(r["dyaw_mean"] for r in seq_reports) / len(seq_reports),
@@ -322,6 +381,7 @@ def main() -> int:
                         "mean_contact_flip_count": sum(r["contact_flip_count"] for r in seq_reports) / len(seq_reports),
                         "mean_stance_anchor_error": sum(r["stance_anchor_error"] for r in seq_reports) / len(seq_reports),
                         "mean_touchdown_jump_distance": sum(r["touchdown_jump_distance"] for r in seq_reports) / len(seq_reports),
+                        "max_touchdown_jump": max(r["touchdown_jump_max"] for r in seq_reports),
                         "mean_touchdown_ground_gap": sum(r["touchdown_ground_gap_mean"] for r in seq_reports) / len(seq_reports),
                         "mean_touchdown_event_ground_gap": sum(r["touchdown_event_ground_gap_mean"] for r in seq_reports) / len(seq_reports),
                         "mean_stance_ground_gap": sum(r["stance_ground_gap_mean"] for r in seq_reports) / len(seq_reports),
@@ -334,6 +394,12 @@ def main() -> int:
                         "mean_touchdown_event_airborne_ratio": sum(r["touchdown_event_airborne_ratio"] for r in seq_reports) / len(seq_reports),
                         "max_touchdown_airborne_max_gap": max(r["touchdown_airborne_max_gap"] for r in seq_reports),
                         "max_touchdown_event_airborne_max_gap": max(r["touchdown_event_airborne_max_gap"] for r in seq_reports),
+                        "mean_diagonal_swing_pair_ratio": sum(r["diagonal_swing_pair_ratio"] for r in seq_reports) / len(seq_reports),
+                        "mean_lateral_swing_pair_ratio": sum(r["lateral_swing_pair_ratio"] for r in seq_reports) / len(seq_reports),
+                        "mean_front_hind_swing_pair_ratio": sum(r["front_hind_swing_pair_ratio"] for r in seq_reports) / len(seq_reports),
+                        "mean_single_swing_ratio": sum(r["single_swing_ratio"] for r in seq_reports) / len(seq_reports),
+                        "mean_two_swing_ratio": sum(r["two_swing_ratio"] for r in seq_reports) / len(seq_reports),
+                        "mean_triple_or_more_swing_ratio": sum(r["triple_or_more_swing_ratio"] for r in seq_reports) / len(seq_reports),
                     }
                     handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
                     handle.flush()

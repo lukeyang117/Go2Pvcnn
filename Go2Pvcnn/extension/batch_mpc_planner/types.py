@@ -35,18 +35,13 @@ class MpcRobotState:
 
 
 @dataclass(frozen=True)
-class MpcFootholdMemory:
-    foot_rel_body_seed: Tensor | None = None
-    stance_anchor_w: Tensor | None = None
-    yaw_entry_ramp: Tensor | None = None
-
-
-@dataclass(frozen=True)
 class MpcPlannerTerrain:
     height_map: Tensor
     world_x_range: tuple[float, float]
     world_y_range: tuple[float, float]
     semantic_map: Tensor | None = None
+    sensor_pos_w: Tensor | None = None
+    sensor_yaw: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +93,6 @@ class MpcPlannerResult:
 __all__ = [
     "MPC_HARD_REASON_COUNT",
     "MPC_HARD_REASON_NAMES",
-    "MpcFootholdMemory",
     "MpcPlannerResult",
     "MpcPlannerStatus",
     "MpcPlannerTerrain",

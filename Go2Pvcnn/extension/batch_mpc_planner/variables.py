@@ -15,10 +15,17 @@ class MpcOptimizationVariables:
     root_pos_residual: Tensor
     root_rpy_residual: Tensor
     foot_pos_residual: Tensor
-    contact_logits: Tensor
+    swing_center_raw: Tensor
+    swing_width_raw: Tensor
 
     def parameters(self) -> list[Tensor]:
-        return [self.root_pos_residual, self.root_rpy_residual, self.foot_pos_residual, self.contact_logits]
+        return [
+            self.root_pos_residual,
+            self.root_rpy_residual,
+            self.foot_pos_residual,
+            self.swing_center_raw,
+            self.swing_width_raw,
+        ]
 
 
 @dataclass(frozen=True)
@@ -26,7 +33,11 @@ class DecodedMpcTrajectory:
     root_pos: Tensor
     root_rpy: Tensor
     foot_pos: Tensor
-    contact_logits: Tensor
+    swing_center: Tensor
+    swing_width: Tensor
+    swing_start: Tensor
+    swing_end: Tensor
+    swing_prob: Tensor
     contact_prob: Tensor
 
 
@@ -51,28 +62,41 @@ def init_optimization_variables(
         root_pos_like = nominal["root_pos"]
         root_rpy_like = nominal["root_rpy"]
         foot_pos_like = nominal["foot_pos"]
-        contact_like = nominal["contact_logits"]
+        center_like = nominal["swing_center"]
+        width_like = nominal["swing_width"]
         if warm_start is not None and runtime_cfg.warm_start_from_previous_plan:
             root_pos_residual = _clone_or_zeros(warm_start.root_pos_residual, root_pos_like)
             root_rpy_residual = _clone_or_zeros(warm_start.root_rpy_residual, root_rpy_like)
             foot_pos_residual = _clone_or_zeros(warm_start.foot_pos_residual, foot_pos_like)
-            contact_logits = _clone_or_zeros(warm_start.contact_logits, contact_like)
+            swing_center_raw = _clone_or_zeros(warm_start.swing_center_raw, center_like)
+            swing_width_raw = _clone_or_zeros(warm_start.swing_width_raw, width_like)
         else:
             root_pos_residual = torch.zeros_like(root_pos_like)
             root_rpy_residual = torch.zeros_like(root_rpy_like)
             foot_pos_residual = torch.zeros_like(foot_pos_like)
-            contact_logits = contact_like.clone()
+            swing_center_raw = torch.zeros_like(center_like)
+            swing_width_raw = _width_prior_to_raw(width_like, runtime_cfg)
 
-        root_pos_residual = root_pos_residual.detach().clone().requires_grad_(True)
-        root_rpy_residual = root_rpy_residual.detach().clone().requires_grad_(True)
-        foot_pos_residual = foot_pos_residual.detach().clone().requires_grad_(True)
-        contact_logits = contact_logits.detach().clone().requires_grad_(True)
         return MpcOptimizationVariables(
-            root_pos_residual=root_pos_residual,
-            root_rpy_residual=root_rpy_residual,
-            foot_pos_residual=foot_pos_residual,
-            contact_logits=contact_logits,
+            root_pos_residual=root_pos_residual.detach().clone().requires_grad_(True),
+            root_rpy_residual=root_rpy_residual.detach().clone().requires_grad_(True),
+            foot_pos_residual=foot_pos_residual.detach().clone().requires_grad_(True),
+            swing_center_raw=swing_center_raw.detach().clone().requires_grad_(True),
+            swing_width_raw=swing_width_raw.detach().clone().requires_grad_(True),
         )
+
+
+def _width_prior_to_raw(width: Tensor, runtime_cfg: MpcRuntimeCfg) -> Tensor:
+    width_min = float(runtime_cfg.swing_window_min_width)
+    width_max = float(runtime_cfg.swing_window_max_width)
+    normalized = (width - width_min) / max(width_max - width_min, 1.0e-6)
+    normalized = normalized.clamp(1.0e-4, 1.0 - 1.0e-4)
+    return torch.logit(normalized)
+
+
+def _circular_abs_distance(a: Tensor, b: Tensor) -> Tensor:
+    diff = torch.remainder(a - b + 0.5, 1.0) - 0.5
+    return torch.abs(diff)
 
 
 def decode_trajectory(
@@ -83,13 +107,31 @@ def decode_trajectory(
     root_pos = nominal["root_pos"] + variables.root_pos_residual
     root_rpy = nominal["root_rpy"] + variables.root_rpy_residual
     foot_pos = nominal["foot_pos"] + variables.foot_pos_residual
-    contact_logits = variables.contact_logits
-    contact_prob = torch.sigmoid(contact_logits / float(runtime_cfg.contact_temperature))
+    center_prior = nominal["swing_center"]
+    width_min = float(runtime_cfg.swing_window_min_width)
+    width_max = float(runtime_cfg.swing_window_max_width)
+    swing_center = torch.remainder(
+        center_prior + float(runtime_cfg.swing_window_center_scale) * torch.tanh(variables.swing_center_raw),
+        1.0,
+    )
+    swing_width = width_min + (width_max - width_min) * torch.sigmoid(variables.swing_width_raw)
+    swing_start = torch.remainder(swing_center - 0.5 * swing_width, 1.0)
+    swing_end = torch.remainder(swing_center + 0.5 * swing_width, 1.0)
+
+    horizon = int(root_pos.shape[1])
+    frame_phase = torch.arange(horizon, dtype=root_pos.dtype, device=root_pos.device).view(1, horizon, 1) / float(horizon)
+    dist = _circular_abs_distance(frame_phase, swing_center.unsqueeze(1))
+    swing_prob = torch.sigmoid(float(runtime_cfg.swing_window_temperature) * (0.5 * swing_width.unsqueeze(1) - dist))
+    contact_prob = 1.0 - swing_prob
     return DecodedMpcTrajectory(
         root_pos=root_pos,
         root_rpy=root_rpy,
         foot_pos=foot_pos,
-        contact_logits=contact_logits,
+        swing_center=swing_center,
+        swing_width=swing_width,
+        swing_start=swing_start,
+        swing_end=swing_end,
+        swing_prob=swing_prob,
         contact_prob=contact_prob,
     )
 

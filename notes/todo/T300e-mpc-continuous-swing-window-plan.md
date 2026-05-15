@@ -14,36 +14,56 @@
 
 - Design spec: [../../docs/superpowers/specs/2026-05-15-mpc-continuous-swing-window-redesign.md](../../docs/superpowers/specs/2026-05-15-mpc-continuous-swing-window-redesign.md)
 - Parent branch: [T300 unified dense MPC backend](T300-unified-dense-mpc-backend.md)
-- Static review conclusion: current code does not implement the redesign yet.
-- Work must preserve existing MPC backend integration points and update focused tests before runtime probes.
+- Implementation state: local working tree now implements the continuous swing-window redesign in `Go2Pvcnn/extension/batch_mpc_planner`.
+- Key contract changes are implemented: `contact_logits` removed, `swing_center/swing_width` decode added, terrain/semantic scanner losses added, body-frame nominal/tracking added, IK-derived joint losses added, `MpcFootholdMemory` removed, and output-side foot grounding removed.
+- Verification on 2026-05-15 now includes `env_isaacsim`:
+  - backend suite -> `43 passed`
+  - targeted `py_compile` over touched MPC/test files -> exit `0`
+  - root-cause probe under `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` on `cuda:2` -> exit `0`, `253` JSONL rows
+- Runtime fixes after the first implementation pass:
+  - safe norms prevent flat-terrain touchdown/support NaN gradients
+  - zero-command output holds current root/rpy/feet/joints and all-stance contacts
+  - support-plane roll/pitch is estimated in the root yaw frame
+- Additional runtime tuning on 2026-05-15 aligned IK/FK residual with clamped output joints, strengthened terrain/root-height losses, and raised default IK/FK residual weight to `8.0`.
+- Final targeted runtime acceptance on 2026-05-15 fixed the remaining `backward_fast` stance-airborne residual and produced a clean command-matrix pytest artifact:
+  - `support_stability_loss` now matches per-leg boolean export threshold semantics.
+  - `ik_fk_residual_loss` now includes a contact-mass-normalized term so sparse contact reachability is not diluted.
+  - nominal post-touchdown stance frames now hold the computed touchdown anchor instead of snapping back to stale replan-start foot positions.
+  - wrap-around touchdown events now sample the finite-horizon endpoint instead of wrapping to phase `0` and reusing stale replan-start feet.
+  - targeted root-cause probe after review fix: `backward_fast` actual last-stance airborne ratio mean `0.0`, mean max gap `0.00043m`, max gap `0.00171m`; mixed-yaw targeted commands stayed at `0.0` actual last-stance airborne ratio.
+  - command-matrix pytest selector produced clean progress `.` and exit code `0`.
 
 ## Open Children
 
 | Child | Status | Priority | Purpose | Primary Files |
 | --- | --- | --- | --- | --- |
-| T300e.1 | pending | P0 | Add GPU terrain/semantic query helpers for loss use | `Go2Pvcnn/extension/batch_mpc_planner/terrain.py` |
-| T300e.2 | pending | P0 | Replace contact logits with continuous swing-window variables | `variables.py`, `config.py` |
-| T300e.3 | pending | P0 | Rewrite nominal builder around body-frame root integration and world-frame foot swing targets | `nominal.py` |
-| T300e.4 | pending | P0 | Implement terrain, semantic, and touchdown losses | `losses/terrain_clearance.py`, `losses/registry.py` |
-| T300e.5 | pending | P0 | Implement swing-window urgency, IK-derived joint limit, IK/FK, root-center, support-plane, and body-frame tracking losses | `losses/kinematics.py`, `losses/tracking.py`, `losses/gait_coupling.py` |
-| T300e.6 | pending | P0 | Remove foothold memory and output-side grounding from planner/manager/viewer direct path | `types.py`, `planner.py`, `manager.py`, `go2_foostep_planner.py` |
-| T300e.7 | pending | P0 | Update focused backend tests and add red/green coverage for new contracts | `Go2Pvcnn/tests/test_batch_mpc_backend.py` |
-| T300e.8 | pending | P1 | Run py_compile, focused pytest, and IsaacLab probes; record evidence | `notes/log/`, `notes/todo.md`, `T300-unified-dense-mpc-backend.md` |
+| T300e.9 | verify | P1 | Broaden runtime confidence beyond the targeted acceptance pass with longer unmonkeypatched yaw/viewer, command-switch, and 4096-counter checks | `Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py`, `Go2Pvcnn/tests/test_mpc_runtime_headless.py` |
 
 ## Closed Children Archive
 
-- None yet.
+- T300e.1 done: GPU terrain/semantic helpers implemented in `terrain.py`, including scanner pose/yaw sampling, `height_at`, `semantic_at`, `slope_at`, and `support_at`.
+- T300e.2 done: optimizer variables now use continuous `swing_center_raw/swing_width_raw`; decoded trajectories expose `swing_center`, `swing_width`, `swing_start`, `swing_end`, `swing_prob`, and `contact_prob`.
+- T300e.3 done: nominal builder now integrates body-frame command on GPU and emits world-frame root/foot trajectories plus terrain-height touchdown targets.
+- T300e.4 done: terrain, semantic, touchdown surface, touchdown semantic, and semantic obstacle losses are active from scanner height/semantic maps.
+- T300e.5 done: swing urgency/order, diagonal pair, body-frame tracking, IK joint limit, IK/FK residual, root-foot center, and yaw-frame support-plane roll/pitch losses are active.
+- T300e.6 done: `MpcFootholdMemory`, manager/viewer memory path, and output-side `_ground_contact_feet_to_terrain` are removed from active MPC code.
+- T300e.7 done: focused backend suite now covers the new decode, terrain/scanner, nominal, loss, no-memory, no-old-symbol, and config contracts.
+- T300e.8 done: support-threshold stability, contact-mass-normalized IK/FK residual, post-touchdown stance anchoring, and wrap-around touchdown endpoint sampling cleaned the prior `backward_fast` targeted runtime residual and command-matrix ambiguity.
 
 ## Related Logs
 
 - [../log/2026-05-13-1910-mpc-root-cause-minimal-verification.md](../log/2026-05-13-1910-mpc-root-cause-minimal-verification.md)
 - [../log/2026-05-13-2023-mpc-ikfk-residual-headless-comparison.md](../log/2026-05-13-2023-mpc-ikfk-residual-headless-comparison.md)
+- [../log/2026-05-15-1755-mpc-continuous-swing-window-implementation.md](../log/2026-05-15-1755-mpc-continuous-swing-window-implementation.md)
+- [../log/2026-05-15-1903-mpc-continuous-window-runtime-fix.md](../log/2026-05-15-1903-mpc-continuous-window-runtime-fix.md)
+- [../log/2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md](../log/2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md)
+- [../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
 
 ## Git Refs
 
 - Last Feature Commit: `1740fc1`
-- Last Verified Commit: `pending`
-- Current Work Ref: `working tree on top of 1740fc1`
+- Last Verified Commit: `65f0d99` plus working tree changes verified through [../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
+- Current Work Ref: `working tree on top of 65f0d99`
 - Key Files:
   - [../../Go2Pvcnn/extension/batch_mpc_planner/terrain.py](../../Go2Pvcnn/extension/batch_mpc_planner/terrain.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/nominal.py](../../Go2Pvcnn/extension/batch_mpc_planner/nominal.py)
@@ -55,7 +75,8 @@
 
 ## Next Step
 
-- Start with T300e.1 and T300e.2 in an isolated implementation session. Do not begin runtime probes until focused backend tests pass.
+- Re-run longer unmonkeypatched yaw/viewer and command-switch probes to check visual behavior beyond the targeted acceptance matrix.
+- Keep 4096 runtime counter/throughput stability as a separate scale-confidence issue.
 
 ## File Structure
 

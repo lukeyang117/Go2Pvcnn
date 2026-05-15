@@ -7,14 +7,16 @@ from torch import Tensor
 
 from .config import MpcPlannerCfg
 from .losses.registry import compute_total_loss
+from .types import MpcPlannerTerrain, MpcRobotState
 from .variables import DecodedMpcTrajectory, MpcOptimizationVariables, decode_trajectory
 
 
 def optimize_variables(
     nominal: dict[str, Tensor],
     variables: MpcOptimizationVariables,
-    joint_angles: Tensor,
+    state: MpcRobotState,
     command: Tensor,
+    terrain: MpcPlannerTerrain,
     cfg: MpcPlannerCfg,
 ) -> tuple[DecodedMpcTrajectory, Tensor, dict[str, Tensor], Tensor]:
     """Run dense gradient optimization and return decoded trajectory."""
@@ -42,7 +44,7 @@ def optimize_variables(
             for _ in range(int(runtime.optimize_steps)):
                 optimizer.zero_grad(set_to_none=True)
                 decoded = decode_trajectory(nominal, variables, runtime)
-                total_scalar, per_env_total, breakdown = compute_total_loss(decoded, nominal, joint_angles, command, cfg)
+                total_scalar, per_env_total, breakdown = compute_total_loss(decoded, nominal, state, command, terrain, cfg)
                 finite_ok = torch.logical_and(finite_ok, torch.isfinite(per_env_total))
                 total_scalar.backward()
                 if runtime.grad_clip_norm > 0.0:
@@ -50,7 +52,7 @@ def optimize_variables(
                 optimizer.step()
 
         decoded = decode_trajectory(nominal, variables, runtime)
-        _, per_env_total, breakdown = compute_total_loss(decoded, nominal, joint_angles, command, cfg)
+        _, per_env_total, breakdown = compute_total_loss(decoded, nominal, state, command, terrain, cfg)
         finite_ok = torch.logical_and(finite_ok, torch.isfinite(per_env_total))
         detached_breakdown = {name: value.detach() for name, value in breakdown.items()}
         return decoded, per_env_total.detach(), detached_breakdown, finite_ok
