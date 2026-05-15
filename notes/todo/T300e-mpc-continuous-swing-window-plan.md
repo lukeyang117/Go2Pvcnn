@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the 2026-05-15 MPC continuous swing-window redesign so contact timing is a single continuous swing window per leg, terrain/semantic scanner losses drive foot placement, and output-side grounding plus planner-owned foothold memory are removed.
+**Goal:** Implement the 2026-05-15 MPC continuous swing-window redesign so contact timing is a single continuous swing window per leg, `swing_center` losses choose which diagonal pair swings first, terrain/semantic scanner losses drive foot placement, and output-side grounding plus planner-owned foothold memory are removed.
 
-**Architecture:** Keep the existing `planner_backend="mpc"` module, but replace its contact parameterization, nominal builder, terrain helpers, loss registry, and manager memory path in place. The optimizer decodes `swing_center/swing_width` into continuous `swing_prob/contact_prob`, samples terrain/semantic maps inside loss computation, emits touchdown positions from swing-window end events, and computes joint losses from IK on optimized root+foot targets.
+**Architecture:** Keep the existing `planner_backend="mpc"` module, but replace its contact parameterization, nominal builder, terrain helpers, loss registry, and manager memory path in place. The optimizer decodes `swing_center/swing_width` into continuous `swing_prob/contact_prob`; nominal may randomize the diagonal first-pair prior, but `swing_center_urgency_order_loss` can move the more urgent diagonal pair earlier based on current foot geometry, command, terrain, and IK feasibility. Loss computation samples terrain/semantic maps, emits touchdown positions from swing-window end events, and computes joint losses from IK on optimized root+foot targets.
 
 **Tech Stack:** PyTorch tensor ops on GPU, IsaacLab semantic height scanner tensors, `grid_sample` terrain/semantic sampling, existing Go2 IK/FK helpers, pytest backend tests, opt-in IsaacLab runtime probes.
 
@@ -24,8 +24,8 @@
 | T300e.1 | pending | P0 | Add GPU terrain/semantic query helpers for loss use | `Go2Pvcnn/extension/batch_mpc_planner/terrain.py` |
 | T300e.2 | pending | P0 | Replace contact logits with continuous swing-window variables | `variables.py`, `config.py` |
 | T300e.3 | pending | P0 | Rewrite nominal builder around body-frame root integration and world-frame foot swing targets | `nominal.py` |
-| T300e.4 | pending | P0 | Implement terrain, semantic, touchdown, and swing-window losses | `losses/terrain_clearance.py`, `losses/gait_coupling.py`, `losses/registry.py` |
-| T300e.5 | pending | P0 | Implement IK-derived joint limit, IK/FK, root-center, support-plane, and body-frame tracking losses | `losses/kinematics.py`, `losses/tracking.py`, `losses/gait_coupling.py` |
+| T300e.4 | pending | P0 | Implement terrain, semantic, and touchdown losses | `losses/terrain_clearance.py`, `losses/registry.py` |
+| T300e.5 | pending | P0 | Implement swing-window urgency, IK-derived joint limit, IK/FK, root-center, support-plane, and body-frame tracking losses | `losses/kinematics.py`, `losses/tracking.py`, `losses/gait_coupling.py` |
 | T300e.6 | pending | P0 | Remove foothold memory and output-side grounding from planner/manager/viewer direct path | `types.py`, `planner.py`, `manager.py`, `go2_foostep_planner.py` |
 | T300e.7 | pending | P0 | Update focused backend tests and add red/green coverage for new contracts | `Go2Pvcnn/tests/test_batch_mpc_backend.py` |
 | T300e.8 | pending | P1 | Run py_compile, focused pytest, and IsaacLab probes; record evidence | `notes/log/`, `notes/todo.md`, `T300-unified-dense-mpc-backend.md` |
@@ -60,11 +60,11 @@
 ## File Structure
 
 - `Go2Pvcnn/extension/batch_mpc_planner/terrain.py`: owns `MpcPlannerTerrain` GPU query helpers: `height_at`, `semantic_at`, `slope_at`, `support_at`, and terrain subsetting/building.
-- `Go2Pvcnn/extension/batch_mpc_planner/config.py`: owns runtime defaults, swing-window bounds, touchdown/support loss weights, and semantic ids.
+- `Go2Pvcnn/extension/batch_mpc_planner/config.py`: owns runtime defaults, swing-window bounds, swing-center urgency weights, touchdown/support loss weights, and semantic ids.
 - `Go2Pvcnn/extension/batch_mpc_planner/variables.py`: owns optimizer variables and decode logic for `swing_center/swing_width -> swing_prob/contact_prob`.
 - `Go2Pvcnn/extension/batch_mpc_planner/nominal.py`: owns vectorized root/foot nominal generation from current IsaacLab state and terrain height.
 - `Go2Pvcnn/extension/batch_mpc_planner/losses/tracking.py`: owns body-frame command tracking.
-- `Go2Pvcnn/extension/batch_mpc_planner/losses/gait_coupling.py`: owns swing-window, diagonal pair, swing direction, root-foot center, and support-plane losses.
+- `Go2Pvcnn/extension/batch_mpc_planner/losses/gait_coupling.py`: owns swing-window, diagonal pair, swing-center urgency ordering, swing direction, root-foot center, and support-plane losses.
 - `Go2Pvcnn/extension/batch_mpc_planner/losses/terrain_clearance.py`: owns stance/swing terrain loss, touchdown surface/semantic loss, and semantic obstacle losses.
 - `Go2Pvcnn/extension/batch_mpc_planner/losses/kinematics.py`: owns IK-derived joint limit and IK/FK residual losses.
 - `Go2Pvcnn/extension/batch_mpc_planner/losses/registry.py`: owns active loss aggregation and deletion of old terrain/contact approximation terms.
@@ -243,8 +243,12 @@ nominal_stride_scale: float = 0.5
 nominal_yaw_stride_scale: float = 0.5
 swing_window_min_width: float = 0.30
 swing_window_max_width: float = 0.70
-swing_window_center_scale: float = 0.20
+swing_window_center_scale: float = 0.60
 swing_window_temperature: float = 40.0
+swing_center_urgency_weight: float = 1.0
+swing_center_urgency_temperature: float = 0.10
+swing_center_reachability_weight: float = 0.25
+swing_center_touchdown_proxy_weight: float = 0.25
 ```
 
 Keep task config overrides where existing callers depend on them.
@@ -285,7 +289,7 @@ class DecodedMpcTrajectory:
 
 - [ ] **Step 6: Implement window decode**
 
-Decode raw fields using the spec mapping:
+Decode raw fields using the spec mapping. The center scale must allow loss-driven half-cycle reordering of the diagonal groups, so use `0.60` unless a later verified config sweep changes it:
 
 ```python
 center_prior = nominal["swing_center"]
@@ -394,7 +398,7 @@ else:
 phase = (frame.view(1, horizon, 1) / float(horizon) + offsets + flip) % 1.0
 ```
 
-Return `swing_center` and `swing_width` priors in `nominal`.
+Return `swing_center` and `swing_width` priors in `nominal`. This randomization is only a nominal initialization/prior. It must not be treated as the final swing order, because `swing_center_raw` and the loss terms in T300e.5 can move either diagonal pair earlier.
 
 - [ ] **Step 6: Build world-frame foot nominal**
 
@@ -601,17 +605,47 @@ def test_mpc_root_support_geometry_losses_are_finite() -> None:
     assert torch.isfinite(plane).all()
 ```
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [ ] **Step 3: Write failing swing-center urgency ordering test**
+
+```python
+def test_mpc_swing_center_urgency_order_loss_prefers_urgent_pair_early() -> None:
+    _, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.6, 0.0, 0.0]], dtype=torch.float32)
+    swing_center = torch.tensor([[0.25, 0.75, 0.75, 0.25]], dtype=torch.float32)
+    swing_width = torch.full((1, 4), 0.5, dtype=torch.float32)
+    swapped_center = torch.tensor([[0.75, 0.25, 0.25, 0.75]], dtype=torch.float32)
+    foot_body = torch.tensor(
+        [[[0.35, 0.12, -0.30], [0.05, -0.12, -0.30], [0.05, 0.12, -0.30], [0.35, -0.12, -0.30]]],
+        dtype=torch.float32,
+    )
+    state = MpcRobotState(
+        root_pos=state.root_pos[:1],
+        root_rpy=torch.zeros((1, 3), dtype=torch.float32),
+        foot_pos=foot_body + state.root_pos[:1, None, :],
+        joint_angles=state.joint_angles[:1],
+    )
+
+    good = swing_center_urgency_order_loss(swing_center, swing_width, state, command, cfg.runtime)
+    bad = swing_center_urgency_order_loss(swapped_center, swing_width, state, command, cfg.runtime)
+
+    assert good.shape == (1,)
+    assert bad.shape == (1,)
+    assert float(good[0]) < float(bad[0])
+```
+
+This fixture makes the `FL/RR` diagonal farther forward in body x and therefore more urgent for the forward command. The loss should prefer `FL/RR` earlier than `FR/RL`.
+
+- [ ] **Step 4: Run tests and confirm failure**
 
 Run:
 
 ```bash
-python -m pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -k "body_frame_velocity or root_support_geometry" -q
+python -m pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -k "body_frame_velocity or root_support_geometry or swing_center_urgency_order" -q
 ```
 
 Expected: FAIL because losses are old or missing.
 
-- [ ] **Step 4: Implement body-frame tracking**
+- [ ] **Step 5: Implement body-frame tracking**
 
 In `tracking.py`, compute per-step velocity:
 
@@ -625,7 +659,7 @@ yaw_rate = (root_rpy[:, 1:, 2] - root_rpy[:, :-1, 2]) / float(dt)
 
 Compare `vel_b` to `command[:, :2]` and `yaw_rate` to `command[:, 2]`.
 
-- [ ] **Step 5: Implement support geometry losses**
+- [ ] **Step 6: Implement support geometry losses**
 
 In `gait_coupling.py`, add these losses with explicit tensor behavior:
 
@@ -645,6 +679,13 @@ support_plane_roll_pitch_loss:
 swing_window_loss:
   combine width bounds, diagonal-pair center agreement, half-cycle group separation, and soft phase-prior terms
 
+swing_center_urgency_order_loss:
+  compute current foot positions in the root/body frame
+  compute per-leg expected command/yaw displacement from the current foot body coordinates
+  group urgency by FL/RR and FR/RL
+  apply softmax over pair urgency
+  penalize forward circular distance from current phase 0.0 to the more urgent pair's swing_start
+
 swing_direction_loss:
   sample swing start and touchdown foot/root poses by window phase
   compare body-frame start-to-end foot displacement with step_gain/yaw_gain expected displacement
@@ -652,7 +693,7 @@ swing_direction_loss:
 
 Plane fitting may use weighted least squares over four foot points per frame; add a small diagonal regularizer before solving the normal equations.
 
-- [ ] **Step 6: Implement IK-derived joint limit loss**
+- [ ] **Step 7: Implement IK-derived joint limit loss**
 
 In `kinematics.py`, expose a loss-side IK path:
 
@@ -669,7 +710,7 @@ joint_limit_loss_from_root_foot(root_pos, root_rpy, foot_pos, joint_limit_margin
 
 Use existing IK math and per-joint limits. Do not use repeated `state.joint_angles` as the loss source.
 
-- [ ] **Step 7: Wire registry**
+- [ ] **Step 8: Wire registry**
 
 In `registry.py`, add breakdown terms:
 
@@ -677,6 +718,7 @@ In `registry.py`, add breakdown terms:
 swing_window
 diagonal_pair
 phase_prior
+swing_center_urgency
 swing_direction
 ik_joint_limit
 ik_fk_residual
@@ -685,17 +727,17 @@ support_plane_rp
 tracking
 ```
 
-- [ ] **Step 8: Run focused loss tests**
+- [ ] **Step 9: Run focused loss tests**
 
 Run:
 
 ```bash
-python -m pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -k "body_frame_velocity or root_support_geometry or decode_uses_continuous" -q
+python -m pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -k "body_frame_velocity or root_support_geometry or swing_center_urgency_order or decode_uses_continuous" -q
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit support/kinematic loss slice**
+- [ ] **Step 10: Commit support/kinematic loss slice**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/losses/kinematics.py Go2Pvcnn/extension/batch_mpc_planner/losses/gait_coupling.py Go2Pvcnn/extension/batch_mpc_planner/losses/tracking.py Go2Pvcnn/extension/batch_mpc_planner/losses/registry.py Go2Pvcnn/tests/test_batch_mpc_backend.py
@@ -862,6 +904,7 @@ def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
     expected = {
         "swing_window",
         "diagonal_pair",
+        "swing_center_urgency",
         "stance_ground",
         "swing_clearance_terrain",
         "touchdown_surface",

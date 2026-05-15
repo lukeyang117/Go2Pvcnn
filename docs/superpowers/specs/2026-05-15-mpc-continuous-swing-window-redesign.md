@@ -18,6 +18,7 @@ This is a redesign of the existing MPC backend, not a new parallel backend.
 - Treat keyboard/user command velocity as root/body-frame velocity, not world-frame velocity.
 - Keep nominal foot positions in world coordinates so terrain and semantic scanner losses can sample directly at `foot_xy`.
 - Use a diagonal trot prior, but let MPC decide each leg's swing start and end time.
+- Keep nominal diagonal first-pair randomization as an initialization/prior source only; optimized `swing_center` losses decide which diagonal pair actually swings first.
 - Guarantee each leg has one continuous swing window per horizon.
 - Use only semantic scanner outputs for height and semantic obstacle losses:
   - `height_map`
@@ -104,14 +105,14 @@ Base phase offsets are:
 [0.0, 0.5, 0.5, 0.0]
 ```
 
-To avoid always making the same pair swing first, each replan/env samples a GPU-side phase flip:
+To avoid always making the nominal prior start from the same pair, each replan/env samples a GPU-side phase flip:
 
 ```text
 phase_flip[B] in {0.0, 0.5}
 phase[t, leg] = (t / T + phase_offsets[leg] + phase_flip) % 1.0
 ```
 
-The phase prior initializes swing timing only. It is not a hard schedule.
+The phase prior initializes swing timing only. It is not a hard schedule and must not decide the final swing order by itself. The actual leading diagonal pair comes from optimized `swing_center` after loss evaluation. In other words, random `phase_flip` supplies diversity for nominal initialization, while `swing_center` optimization can move either diagonal pair earlier when current foot geometry, command direction, terrain, or IK feasibility makes that pair more urgent.
 
 ### 5.4 Swing Window Prior
 
@@ -125,6 +126,8 @@ swing_end = swing_center + 0.5 * swing_width
 ```
 
 Nominal initializes `center/width` from the diagonal trot prior. MPC can freely shift start/end and change width, while soft losses keep diagonal group behavior reasonable.
+
+The center parameterization must leave enough range for the optimizer to swap the leading diagonal pair relative to the random nominal prior. A small local-only center residual is not sufficient here, because command switches may require the pair that nominal initialized second to become first.
 
 ### 5.5 World-Frame Foot Nominal
 
@@ -236,6 +239,8 @@ swing_start = wrap01(swing_center - 0.5 * swing_width)
 swing_end = wrap01(swing_center + 0.5 * swing_width)
 ```
 
+`center_scale` must be large enough to let losses override random first-pair initialization, including an effective half-cycle reordering of the two diagonal groups. The default implementation target is `center_scale >= 0.55`.
+
 All circular distances, start/end comparisons, and time interpolation must use the same wrap convention so windows crossing the horizon boundary stay continuous.
 
 `decode_trajectory()` returns:
@@ -330,6 +335,40 @@ compute_total_loss(decoded, nominal, state, command, terrain, cfg)
 
 - soft pull toward nominal center/width
 - lower priority than terrain, IK, and semantic feasibility
+- lower priority than swing-order urgency, so the random nominal first pair can be overridden
+
+`swing_center_urgency_order_loss`:
+
+- computes a per-leg urgency score from current foot geometry and command-induced expected displacement
+- groups urgency by diagonal pair:
+  - `urgency_A = urgency_FL + urgency_RR`
+  - `urgency_B = urgency_FR + urgency_RL`
+- pushes the more urgent pair's `swing_start` closer to the current replan frame
+- uses smooth weighting, not a hard branch, so gradients flow into `swing_center`
+
+One implementation form:
+
+```text
+foot_body_now = rotate_world_to_body(foot_pos0_w - root_pos0, yaw0)
+expected_disp_leg =
+    step_gain * horizon_time * [Vx, Vy]
+    + yaw_gain * Vyaw * horizon_time * [-foot_body_now.y, foot_body_now.x]
+
+urgency_leg =
+    ||expected_disp_leg||_2
+    + reachability_risk(foot_body_now, expected_disp_leg)
+    + touchdown_risk_proxy
+
+pair_weight = softmax([urgency_A, urgency_B] / temperature)
+early_cost_A = forward_phase_distance(0.0, swing_start_A)
+early_cost_B = forward_phase_distance(0.0, swing_start_B)
+
+swing_center_urgency_order_loss =
+    pair_weight_A * early_cost_A
+    + pair_weight_B * early_cost_B
+```
+
+`touchdown_risk_proxy` should use scanner height/semantic and support/slope approximations already available on GPU. The exact risk proxy can be lightweight; full terrain, semantic, touchdown, and IK losses below remain the stronger feasibility signals. This loss exists to make "which diagonal pair swings first" optimizable through `swing_center` instead of decided by random nominal initialization.
 
 ### 8.2 Stance And Swing Terrain Losses
 
@@ -633,6 +672,7 @@ Add or update tests for:
 - body-frame root nominal integration, including yawing root
 - GPU-vectorized nominal shapes and no Python time loop dependency
 - randomized diagonal first swing pair
+- random first pair is only nominal initialization; `swing_center_urgency_order_loss` can override final leading pair
 - world-frame foot nominal
 - touchdown target using swing-time root frame
 - continuous swing window from center/width
@@ -651,6 +691,7 @@ Update `Go2Pvcnn/tests/test_batch_mpc_backend.py` to verify:
 - new breakdown terms exist:
   - `swing_window`
   - `diagonal_pair`
+  - `swing_center_urgency`
   - `stance_ground`
   - `swing_clearance_terrain`
   - `touchdown_surface`
