@@ -11,6 +11,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
   - New design front: T300 has completed subagent-driven implementation integration for `extension/batch_mpc_planner`; current state is runtime-acceptance verification.
   - T300d now has `env_isaacsim` headless MPC selector evidence, runtime-counter instrumentation, viewer direct-script MPC stabilization, long replan foot-drift reproduction evidence, a five-direction variant sweep, an iterative direction search selecting `dir10`, a second expansion round, and a mixed-command / command-switch sweep showing the `dir10` drift benefit plus yaw-segment foot-step side effects; `dir14` helps mixed boundary drift. Production `batch_mpc_planner` now implements the accepted `dir15 + dir19` synthesis with terrain-grounded contact foot z. User visual inspection then exposed a remaining yaw-only foot alternation problem; standalone IsaacLab probes separate planned grounding from actual playback and show the failure is yaw-dominant while pure forward/back/lateral are much cleaner. True 4096 counter extraction remains blocked by large-scale Isaac runtime instability.
   - T300e continuous swing-window redesign is now implemented locally and has `env_isaacsim` runtime probe evidence: no `MpcFootholdMemory`, no output-side foot grounding, no `contact_logits`; scanner height/semantic losses, body-frame nominal/tracking, swing-center urgency, clamped-output IK/FK feasibility, root-foot center, root-height, and yaw-frame support-plane losses are active. Backend verification passes, NaN/contact-collapse is fixed, and the latest targeted runtime pass cleaned the prior `backward_fast` plus mixed-yaw stance-airborne residuals with a clean command-matrix pytest artifact.
+  - T302 is a new MPC design branch related to T300e for body/leg height-field collision safety, semantic stance/touchdown obstacle rejection, low-small crossing, high-small/large avoidance, yaw-only obstacle risk, and real `env_isaacsim` headless acceptance.
 - Read next:
   - [T300 unified dense MPC branch](todo/T300-unified-dense-mpc-backend.md)
   - [T300 spec](../docs/superpowers/specs/2026-05-11-unified-dense-mpc-backend-design.md)
@@ -45,6 +46,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
   - [T300e continuous window runtime fix log](log/2026-05-15-1903-mpc-continuous-window-runtime-fix.md)
   - [T300e IK/FK and grounding runtime tuning log](log/2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md)
   - [T300e contact support and touchdown anchor acceptance log](log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
+  - [T302 body/leg collision design log](log/2026-05-16-2200-t302-mpc-body-leg-collision-design.md)
   - [human-16 mpc command update log](log/2026-05-11-1343-human16-mpc-command-update.md)
   - [T116i nonzero speed/hard-reason design](../docs/superpowers/specs/2026-05-10-nonzero-speed-hard-reason-design.md)
   - [T116i main review/final verification log](log/2026-05-10-2223-t116i-main-review-final-verification.md)
@@ -81,6 +83,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | T002b | One live branch-compact session passed and tree/Obsidian index preservation is now explicit; the remaining pressure gap is grouped stale-test review and decision batching across `Go2Pvcnn/tests/`. | Use compact sessions to keep grouped note/test cleanup behavior sharp as the tree shrinks around final T116 authority. |
 | T117 | T116 is closed through `T116h`; remaining work is lightweight note/index cleanup around final authority and reduced test surface. | Keep compressing non-T116 surfaces while preserving final authority and the new `T117` cleanup branch. |
 | T300e | Continuous swing-window MPC redesign is implemented in active code; backend verification and `env_isaacsim` tuning show NaN/contact-collapse fixed, `backward_fast` targeted residual cleaned, mixed-yaw targeted probes clean, and command-matrix pytest artifact clean. | Broaden acceptance with longer unmonkeypatched yaw/viewer and command-switch probes; keep 4096 runtime counters as the remaining scale-stability front. |
+| T302 | Body/leg height-field collision safety is now a written design branch tied to T300e; subagent coverage review found no P0 gaps and P1 clarifications are integrated. | Ask the user to review the written spec before implementation planning. |
 | T301a | Viewer `R` reset semantics now preserve current root `xy/yaw`, restore standing joints, and ground feet from scanner terrain; remaining work is one targeted real-runtime reset assertion. | Add a focused IsaacLab headless reset check without disturbing the active T300e branch. |
 
 ## Root Map
@@ -92,6 +95,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | T002 | verify | local skill design / interactive memory and test grooming workflow | [T002](todo/T002-compact-todo-interactive-memory-and-test-grooming.md) | `compact-todo` skill body now preserves child-tree/Obsidian index paths during compaction; grouped stale-test review remains | feature `pending`; verified `skill readback + live branch-compact pressure pass + tree/index hardening readback` |
 | T100 | doing | batched together planner -> IsaacLab training/runtime/viewer | [T100](todo/T100-batched-together-planner-gpu-migration.md) | T116i is closed with main review/final verification evidence; `T117` remains notes/test cleanup | feature `pending`; verified through `T116i` final review checks |
 | T300 | verify | unified dense MPC backend design and implementation | [T300](todo/T300-unified-dense-mpc-backend.md) | `batch_mpc_planner` now implements T300e continuous swing-window MPC; backend/compile verification passes and targeted `env_isaacsim` acceptance cleaned the previous `backward_fast` and command-matrix blockers | feature `pending`; verified `43 backend tests + py_compile + root-cause JSONL probe + command-matrix selector` |
+| T302 | verify | MPC body/leg collision and obstacle behavior design | [T302](todo/T302-mpc-body-leg-height-field-collision-safety.md) | design recorded for height-field root/body/knee/shank/swing-foot collision, semantic touchdown/stance safety, low-small crossing, high-small/large avoidance, and headless acceptance; subagent coverage review clean | feature `pending`; verified `subagent design coverage review` |
 | T200 | done | semantic static course -> semantic raycaster -> viewer integration | [T200](todo/T200-semantic-static-course-viewer.md) | supporting semantic terrain work is background for T116, including small obstacle height reduction; no active T200 work is in the current front | feature `130c635`; verified `130c635` with runtime-output caveat |
 | T301 | verify | viewer interaction / grounded reset behavior | [T301](todo/T301-viewer-r-key-grounded-reset.md) | `R` reset helper now preserves current root `xy/yaw`, restores initial standing joints, clears command buffer, and grounds feet from scanner terrain; targeted real-runtime reset evidence remains | feature `pending`; verified `local+env_isaacsim test_viewer_reset + py_compile + diff check` |
 
@@ -102,6 +106,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 | T002b | T002 | verify | P1 | One live branch-compact pass is complete; remaining verification is grouped stale-test cleanup behavior and decision batching for `Go2Pvcnn/tests/`. | [T002 branch](todo/T002-compact-todo-interactive-memory-and-test-grooming.md#t002b-live-usage-pressure-verification) |
 | T117 | T100/T116 | verify | P1 | Non-keep `Go2Pvcnn/tests/` surfaces were deleted with user approval; remaining work is note compression and new index organization for the reduced test tree. | [T117 branch](todo/T117-together-planner-test-and-todo-cleanup.md) |
 | T300e | T300 | verify | P0 | Continuous swing-window redesign is implemented and latest `env_isaacsim` targeted acceptance cleaned mixed-yaw, `backward_fast`, and command-matrix evidence; remaining work is broader long-horizon viewer/yaw/4096 confidence. | [T300e branch](todo/T300e-mpc-continuous-swing-window-plan.md) + [acceptance log](log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md) |
+| T302a | T302/T300e | verify | P0 | Written design exists and subagent found no P0 gaps; waiting for user spec review before implementation planning. | [T302 branch](todo/T302-mpc-body-leg-height-field-collision-safety.md) + [design log](log/2026-05-16-2200-t302-mpc-body-leg-collision-design.md) |
 | T301a | T301 | verify | P1 | Viewer `R` reset helper now matches the corrected user semantics; remaining gap is one real-runtime targeted reset assertion. | [T301 branch](todo/T301-viewer-r-key-grounded-reset.md#t301a-viewer-r-reset语义改造与helper验证) + [log](log/2026-05-15-2045-t301-viewer-r-key-grounded-reset.md) |
 
 ## Branch Pages
@@ -114,6 +119,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 - [T117-together-planner-test-and-todo-cleanup.md](todo/T117-together-planner-test-and-todo-cleanup.md)
 - [T100-pre-t116-history.md](todo/T100-pre-t116-history.md)
 - [T300-unified-dense-mpc-backend.md](todo/T300-unified-dense-mpc-backend.md)
+- [T302-mpc-body-leg-height-field-collision-safety.md](todo/T302-mpc-body-leg-height-field-collision-safety.md)
 - [T301-viewer-r-key-grounded-reset.md](todo/T301-viewer-r-key-grounded-reset.md)
 - [T200-semantic-static-course-viewer.md](todo/T200-semantic-static-course-viewer.md)
 
@@ -121,6 +127,7 @@ This page is the fast-start dashboard for agent work. It is not a full database.
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-16 22:00 | T302 MPC body/leg collision safety design | design recorded; subagent coverage review clean | [T302](todo/T302-mpc-body-leg-height-field-collision-safety.md) | [2026-05-16-2200-t302-mpc-body-leg-collision-design.md](log/2026-05-16-2200-t302-mpc-body-leg-collision-design.md) |
 | 2026-05-15 20:45 | T301 viewer R-key grounded reset | helper-level pass with local and `env_isaacsim` verification | [T301](todo/T301-viewer-r-key-grounded-reset.md) | [2026-05-15-2045-t301-viewer-r-key-grounded-reset.md](log/2026-05-15-2045-t301-viewer-r-key-grounded-reset.md) |
 | 2026-05-15 20:01 | T300e MPC contact support and touchdown anchor acceptance | targeted runtime pass; prior blockers clean | [T300/T300e](todo/T300e-mpc-continuous-swing-window-plan.md) | [2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md) |
 | 2026-05-15 19:37 | T300e MPC IK/FK and grounding runtime tuning | partial runtime improvement; backward-fast remains | [T300/T300e](todo/T300e-mpc-continuous-swing-window-plan.md) | [2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md](log/2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md) |

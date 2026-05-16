@@ -6,6 +6,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-05-16 22:00 | T302 MPC body/leg collision safety design | production `extension/batch_mpc_planner` design | design recorded; subagent coverage review clean | spec + T302 branch page created; P1 clarifications integrated; implementation not started | [T302](../todo/T302-mpc-body-leg-height-field-collision-safety.md) | [2026-05-16-2200-t302-mpc-body-leg-collision-design.md](2026-05-16-2200-t302-mpc-body-leg-collision-design.md) |
 | 2026-05-15 20:45 | T301 viewer R-key grounded reset | viewer interaction / grounded reset helper verification | pass with scoped verification | local pytest `3 passed`; `env_isaacsim` pytest `3 passed`; py_compile exit `0`; diff check exit `0` | [T301](../todo/T301-viewer-r-key-grounded-reset.md) | [2026-05-15-2045-t301-viewer-r-key-grounded-reset.md](2026-05-15-2045-t301-viewer-r-key-grounded-reset.md) |
 | 2026-05-15 20:01 | T300e MPC contact support and touchdown anchor acceptance | production `extension/batch_mpc_planner` nominal/contact/IK acceptance | targeted runtime pass; prior blockers clean | backend `43 passed`; py_compile exit `0`; diff check exit `0`; command-matrix selector clean `.`; targeted `cuda:2` root-cause probe `24` cycle rows; `backward_fast` actual stance air `0.0`, mean max gap `0.00043m`, max gap `0.00171m`; mixed-yaw actual stance air `0.0`; wrap-around touchdown endpoint regression covered | [T300/T300e](../todo/T300e-mpc-continuous-swing-window-plan.md) | [2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md) |
 | 2026-05-15 19:37 | T300e MPC IK/FK and grounding runtime tuning | production `extension/batch_mpc_planner` loss/runtime verification | partial runtime improvement with backward-fast residual | backend `39 passed`; py_compile exit `0`; diff check exit `0`; targeted `cuda:2` root-cause probe `24` cycle rows; mixed-yaw final stance air `0.0`; backward-fast actual stance air `1.0 -> 0.75`, mean max gap `0.3852m -> 0.2497m`; residual backward-fast remains | [T300/T300e](../todo/T300e-mpc-continuous-swing-window-plan.md) | [2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md](2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md) |
@@ -138,6 +139,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 ## Topic Log Index
 
 - T300 unified dense MPC backend:
+  - [2026-05-16-2200-t302-mpc-body-leg-collision-design.md](2026-05-16-2200-t302-mpc-body-leg-collision-design.md)
   - [2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
   - [2026-05-15-1903-mpc-continuous-window-runtime-fix.md](2026-05-15-1903-mpc-continuous-window-runtime-fix.md)
   - [2026-05-15-1755-mpc-continuous-swing-window-implementation.md](2026-05-15-1755-mpc-continuous-swing-window-implementation.md)

@@ -140,6 +140,7 @@
 ## Open Children
 
 - [T300e](T300e-mpc-continuous-swing-window-plan.md): continuous swing-window MPC redesign is implemented; targeted `env_isaacsim` acceptance now cleans mixed-yaw, normal/backward-fast stance grounding, and command-matrix evidence. Broader long-horizon viewer/yaw and 4096 counter confidence remain open.
+- [T302](T302-mpc-body-leg-height-field-collision-safety.md): new related design branch for body/leg height-field collision safety, semantic stance/touchdown obstacle rejection, low-small crossing, high-small/large avoidance, and real `env_isaacsim` headless acceptance.
 
 ## Closed Children Archive
 
@@ -180,6 +181,7 @@
 - [2026-05-15-1903-mpc-continuous-window-runtime-fix.md](../log/2026-05-15-1903-mpc-continuous-window-runtime-fix.md)
 - [2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md](../log/2026-05-15-1937-mpc-ikfk-grounding-runtime-tuning.md)
 - [2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
+- [2026-05-16-2200-t302-mpc-body-leg-collision-design.md](../log/2026-05-16-2200-t302-mpc-body-leg-collision-design.md)
 
 ## Git Refs
 
@@ -197,6 +199,7 @@
 - Broaden T300e runtime confidence after targeted acceptance:
   - re-run longer yaw/viewer and command-switch behavior with [../../Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py](../../Go2Pvcnn/tests/mpc_yaw_gait_failure_probe.py) and selected [../../Go2Pvcnn/tests/test_mpc_runtime_headless.py](../../Go2Pvcnn/tests/test_mpc_runtime_headless.py) opt-in cases
   - keep 4096 runtime counter/throughput extraction as the remaining scale-stability issue
+- Complete T302 design review before implementation planning for collision/obstacle behavior.
 
 ## Node Details
 
