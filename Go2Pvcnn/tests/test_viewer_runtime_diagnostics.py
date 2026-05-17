@@ -199,6 +199,30 @@ def test_runtime_app_launcher_init_failure_closes_partial_app_and_clears_state(m
     assert viewer_diag._APP_STATE is None
 
 
+def test_real_runtime_fixture_close_leaves_shared_app_alive(monkeypatch):
+    closed = {"env": False, "app": False}
+
+    class FakeEnv:
+        def close(self):
+            closed["env"] = True
+
+    class FakeApp:
+        def close(self):
+            closed["app"] = True
+
+    runtime = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+    runtime._closed = False
+    runtime.env = FakeEnv()
+    monkeypatch.setattr(viewer_diag, "_APP_STATE", viewer_diag._RuntimeAppState(launcher=object(), app=FakeApp(), device="cuda:0"))
+
+    runtime.close()
+
+    assert closed["env"] is True
+    assert closed["app"] is False
+    assert runtime._closed is True
+    assert viewer_diag._APP_STATE is not None
+
+
 def test_together_viewer_adapter_preserves_grounded_crossing_fields():
     from extension.viz import go2_foostep_planner as viewer_module
 
@@ -341,6 +365,69 @@ def test_runtime_plan_diagnostics_builds_grounded_crossing_wrapper():
         "base_small_penetration_count": 0,
         "base_path_crosses_small_flag": False,
     }
+
+
+def test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape():
+    class FakeTerrainGen:
+        num_rows = 10
+        num_cols = 20
+        curriculum = True
+
+    class FakeTerrainCfg:
+        terrain_generator = FakeTerrainGen()
+        max_init_terrain_level = 9
+
+    class FakeScene:
+        terrain = FakeTerrainCfg()
+
+    class FakeEnvCfg:
+        scene = FakeScene()
+
+    compact = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+    compact.terrain = "cobblestone"
+    compact.env_cfg = FakeEnvCfg()
+    compact._cobblestone_num_rows = None
+    compact._cobblestone_num_cols = None
+    compact._configure_compact_cobblestone_runtime_grid()
+
+    assert compact.env_cfg.scene.terrain.terrain_generator.num_rows == 2
+    assert compact.env_cfg.scene.terrain.terrain_generator.num_cols == 1
+    assert compact.env_cfg.scene.terrain.max_init_terrain_level == 1
+
+    metric = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+    metric.terrain = "cobblestone"
+    metric.env_cfg = FakeEnvCfg()
+    metric._cobblestone_num_rows = 4
+    metric._cobblestone_num_cols = 7
+    metric._configure_compact_cobblestone_runtime_grid()
+
+    assert metric.env_cfg.scene.terrain.terrain_generator.num_rows == 4
+    assert metric.env_cfg.scene.terrain.terrain_generator.num_cols == 7
+    assert metric.env_cfg.scene.terrain.max_init_terrain_level == 3
+
+
+def test_real_runtime_fixture_selects_requested_terrain_tile():
+    calls = []
+
+    class FakeViewer:
+        @staticmethod
+        def _apply_viewer_terrain_selection(scene, *, env_id: int, terrain_row: int, terrain_col: int):
+            calls.append((scene, env_id, terrain_row, terrain_col))
+            return torch.tensor((float(terrain_row), float(terrain_col), 0.0), dtype=torch.float32)
+
+    fake_scene = object()
+    fixture = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+    fixture._viewer = FakeViewer()
+    fixture.base_env = type("FakeBaseEnv", (), {"scene": fake_scene})()
+    fixture.terrain_row = 1
+    fixture.terrain_col = 2
+
+    origin = fixture.select_terrain_tile(terrain_row=3, terrain_col=4)
+
+    assert fixture.terrain_row == 3
+    assert fixture.terrain_col == 4
+    torch.testing.assert_close(origin, torch.tensor((3.0, 4.0, 0.0), dtype=torch.float32))
+    assert calls == [(fake_scene, 0, 3, 4)]
 
 
 def test_grounded_crossing_runtime_sequence_report_summarizes_acceptance_fields():

@@ -1,0 +1,305 @@
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260517_025010.log
+2026-05-16 18:50:10 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-16 18:50:10 [4ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-16 18:50:10 [204ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-16 18:50:10 [409ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-16 18:50:11 [785ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-16 18:50:11 [861ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          | Yes: 1 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          | Yes: 2 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          | Yes: 3 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 193409
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1904
+|---------------------------------------------------------------------------------------------|
+2026-05-16 18:50:1[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[TeacherWithoutSemanticEnvCfg_PLAY] Play mode
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains randomly took : 0.443058 seconds
+[INFO]: Time taken for scene creation : 2.639769 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 2
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 1.311419 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 2 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 21 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_root_pose   |      0.2 |
+|   17  | reference_joint_pos   |     0.15 |
+|   18  | reference_foot_pos    |      0.3 |
+|   19  | reference_contact     |     0.25 |
+|   20  | reference_touchdown   |      0.1 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1394215077161789, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14310289919376373, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04354998469352722, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.018052075058221817, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1416187584400177, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14194858074188232, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0362449586391449, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06363168358802795, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13088232278823853, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.12174460291862488, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03306838870048523, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.017060527577996254, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14380788803100586, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1562749594449997, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041726674884557724, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06710611283779144, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13132023811340332, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.17518272995948792, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038840025663375854, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05079701170325279, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12968523800373077, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1496453434228897, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03811304271221161, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.038121968507766724, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12672516703605652, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14004573225975037, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0331692099571228, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07642778754234314, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14668753743171692, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.141770601272583, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03882932662963867, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04571712017059326, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 2.0, "leg_worst": 8.0, "max_any_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.0, "min_clearance": 0.12, "min_shank_clearance": 0.03306838870048523, "min_swing_foot_clearance": 0.017060527577996254, "name": "prod_legworst8_swing12_min12_worst12", "negative_shank_samples": 0, "negative_swing_samples": 0, "nominal_height": 0.1, "sample_count": 8, "swing_weight": 12.0, "swing_worst": 12.0, "worst": {"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13088232278823853, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "prod_legworst8_swing12_min12_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.12174460291862488, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03306838870048523, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.017060527577996254, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 1, "terrain_row": 1}}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1460217833518982, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14203646779060364, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04086468368768692, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0568372942507267, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14641356468200684, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14006319642066956, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.042653508484363556, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03242029994726181, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10650095343589783, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14099231362342834, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03550902009010315, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0164180938154459, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.02, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14414942264556885, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1514454483985901, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03799920156598091, "swing_foot_collision_ratio": 0.02, "swing_foot_min_clearance": -0.010375086218118668, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14236052334308624, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1643378883600235, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.035349681973457336, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.019273245707154274, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12897007167339325, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14482560753822327, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03862132504582405, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04379662126302719, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13160982728004456, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14134007692337036, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03762593865394592, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0009704530239105225, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14344874024391174, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14405697584152222, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03766718506813049, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03187372535467148, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 2.0, "leg_worst": 8.0, "max_any_collision_ratio": 0.02, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.02, "min_clearance": 0.12, "min_shank_clearance": 0.035349681973457336, "min_swing_foot_clearance": -0.010375086218118668, "name": "swing16_min12_worst16_legworst8", "negative_shank_samples": 0, "negative_swing_samples": 1, "nominal_height": 0.1, "sample_count": 8, "swing_weight": 16.0, "swing_worst": 16.0, "worst": {"any_collision_ratio": 0.02, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14414942264556885, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1514454483985901, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03799920156598091, "swing_foot_collision_ratio": 0.02, "swing_foot_min_clearance": -0.010375086218118668, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13256892561912537, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14235541224479675, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04090303182601929, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04118931293487549, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12840837240219116, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1415311098098755, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04143926501274109, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.01572311669588089, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10661186277866364, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14224779605865479, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03170177340507507, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04576005041599274, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.01, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14919094741344452, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15571831166744232, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.043473631143569946, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.005256086587905884, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10944944620132446, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14084666967391968, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.028493404388427734, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06427550315856934, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.01, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11285164952278137, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14575882256031036, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.048097163438797, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.008195344358682632, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10342612862586975, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14111316204071045, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03686535358428955, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0560460090637207, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1324681043624878, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1416994333267212, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038547784090042114, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.011154532432556152, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 2.0, "leg_worst": 8.0, "max_any_collision_ratio": 0.01, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.01, "min_clearance": 0.13, "min_shank_clearance": 0.028493404388427734, "min_swing_foot_clearance": -0.008195344358682632, "name": "swing16_min13_worst16_legworst8", "negative_shank_samples": 0, "negative_swing_samples": 2, "nominal_height": 0.1, "sample_count": 8, "swing_weight": 16.0, "swing_worst": 16.0, "worst": {"any_collision_ratio": 0.01, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11285164952278137, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing16_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14575882256031036, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.048097163438797, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.008195344358682632, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 2}}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14211465418338776, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14303749799728394, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0425492562353611, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03789368271827698, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14463388919830322, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14157825708389282, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.045057713985443115, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06280532479286194, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10542958974838257, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.141121506690979, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.030631572008132935, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04609100520610809, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.01, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.15163961052894592, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15514850616455078, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04636840522289276, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.0026045143604278564, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14455397427082062, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15819135308265686, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03888026252388954, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05197314918041229, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12222837656736374, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14203977584838867, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.024293474853038788, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0771854817867279, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13066351413726807, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1425797939300537, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03234824538230896, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05836081504821777, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13307242095470428, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14333102107048035, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03261904418468475, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06325170397758484, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 2.0, "leg_worst": 8.0, "max_any_collision_ratio": 0.01, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.01, "min_clearance": 0.13, "min_shank_clearance": 0.024293474853038788, "min_swing_foot_clearance": -0.0026045143604278564, "name": "swing18_min13_worst16_legworst8", "negative_shank_samples": 0, "negative_swing_samples": 1, "nominal_height": 0.1, "sample_count": 8, "swing_weight": 18.0, "swing_worst": 16.0, "worst": {"any_collision_ratio": 0.01, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.15163961052894592, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.13, "name": "swing18_min13_worst16_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15514850616455078, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04636840522289276, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.0026045143604278564, "swing_weight": 18.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13527460396289825, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14186371862888336, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03857484459877014, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.038910552859306335, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13260813057422638, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14307984709739685, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0374397411942482, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.022534530609846115, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10397981107234955, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14153417944908142, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03376016020774841, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0379570834338665, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.010101010101010102, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14623379707336426, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15591903030872345, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04225039482116699, "swing_foot_collision_ratio": 0.010101010101010102, "swing_foot_min_clearance": -0.004324134439229965, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11428895592689514, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1603972464799881, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04175124689936638, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.026868337765336037, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13026604056358337, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14782723784446716, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038013506680727005, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03172672539949417, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10170373320579529, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14275923371315002, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.036360740661621094, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0414099395275116, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14076602458953857, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1430046558380127, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.044548310339450836, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.005359530448913574, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 2.0, "leg_worst": 8.0, "max_any_collision_ratio": 0.010101010101010102, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.010101010101010102, "min_clearance": 0.12, "min_shank_clearance": 0.03376016020774841, "min_swing_foot_clearance": -0.004324134439229965, "name": "swing16_min12_worst20_legworst8", "negative_shank_samples": 0, "negative_swing_samples": 1, "nominal_height": 0.1, "sample_count": 8, "swing_weight": 16.0, "swing_worst": 20.0, "worst": {"any_collision_ratio": 0.010101010101010102, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14623379707336426, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst20_legworst8", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15591903030872345, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04225039482116699, "swing_foot_collision_ratio": 0.010101010101010102, "swing_foot_min_clearance": -0.004324134439229965, "swing_weight": 16.0, "swing_worst": 20.0, "terrain_col": 5, "terrain_row": 1}}
+{"any_collision_ratio": 0.01, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13344648480415344, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1401774287223816, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03606322407722473, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.012626072391867638, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14518055319786072, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14324471354484558, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04387691617012024, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.057464927434921265, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10284951329231262, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14295199513435364, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03474825620651245, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05321478471159935, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1463819146156311, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1570591926574707, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041950784623622894, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08266501128673553, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13307127356529236, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.17334675788879395, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03191070258617401, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06683322042226791, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12460056692361832, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15026775002479553, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04423176497220993, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07643753290176392, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.01020408163265306, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13299497961997986, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13940700888633728, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.040269047021865845, "swing_foot_collision_ratio": 0.01020408163265306, "swing_foot_min_clearance": -0.0028437376022338867, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14159810543060303, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14065709710121155, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.042792826890945435, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05057930946350098, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 3.0, "leg_worst": 12.0, "max_any_collision_ratio": 0.01020408163265306, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.01020408163265306, "min_clearance": 0.12, "min_shank_clearance": 0.03191070258617401, "min_swing_foot_clearance": -0.012626072391867638, "name": "swing16_min12_worst16_legweight3_worst12", "negative_shank_samples": 0, "negative_swing_samples": 2, "nominal_height": 0.1, "sample_count": 8, "swing_weight": 16.0, "swing_worst": 16.0, "worst": {"any_collision_ratio": 0.01020408163265306, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13299497961997986, "leg_weight": 3.0, "leg_worst": 12.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legweight3_worst12", "nominal_height": 0.1, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13940700888633728, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.040269047021865845, "swing_foot_collision_ratio": 0.01020408163265306, "swing_foot_min_clearance": -0.0028437376022338867, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11866666376590729, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.141689732670784, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.029601773247122765, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.046186551451683044, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14277076721191406, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14312037825584412, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.042800962924957275, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05618348717689514, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10708236694335938, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13870427012443542, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03614693880081177, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.015563778579235077, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 1, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1513306200504303, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1580982804298401, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04479001462459564, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07970775663852692, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 5, "terrain_row": 1}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.09835326671600342, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1330471634864807, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038370609283447266, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.053552865982055664, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 3}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10728543996810913, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1493375301361084, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.046831727027893066, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05141398310661316, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 3, "terrain_row": 2}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12818369269371033, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13841411471366882, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0315375030040741, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.002012103796005249, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14365100860595703, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14195264875888824, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04616415500640869, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0028470605611801147, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 0, "terrain_row": 3}
+{"kind": "summary", "leg_weight": 2.0, "leg_worst": 8.0, "max_any_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.0, "min_clearance": 0.12, "min_shank_clearance": 0.029601773247122765, "min_swing_foot_clearance": 0.002012103796005249, "name": "swing16_min12_worst16_legworst8_h12", "negative_shank_samples": 0, "negative_swing_samples": 0, "nominal_height": 0.12, "sample_count": 8, "swing_weight": 16.0, "swing_worst": 16.0, "worst": {"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12818369269371033, "leg_weight": 2.0, "leg_worst": 8.0, "min_clearance": 0.12, "name": "swing16_min12_worst16_legworst8_h12", "nominal_height": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13841411471366882, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0315375030040741, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.002012103796005249, "swing_weight": 16.0, "swing_worst": 16.0, "terrain_col": 6, "terrain_row": 0}}
+6 [6,170ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-16 18:50:16 [6,170ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0      1      2      3 
+     0 933.95  21.81   6.40  21.34 
+     1  21.90 945.07   6.40  21.46 
+     2   6.51   6.51 946.40   6.51 
+     3  21.43  21.34   6.40 940.13 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0      1      2      3 
+     0   1.40  11.21  13.10  15.29 
+     1  12.61   1.39  10.96  11.46 
+     2  13.28  12.43   1.36  13.44 
+     3  15.62  13.62  10.58   1.30 
+
+   CPU     0      1      2      3 
+     0   3.49  10.74   9.89  13.93 
+     1  11.26   3.18   9.80  11.85 
+     2  10.04   9.98   3.06  11.50 
+     3  11.74  11.59  11.13   3.68 
+2026-05-16 18:50:17 [7,251ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed bandwidth: 6.4 GB/s.
+2026-05-16 18:50:17 [7,251ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed latency: 15.6 us.
+2026-05-16 18:50:17 [7,251ms] [Warning] [gpu.foundation.plugin] Please verify if observed bandwidth and latency are expected.
+2026-05-16 18:50:18 [7,873ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.
+exit=0

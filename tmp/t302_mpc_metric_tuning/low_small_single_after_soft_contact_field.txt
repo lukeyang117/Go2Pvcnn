@@ -1,0 +1,69 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.2, pluggy-1.6.0 -- /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn
+plugins: mock-3.15.1, hydra-core-1.3.2, anyio-4.12.0, flaky-3.8.1
+collecting ... collected 1 item
+
+Go2Pvcnn/tests/test_mpc_body_leg_collision_headless.py::test_t302_low_small_obstacle_crosses_without_stance_on_obstacle PASSED [100%]
+
+============================== 1 passed in 22.85s ==============================
+lugin
+2026-05-16 21:09:29 [12,323ms] [Verbose] [carb] omni.fabric.plugin(12) already unloads after omni.physx.tensors.plugin(3)
+2026-05-16 21:09:29 [12,323ms] [Verbose] [carb] Returning interface 0x5ec9251f8aa0 as omni::fabric::IStageReaderWriter 0.12 to client omni.physx.tensors.plugin
+2026-05-16 21:09:29 [12,323ms] [Verbose] [carb] Client omni.physx.tensors.plugin acquiring interface omni::fabric::IPath 0.2 from <default plugin>
+2026-05-16 21:09:29 [12,323ms] [Verbose] [carb] Ensuring omni.fabric.plugin unloads after omni.physx.tensors.plugin
+2026-05-16 21:09:29 [12,323ms] [Verbose] [carb] omni.fabric.plugin(12) already unloads after omni.physx.tensors.plugin(3)
+2026-05-16 21:09:29 [12,323ms] [Verbose] [carb] Returning interface 0x5ec9251f7c50 as omni::fabric::IPath 0.2 to client omni.physx.tensors.plugin
+2026-05-16 21:09:29 [12,331ms] [Info] [isaaclab.envs.mdp.actions.joint_actions] Resolved joint names for the action term JointPositionAction: ['FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint', 'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint', 'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint'] [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]
+2026-05-16 21:09:29 [12,333ms] [Info] [isaaclab.managers.manager_base] [ObservationTermCfg:policy_elevation_map/elevation_map] Found entity 'semantic_height_scanner'.
+	Joint names: None [slice(None, None, None)]
+	Body names: None [slice(None, None, None)]
+2026-05-16 21:09:29 [12,626ms] [Info] [isaaclab.managers.manager_base] [ObservationTermCfg:critic_elevation_map/elevation_map] Found entity 'semantic_height_scanner'.
+	Joint names: None [slice(None, None, None)]
+	Body names: None [slice(None, None, None)]
+2026-05-16 21:09:29 [12,706ms] [Info] [isaaclab.managers.manager_base] [TerminationTermCfg:base_contact] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['base'] [[0]]
+2026-05-16 21:09:30 [12,708ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:joint_pos] Found entity 'robot'.
+	Joint names: ['.*'] [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]
+	Body names: None [slice(None, None, None)]
+2026-05-16 21:09:30 [12,708ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:feet_air_time] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[4, 8, 14, 18]]
+2026-05-16 21:09:30 [12,708ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:air_time_variance] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[4, 8, 14, 18]]
+2026-05-16 21:09:30 [12,709ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:feet_slide] Found entity 'robot'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[15, 16, 17, 18]]
+2026-05-16 21:09:30 [12,709ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:feet_slide] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[4, 8, 14, 18]]
+2026-05-16 21:09:30 [12,709ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:undesired_contacts] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['Head_.*', '.*_hip', '.*_thigh', '.*_calf'] [[1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17]]
+2026-05-16 21:09:30 [12,709ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:reference_foot_pos] Found entity 'robot'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[15, 16, 17, 18]]
+2026-05-16 21:09:30 [12,709ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:reference_contact] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[4, 8, 14, 18]]
+2026-05-16 21:09:30 [12,709ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:reference_touchdown] Found entity 'robot'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[15, 16, 17, 18]]
+2026-05-16 21:09:39 [22,345ms] [Verbose] [carb] Client omni.usd acquiring interface omni::gpufoundation::IGpuFoundationFactory 0.1 from <default plugin>
+2026-05-16 21:09:39 [22,345ms] [Verbose] [carb] Returning interface 0x5ec925018bc0 as omni::gpufoundation::IGpuFoundationFactory 0.1 to client omni.usd
+2026-05-16 21:09:39 [22,487ms] [Verbose] [carb] Client omni.physx.foundation.plugin acquiring interface omni::kit::renderer::IGpuFoundation 1.1 from <default plugin>
+2026-05-16 21:09:39 [22,488ms] [Info] [omni.physx.plugin] Using CUDA device ordinal 0.
+2026-05-16 21:09:39 [22,496ms] [Info] [omni.kit.app.plugin] [22.666s] Simulation App Shutting Down
+2026-05-16 21:09:39 [22,496ms] [Verbose] [carb] Client omni.usd acquiring interface carb::progress::IProgress 1.0 from <default plugin>
+2026-05-16 21:09:39 [22,496ms] [Verbose] [carb] Returning interface 0x5ec924fa2160 as carb::progress::IProgress 1.0 to client omni.usd
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Client carb.profiler.python acquiring interface carb::profiler::IProfiler 1.5 from carb.profiler-tracy.plugin
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Starting plugin discovery.
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Searching plugins in folder: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Sorting and loading 1 matched plugins
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Finished plugin discovery.
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Client carb.profiler.python acquiring interface carb::profiler::IProfiler 1.5 from carb.profiler-tracy.plugin
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Client carb.python acquiring interface carb::logging::ILogging 1.2 from <default plugin>
+2026-05-16 21:09:39 [22,497ms] [Verbose] [carb] Returning interface 0x5ec924bb0b00 as carb::logging::ILogging 1.2 to client carb.python

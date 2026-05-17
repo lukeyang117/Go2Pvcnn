@@ -184,7 +184,7 @@ def _world_to_grid(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
     xs = query_xy[..., 0].clamp(float(x0), float(x1))
     ys = query_xy[..., 1].clamp(float(y0), float(y1))
     x_norm = (xs - float(x0)) / max(float(x1) - float(x0), 1.0e-6) * 2.0 - 1.0
-    y_norm = (float(y1) - ys) / max(float(y1) - float(y0), 1.0e-6) * 2.0 - 1.0
+    y_norm = (ys - float(y0)) / max(float(y1) - float(y0), 1.0e-6) * 2.0 - 1.0
     return torch.stack((x_norm, y_norm), dim=-1)
 
 

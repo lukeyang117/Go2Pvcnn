@@ -1,0 +1,52 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+______ test_mpc_stance_ground_loss_ignores_frames_below_contact_threshold ______
+
+    def test_mpc_stance_ground_loss_ignores_frames_below_contact_threshold() -> None:
+        terrain = MpcPlannerTerrain(
+            height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+            semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+            world_x_range=(-1, 1),
+            world_y_range=(-1, 1),
+        )
+        foot = torch.zeros((1, 3, 4, 3), dtype=torch.float32)
+        contact = torch.zeros((1, 3, 4), dtype=torch.float32)
+        foot[:, 1, 0, 2] = 0.10
+        contact[:, 1, 0] = 0.30
+    
+>       below_threshold = stance_ground_loss(terrain, foot, contact, min_contact_prob=0.40)
+E       TypeError: stance_ground_loss() got an unexpected keyword argument 'min_contact_prob'
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:780: TypeError
+_____ test_mpc_stance_semantic_loss_ignores_frames_below_contact_threshold _____
+
+    def test_mpc_stance_semantic_loss_ignores_frames_below_contact_threshold() -> None:
+        terrain = MpcPlannerTerrain(
+            height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+            semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+            world_x_range=(-1, 1),
+            world_y_range=(-1, 1),
+        )
+        terrain.semantic_map[:, 2, 2] = 1
+        foot = torch.zeros((1, 3, 4, 3), dtype=torch.float32)
+        contact = torch.zeros((1, 3, 4), dtype=torch.float32)
+        contact[:, 1, 0] = 0.30
+    
+>       below_threshold = stance_semantic_obstacle_loss(
+            terrain,
+            foot,
+            contact,
+            ground_ids=(0,),
+            small_ids=(1,),
+            large_ids=(2,),
+            small_weight=10.0,
+            large_weight=50.0,
+            min_contact_prob=0.40,
+        )
+E       TypeError: stance_semantic_obstacle_loss() got an unexpected keyword argument 'min_contact_prob'
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:800: TypeError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_stance_ground_loss_ignores_frames_below_contact_threshold
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_stance_semantic_loss_ignores_frames_below_contact_threshold
+2 failed in 2.32s

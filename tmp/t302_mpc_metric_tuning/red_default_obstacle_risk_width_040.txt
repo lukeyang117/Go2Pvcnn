@@ -1,0 +1,50 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_mpc_default_obstacle_risk_width_catches_path_near_high_small _______
+
+    def test_mpc_default_obstacle_risk_width_catches_path_near_high_small() -> None:
+        cfg = MpcPlannerCfg()
+        height = torch.zeros((1, 11, 11), dtype=torch.float32)
+        semantic = torch.zeros((1, 11, 11), dtype=torch.long)
+        height[:, 9, 5] = 0.45
+        semantic[:, 9, 5] = 1
+        terrain = MpcPlannerTerrain(
+            height_map=height,
+            semantic_map=semantic,
+            world_x_range=(-0.5, 0.5),
+            world_y_range=(-0.5, 0.5),
+        )
+        root = torch.zeros((1, 25, 3), dtype=torch.float32)
+        root[:, :, 0] = torch.linspace(-0.2, 0.2, 25)
+        root[..., 2] = 0.30
+        rpy = torch.zeros_like(root)
+        command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+    
+        scales = obstacle_risk_scales(
+            terrain,
+            root,
+            rpy,
+            command,
+            small_ids=cfg.losses.touchdown_semantic.small_ids,
+            large_ids=cfg.losses.touchdown_semantic.large_ids,
+            high_small_relative_height_m=cfg.losses.obstacle_risk.high_small_relative_height_m,
+            linear_corridor_width_m=cfg.losses.obstacle_risk.linear_corridor_width_m,
+            linear_forward_distance_m=cfg.losses.obstacle_risk.linear_forward_distance_m,
+            yaw_swept_radius_m=cfg.losses.obstacle_risk.yaw_swept_radius_m,
+            linear_scale_when_blocked=cfg.losses.obstacle_risk.linear_scale_when_blocked,
+            yaw_scale_when_blocked=cfg.losses.obstacle_risk.yaw_scale_when_blocked,
+            linear_speed_eps=cfg.losses.obstacle_risk.linear_speed_eps,
+            yaw_speed_eps=cfg.losses.obstacle_risk.yaw_speed_eps,
+        )
+    
+>       assert cfg.losses.obstacle_risk.linear_corridor_width_m == pytest.approx(0.40)
+E       assert 0.35 == 0.4 ± 4.0e-07
+E         
+E         comparison failed
+E         Obtained: 0.35
+E         Expected: 0.4 ± 4.0e-07
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:1222: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_default_obstacle_risk_width_catches_path_near_high_small
+1 failed in 2.02s

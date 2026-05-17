@@ -1,0 +1,19 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions ___
+
+    def test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions() -> None:
+        cfg = MpcPlannerCfg()
+    
+        assert cfg.runtime.contact_threshold <= 0.40
+        assert cfg.losses.swing_clearance_terrain.min_clearance_m >= 0.12
+>       assert cfg.losses.swing_clearance_terrain.weight >= 8.0
+E       AssertionError: assert 5.0 >= 8.0
+E        +  where 5.0 = MpcClearanceLossCfg(enabled=True, weight=5.0, min_clearance_m=0.12, worst_deficit_weight=12.0).weight
+E        +    where MpcClearanceLossCfg(enabled=True, weight=5.0, min_clearance_m=0.12, worst_deficit_weight=12.0) = MpcLossesCfg(tracking=MpcTrackingLossCfg(enabled=True, weight=1.0, vel_weight=1.0, yaw_weight=0.5), smoothness=MpcSmoo...bled=True, weight=8.0, contact_weight=2.0), progress=MpcProgressLossCfg(enabled=True, weight=1.0, min_progress_m=0.02)).swing_clearance_terrain
+E        +      where MpcLossesCfg(tracking=MpcTrackingLossCfg(enabled=True, weight=1.0, vel_weight=1.0, yaw_weight=0.5), smoothness=MpcSmoo...bled=True, weight=8.0, contact_weight=2.0), progress=MpcProgressLossCfg(enabled=True, weight=1.0, min_progress_m=0.02)) = MpcPlannerCfg(runtime=MpcRuntimeCfg(horizon_steps=25, dt=0.02, optimize_steps=24, lr=0.01, optimizer='adam', grad_clip...ct_weight=2.0), progress=MpcProgressLossCfg(enabled=True, weight=1.0, min_progress_m=0.02)), profile_name='train_4096').losses
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:722: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions
+1 failed in 2.02s

@@ -20,6 +20,8 @@ def command_tracking_loss(
     *,
     vel_weight: float = 1.0,
     yaw_weight: float = 1.0,
+    linear_scale: Tensor | float | None = None,
+    yaw_scale: Tensor | float | None = None,
 ) -> Tensor:
     if int(root_pos.shape[1]) < 2:
         return torch.zeros(root_pos.shape[0], dtype=root_pos.dtype, device=root_pos.device)
@@ -30,7 +32,13 @@ def command_tracking_loss(
     yaw_rate = (root_rpy[:, 1:, 2] - root_rpy[:, :-1, 2]) / float(dt)
     xy_err = vel_b - cmd[:, None, :2]
     yaw_err = yaw_rate - cmd[:, None, 2]
-    return float(vel_weight) * torch.linalg.vector_norm(xy_err, dim=-1).mean(dim=1) + float(yaw_weight) * torch.abs(yaw_err).mean(dim=1)
+    lin_term = torch.linalg.vector_norm(xy_err, dim=-1).mean(dim=1)
+    yaw_term = torch.abs(yaw_err).mean(dim=1)
+    if linear_scale is not None:
+        lin_term = lin_term * torch.as_tensor(linear_scale, dtype=root_pos.dtype, device=root_pos.device).reshape(-1)
+    if yaw_scale is not None:
+        yaw_term = yaw_term * torch.as_tensor(yaw_scale, dtype=root_pos.dtype, device=root_pos.device).reshape(-1)
+    return float(vel_weight) * lin_term + float(yaw_weight) * yaw_term
 
 
 def progress_direction_loss(root_pos: Tensor, root_rpy: Tensor, command: Tensor, min_progress_m: float) -> Tensor:

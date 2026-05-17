@@ -1,0 +1,262 @@
+[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260517_072647.log
+2026-05-16 23:26:47 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-16 23:26:47 [6ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-16 23:26:48 [240ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-16 23:26:48 [520ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-16 23:26:48 [949ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-16 23:26:48 [1,029ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          | Yes: 1 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          | Yes: 2 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          | Yes: 3 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 192231
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1904
+|---------------------------------------------------------------------------------------------|
+2026-05-16 23:26:53 [6,079ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-16 23:26:53 [6,079ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0      1      2      3 
+     0 933.92  21.86   6.40  21.72 
+     1  21.75 944.06   6.40  21.78 
+     2   6.51   6.51 945.82   6.51 
+     3  21.69  21.56   6.22 940.13 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0      1      2      3 
+     0   1.45  12.40  18.53  12.83 
+     1  13.48   1.33  18.78  18.59 
+     2  15.78  18.74   1.36  16.87 
+     3  14.49  13.02  11.97   1.30 
+
+   CPU     0      1      2      3 
+     0   2.80   9.63   9.03  10.05 
+     1  10.50   3.84   9.36   8.96 
+     2   9.52   8.52   2.29   7.95 
+     3   8.80   8.69   8.45   2.59 
+2026-05-16 23:26:54 [7,155ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed bandwidth: 6.2 GB/s.
+2026-05-16 23:26:54 [7,155ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed latency: 18.8 us.
+2026-05-16 23:26:54 [7,155ms] [Warning] [gpu.foundation.plugin] Please verify if observed bandwidth and latency are expected.
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[TeacherWithoutSemanticEnvCfg_PLAY] Play mode
+2026-05-16 23:26:55 [7,787ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains based on curriculum took : 0.006772 seconds
+[INFO]: Time taken for scene creation : 2.455046 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 2
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : False
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 0.920116 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 3 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
++-------------------------------------------+
+|  Active Event Terms in Mode: 'prestartup' |
++---------+---------------------------------+
+|  Index  | Name                            |
++---------+---------------------------------+
+|    0    | generate_semantic_course        |
++---------+---------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 21 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_root_pose   |      0.2 |
+|   17  | reference_joint_pos   |     0.15 |
+|   18  | reference_foot_pos    |      0.3 |
+|   19  | reference_contact     |     0.25 |
+|   20  | reference_touchdown   |      0.1 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.04, "samples": 2, "shank": 0.04, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 6.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.009999999776482582, "knee_min_clearance": -0.015816301107406616, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.21051174402236938, "shank_collision_ratio": 0.009999999776482582, "shank_min_clearance": -0.0238131582736969, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.10057467222213745}, "min_dist": 0.38367629051208496, "name": "current", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.21830177307128906, "dy": 0.08981335163116455, "dyaw": -0.34525247822697813, "dz": -0.16309157013893127, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.04, "samples": 2, "shank": 0.04, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 8.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.04947084188461304, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.23821598291397095, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.05975005030632019, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.11741907149553299}, "min_dist": 0.36954429745674133, "name": "leg_w8", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": true, "summary": {"dx": 0.21756362915039062, "dy": 0.09357202053070068, "dyaw": -0.3814582152740293, "dz": -0.06355291604995728, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.04, "samples": 2, "shank": 0.04, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 10.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.004999999888241291, "knee_min_clearance": -0.09777343273162842, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.24170446395874023, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.07762512564659119, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.12963229417800903}, "min_dist": 0.2887744903564453, "name": "leg_w10", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.21697330474853516, "dy": 0.0941849946975708, "dyaw": -0.3723674084514993, "dz": -0.07471257448196411, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.04, "samples": 2, "shank": 0.04, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 12.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.030280262231826782, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.24810612201690674, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0796351432800293, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.12850500643253326}, "min_dist": 0.29325202107429504, "name": "leg_w12", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.2156972885131836, "dy": 0.09509074687957764, "dyaw": -0.37807148699015974, "dz": -0.07054242491722107, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.04, "samples": 2, "shank": 0.04, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 16.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.01357656717300415, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.21889758110046387, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0007378458976745605, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09913145750761032}, "min_dist": 0.38447055220603943, "name": "leg_w16", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": true, "summary": {"dx": 0.21709823608398438, "dy": 0.09105271100997925, "dyaw": -0.3466399940137517, "dz": 0.014553844928741455, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 2, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 10.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.0123959481716156, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.2174689769744873, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.012007862329483032, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06876447796821594}, "min_dist": 0.38446998596191406, "name": "leg_w10_m06", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": true, "summary": {"dx": 0.21727371215820312, "dy": 0.09097325801849365, "dyaw": -0.3455756790343406, "dz": -0.0033571720123291016, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 2, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 12.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.05901309847831726, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.2496711015701294, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.09343940019607544, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.12928837537765503}, "min_dist": 0.28033703565597534, "name": "leg_w12_m06", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.21803951263427734, "dy": 0.09247434139251709, "dyaw": -0.3650726703007562, "dz": -0.062321364879608154, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 2, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 16.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.04056030511856079, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.2071191966533661, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.029355376958847046, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07051584124565125}, "min_dist": 0.384469598531723, "name": "leg_w16_m06", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": true, "summary": {"dx": 0.21719741821289062, "dy": 0.09093987941741943, "dyaw": -0.3480552142467459, "dz": -0.17202195525169373, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.08, "samples": 2, "shank": 0.08, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 12.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.004999999888241291, "knee_min_clearance": -0.06007769703865051, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.25004494190216064, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.09057524800300598, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.12846939265727997}, "min_dist": 0.32145845890045166, "name": "leg_w12_m08", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.21634960174560547, "dy": 0.0951920747756958, "dyaw": -0.3703827753175204, "dz": -0.05493718385696411, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 2, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 12.0, "worst": 12.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.017979979515075684, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.2038440704345703, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.011308759450912476, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07246538251638412}, "min_dist": 0.2666131854057312, "name": "leg_w12_m06_worst12", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.2199687957763672, "dy": 0.08764123916625977, "dyaw": -0.34856312560716046, "dz": -0.17351162433624268, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 2, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 16.0, "worst": 16.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.06701472401618958, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.2500687837600708, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.08957800269126892, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.12262498587369919}, "min_dist": 0.3142874836921692, "name": "leg_w16_m06_worst16", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": true, "summary": {"dx": 0.21555805206298828, "dy": 0.09312319755554199, "dyaw": -0.372725314167649, "dz": -0.05363476276397705, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 4, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 12.0, "weight": 12.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.0060259997844696045, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.20519199967384338, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.00938829779624939, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07242751121520996}, "min_dist": 0.2666136622428894, "name": "leg_w12_m06_samples4", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.21974849700927734, "dy": 0.08767086267471313, "dyaw": -0.347643124824323, "dz": -0.008928894996643066, "standstill": false}}
+T302_LARGE_SWEEP_JSON {"cfg": {"knee": 0.06, "samples": 2, "shank": 0.06, "swing_clear": 0.12, "swing_weight": 16.0, "weight": 12.0, "worst": 8.0}, "metrics": {"joint_finite": 1.0, "knee_collision_ratio": 0.0, "knee_min_clearance": 0.06342467665672302, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.23982423543930054, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.07959109544754028, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.13603857159614563}, "min_dist": 0.27989625930786133, "name": "leg_w12_m06_swing16", "required_min_dist": 0.305, "stance_semantic_count": 0, "strict_pass": false, "summary": {"dx": 0.2142324447631836, "dy": 0.09492689371109009, "dyaw": -0.3314035139202314, "dz": -0.09356874227523804, "standstill": false}}
+T302_LARGE_SWEEP_SUMMARY {"best_by_clearance": "leg_w16_m06_worst16", "passed": ["leg_w8", "leg_w16", "leg_w10_m06", "leg_w16_m06", "leg_w16_m06_worst16"], "rows": 13}

@@ -28,3 +28,14 @@
 **Sum:** **O(N·T + N + T + K)**; dominant **O(N·T)** for large N,T.
 
 **N = 1:** **O(T + K)**.
+
+## T302 MPC Collision/Semantic Addendum
+
+Active MPC path: `Go2Pvcnn/extension/batch_mpc_planner`.
+
+- `kinematics.py` now exposes FK leg points: foot, knee, and shank world samples.
+- `terrain_clearance.py` owns T302 height-field body/leg collision losses, stance semantic obstacle loss, and all-scanner obstacle risk scaling.
+- `registry.py` wires body collision, leg collision, stance semantic, and obstacle risk scaling into total loss; risk diagnostics are exported as non-loss breakdown tensors.
+- `tracking.py` accepts per-env linear/yaw scale tensors.
+- `planner.py` copies loss diagnostics into `cost_breakdown`, so collision/risk diagnostics are available even when full `loss_breakdown` is not emitted.
+- Headless acceptance lives in `Go2Pvcnn/tests/test_mpc_body_leg_collision_headless.py`; evidence is logged in [../log/2026-05-16-2309-t302-mpc-body-leg-collision-implementation.md](../log/2026-05-16-2309-t302-mpc-body-leg-collision-implementation.md).

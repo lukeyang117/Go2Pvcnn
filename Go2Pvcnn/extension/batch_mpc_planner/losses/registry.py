@@ -19,13 +19,20 @@ from .gait_coupling import (
     swing_direction_loss,
     swing_window_loss,
 )
-from .kinematics import ik_fk_residual_loss, joint_limit_loss_from_root_foot
+from .kinematics import evaluate_kinematics_for_loss, ik_fk_residual_loss, joint_limit_loss_from_root_foot
 from .smoothness import foot_smoothness_loss, root_smoothness_loss
 from .terrain_clearance import (
+    body_heightfield_collision_loss,
     finite_horizon_touchdown_phase,
+    high_obstacle_avoidance_loss,
+    knee_shank_heightfield_collision_loss,
+    low_small_crossing_progress_loss,
+    obstacle_risk_scales,
     sample_time,
+    semantic_contact_avoidance_loss,
     semantic_obstacle_loss,
     stance_ground_loss,
+    stance_semantic_obstacle_loss,
     swing_clearance_terrain_loss,
     touchdown_semantic_loss,
     touchdown_surface_loss,
@@ -60,6 +67,31 @@ def compute_total_loss(
     breakdown: dict[str, Tensor] = {}
     per_env = torch.zeros(decoded.root_pos.shape[0], dtype=decoded.root_pos.dtype, device=decoded.root_pos.device)
 
+    risk_scales = obstacle_risk_scales(
+        terrain,
+        decoded.root_pos,
+        decoded.root_rpy,
+        command,
+        small_ids=losses.touchdown_semantic.small_ids,
+        large_ids=losses.touchdown_semantic.large_ids,
+        high_small_relative_height_m=losses.obstacle_risk.high_small_relative_height_m,
+        linear_corridor_width_m=losses.obstacle_risk.linear_corridor_width_m,
+        linear_forward_distance_m=losses.obstacle_risk.linear_forward_distance_m,
+        yaw_swept_radius_m=losses.obstacle_risk.yaw_swept_radius_m,
+        linear_scale_when_blocked=losses.obstacle_risk.linear_scale_when_blocked,
+        yaw_scale_when_blocked=losses.obstacle_risk.yaw_scale_when_blocked,
+        linear_speed_eps=losses.obstacle_risk.linear_speed_eps,
+        yaw_speed_eps=losses.obstacle_risk.yaw_speed_eps,
+    )
+    linear_scale = risk_scales.linear_scale if losses.obstacle_risk.enabled else None
+    yaw_scale = risk_scales.yaw_scale if losses.obstacle_risk.enabled else None
+    breakdown["obstacle_risk_linear_scale"] = risk_scales.linear_scale
+    breakdown["obstacle_risk_yaw_scale"] = risk_scales.yaw_scale
+    breakdown["obstacle_risk_linear_trigger_count"] = risk_scales.linear_trigger_count.to(dtype=per_env.dtype)
+    breakdown["obstacle_risk_yaw_trigger_count"] = risk_scales.yaw_trigger_count.to(dtype=per_env.dtype)
+    breakdown["obstacle_risk_trigger_horizon_index"] = risk_scales.trigger_horizon_index.to(dtype=per_env.dtype)
+    breakdown["obstacle_risk_trigger_semantic_class"] = risk_scales.trigger_semantic_class.to(dtype=per_env.dtype)
+
     track = command_tracking_loss(
         decoded.root_pos,
         decoded.root_rpy,
@@ -67,6 +99,8 @@ def compute_total_loss(
         runtime.dt,
         vel_weight=losses.tracking.vel_weight,
         yaw_weight=losses.tracking.yaw_weight,
+        linear_scale=linear_scale,
+        yaw_scale=yaw_scale,
     )
     per_env = per_env + _weighted(losses.tracking.enabled, losses.tracking.weight, track, breakdown, "tracking")
 
@@ -119,7 +153,12 @@ def compute_total_loss(
         "swing_center_urgency",
     )
 
-    stance = stance_ground_loss(terrain, decoded.foot_pos, decoded.contact_prob)
+    stance = stance_ground_loss(
+        terrain,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        min_contact_prob=runtime.contact_threshold,
+    )
     per_env = per_env + _weighted(losses.stance_ground.enabled, losses.stance_ground.weight, stance, breakdown, "stance_ground")
 
     swing_clear = swing_clearance_terrain_loss(
@@ -127,6 +166,11 @@ def compute_total_loss(
         decoded.foot_pos,
         decoded.swing_prob,
         min_clearance_m=losses.swing_clearance_terrain.min_clearance_m,
+        worst_deficit_weight=losses.swing_clearance_terrain.worst_deficit_weight,
+        min_swing_prob=1.0 - float(runtime.contact_threshold),
+        hard_active_weight=True,
+        boundary_min_swing_prob=losses.swing_clearance_terrain.boundary_min_swing_prob,
+        boundary_weight=losses.swing_clearance_terrain.boundary_weight,
     )
     per_env = per_env + _weighted(
         losses.swing_clearance_terrain.enabled,
@@ -177,6 +221,48 @@ def compute_total_loss(
         "touchdown_semantic",
     )
 
+    stance_sem = stance_semantic_obstacle_loss(
+        terrain,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        ground_ids=losses.stance_semantic.ground_ids,
+        small_ids=losses.stance_semantic.small_ids,
+        large_ids=losses.stance_semantic.large_ids,
+        small_weight=losses.stance_semantic.small_weight,
+        large_weight=losses.stance_semantic.large_weight,
+        min_contact_prob=runtime.contact_threshold,
+    )
+    per_env = per_env + _weighted(
+        losses.stance_semantic.enabled,
+        losses.stance_semantic.weight,
+        stance_sem,
+        breakdown,
+        "stance_semantic",
+    )
+
+    semantic_contact = semantic_contact_avoidance_loss(
+        terrain,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        ground_ids=losses.semantic_contact_avoid.ground_ids,
+        small_ids=losses.semantic_contact_avoid.small_ids,
+        large_ids=losses.semantic_contact_avoid.large_ids,
+        small_weight=losses.semantic_contact_avoid.small_weight,
+        large_weight=losses.semantic_contact_avoid.large_weight,
+        activation_margin=losses.semantic_contact_avoid.activation_margin,
+        worst_contact_weight=losses.semantic_contact_avoid.worst_contact_weight,
+        soft_margin_m=losses.semantic_contact_avoid.soft_margin_m,
+        soft_field_weight=losses.semantic_contact_avoid.soft_field_weight,
+        soft_worst_field_weight=losses.semantic_contact_avoid.soft_worst_field_weight,
+    )
+    per_env = per_env + _weighted(
+        losses.semantic_contact_avoid.enabled,
+        losses.semantic_contact_avoid.weight,
+        semantic_contact,
+        breakdown,
+        "semantic_contact_avoid",
+    )
+
     obstacle = semantic_obstacle_loss(
         terrain,
         decoded.root_pos,
@@ -189,6 +275,12 @@ def compute_total_loss(
         body_weight=losses.semantic_obstacle.body_weight,
         foot_weight=losses.semantic_obstacle.foot_weight,
         body_stencil_radius_m=losses.semantic_obstacle.body_stencil_radius_m,
+        soft_margin_m=losses.semantic_obstacle.soft_margin_m,
+        body_soft_field_weight=losses.semantic_obstacle.body_soft_field_weight,
+        body_soft_worst_field_weight=losses.semantic_obstacle.body_soft_worst_field_weight,
+        foot_soft_field_weight=losses.semantic_obstacle.foot_soft_field_weight,
+        foot_soft_worst_field_weight=losses.semantic_obstacle.foot_soft_worst_field_weight,
+        high_small_relative_height_m=losses.semantic_obstacle.high_small_relative_height_m,
     )
     per_env = per_env + _weighted(
         losses.semantic_obstacle.enabled,
@@ -196,6 +288,88 @@ def compute_total_loss(
         obstacle,
         breakdown,
         "semantic_obstacle",
+    )
+
+    low_small_crossing = low_small_crossing_progress_loss(
+        terrain,
+        decoded.root_pos,
+        decoded.root_rpy,
+        command,
+        small_ids=losses.touchdown_semantic.small_ids,
+        high_small_relative_height_m=losses.low_small_crossing.high_small_relative_height_m,
+        corridor_width_m=losses.low_small_crossing.corridor_width_m,
+        forward_distance_m=losses.low_small_crossing.forward_distance_m,
+        pass_margin_m=losses.low_small_crossing.pass_margin_m,
+        obstacle_depth_m=losses.low_small_crossing.obstacle_depth_m,
+        linear_speed_eps=losses.low_small_crossing.linear_speed_eps,
+    )
+    per_env = per_env + _weighted(
+        losses.low_small_crossing.enabled,
+        losses.low_small_crossing.weight,
+        low_small_crossing,
+        breakdown,
+        "low_small_crossing",
+    )
+
+    high_obstacle_avoidance = high_obstacle_avoidance_loss(
+        terrain,
+        decoded.root_pos,
+        decoded.root_rpy,
+        command,
+        small_ids=losses.touchdown_semantic.small_ids,
+        large_ids=losses.touchdown_semantic.large_ids,
+        high_small_relative_height_m=losses.high_obstacle_avoidance.high_small_relative_height_m,
+        corridor_width_m=losses.high_obstacle_avoidance.corridor_width_m,
+        forward_distance_m=losses.high_obstacle_avoidance.forward_distance_m,
+        lateral_clearance_m=losses.high_obstacle_avoidance.lateral_clearance_m,
+        longitudinal_influence_m=losses.high_obstacle_avoidance.longitudinal_influence_m,
+        linear_speed_eps=losses.high_obstacle_avoidance.linear_speed_eps,
+    )
+    per_env = per_env + _weighted(
+        losses.high_obstacle_avoidance.enabled,
+        losses.high_obstacle_avoidance.weight,
+        high_obstacle_avoidance,
+        breakdown,
+        "high_obstacle_avoidance",
+    )
+
+    body_collision = body_heightfield_collision_loss(
+        terrain,
+        decoded.root_pos,
+        decoded.root_rpy,
+        bottom_offset_z=losses.body_collision.bottom_offset_z_m,
+        margin_m=losses.body_collision.margin_m,
+        stencil_xy=losses.body_collision.stencil_xy_m,
+    )
+    per_env = per_env + _weighted(
+        losses.body_collision.enabled,
+        losses.body_collision.weight,
+        body_collision,
+        breakdown,
+        "body_collision",
+    )
+
+    loss_kinematics = evaluate_kinematics_for_loss(
+        decoded.root_pos,
+        decoded.root_rpy,
+        decoded.foot_pos,
+        clamp_to_limits=True,
+        shank_sample_count=losses.leg_collision.shank_sample_count,
+    )
+    leg_collision = knee_shank_heightfield_collision_loss(
+        terrain,
+        loss_kinematics.leg_points.knee_pos_world,
+        loss_kinematics.leg_points.shank_sample_world,
+        knee_margin_m=losses.leg_collision.knee_margin_m,
+        shank_margin_m=losses.leg_collision.shank_margin_m,
+        worst_deficit_weight=losses.leg_collision.worst_deficit_weight,
+    )
+    per_env = per_env + _weighted(
+        losses.leg_collision.enabled,
+        losses.leg_collision.weight,
+        leg_collision,
+        breakdown,
+        "leg_collision",
     )
 
     swing_dir = swing_direction_loss(

@@ -1,0 +1,26 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.2, pluggy-1.6.0 -- /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn
+plugins: mock-3.15.1, hydra-core-1.3.2, anyio-4.12.0, flaky-3.8.1
+collecting ... collected 1 item
+
+Go2Pvcnn/tests/test_mpc_runtime_headless.py::test_mpc_runtime_command_matrix_tracks_motion_and_limits_drift PASSED [100%]
+
+======================== 1 passed in 134.84s (0:02:14) =========================
+0,842ms] [Verbose] [omni.datastore] Disk size in budget: 14738213152, budget: 102400 MiB
+2026-05-16 22:58:41 [133,896ms] [Verbose] [carb] Client omni.usd acquiring interface omni::gpufoundation::IGpuFoundationFactory 0.1 from <default plugin>
+2026-05-16 22:58:41 [133,896ms] [Verbose] [carb] Returning interface 0x64d2ec8d9b30 as omni::gpufoundation::IGpuFoundationFactory 0.1 to client omni.usd
+2026-05-16 22:58:41 [134,085ms] [Verbose] [carb] Client omni.physx.foundation.plugin acquiring interface omni::kit::renderer::IGpuFoundation 1.1 from <default plugin>
+2026-05-16 22:58:41 [134,085ms] [Info] [omni.physx.plugin] Using CUDA device ordinal 0.
+2026-05-16 22:58:41 [134,099ms] [Info] [omni.kit.app.plugin] [134.281s] Simulation App Shutting Down
+2026-05-16 22:58:41 [134,099ms] [Verbose] [carb] Client omni.usd acquiring interface carb::progress::IProgress 1.0 from <default plugin>
+2026-05-16 22:58:41 [134,099ms] [Verbose] [carb] Returning interface 0x64d2ec862d10 as carb::progress::IProgress 1.0 to client omni.usd
+2026-05-16 22:58:41 [134,099ms] [Verbose] [carb] Client carb.profiler.python acquiring interface carb::profiler::IProfiler 1.5 from carb.profiler-tracy.plugin
+2026-05-16 22:58:41 [134,099ms] [Verbose] [carb] Starting plugin discovery.
+2026-05-16 22:58:41 [134,099ms] [Verbose] [carb] Searching plugins in folder: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/
+2026-05-16 22:58:41 [134,100ms] [Verbose] [carb] Sorting and loading 1 matched plugins
+2026-05-16 22:58:41 [134,100ms] [Verbose] [carb] Finished plugin discovery.
+2026-05-16 22:58:41 [134,100ms] [Verbose] [carb] Client carb.profiler.python acquiring interface carb::profiler::IProfiler 1.5 from carb.profiler-tracy.plugin
+2026-05-16 22:58:41 [134,100ms] [Verbose] [carb] Client carb.python acquiring interface carb::logging::ILogging 1.2 from <default plugin>
+2026-05-16 22:58:41 [134,100ms] [Verbose] [carb] Returning interface 0x64d2ec4a4a00 as carb::logging::ILogging 1.2 to client carb.python

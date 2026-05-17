@@ -27,6 +27,10 @@ COMMAND_CASES: tuple[CommandCase, ...] = (
     CommandCase("lateral_right", (0.0, -0.25, 0.0)),
     CommandCase("yaw_left", (0.0, 0.0, 0.3)),
     CommandCase("yaw_right", (0.0, 0.0, -0.3)),
+    CommandCase("forward_yaw_left", (0.25, 0.0, 0.25)),
+    CommandCase("forward_yaw_right", (0.25, 0.0, -0.25)),
+    CommandCase("diagonal_forward_left", (0.22, 0.18, 0.0)),
+    CommandCase("diagonal_forward_right", (0.22, -0.18, 0.0)),
     CommandCase("batched_forward", (0.1, 0.0, 0.0)),
     CommandCase("batched_lateral_left", (0.0, 0.08, 0.0)),
 )
@@ -782,6 +786,9 @@ class RealViewerRuntimeFixture:
         planner_max_touchdown_xy_reach: float = 0.22,
         planner_backend: str = "legacy",
         heightmap_viz_stride: int = 10,
+        semantic_small_height_m: float | None = None,
+        cobblestone_num_rows: int | None = None,
+        cobblestone_num_cols: int | None = None,
     ) -> None:
         self._closed = False
         self.env = None
@@ -804,6 +811,10 @@ class RealViewerRuntimeFixture:
             self.requested_n_frames = int(requested_n_frames)
             self.planner_backend = str(planner_backend)
             self.heightmap_viz_stride = int(heightmap_viz_stride)
+            self._cobblestone_num_rows = cobblestone_num_rows
+            self._cobblestone_num_cols = cobblestone_num_cols
+            self.terrain_row = 0
+            self.terrain_col = 0
 
             args_cli = SimpleNamespace(
                 num_envs=self.num_envs,
@@ -814,7 +825,17 @@ class RealViewerRuntimeFixture:
                 plan_dt=0.02,
             )
             self.env_cfg = self._viewer._build_env_cfg(args_cli)
+            if semantic_small_height_m is not None:
+                from extension.semantic_course import SMALL_OBSTACLE_DIAMETER
+
+                event = getattr(self.env_cfg.events, "generate_semantic_course", None)
+                if event is None:
+                    raise RuntimeError("semantic_small_height_m requires semantic-course event support")
+                event.params["scale_profile_overrides"] = {
+                    "small": (float(SMALL_OBSTACLE_DIAMETER), float(semantic_small_height_m)),
+                }
             self._configure_compact_semantic_runtime_grid()
+            self._configure_compact_cobblestone_runtime_grid()
             self._configure_large_runtime_physx_buffers()
             self.planner_cfg = self._viewer._build_planner_cfg(self.env_cfg)
             self.planner_cfg.max_touchdown_xy_reach = float(planner_max_touchdown_xy_reach)
@@ -944,6 +965,22 @@ class RealViewerRuntimeFixture:
         if hasattr(terrain_cfg, "max_init_terrain_level"):
             terrain_cfg.max_init_terrain_level = 3
 
+    def _configure_compact_cobblestone_runtime_grid(self) -> None:
+        if self.terrain != "cobblestone":
+            return
+        scene = getattr(self.env_cfg, "scene", None)
+        terrain_cfg = getattr(scene, "terrain", None) if scene is not None else None
+        terrain_gen = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
+        if terrain_gen is None:
+            return
+        num_rows = 2 if self._cobblestone_num_rows is None else int(self._cobblestone_num_rows)
+        num_cols = 1 if self._cobblestone_num_cols is None else int(self._cobblestone_num_cols)
+        terrain_gen.num_rows = num_rows
+        terrain_gen.num_cols = num_cols
+        terrain_gen.curriculum = False
+        if hasattr(terrain_cfg, "max_init_terrain_level"):
+            terrain_cfg.max_init_terrain_level = max(0, num_rows - 1)
+
     def _configure_large_runtime_physx_buffers(self) -> None:
         """Increase PhysX GPU pair capacities for very large headless env counts.
 
@@ -976,12 +1013,24 @@ class RealViewerRuntimeFixture:
             return
         self.env.close()
         self._closed = True
-        _close_runtime_app()
 
     def reset(self) -> None:
+        self.select_terrain_tile(terrain_row=self.terrain_row, terrain_col=self.terrain_col)
         self.env.reset()
+        self.select_terrain_tile(terrain_row=self.terrain_row, terrain_col=self.terrain_col)
         for _ in range(self.warmup_steps):
             self.env.step(self.zero_actions)
+
+    def select_terrain_tile(self, *, terrain_row: int, terrain_col: int) -> torch.Tensor:
+        selected = self._viewer._apply_viewer_terrain_selection(
+            self.base_env.scene,
+            env_id=0,
+            terrain_row=int(terrain_row),
+            terrain_col=int(terrain_col),
+        )
+        self.terrain_row = int(terrain_row)
+        self.terrain_col = int(terrain_col)
+        return selected
 
     def _write_env0_root_xy(self, world_xy: tuple[float, float], *, z_clearance: float = 0.65) -> None:
         root_pose = torch.cat(

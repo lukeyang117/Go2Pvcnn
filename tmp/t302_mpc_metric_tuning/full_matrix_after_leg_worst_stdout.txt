@@ -1,0 +1,299 @@
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260517_025426.log
+2026-05-16 18:54:26 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-16 18:54:26 [6ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-16 18:54:26 [274ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-16 18:54:26 [546ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-16 18:54:27 [979ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-16 18:54:27 [1,060ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          | Yes: 1 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          | Yes: 2 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          | Yes: 3 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 193502
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1904
+|---------------------------------------------------------------------------------------------|
+2026-05-16 18:54[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[TeacherWithoutSemanticEnvCfg_PLAY] Play mode
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains randomly took : 0.438093 seconds
+[INFO]: Time taken for scene creation : 54.790135 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 2
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 1.413957 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 2 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 21 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_root_pose   |      0.2 |
+|   17  | reference_joint_pos   |     0.15 |
+|   18  | reference_foot_pos    |      0.3 |
+|   19  | reference_contact     |     0.25 |
+|   20  | reference_touchdown   |      0.1 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+{"any_collision_ratio": 0.010101010101010102, "command": "forward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10575221478939056, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14177413284778595, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.030909597873687744, "swing_foot_collision_ratio": 0.010101010101010102, "swing_foot_min_clearance": -0.006511762738227844, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "backward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10503216087818146, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1427171230316162, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041618749499320984, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04855717718601227, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1476586014032364, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14150509238243103, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038067013025283813, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05042107403278351, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12810270488262177, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1421828418970108, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03903689980506897, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.055135294795036316, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14715319871902466, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14243078231811523, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.047704219818115234, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.008411109447479248, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.010101010101010102, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14899051189422607, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1431189626455307, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04805441200733185, "swing_foot_collision_ratio": 0.010101010101010102, "swing_foot_min_clearance": -0.0029832571744918823, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12616629898548126, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14168865978717804, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03411337733268738, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05716598033905029, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12182188034057617, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14134058356285095, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03733605146408081, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0030708611011505127, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13437849283218384, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14080369472503662, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03733748197555542, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0024088621139526367, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.09628051519393921, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14138785004615784, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0376933217048645, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04107967019081116, "terrain_col": 0, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10900795459747314, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1429518461227417, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04002997279167175, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.024884015321731567, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "backward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11112597584724426, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1416637897491455, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.042656511068344116, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.055526673793792725, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1458243727684021, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14410313963890076, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04413259029388428, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06062576174736023, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13191351294517517, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1427355706691742, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04255020618438721, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.030252963304519653, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14369440078735352, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14188796281814575, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04893520474433899, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05579566955566406, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12824290990829468, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14121544361114502, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04027402400970459, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05357411503791809, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12253591418266296, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14178907871246338, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.040055930614471436, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03290790319442749, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12397405505180359, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13655877113342285, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03984549641609192, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0009050965309143066, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1284654140472412, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1428949534893036, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03577536344528198, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0560227632522583, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1063305139541626, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14298099279403687, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.039299219846725464, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.01578381657600403, "terrain_col": 1, "terrain_row": 0}
+{"any_collision_ratio": 0.010101010101010102, "command": "forward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1074722558259964, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14345091581344604, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03196513652801514, "swing_foot_collision_ratio": 0.010101010101010102, "swing_foot_min_clearance": -0.009404197335243225, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.010101010101010102, "command": "backward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11071842908859253, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13662010431289673, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04072056710720062, "swing_foot_collision_ratio": 0.010101010101010102, "swing_foot_min_clearance": -0.004361197352409363, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14751723408699036, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14300408959388733, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03948637843132019, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0030736029148101807, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1323137879371643, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1434151828289032, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041414469480514526, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.015272900462150574, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13196802139282227, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14190880954265594, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.045510947704315186, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04307714104652405, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1510104537010193, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1436855047941208, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.046817660331726074, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05042847990989685, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11970400810241699, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.141897514462471, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03571528196334839, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.053937703371047974, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10183398425579071, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13742902874946594, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03467440605163574, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04316730797290802, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10855916142463684, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13939660787582397, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0398368239402771, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.028978168964385986, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10911676287651062, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14154386520385742, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03824564814567566, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.02031838893890381, "terrain_col": 2, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11020179092884064, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.16714487969875336, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03646961227059364, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09453003108501434, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "backward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14287146925926208, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.16522279381752014, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04288724809885025, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08611981570720673, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14244341850280762, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.12451465427875519, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038271524012088776, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.061965472996234894, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14272946119308472, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13176286220550537, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03407561406493187, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.027875065803527832, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14323444664478302, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.18235397338867188, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04450191184878349, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08447174727916718, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.15434014797210693, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.18164968490600586, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041335463523864746, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.008625306189060211, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14341144263744354, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.16504481434822083, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04127423092722893, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06590212881565094, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14223448932170868, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1636180579662323, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04566646367311478, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04151713848114014, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11907419562339783, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15065819025039673, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03817138820886612, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06471303105354309, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1351357400417328, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14754511415958405, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038025859743356705, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06622932851314545, "terrain_col": 3, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1077049970626831, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1404557228088379, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03951752185821533, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03770089149475098, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "backward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11053681373596191, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14261126518249512, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04326987266540527, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05749404430389404, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14473319053649902, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14299309253692627, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03741788864135742, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05793440341949463, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1435844898223877, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14376533031463623, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041422247886657715, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.046964049339294434, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1476651430130005, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14346420764923096, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.048566341400146484, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07151556015014648, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12371647357940674, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1432664394378662, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04242658615112305, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.012211441993713379, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12905502319335938, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14207673072814941, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04289448261260986, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04793405532836914, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1068946123123169, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13994145393371582, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.033086419105529785, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.009810328483581543, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12881135940551758, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14167296886444092, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.034432291984558105, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.052942752838134766, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "diagonal_forward_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13611090183258057, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14108192920684814, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03820395469665527, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04877579212188721, "terrain_col": 4, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10869646072387695, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1393929421901703, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03655850887298584, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.031038641929626465, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "backward", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11540201306343079, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14255541563034058, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.043019965291023254, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.03556090593338013, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1496250033378601, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14270168542861938, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03996068239212036, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04323287308216095, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "lateral_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14823316037654877, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13187769055366516, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038803160190582275, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04585683345794678, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12871131300926208, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1406700611114502, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04110962152481079, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.021431565284729004, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12862294912338257, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14021903276443481, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04415547847747803, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.015905946493148804, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_left", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10442951321601868, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14043891429901123, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.02885216474533081, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.023679614067077637, "terrain_col": 5, "terrain_row": 0}
+{"any_collision_ratio": 0.0, "command": "forward_yaw_right", "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1096334457397461, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14309287071228027, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03590095043182373, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04828615486621857, "terrain_col": 5, "terrain_row": 0}
+:32 [6,611ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-16 18:54:32 [6,611ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0      1      2      3 
+     0 935.07  21.86   6.16  20.86 
+     1  21.85 946.40   6.18  21.74 
+     2   6.50   6.50 943.45   6.50 
+     3  21.02  21.11   6.14 941.83 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0      1      2      3 
+     0   1.42  13.55  15.25  11.57 
+     1  13.36   1.33  13.89  10.82 
+     2  18.34  16.57   1.36  25.20 
+     3  15.59  14.59  17.90   1.31 
+
+   CPU     0      1      2      3 
+     0   3.55  11.14  10.27  12.31 
+     1  11.30   3.24  10.19  10.29 
+     2  10.57  10.36   2.94   9.76 
+     3  10.34  10.30   9.54   2.96 
+2026-05-16 18:54:33 [7,700ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed bandwidth: 6.1 GB/s.
+2026-05-16 18:54:33 [7,701ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed latency: 25.2 us.
+2026-05-16 18:54:33 [7,701ms] [Warning] [gpu.foundation.plugin] Please verify if observed bandwidth and latency are expected.
+2026-05-16 18:54:34 [8,303ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.

@@ -1,0 +1,16 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions ___
+
+    def test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions() -> None:
+        cfg = MpcPlannerCfg()
+    
+>       assert cfg.runtime.contact_threshold <= 0.40
+E       AssertionError: assert 0.45 <= 0.4
+E        +  where 0.45 = MpcRuntimeCfg(horizon_steps=25, dt=0.02, optimize_steps=24, lr=0.01, optimizer='adam', grad_clip_norm=10.0, contact_th... swing_center_urgency_temperature=0.1, swing_center_reachability_weight=0.25, swing_center_touchdown_proxy_weight=0.25).contact_threshold
+E        +    where MpcRuntimeCfg(horizon_steps=25, dt=0.02, optimize_steps=24, lr=0.01, optimizer='adam', grad_clip_norm=10.0, contact_th... swing_center_urgency_temperature=0.1, swing_center_reachability_weight=0.25, swing_center_touchdown_proxy_weight=0.25) = MpcPlannerCfg(runtime=MpcRuntimeCfg(horizon_steps=25, dt=0.02, optimize_steps=24, lr=0.01, optimizer='adam', grad_clip...ct_weight=2.0), progress=MpcProgressLossCfg(enabled=True, weight=1.0, min_progress_m=0.02)), profile_name='train_4096').runtime
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:720: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions
+1 failed in 2.28s

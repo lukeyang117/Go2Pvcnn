@@ -1,0 +1,317 @@
+[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260517_040153.log
+2026-05-16 20:01:53 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-16 20:01:53 [3ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-16 20:01:53 [193ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-16 20:01:53 [400ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-16 20:01:54 [767ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-16 20:01:54 [821ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          | Yes: 1 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          | Yes: 2 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          | Yes: 3 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 189883
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1904
+|---------------------------------------------------------------------------------------------|
+2026-05-16 20:01:59 [6,333ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-16 20:01:59 [6,333ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0      1      2      3 
+     0 934.91  22.03   6.40  21.62 
+     1  21.83 947.51   6.40  21.87 
+     2   6.51   6.50 945.82   6.51 
+     3  21.50  21.80   6.40 960.95 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0      1      2      3 
+     0   1.43  10.32  11.49  11.69 
+     1  10.98   1.33  14.65  12.23 
+     2  11.74  11.31   1.40  11.87 
+     3  14.88  13.79  13.77   1.31 
+
+   CPU     0      1      2      3 
+     0   3.80  11.86  14.10  12.01 
+     1  12.60   3.02  12.33  10.01 
+     2  14.00  11.64   3.82  12.31 
+     3  12.11   9.77  12.53   3.22 
+2026-05-16 20:02:00 [7,405ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed bandwidth: 6.4 GB/s.
+2026-05-16 20:02:00 [7,406ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed latency: 14.9 us.
+2026-05-16 20:02:00 [7,406ms] [Warning] [gpu.foundation.plugin] Please verify if observed bandwidth and latency are expected.
+2026-05-16 20:02:00 [7,449ms] [Warning] [omni.kvdb.plugin] Disabling key-value database because another kit process is locking it
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[TeacherWithoutSemanticEnvCfg_PLAY] Play mode
+2026-05-16 20:02:01 [8,016ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains randomly took : 0.442518 seconds
+[INFO]: Time taken for scene creation : 3.195355 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 2
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 1.440833 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 2 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++--------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_map' (shape: (1, 16, 16)) |
++--------------+-------------------------------+---------------------------+
+|    Index     | Name                          |           Shape           |
++--------------+-------------------------------+---------------------------+
+|      0       | elevation_map                 |        (1, 16, 16)        |
++--------------+-------------------------------+---------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 21 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_root_pose   |      0.2 |
+|   17  | reference_joint_pos   |     0.15 |
+|   18  | reference_foot_pos    |      0.3 |
+|   19  | reference_contact     |     0.25 |
+|   20  | reference_touchdown   |      0.1 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "diagonal_forward_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10092371702194214, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13993507623672485, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04015013575553894, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.01389552652835846, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "forward_yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11039495468139648, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14244616031646729, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038487911224365234, "swing_foot_collision_ratio": 0.01, "swing_foot_min_clearance": -0.01554250717163086, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1312025785446167, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14053890109062195, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03880080580711365, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07473132014274597, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1435101330280304, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14304733276367188, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.045190006494522095, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04814508557319641, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1313510537147522, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1405409574508667, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04161304235458374, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.013444364070892334, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 3}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12753832340240479, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13882410526275635, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03710603713989258, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05688732862472534, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 2}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10640561580657959, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14073807001113892, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.037101417779922485, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.004300624132156372, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 0, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10607105493545532, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1425735354423523, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04191184043884277, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.020275592803955078, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "backward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.11890294402837753, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14572647213935852, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03920547664165497, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06225727126002312, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14567930996418, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1420041024684906, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.034921642392873764, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06206490099430084, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "forward_yaw_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1106344610452652, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14426836371421814, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04056990146636963, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.009829550981521606, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 2, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "lateral_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14969229698181152, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1416890025138855, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.034653354436159134, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.028378237038850784, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1449202597141266, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14247366786003113, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041421711444854736, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.039716482162475586, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "command": "diagonal_forward_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13428297638893127, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14089947938919067, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.034315526485443115, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.006254643201828003, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.0, "candidate": "no_halo", "kind": "summary", "max_knee_collision_ratio": 0.0, "max_root_bottom_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.01, "min_swing_foot_clearance": -0.01554250717163086, "near_swing_samples": 3, "negative_swing_samples": 2, "sample_count": 14}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "diagonal_forward_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10212567448616028, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14109422266483307, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03720034658908844, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.003557950258255005, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "forward_yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1050107479095459, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.140403151512146, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03775143623352051, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.048775672912597656, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13830438256263733, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13987988233566284, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03879883885383606, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0753396600484848, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12622016668319702, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14093273878097534, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041210949420928955, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05969810485839844, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12622016668319702, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14093273878097534, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041210949420928955, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05969810485839844, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 3}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13668078184127808, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1430242657661438, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03769320249557495, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08169770240783691, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 2}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10825471580028534, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14346832036972046, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03641737252473831, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0736117959022522, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 0, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10850971937179565, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14350128173828125, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.029559612274169922, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07474768161773682, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "backward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13210639357566833, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15031012892723083, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03565855324268341, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08994865417480469, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1408640742301941, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14027757942676544, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0385618731379509, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05633757263422012, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "forward_yaw_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.09717370569705963, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1402876228094101, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03316517174243927, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.006734892725944519, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 2, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "lateral_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12839841842651367, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13516610860824585, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04012656211853027, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06351111829280853, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1461086869239807, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14117732644081116, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.045199185609817505, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08614778518676758, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "command": "diagonal_forward_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13191494345664978, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14181581139564514, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.033091574907302856, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09320664405822754, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.25, "candidate": "halo045_w025", "kind": "summary", "max_knee_collision_ratio": 0.0, "max_root_bottom_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.0, "min_swing_foot_clearance": 0.003557950258255005, "near_swing_samples": 1, "negative_swing_samples": 0, "sample_count": 14}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "diagonal_forward_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12472397089004517, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14168038964271545, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03374156355857849, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08433187007904053, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "forward_yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10666990280151367, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14336299896240234, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03521609306335449, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06352227926254272, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1265031397342682, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1385316252708435, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03607258200645447, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.006855800747871399, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14267441630363464, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14265134930610657, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0442081093788147, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.10403469204902649, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12434756755828857, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14313414692878723, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.028066158294677734, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07615315914154053, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 3}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13309967517852783, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14205658435821533, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03852236270904541, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08646994829177856, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 2}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10618837177753448, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1416243314743042, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.035974591970443726, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09135034680366516, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 0, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1106795072555542, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14347690343856812, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0337146520614624, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04501020908355713, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "backward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12209086120128632, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15093012154102325, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.035751886665821075, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.1093951091170311, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12533973157405853, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1391238272190094, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0353659987449646, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06353852152824402, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "forward_yaw_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10909560322761536, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14308112859725952, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03096581995487213, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07791566848754883, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 2, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "lateral_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13870243728160858, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1408979743719101, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03912287577986717, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08045525848865509, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14623099565505981, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14325076341629028, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.035365134477615356, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08440983295440674, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "command": "diagonal_forward_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.09058427810668945, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13486361503601074, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.0319543182849884, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07761314511299133, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.45, "boundary_weight": 0.5, "candidate": "halo045_w050", "kind": "summary", "max_knee_collision_ratio": 0.0, "max_root_bottom_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.0, "min_swing_foot_clearance": 0.006855800747871399, "near_swing_samples": 0, "negative_swing_samples": 0, "sample_count": 14}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "diagonal_forward_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1271188110113144, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14177566766738892, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03350245952606201, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05698862671852112, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "forward_yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1170458197593689, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14127117395401, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04116988182067871, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07039856910705566, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14607501029968262, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14143145084381104, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04319755733013153, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05565851926803589, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12927958369255066, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1409662961959839, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.041474372148513794, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.06420668959617615, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13389839231967926, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.15081772208213806, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03852258622646332, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07380902767181396, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 3}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13243107497692108, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1422526240348816, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04071381688117981, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.04689514636993408, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 2}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1062157079577446, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14203298091888428, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03708955645561218, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.05745929479598999, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 0, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10516130924224854, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14281964302062988, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.034343719482421875, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.047048211097717285, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "backward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13165637850761414, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1538638472557068, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.033531613647937775, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0730014368891716, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12891574203968048, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1392081379890442, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03353647142648697, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08465872704982758, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "forward_yaw_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10421298444271088, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.142401784658432, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03716549277305603, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.056768327951431274, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 2, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "lateral_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13177187740802765, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14011944830417633, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03696511313319206, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.027677161619067192, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12476092576980591, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.1398482620716095, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.039626508951187134, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.013134688138961792, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "command": "diagonal_forward_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13254854083061218, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14217543601989746, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03555789589881897, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.07231596112251282, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 0.5, "candidate": "halo040_w050", "kind": "summary", "max_knee_collision_ratio": 0.0, "max_root_bottom_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.0, "min_swing_foot_clearance": 0.013134688138961792, "near_swing_samples": 0, "negative_swing_samples": 0, "sample_count": 14}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "diagonal_forward_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.09326839447021484, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14025038480758667, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038055628538131714, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09372061491012573, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "forward_yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10702395439147949, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14237654209136963, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03979527950286865, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09541714191436768, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14089509844779968, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14153537154197693, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03956666588783264, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0726834386587143, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12678410112857819, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14246290922164917, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04129800200462341, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09581510722637177, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14750202000141144, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14299136400222778, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.046938419342041016, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.10076171159744263, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 3}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.15044182538986206, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13955605030059814, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04763472080230713, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08134669065475464, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 2}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10283836722373962, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14175891876220703, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.03761237859725952, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0873551145195961, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 0, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "forward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.10033702850341797, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13859432935714722, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04083967208862305, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08522343635559082, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 3, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "backward", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.13321459293365479, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14819695055484772, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.032560788094997406, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08952468633651733, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 5, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "lateral_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1238945871591568, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.13922205567359924, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04024741053581238, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09362535923719406, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "forward_yaw_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.12019878625869751, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14156943559646606, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.039669424295425415, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09813368320465088, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 2, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "lateral_right", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.1471860259771347, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14140979945659637, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04678158462047577, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.08590319007635117, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "yaw_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.14904779195785522, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14286905527114868, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.04924309253692627, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.0815935730934143, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 0}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "command": "diagonal_forward_left", "contact_threshold": 0.4, "joint_finite": 1.0, "kind": "sample", "knee_collision_ratio": 0.0, "knee_min_clearance": 0.09292656183242798, "min_clearance": 0.12, "root_bottom_collision_ratio": 0.0, "root_bottom_min_clearance": 0.14241433143615723, "shank_collision_ratio": 0.0, "shank_min_clearance": 0.038591742515563965, "swing_foot_collision_ratio": 0.0, "swing_foot_min_clearance": 0.09591814875602722, "swing_weight": 12.0, "swing_worst": 12.0, "terrain_col": 6, "terrain_row": 1}
+{"boundary_min_swing_prob": 0.4, "boundary_weight": 1.0, "candidate": "halo040_w100", "kind": "summary", "max_knee_collision_ratio": 0.0, "max_root_bottom_collision_ratio": 0.0, "max_shank_collision_ratio": 0.0, "max_swing_foot_collision_ratio": 0.0, "min_swing_foot_clearance": 0.0726834386587143, "near_swing_samples": 0, "negative_swing_samples": 0, "sample_count": 14}

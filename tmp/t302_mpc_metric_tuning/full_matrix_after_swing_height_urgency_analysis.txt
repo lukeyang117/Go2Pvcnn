@@ -1,0 +1,56 @@
+{
+  "contact_threshold": 0.4,
+  "count": 280,
+  "kind": "summary",
+  "leg_worst": 8.0,
+  "max_any_collision_ratio": 0.010101010101010102,
+  "max_knee_collision_ratio": 0.0,
+  "max_root_bottom_collision_ratio": 0.0,
+  "max_shank_collision_ratio": 0.0,
+  "max_swing_foot_collision_ratio": 0.010101010101010102,
+  "min_clearance": 0.12,
+  "min_knee_clearance": 0.07710011303424835,
+  "min_root_bottom_clearance": 0.09918606281280518,
+  "min_shank_clearance": 0.0230557918548584,
+  "min_swing_foot_clearance": -0.015717506408691406,
+  "negative_knee_samples": 0,
+  "negative_root_samples": 0,
+  "negative_shank_samples": 0,
+  "negative_swing_samples": 12,
+  "nominal_swing_height": 0.12,
+  "optimize_steps": 24,
+  "path": "/mnt/mydisk/lhy/testPvcnnWithIsaacsim/tmp/t302_mpc_metric_tuning/full_matrix_after_swing_height_urgency.jsonl",
+  "swing_center_urgency": 1.5,
+  "swing_weight": 12.0,
+  "swing_worst": 12.0
+}
+negative_count 12
+NEG 0 5 diagonal_forward_right -0.015717506408691406 0.01
+NEG 1 3 forward_yaw_left -0.011278510093688965 0.010101010101010102
+NEG 0 5 lateral_left -0.010437950491905212 0.01
+NEG 1 5 yaw_left -0.009579401463270187 0.010101010101010102
+NEG 3 5 yaw_left -0.009579401463270187 0.010101010101010102
+NEG 2 5 lateral_left -0.0075356364250183105 0.01
+NEG 1 0 forward -0.0059686750173568726 0.01
+NEG 1 3 forward -0.005922079086303711 0.01
+NEG 1 5 backward -0.0027532316744327545 0.010101010101010102
+NEG 2 2 lateral_left -0.0008394643664360046 0.01
+NEG 3 2 lateral_left -0.0008394643664360046 0.01
+NEG 1 6 lateral_right -0.0005541378632187843 0.01
+near_count 16
+NEAR 0 6 yaw_left 7.644295692443848e-05
+NEAR 2 2 backward 0.0019408166408538818
+NEAR 3 5 forward_yaw_left 0.0020835399627685547
+NEAR 2 6 diagonal_forward_right 0.0021860748529434204
+NEAR 1 4 yaw_left 0.0022858120501041412
+NEAR 3 4 yaw_left 0.0022858120501041412
+NEAR 3 5 lateral_left 0.0024274103343486786
+NEAR 1 6 diagonal_forward_left 0.00245001632720232
+NEAR 0 4 forward 0.002712249755859375
+NEAR 3 0 diagonal_forward_right 0.002750895917415619
+NEAR 1 6 forward 0.002936871722340584
+NEAR 1 4 diagonal_forward_right 0.0030777640640735626
+NEAR 2 2 diagonal_forward_left 0.0038470029830932617
+NEAR 2 1 diagonal_forward_left 0.0038956552743911743
+NEAR 2 1 forward 0.00480419397354126
+NEAR 2 6 forward_yaw_right 0.004930146038532257

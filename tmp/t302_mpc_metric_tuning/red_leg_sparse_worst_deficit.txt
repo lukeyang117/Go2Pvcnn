@@ -1,0 +1,31 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_mpc_leg_collision_loss_amplifies_sparse_shank_collisions _________
+
+    def test_mpc_leg_collision_loss_amplifies_sparse_shank_collisions() -> None:
+        terrain = MpcPlannerTerrain(
+            height_map=torch.zeros((1, 3, 3), dtype=torch.float32),
+            semantic_map=torch.zeros((1, 3, 3), dtype=torch.long),
+            world_x_range=(-1.0, 1.0),
+            world_y_range=(-1.0, 1.0),
+        )
+        knee = torch.zeros((1, 6, 4, 3), dtype=torch.float32)
+        knee[..., 2] = 0.10
+        shank = torch.zeros((1, 6, 4, 2, 3), dtype=torch.float32)
+        shank[..., 2] = 0.10
+        shank[:, 4, 1, 0, 2] = -0.01
+    
+>       loss = knee_shank_heightfield_collision_loss(
+            terrain,
+            knee,
+            shank,
+            knee_margin_m=0.0,
+            shank_margin_m=0.0,
+            worst_deficit_weight=8.0,
+        )
+E       TypeError: knee_shank_heightfield_collision_loss() got an unexpected keyword argument 'worst_deficit_weight'
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:678: TypeError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_leg_collision_loss_amplifies_sparse_shank_collisions
+1 failed in 1.96s

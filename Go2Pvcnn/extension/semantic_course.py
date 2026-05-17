@@ -164,7 +164,14 @@ def course_anchor_counts(stage: SemanticCourseStage) -> dict[str, int]:
     return {semantic_class: int(layout[semantic_class]) for semantic_class in ("small", "large")}
 
 
-def semantic_scale_profile(semantic_class: str) -> tuple[float, float]:
+def semantic_scale_profile(
+    semantic_class: str,
+    *,
+    scale_profile_overrides: dict[str, tuple[float, float]] | None = None,
+) -> tuple[float, float]:
+    if scale_profile_overrides is not None and semantic_class in scale_profile_overrides:
+        diameter, height = scale_profile_overrides[semantic_class]
+        return float(diameter), float(height)
     if semantic_class == "small":
         return SMALL_OBSTACLE_DIAMETER, SMALL_OBSTACLE_HEIGHT
     if semantic_class == "large":
@@ -440,13 +447,17 @@ def _stage_slots(
     tile_size: tuple[float, float],
     semantic_course_seed: int,
     layout_cfg: SemanticCourseLayoutCfg,
+    scale_profile_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> list[_LayoutSlot]:
     stage_counts = stage_layout(stage)
     ordered_classes = ("large", "small")
     placed: list[tuple[tuple[float, float], float]] = []
     slots: list[_LayoutSlot] = []
     for semantic_class in ordered_classes:
-        target_diameter, _target_height = semantic_scale_profile(semantic_class)
+        target_diameter, _target_height = semantic_scale_profile(
+            semantic_class,
+            scale_profile_overrides=scale_profile_overrides,
+        )
         radius = target_diameter / 2.0
         for slot_index in range(stage_counts[semantic_class]):
             selected_xy: tuple[float, float] | None = None
@@ -487,6 +498,7 @@ def build_course_anchors(
     tile_size: tuple[float, float] | None = None,
     semantic_course_seed: int = DEFAULT_SEMANTIC_COURSE_SEED,
     layout_cfg: SemanticCourseLayoutCfg = DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG,
+    scale_profile_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> list[CourseAnchor]:
     """Build deterministic per-tile obstacle anchors before terrain grounding."""
     num_rows = len(terrain_origins)
@@ -509,9 +521,13 @@ def build_course_anchors(
                 tile_size=resolved_tile_size,
                 semantic_course_seed=semantic_course_seed,
                 layout_cfg=layout_cfg,
+                scale_profile_overrides=scale_profile_overrides,
             ):
                 semantic_class = slot.semantic_class
-                target_diameter, target_height = semantic_scale_profile(semantic_class)
+                target_diameter, target_height = semantic_scale_profile(
+                    semantic_class,
+                    scale_profile_overrides=scale_profile_overrides,
+                )
                 root = SEMANTIC_COURSE_SMALL_ROOT if semantic_class == "small" else SEMANTIC_COURSE_LARGE_ROOT
                 local_x, local_y = slot.local_xy
                 shape_kind = select_shape_kind(
@@ -612,6 +628,7 @@ def spawn_semantic_course_prestartup(
     tile_size: tuple[float, float] | None = None,
     layout_cfg: SemanticCourseLayoutCfg = DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG,
     grounding_cfg: SemanticCourseGroundingCfg = DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG,
+    scale_profile_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> None:
     """Prestartup event: create semantic-course geometry before sensor initialization."""
     scene = env.scene
@@ -630,6 +647,7 @@ def spawn_semantic_course_prestartup(
         tile_size=tile_size,
         semantic_course_seed=semantic_course_seed,
         layout_cfg=layout_cfg,
+        scale_profile_overrides=scale_profile_overrides,
     )
     obstacles = _ground_with_runtime_terrain_sampler(
         anchors,

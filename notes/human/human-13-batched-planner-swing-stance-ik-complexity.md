@@ -219,6 +219,20 @@ def _solve_leg_ik_batch(
 
 ### 3.3 时间复杂度
 
+## 8. T302 MPC 碰撞与语义安全增量
+
+T302 只改 active `extension/batch_mpc_planner` MPC 后端，不回退到旧 raw/legacy planner。
+
+新增行为：
+
+- `kinematics.py` 的 MPC FK 现在可返回足端、knee world、shank 采样点 world，用于 loss 侧碰撞检测。
+- `terrain_clearance.py` 新增 root/body bottom、knee、shank 和 swing foot 的 height-field clearance 约束。
+- stance/touchdown 的障碍禁止逻辑使用 semantic id：`0` 为地面，`1/2` 为障碍，stance 不再靠高度差判断是否允许踩。
+- high-small / large 障碍会通过全 scanner cell 的风险检测降低 linear/yaw tracking pressure；yaw-only 原地转向使用 yaw swept radius。
+- `planner.py` 的 `cost_breakdown` 与诊断 `loss_breakdown` 都暴露 T302 collision/risk 项，便于 viewer/headless 接受测试读取。
+
+验证入口见 [../log/2026-05-16-2309-t302-mpc-body-leg-collision-implementation.md](../log/2026-05-16-2309-t302-mpc-body-leg-collision-implementation.md)。
+
 `batch_inverse_kinematics` / `batch_forward_kinematics`（`ik.py:166` 起）在 IK 主路径上 **无** 对 `batch_size` 或 `n_frames` 的 Python `for`（仅常数级设备检查）。
 
 按 §约定符号：**不在阶中写 N**；相对一次规划 horizon，记为 **O(T)**（一次 replan 内与轨迹长度相关；**N** 不进入渐近式）。

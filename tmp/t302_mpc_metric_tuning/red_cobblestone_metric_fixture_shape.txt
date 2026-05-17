@@ -1,0 +1,50 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape ____
+
+    def test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape():
+        class FakeTerrainGen:
+            num_rows = 10
+            num_cols = 20
+            curriculum = True
+    
+        class FakeTerrainCfg:
+            terrain_generator = FakeTerrainGen()
+            max_init_terrain_level = 9
+    
+        class FakeScene:
+            terrain = FakeTerrainCfg()
+    
+        class FakeEnvCfg:
+            scene = FakeScene()
+    
+        compact = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+        compact.terrain = "cobblestone"
+        compact.env_cfg = FakeEnvCfg()
+        compact._cobblestone_num_rows = None
+        compact._cobblestone_num_cols = None
+        compact._configure_compact_cobblestone_runtime_grid()
+    
+        assert compact.env_cfg.scene.terrain.terrain_generator.num_rows == 2
+        assert compact.env_cfg.scene.terrain.terrain_generator.num_cols == 1
+        assert compact.env_cfg.scene.terrain.max_init_terrain_level == 1
+    
+        metric = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+        metric.terrain = "cobblestone"
+        metric.env_cfg = FakeEnvCfg()
+        metric._cobblestone_num_rows = 4
+        metric._cobblestone_num_cols = 7
+        metric._configure_compact_cobblestone_runtime_grid()
+    
+>       assert metric.env_cfg.scene.terrain.terrain_generator.num_rows == 4
+E       assert 2 == 4
+E        +  where 2 = <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeTerrainGen object at 0x7da61a17ddb0>.num_rows
+E        +    where <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeTerrainGen object at 0x7da61a17ddb0> = <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeTerrainCfg object at 0x7da61a17d510>.terrain_generator
+E        +      where <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeTerrainCfg object at 0x7da61a17d510> = <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeScene object at 0x7da61a17c640>.terrain
+E        +        where <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeScene object at 0x7da61a17c640> = <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeEnvCfg object at 0x7da61a17fe50>.scene
+E        +          where <test_viewer_runtime_diagnostics.test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape.<locals>.FakeEnvCfg object at 0x7da61a17fe50> = <tests.fixtures.viewer_runtime_diagnostics.RealViewerRuntimeFixture object at 0x7da61a17d750>.env_cfg
+
+Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py:380: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py::test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape
+1 failed in 1.85s

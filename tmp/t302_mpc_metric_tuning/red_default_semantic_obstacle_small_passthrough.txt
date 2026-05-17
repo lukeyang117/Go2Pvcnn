@@ -1,0 +1,81 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_mpc_default_semantic_obstacle_loss_ignores_crossable_small_but_keeps_large _
+
+    def test_mpc_default_semantic_obstacle_loss_ignores_crossable_small_but_keeps_large() -> None:
+        cfg = MpcPlannerCfg()
+        height = torch.zeros((1, 9, 9), dtype=torch.float32)
+        root = torch.zeros((1, 2, 3), dtype=torch.float32)
+        root[..., 2] = 0.30
+        rpy = torch.zeros_like(root)
+        foot = torch.zeros((1, 2, 4, 3), dtype=torch.float32)
+        foot[..., 0] = 0.35
+        foot[..., 2] = 0.20
+        contact = torch.zeros((1, 2, 4), dtype=torch.float32)
+        swing = torch.ones_like(contact)
+    
+        small_semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+        small_semantic[:, 4, 4] = 1
+        small_terrain = MpcPlannerTerrain(
+            height_map=height.clone(),
+            semantic_map=small_semantic,
+            world_x_range=(-0.4, 0.4),
+            world_y_range=(-0.4, 0.4),
+        )
+        large_semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+        large_semantic[:, 4, 4] = 2
+        large_terrain = MpcPlannerTerrain(
+            height_map=height.clone(),
+            semantic_map=large_semantic,
+            world_x_range=(-0.4, 0.4),
+            world_y_range=(-0.4, 0.4),
+        )
+    
+        small_loss = semantic_obstacle_loss(
+            small_terrain,
+            root,
+            rpy,
+            foot,
+            contact,
+            swing,
+            small_weight=cfg.losses.semantic_obstacle.small_weight,
+            large_weight=cfg.losses.semantic_obstacle.large_weight,
+            body_weight=cfg.losses.semantic_obstacle.body_weight,
+            foot_weight=cfg.losses.semantic_obstacle.foot_weight,
+            body_stencil_radius_m=0.0,
+            soft_margin_m=cfg.losses.semantic_obstacle.soft_margin_m,
+            body_soft_field_weight=cfg.losses.semantic_obstacle.body_soft_field_weight,
+            body_soft_worst_field_weight=cfg.losses.semantic_obstacle.body_soft_worst_field_weight,
+            foot_soft_field_weight=cfg.losses.semantic_obstacle.foot_soft_field_weight,
+            foot_soft_worst_field_weight=cfg.losses.semantic_obstacle.foot_soft_worst_field_weight,
+        )
+        large_loss = semantic_obstacle_loss(
+            large_terrain,
+            root,
+            rpy,
+            foot,
+            contact,
+            swing,
+            small_weight=cfg.losses.semantic_obstacle.small_weight,
+            large_weight=cfg.losses.semantic_obstacle.large_weight,
+            body_weight=cfg.losses.semantic_obstacle.body_weight,
+            foot_weight=cfg.losses.semantic_obstacle.foot_weight,
+            body_stencil_radius_m=0.0,
+            soft_margin_m=cfg.losses.semantic_obstacle.soft_margin_m,
+            body_soft_field_weight=cfg.losses.semantic_obstacle.body_soft_field_weight,
+            body_soft_worst_field_weight=cfg.losses.semantic_obstacle.body_soft_worst_field_weight,
+            foot_soft_field_weight=cfg.losses.semantic_obstacle.foot_soft_field_weight,
+            foot_soft_worst_field_weight=cfg.losses.semantic_obstacle.foot_soft_worst_field_weight,
+        )
+    
+>       assert float(small_loss[0]) == pytest.approx(0.0, abs=1.0e-7)
+E       assert 14.999935150146484 == 0.0 ± 1.0e-07
+E         
+E         comparison failed
+E         Obtained: 14.999935150146484
+E         Expected: 0.0 ± 1.0e-07
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:1790: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_default_semantic_obstacle_loss_ignores_crossable_small_but_keeps_large
+1 failed in 2.34s

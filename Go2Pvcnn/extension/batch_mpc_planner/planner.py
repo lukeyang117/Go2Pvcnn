@@ -90,6 +90,7 @@ def plan_segment(
     touchdown_state = state_touchdown.unsqueeze(2).expand(batch, 4, int(cfg.runtime.touchdown_event_cap), 3)
     touchdown_seq = torch.where(row_4, touchdown_state, touchdown_seq)
     cost_breakdown = {"cost_total": cost_total}
+    cost_breakdown.update({str(name): value.detach() for name, value in loss_breakdown.items()})
     status = torch.full(
         (decoded.root_pos.shape[0],),
         int(MpcPlannerStatus.OK),

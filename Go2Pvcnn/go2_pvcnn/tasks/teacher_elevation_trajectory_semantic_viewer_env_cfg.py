@@ -115,7 +115,10 @@ class TeacherElevationTrajectorySemanticViewerEventCfg(BaseEventCfg):
     generate_semantic_course = EventTerm(
         func=spawn_semantic_course_prestartup,
         mode="prestartup",
-        params={"default_stage": DEFAULT_VIEWER_REPRESENTATIVE_STAGE.value},
+        params={
+            "default_stage": DEFAULT_VIEWER_REPRESENTATIVE_STAGE.value,
+            "scale_profile_overrides": None,
+        },
     )
 
 

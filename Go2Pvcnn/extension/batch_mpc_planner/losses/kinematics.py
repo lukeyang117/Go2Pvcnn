@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import Tensor
 
-from ..kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_trajectory
+from ..kinematics import MpcLegPoints, fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory
 
 _JOINT_LIMITS = torch.tensor(
     (
@@ -26,8 +28,37 @@ _JOINT_LIMITS = torch.tensor(
 )
 
 
+@dataclass(frozen=True)
+class MpcKinematicsForLoss:
+    joint_angles: Tensor
+    leg_points: MpcLegPoints
+
+
 def solve_ik_for_loss(root_pos: Tensor, root_rpy: Tensor, foot_pos: Tensor) -> Tensor:
     return solve_joint_angles_from_trajectory(root_pos, root_rpy, foot_pos, clamp_to_limits=False)
+
+
+def evaluate_kinematics_for_loss(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    foot_pos: Tensor,
+    *,
+    clamp_to_limits: bool,
+    shank_sample_count: int,
+) -> MpcKinematicsForLoss:
+    joint_angles = solve_joint_angles_from_trajectory(
+        root_pos,
+        root_rpy,
+        foot_pos,
+        clamp_to_limits=bool(clamp_to_limits),
+    )
+    leg_points = fk_leg_points_from_joint_angles(
+        root_pos,
+        root_rpy,
+        joint_angles,
+        shank_sample_count=int(shank_sample_count),
+    )
+    return MpcKinematicsForLoss(joint_angles=joint_angles, leg_points=leg_points)
 
 
 def joint_limit_loss_from_root_foot(
@@ -65,4 +96,10 @@ def ik_fk_residual_loss(
     return base + float(contact_weight) * contact
 
 
-__all__ = ["ik_fk_residual_loss", "joint_limit_loss_from_root_foot", "solve_ik_for_loss"]
+__all__ = [
+    "MpcKinematicsForLoss",
+    "evaluate_kinematics_for_loss",
+    "ik_fk_residual_loss",
+    "joint_limit_loss_from_root_foot",
+    "solve_ik_for_loss",
+]

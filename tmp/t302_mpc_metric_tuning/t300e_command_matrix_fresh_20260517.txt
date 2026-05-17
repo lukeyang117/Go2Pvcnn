@@ -1,0 +1,26 @@
+.                                                                        [100%]
+1 passed in 142.85s (0:02:22)
+0 [6,258ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-17 00:01:30 [6,258ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0      1      2      3 
+     0 933.39  21.95   6.40  20.61 
+     1  21.75 946.25   6.40  21.63 
+     2   6.51   6.27 945.25   5.54 
+     3  21.65  21.81   6.27 942.40 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0      1      2      3 
+     0   1.40  12.55  13.12  11.46 
+     1  12.79   1.39  11.14  19.35 
+     2  14.38  11.97   1.36  11.41 
+     3  11.09  11.99  12.08   1.30 
+
+   CPU     0      1      2      3 
+     0   3.38  10.80  12.25  14.17 
+     1  10.68   4.07  18.67  16.79 
+     2  12.38  11.97   4.28  13.19 
+     3  11.85  11.65  13.34   3.52 
+2026-05-17 00:01:31 [7,361ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed bandwidth: 5.5 GB/s.
+2026-05-17 00:01:31 [7,362ms] [Warning] [gpu.foundation.plugin] CUDA peer-to-peer observed latency: 19.4 us.
+2026-05-17 00:01:31 [7,362ms] [Warning] [gpu.foundation.plugin] Please verify if observed bandwidth and latency are expected.
+2026-05-17 00:01:32 [8,155ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.

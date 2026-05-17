@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import Tensor
 
@@ -25,6 +27,13 @@ _JOINT_LIMITS = torch.tensor(
     dtype=torch.float32,
 )
 _LEG_SIDE_SIGNS = torch.tensor((1.0, -1.0, 1.0, -1.0), dtype=torch.float32)
+
+
+@dataclass(frozen=True)
+class MpcLegPoints:
+    foot_pos_world: Tensor
+    knee_pos_world: Tensor
+    shank_sample_world: Tensor
 
 
 def _rpy_to_rot_matrix(root_rpy: Tensor) -> Tensor:
@@ -109,8 +118,16 @@ def solve_joint_angles_from_trajectory(
     return joint_raw.clamp(min=lower, max=upper)
 
 
-def fk_feet_from_joint_angles(root_pos: Tensor, root_rpy: Tensor, joint_angles: Tensor) -> Tensor:
-    """Forward-kinematics foot positions from world root pose and planner-order joints."""
+def fk_leg_points_from_joint_angles(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    joint_angles: Tensor,
+    *,
+    shank_sample_count: int = 2,
+) -> MpcLegPoints:
+    """Forward-kinematics foot, knee, and shank samples from planner-order joints."""
+    if int(shank_sample_count) < 0:
+        raise ValueError("shank_sample_count must be non-negative")
     leg_angles = joint_angles.reshape(root_pos.shape[0], root_pos.shape[1], 4, 3)
     h = leg_angles[..., 0]
     theta_t = leg_angles[..., 1]
@@ -128,6 +145,14 @@ def fk_feet_from_joint_angles(root_pos: Tensor, root_rpy: Tensor, joint_angles: 
     cos_h = torch.cos(h)
     sin_h = torch.sin(h)
     hip_offsets = HIP_OFFSETS_ARRAY.to(device=root_pos.device, dtype=root_pos.dtype).view(1, 1, 4, 3)
+    knee_body = torch.stack(
+        (
+            hip_offsets[..., 0] + knee_x,
+            hip_offsets[..., 1] + cos_h * d - sin_h * knee_z,
+            hip_offsets[..., 2] + sin_h * d + cos_h * knee_z,
+        ),
+        dim=-1,
+    )
     foot_body = torch.stack(
         (
             hip_offsets[..., 0] + foot_x,
@@ -136,8 +161,31 @@ def fk_feet_from_joint_angles(root_pos: Tensor, root_rpy: Tensor, joint_angles: 
         ),
         dim=-1,
     )
+    alpha = torch.linspace(
+        0.0,
+        1.0,
+        steps=int(shank_sample_count) + 2,
+        dtype=root_pos.dtype,
+        device=root_pos.device,
+    )[1:-1]
+    shank_body = (
+        knee_body.unsqueeze(-2) * (1.0 - alpha.view(1, 1, 1, -1, 1))
+        + foot_body.unsqueeze(-2) * alpha.view(1, 1, 1, -1, 1)
+    )
     rot_body_to_world = _rpy_to_rot_matrix(root_rpy)
-    return torch.einsum("btij,btkj->btki", rot_body_to_world, foot_body) + root_pos.unsqueeze(2)
+    knee_world = torch.einsum("btij,btkj->btki", rot_body_to_world, knee_body) + root_pos.unsqueeze(2)
+    foot_world = torch.einsum("btij,btkj->btki", rot_body_to_world, foot_body) + root_pos.unsqueeze(2)
+    shank_world = torch.einsum("btij,btkqj->btkqi", rot_body_to_world, shank_body) + root_pos.unsqueeze(2).unsqueeze(-2)
+    return MpcLegPoints(
+        foot_pos_world=foot_world,
+        knee_pos_world=knee_world,
+        shank_sample_world=shank_world,
+    )
 
 
-__all__ = ["fk_feet_from_joint_angles", "solve_joint_angles_from_trajectory"]
+def fk_feet_from_joint_angles(root_pos: Tensor, root_rpy: Tensor, joint_angles: Tensor) -> Tensor:
+    """Forward-kinematics foot positions from world root pose and planner-order joints."""
+    return fk_leg_points_from_joint_angles(root_pos, root_rpy, joint_angles, shank_sample_count=0).foot_pos_world
+
+
+__all__ = ["MpcLegPoints", "fk_feet_from_joint_angles", "fk_leg_points_from_joint_angles", "solve_joint_angles_from_trajectory"]

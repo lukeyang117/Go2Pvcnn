@@ -1,0 +1,45 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.2, pluggy-1.6.0 -- /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn
+plugins: mock-3.15.1, hydra-core-1.3.2, anyio-4.12.0, flaky-3.8.1
+collecting ... collected 53 items
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_fk_leg_points_exposes_knee_and_shank_samples PASSED [  1%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_build_mpc_terrain_accepts_flattened_ray_hits_and_subset_batch_dimension PASSED [  3%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_terrain_height_semantic_slope_and_support_queries PASSED [  5%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_touchdown_surface_loss_has_finite_flat_ground_gradients PASSED [  7%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_terrain_queries_use_per_env_scanner_pose_for_world_points PASSED [  9%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_manager_terrain_from_env_carries_scanner_pose PASSED [ 11%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_factory_recognizes_mpc_backend[mpc] PASSED [ 13%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_factory_recognizes_mpc_backend[MPC] PASSED [ 15%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_factory_rejects_unknown_backend_with_valid_backend_hint PASSED [ 16%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_shapes PASSED [ 18%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_manager_supports_flattened_scanner_ray_hits_shape PASSED [ 20%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_result_and_package_do_not_depend_on_old_mode_fields PASSED [ 22%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_decode_uses_continuous_swing_window_variables PASSED [ 24%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_nominal_integrates_body_frame_command_with_yaw PASSED [ 26%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_nominal_touchdown_target_uses_swing_time_root_frame PASSED [ 28%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_nominal_first_frame_keeps_current_feet_and_diagonal_prior PASSED [ 30%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_nominal_holds_touchdown_target_after_swing PASSED [ 32%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_wraparound_touchdown_samples_horizon_end_target PASSED [ 33%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_touchdown_semantic_loss_penalizes_small_and_large_obstacles PASSED [ 35%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_heightfield_collision_losses_penalize_body_knee_and_shank PASSED [ 37%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_stance_semantic_loss_penalizes_obstacle_contact_frames PASSED [ 39%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_stance_and_swing_terrain_losses_use_height_map PASSED [ 41%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions PASSED [ 43%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_swing_clearance_loss_amplifies_sparse_heightfield_collisions PASSED [ 45%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_stance_ground_loss_is_not_diluted_by_non_contact_frames PASSED [ 47%]
+Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_support_stability_uses_contact_threshold_per_leg FAILED [ 49%]
+
+=================================== FAILURES ===================================
+__________ test_mpc_support_stability_uses_contact_threshold_per_leg ___________
+Go2Pvcnn/tests/test_batch_mpc_backend.py:792: in test_mpc_support_stability_uses_contact_threshold_per_leg
+    assert float(diffuse_loss[0]) > 0.4
+E   assert 0.2999999523162842 > 0.4
+E    +  where 0.2999999523162842 = float(tensor(0.3000))
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_support_stability_uses_contact_threshold_per_leg - assert 0.2999999523162842 > 0.4
+ +  where 0.2999999523162842 = float(tensor(0.3000))
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+========================= 1 failed, 25 passed in 3.05s =========================

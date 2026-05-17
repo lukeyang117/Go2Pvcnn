@@ -1,0 +1,20 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions ___
+
+    def test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions() -> None:
+        cfg = MpcPlannerCfg()
+    
+        assert cfg.runtime.optimize_steps == 24
+        assert cfg.runtime.contact_threshold == pytest.approx(0.40)
+>       assert cfg.runtime.nominal_swing_height_m == pytest.approx(0.12)
+E       assert 0.1 == 0.12 ± 1.2e-07
+E         
+E         comparison failed
+E         Obtained: 0.1
+E         Expected: 0.12 ± 1.2e-07
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:748: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions
+1 failed in 1.84s

@@ -81,6 +81,7 @@ class ViewerTrajectoryResult:
     hard_reason_mask: torch.Tensor | None = None
     hard_reason_names: tuple[str, ...] | None = None
     status_names: tuple[str, ...] | None = None
+    loss_breakdown: dict[str, torch.Tensor] | None = None
 
 
 @dataclass(frozen=True)
@@ -98,8 +99,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--terrain",
         type=str,
         default="task",
-        choices=["task"],
-        help="Use the terrain generator exactly as defined by teacher_elevation_trajectory env config.",
+        choices=["task", "cobblestone"],
+        help="Use the semantic task terrain or the teacher_without_semantic COBBLESTONE_ROAD_CFG terrain.",
     )
     parser.add_argument("--n-frames", type=int, default=50, help="Planner horizon in frames.")
     parser.add_argument("--plan-dt", type=float, default=0.02, help="Planner integration step.")
@@ -1036,11 +1037,18 @@ class PlannerVisualizer:
 
 
 def _build_env_cfg(args_cli: argparse.Namespace):
-    from go2_pvcnn.tasks.teacher_elevation_trajectory_semantic_viewer_env_cfg import (
-        TeacherElevationTrajectorySemanticViewerEnvCfg_PLAY,
-    )
+    if str(getattr(args_cli, "terrain", "task")) == "cobblestone":
+        from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg_PLAY
+        from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import COBBLESTONE_ROAD_CFG
 
-    env_cfg = TeacherElevationTrajectorySemanticViewerEnvCfg_PLAY()
+        env_cfg = TeacherElevationTrajectoryEnvCfg_PLAY()
+        env_cfg.scene.terrain.terrain_generator = copy.deepcopy(COBBLESTONE_ROAD_CFG)
+    else:
+        from go2_pvcnn.tasks.teacher_elevation_trajectory_semantic_viewer_env_cfg import (
+            TeacherElevationTrajectorySemanticViewerEnvCfg_PLAY,
+        )
+
+        env_cfg = TeacherElevationTrajectorySemanticViewerEnvCfg_PLAY()
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.scene.env_spacing = 6.0
     env_cfg.sim.device = args_cli.device
@@ -1798,6 +1806,14 @@ def _adapt_mpc_result_for_viewer(result) -> ViewerTrajectoryResult:
         touchdown_w = torch.as_tensor(result.touchdown_seq[:, :, 0, :], device=root_pos_w.device, dtype=root_pos_w.dtype).detach()
     hard_mask = getattr(result, "hard_reason_mask", None)
     hard_reason_mask = None if hard_mask is None else torch.as_tensor(hard_mask, device=root_pos_w.device, dtype=torch.bool).detach()
+    loss_breakdown = getattr(result, "loss_breakdown", None)
+    if loss_breakdown is None:
+        loss_breakdown = getattr(result, "cost_breakdown", None)
+    if loss_breakdown is not None:
+        loss_breakdown = {
+            str(name): torch.as_tensor(value, device=root_pos_w.device).detach().contiguous()
+            for name, value in loss_breakdown.items()
+        }
     zeros_vel = torch.zeros_like(root_pos_w)
     return ViewerTrajectoryResult(
         num_frames=int(root_pos_w.shape[1]),
@@ -1821,6 +1837,7 @@ def _adapt_mpc_result_for_viewer(result) -> ViewerTrajectoryResult:
         hard_reason_mask=hard_reason_mask,
         hard_reason_names=tuple(MPC_HARD_REASON_NAMES),
         status_names=tuple(status.name for status in MpcPlannerStatus),
+        loss_breakdown=loss_breakdown,
     )
 
 

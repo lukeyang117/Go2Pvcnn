@@ -1,0 +1,39 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_mpc_swing_clearance_loss_penalizes_boundary_swing_halo __________
+
+    def test_mpc_swing_clearance_loss_penalizes_boundary_swing_halo() -> None:
+        terrain = MpcPlannerTerrain(
+            height_map=torch.zeros((1, 3, 3), dtype=torch.float32),
+            semantic_map=torch.zeros((1, 3, 3), dtype=torch.long),
+            world_x_range=(-1.0, 1.0),
+            world_y_range=(-1.0, 1.0),
+        )
+        foot = torch.zeros((1, 3, 1, 3), dtype=torch.float32)
+        foot[:, :, :, 2] = -0.02
+        swing = torch.tensor([[[0.44], [0.50], [0.61]]], dtype=torch.float32)
+    
+        active_only = swing_clearance_terrain_loss(
+            terrain,
+            foot,
+            swing,
+            min_clearance_m=0.0,
+            min_swing_prob=0.60,
+            hard_active_weight=True,
+        )
+>       loss = swing_clearance_terrain_loss(
+            terrain,
+            foot,
+            swing,
+            min_clearance_m=0.0,
+            min_swing_prob=0.60,
+            hard_active_weight=True,
+            boundary_min_swing_prob=0.45,
+            boundary_weight=0.25,
+        )
+E       TypeError: swing_clearance_terrain_loss() got an unexpected keyword argument 'boundary_min_swing_prob'
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:824: TypeError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_swing_clearance_loss_penalizes_boundary_swing_halo
+1 failed in 1.85s

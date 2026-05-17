@@ -11,10 +11,10 @@ class MpcRuntimeCfg:
     horizon_steps: int = 25
     dt: float = 0.02
     optimize_steps: int = 24
-    lr: float = 1e-2
+    lr: float = 2e-2
     optimizer: str = "adam"
     grad_clip_norm: float = 10.0
-    contact_threshold: float = 0.55
+    contact_threshold: float = 0.40
     replan_interval_steps: int = 50
     max_stale_steps: int = 100
     warm_start_from_previous_plan: bool = True
@@ -43,7 +43,7 @@ class MpcRuntimeCfg:
     leg_phase_offsets: tuple[float, float, float, float] = (0.0, 0.5, 0.5, 0.0)
     touchdown_event_cap: int = 2
     nominal_stride_scale: float = 0.5
-    nominal_swing_height_m: float = 0.10
+    nominal_swing_height_m: float = 0.12
     nominal_yaw_stride_scale: float = 0.5
     swing_window_min_width: float = 0.30
     swing_window_max_width: float = 0.70
@@ -108,7 +108,10 @@ class MpcSwingCenterUrgencyLossCfg(MpcLossTermCfg):
 
 @dataclass
 class MpcClearanceLossCfg(MpcLossTermCfg):
-    min_clearance_m: float = 0.05
+    min_clearance_m: float = 0.12
+    worst_deficit_weight: float = 12.0
+    boundary_min_swing_prob: float = 0.40
+    boundary_weight: float = 0.50
 
 
 @dataclass
@@ -131,6 +134,23 @@ class MpcTouchdownSurfaceLossCfg(MpcLossTermCfg):
 class MpcTouchdownSemanticLossCfg(MpcLossTermCfg):
     small_weight: float = 10.0
     large_weight: float = 50.0
+    ground_ids: tuple[int, ...] = (0,)
+    small_ids: tuple[int, ...] = (1,)
+    large_ids: tuple[int, ...] = (2,)
+
+
+@dataclass
+class MpcStanceSemanticLossCfg(MpcTouchdownSemanticLossCfg):
+    pass
+
+
+@dataclass
+class MpcSemanticContactAvoidLossCfg(MpcTouchdownSemanticLossCfg):
+    activation_margin: float = 0.05
+    worst_contact_weight: float = 8.0
+    soft_margin_m: float = 0.18
+    soft_field_weight: float = 2.0
+    soft_worst_field_weight: float = 8.0
 
 
 @dataclass
@@ -139,7 +159,66 @@ class MpcSemanticObstacleLossCfg(MpcLossTermCfg):
     large_weight: float = 5.0
     body_weight: float = 1.0
     foot_weight: float = 1.0
+    high_small_relative_height_m: float = 0.30
     body_stencil_radius_m: float = 0.16
+    soft_margin_m: float = 0.22
+    body_soft_field_weight: float = 4.0
+    body_soft_worst_field_weight: float = 10.0
+    foot_soft_field_weight: float = 2.0
+    foot_soft_worst_field_weight: float = 8.0
+
+
+@dataclass
+class MpcObstacleRiskCfg(MpcLossTermCfg):
+    high_small_relative_height_m: float = 0.30
+    linear_corridor_width_m: float = 0.40
+    linear_forward_distance_m: float = 1.0
+    yaw_swept_radius_m: float = 0.60
+    linear_scale_when_blocked: float = 0.5
+    yaw_scale_when_blocked: float = 0.5
+    linear_speed_eps: float = 1.0e-4
+    yaw_speed_eps: float = 1.0e-4
+
+
+@dataclass
+class MpcLowSmallCrossingLossCfg(MpcLossTermCfg):
+    high_small_relative_height_m: float = 0.30
+    corridor_width_m: float = 0.28
+    forward_distance_m: float = 1.0
+    pass_margin_m: float = 0.06
+    obstacle_depth_m: float = 0.24
+    linear_speed_eps: float = 1.0e-4
+
+
+@dataclass
+class MpcHighObstacleAvoidanceLossCfg(MpcLossTermCfg):
+    high_small_relative_height_m: float = 0.30
+    corridor_width_m: float = 0.40
+    forward_distance_m: float = 1.0
+    lateral_clearance_m: float = 0.45
+    longitudinal_influence_m: float = 0.55
+    linear_speed_eps: float = 1.0e-4
+
+
+@dataclass
+class MpcBodyCollisionLossCfg(MpcLossTermCfg):
+    bottom_offset_z_m: float = -0.18
+    margin_m: float = 0.04
+    stencil_xy_m: tuple[tuple[float, float], ...] = (
+        (0.0, 0.0),
+        (0.18, 0.0),
+        (-0.18, 0.0),
+        (0.0, 0.10),
+        (0.0, -0.10),
+    )
+
+
+@dataclass
+class MpcLegCollisionLossCfg(MpcLossTermCfg):
+    knee_margin_m: float = 0.06
+    shank_margin_m: float = 0.06
+    shank_sample_count: int = 2
+    worst_deficit_weight: float = 16.0
 
 
 @dataclass
@@ -184,12 +263,21 @@ class MpcLossesCfg:
     contact_regularization: MpcContactRegularizationLossCfg = field(default_factory=MpcContactRegularizationLossCfg)
     swing_window: MpcSwingWindowLossCfg = field(default_factory=lambda: MpcSwingWindowLossCfg(enabled=True, weight=0.8))
     diagonal_pair: MpcDiagonalPairLossCfg = field(default_factory=lambda: MpcDiagonalPairLossCfg(enabled=True, weight=1.0))
-    swing_center_urgency: MpcSwingCenterUrgencyLossCfg = field(default_factory=lambda: MpcSwingCenterUrgencyLossCfg(enabled=True, weight=1.0))
+    swing_center_urgency: MpcSwingCenterUrgencyLossCfg = field(default_factory=lambda: MpcSwingCenterUrgencyLossCfg(enabled=True, weight=1.5))
     stance_ground: MpcLossTermCfg = field(default_factory=lambda: MpcLossTermCfg(enabled=True, weight=3.0))
-    swing_clearance_terrain: MpcClearanceLossCfg = field(default_factory=lambda: MpcClearanceLossCfg(enabled=True, weight=2.0))
+    swing_clearance_terrain: MpcClearanceLossCfg = field(default_factory=lambda: MpcClearanceLossCfg(enabled=True, weight=12.0))
     touchdown_surface: MpcTouchdownSurfaceLossCfg = field(default_factory=lambda: MpcTouchdownSurfaceLossCfg(enabled=True, weight=2.0))
     touchdown_semantic: MpcTouchdownSemanticLossCfg = field(default_factory=lambda: MpcTouchdownSemanticLossCfg(enabled=True, weight=2.0))
+    stance_semantic: MpcStanceSemanticLossCfg = field(default_factory=lambda: MpcStanceSemanticLossCfg(enabled=True, weight=2.0))
+    semantic_contact_avoid: MpcSemanticContactAvoidLossCfg = field(default_factory=lambda: MpcSemanticContactAvoidLossCfg(enabled=True, weight=20.0))
     semantic_obstacle: MpcSemanticObstacleLossCfg = field(default_factory=lambda: MpcSemanticObstacleLossCfg(enabled=True, weight=1.0))
+    obstacle_risk: MpcObstacleRiskCfg = field(default_factory=lambda: MpcObstacleRiskCfg(enabled=True, weight=1.0))
+    low_small_crossing: MpcLowSmallCrossingLossCfg = field(default_factory=lambda: MpcLowSmallCrossingLossCfg(enabled=True, weight=8.0))
+    high_obstacle_avoidance: MpcHighObstacleAvoidanceLossCfg = field(
+        default_factory=lambda: MpcHighObstacleAvoidanceLossCfg(enabled=True, weight=250.0)
+    )
+    body_collision: MpcBodyCollisionLossCfg = field(default_factory=lambda: MpcBodyCollisionLossCfg(enabled=True, weight=2.0))
+    leg_collision: MpcLegCollisionLossCfg = field(default_factory=lambda: MpcLegCollisionLossCfg(enabled=True, weight=16.0))
     swing_direction: MpcSwingDirectionLossCfg = field(default_factory=lambda: MpcSwingDirectionLossCfg(enabled=True, weight=1.0))
     root_foot_center: MpcRootFootCenterLossCfg = field(default_factory=lambda: MpcRootFootCenterLossCfg(enabled=True, weight=1.0))
     root_height: MpcRootHeightLossCfg = field(default_factory=lambda: MpcRootHeightLossCfg(enabled=True, weight=3.0))
@@ -224,6 +312,12 @@ def _set_if_has(cfg, attr: str, cast, target, target_attr: str) -> None:
 def _override_loss_term(task_cfg, *, prefix: str, loss_term) -> None:
     _set_if_has(task_cfg, f"{prefix}_enabled", bool, loss_term, "enabled")
     _set_if_has(task_cfg, f"{prefix}_weight", float, loss_term, "weight")
+
+
+def _tuple_ints_if_has(cfg, attr: str, target, target_attr: str) -> None:
+    value = getattr(cfg, attr, None)
+    if value is not None:
+        setattr(target, target_attr, tuple(int(v) for v in value))
 
 
 def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
@@ -295,12 +389,161 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
         losses.swing_clearance_terrain,
         "min_clearance_m",
     )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_swing_clearance_terrain_worst_deficit_weight",
+        float,
+        losses.swing_clearance_terrain,
+        "worst_deficit_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_swing_clearance_terrain_boundary_min_swing_prob",
+        float,
+        losses.swing_clearance_terrain,
+        "boundary_min_swing_prob",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_swing_clearance_terrain_boundary_weight",
+        float,
+        losses.swing_clearance_terrain,
+        "boundary_weight",
+    )
     _override_loss_term(task_cfg, prefix="mpc_loss_touchdown_surface", loss_term=losses.touchdown_surface)
     _set_if_has(task_cfg, "mpc_loss_touchdown_surface_max_slope", float, losses.touchdown_surface, "max_slope")
     _override_loss_term(task_cfg, prefix="mpc_loss_touchdown_semantic", loss_term=losses.touchdown_semantic)
     _set_if_has(task_cfg, "mpc_loss_touchdown_semantic_small_weight", float, losses.touchdown_semantic, "small_weight")
     _set_if_has(task_cfg, "mpc_loss_touchdown_semantic_large_weight", float, losses.touchdown_semantic, "large_weight")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_touchdown_semantic_ground_ids", losses.touchdown_semantic, "ground_ids")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_touchdown_semantic_small_ids", losses.touchdown_semantic, "small_ids")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_touchdown_semantic_large_ids", losses.touchdown_semantic, "large_ids")
+    _override_loss_term(task_cfg, prefix="mpc_loss_stance_semantic", loss_term=losses.stance_semantic)
+    _set_if_has(task_cfg, "mpc_loss_stance_semantic_small_weight", float, losses.stance_semantic, "small_weight")
+    _set_if_has(task_cfg, "mpc_loss_stance_semantic_large_weight", float, losses.stance_semantic, "large_weight")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_stance_semantic_ground_ids", losses.stance_semantic, "ground_ids")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_stance_semantic_small_ids", losses.stance_semantic, "small_ids")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_stance_semantic_large_ids", losses.stance_semantic, "large_ids")
+    _override_loss_term(task_cfg, prefix="mpc_loss_semantic_contact_avoid", loss_term=losses.semantic_contact_avoid)
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_small_weight", float, losses.semantic_contact_avoid, "small_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_large_weight", float, losses.semantic_contact_avoid, "large_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_activation_margin", float, losses.semantic_contact_avoid, "activation_margin")
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_worst_contact_weight", float, losses.semantic_contact_avoid, "worst_contact_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_soft_margin_m", float, losses.semantic_contact_avoid, "soft_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_soft_field_weight", float, losses.semantic_contact_avoid, "soft_field_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_soft_worst_field_weight", float, losses.semantic_contact_avoid, "soft_worst_field_weight")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_ground_ids", losses.semantic_contact_avoid, "ground_ids")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_small_ids", losses.semantic_contact_avoid, "small_ids")
+    _tuple_ints_if_has(task_cfg, "mpc_loss_semantic_contact_avoid_large_ids", losses.semantic_contact_avoid, "large_ids")
     _override_loss_term(task_cfg, prefix="mpc_loss_semantic_obstacle", loss_term=losses.semantic_obstacle)
+    _set_if_has(task_cfg, "mpc_loss_semantic_obstacle_small_weight", float, losses.semantic_obstacle, "small_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_obstacle_large_weight", float, losses.semantic_obstacle, "large_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_obstacle_body_weight", float, losses.semantic_obstacle, "body_weight")
+    _set_if_has(task_cfg, "mpc_loss_semantic_obstacle_foot_weight", float, losses.semantic_obstacle, "foot_weight")
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_semantic_obstacle_high_small_relative_height_m",
+        float,
+        losses.semantic_obstacle,
+        "high_small_relative_height_m",
+    )
+    _set_if_has(task_cfg, "mpc_loss_semantic_obstacle_body_stencil_radius_m", float, losses.semantic_obstacle, "body_stencil_radius_m")
+    _set_if_has(task_cfg, "mpc_loss_semantic_obstacle_soft_margin_m", float, losses.semantic_obstacle, "soft_margin_m")
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_semantic_obstacle_body_soft_field_weight",
+        float,
+        losses.semantic_obstacle,
+        "body_soft_field_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_semantic_obstacle_body_soft_worst_field_weight",
+        float,
+        losses.semantic_obstacle,
+        "body_soft_worst_field_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_semantic_obstacle_foot_soft_field_weight",
+        float,
+        losses.semantic_obstacle,
+        "foot_soft_field_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_semantic_obstacle_foot_soft_worst_field_weight",
+        float,
+        losses.semantic_obstacle,
+        "foot_soft_worst_field_weight",
+    )
+    _override_loss_term(task_cfg, prefix="mpc_loss_obstacle_risk", loss_term=losses.obstacle_risk)
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_high_small_relative_height_m", float, losses.obstacle_risk, "high_small_relative_height_m")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_linear_corridor_width_m", float, losses.obstacle_risk, "linear_corridor_width_m")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_linear_forward_distance_m", float, losses.obstacle_risk, "linear_forward_distance_m")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_yaw_swept_radius_m", float, losses.obstacle_risk, "yaw_swept_radius_m")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_linear_scale_when_blocked", float, losses.obstacle_risk, "linear_scale_when_blocked")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_yaw_scale_when_blocked", float, losses.obstacle_risk, "yaw_scale_when_blocked")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_linear_speed_eps", float, losses.obstacle_risk, "linear_speed_eps")
+    _set_if_has(task_cfg, "mpc_loss_obstacle_risk_yaw_speed_eps", float, losses.obstacle_risk, "yaw_speed_eps")
+    _override_loss_term(task_cfg, prefix="mpc_loss_low_small_crossing", loss_term=losses.low_small_crossing)
+    _set_if_has(task_cfg, "mpc_loss_low_small_crossing_high_small_relative_height_m", float, losses.low_small_crossing, "high_small_relative_height_m")
+    _set_if_has(task_cfg, "mpc_loss_low_small_crossing_corridor_width_m", float, losses.low_small_crossing, "corridor_width_m")
+    _set_if_has(task_cfg, "mpc_loss_low_small_crossing_forward_distance_m", float, losses.low_small_crossing, "forward_distance_m")
+    _set_if_has(task_cfg, "mpc_loss_low_small_crossing_pass_margin_m", float, losses.low_small_crossing, "pass_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_low_small_crossing_obstacle_depth_m", float, losses.low_small_crossing, "obstacle_depth_m")
+    _set_if_has(task_cfg, "mpc_loss_low_small_crossing_linear_speed_eps", float, losses.low_small_crossing, "linear_speed_eps")
+    _override_loss_term(task_cfg, prefix="mpc_loss_high_obstacle_avoidance", loss_term=losses.high_obstacle_avoidance)
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_high_obstacle_avoidance_high_small_relative_height_m",
+        float,
+        losses.high_obstacle_avoidance,
+        "high_small_relative_height_m",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_high_obstacle_avoidance_corridor_width_m",
+        float,
+        losses.high_obstacle_avoidance,
+        "corridor_width_m",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_high_obstacle_avoidance_forward_distance_m",
+        float,
+        losses.high_obstacle_avoidance,
+        "forward_distance_m",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_high_obstacle_avoidance_lateral_clearance_m",
+        float,
+        losses.high_obstacle_avoidance,
+        "lateral_clearance_m",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_high_obstacle_avoidance_longitudinal_influence_m",
+        float,
+        losses.high_obstacle_avoidance,
+        "longitudinal_influence_m",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_high_obstacle_avoidance_linear_speed_eps",
+        float,
+        losses.high_obstacle_avoidance,
+        "linear_speed_eps",
+    )
+    _override_loss_term(task_cfg, prefix="mpc_loss_body_collision", loss_term=losses.body_collision)
+    _set_if_has(task_cfg, "mpc_loss_body_collision_bottom_offset_z_m", float, losses.body_collision, "bottom_offset_z_m")
+    _set_if_has(task_cfg, "mpc_loss_body_collision_margin_m", float, losses.body_collision, "margin_m")
+    _override_loss_term(task_cfg, prefix="mpc_loss_leg_collision", loss_term=losses.leg_collision)
+    _set_if_has(task_cfg, "mpc_loss_leg_collision_knee_margin_m", float, losses.leg_collision, "knee_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_leg_collision_shank_margin_m", float, losses.leg_collision, "shank_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_leg_collision_shank_sample_count", int, losses.leg_collision, "shank_sample_count")
+    _set_if_has(task_cfg, "mpc_loss_leg_collision_worst_deficit_weight", float, losses.leg_collision, "worst_deficit_weight")
     _override_loss_term(task_cfg, prefix="mpc_loss_swing_direction", loss_term=losses.swing_direction)
     _override_loss_term(task_cfg, prefix="mpc_loss_root_foot_center", loss_term=losses.root_foot_center)
     _override_loss_term(task_cfg, prefix="mpc_loss_root_height", loss_term=losses.root_height)
@@ -345,10 +588,16 @@ def validate_mpc_config(cfg: MpcPlannerCfg) -> None:
 
 
 __all__ = [
+    "MpcBodyCollisionLossCfg",
     "MpcDiagnosticsCfg",
+    "MpcLegCollisionLossCfg",
     "MpcLossesCfg",
+    "MpcLowSmallCrossingLossCfg",
+    "MpcObstacleRiskCfg",
     "MpcPlannerCfg",
     "MpcRuntimeCfg",
+    "MpcSemanticContactAvoidLossCfg",
+    "MpcStanceSemanticLossCfg",
     "planner_cfg_from_task_cfg",
     "validate_mpc_config",
 ]

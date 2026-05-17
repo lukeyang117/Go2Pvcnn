@@ -16,6 +16,10 @@ if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 from extension.batch_mpc_planner.config import MpcPlannerCfg, planner_cfg_from_task_cfg
+from extension.batch_mpc_planner.kinematics import (
+    fk_feet_from_joint_angles,
+    fk_leg_points_from_joint_angles,
+)
 from extension.batch_mpc_planner.losses.contact import support_stability_loss
 from extension.batch_mpc_planner.losses.gait_coupling import (
     diagonal_pair_loss,
@@ -24,8 +28,15 @@ from extension.batch_mpc_planner.losses.gait_coupling import (
     swing_center_urgency_order_loss,
 )
 from extension.batch_mpc_planner.losses.terrain_clearance import (
+    body_heightfield_collision_loss,
+    high_obstacle_avoidance_loss,
+    knee_shank_heightfield_collision_loss,
+    low_small_crossing_progress_loss,
+    obstacle_risk_scales,
+    semantic_contact_avoidance_loss,
     semantic_obstacle_loss,
     stance_ground_loss,
+    stance_semantic_obstacle_loss,
     swing_clearance_terrain_loss,
     touchdown_semantic_loss,
     touchdown_surface_loss,
@@ -47,6 +58,7 @@ from extension.batch_mpc_planner.nominal import build_nominal_trajectory
 from extension.batch_mpc_planner.types import MpcPlannerTerrain, MpcRobotState
 from extension.batch_mpc_planner.variables import DecodedMpcTrajectory, decode_trajectory, init_optimization_variables
 from extension.trajectory_manager_factory import create_trajectory_manager, planner_backend_from_cfg
+from extension.viz.go2_foostep_planner import _adapt_mpc_result_for_viewer
 
 
 def _task_cfg(**overrides):
@@ -161,6 +173,27 @@ def _mpc_plan_inputs(*, batch: int = 2, horizon: int = 6):
     cfg.runtime.optimize_steps = 0
     cfg.diagnostics.enabled = True
     return terrain, state, command, cfg
+
+
+def test_mpc_fk_leg_points_exposes_knee_and_shank_samples() -> None:
+    root = torch.zeros((2, 3, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    joint = torch.zeros((2, 3, 12), dtype=torch.float32)
+
+    leg_points = fk_leg_points_from_joint_angles(root, rpy, joint, shank_sample_count=2)
+
+    assert leg_points.foot_pos_world.shape == (2, 3, 4, 3)
+    assert leg_points.knee_pos_world.shape == (2, 3, 4, 3)
+    assert leg_points.shank_sample_world.shape == (2, 3, 4, 2, 3)
+    torch.testing.assert_close(
+        leg_points.foot_pos_world,
+        fk_feet_from_joint_angles(root, rpy, joint),
+        atol=1.0e-6,
+        rtol=1.0e-6,
+    )
+    assert torch.isfinite(leg_points.knee_pos_world).all()
+    assert torch.isfinite(leg_points.shank_sample_world).all()
 
 
 def test_build_mpc_terrain_accepts_flattened_ray_hits_and_subset_batch_dimension() -> None:
@@ -287,6 +320,27 @@ def test_mpc_terrain_queries_use_per_env_scanner_pose_for_world_points() -> None
     torch.testing.assert_close(sampled[:, 0], torch.tensor([1.25, 2.50], dtype=torch.float32))
 
 
+def test_mpc_terrain_queries_preserve_scanner_local_positive_y() -> None:
+    ray_hits = torch.zeros((1, 3, 3, 3), dtype=torch.float32)
+    ray_hits[0, 0, 1, 2] = 0.25
+    ray_hits[0, 2, 1, 2] = 1.25
+    semantic = torch.zeros((1, 3, 3), dtype=torch.long)
+    semantic[0, 2, 1] = 1
+    terrain = build_mpc_terrain_from_scanner(
+        ray_hits,
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+        semantic_map=semantic,
+        sensor_pos_w=torch.zeros((1, 3), dtype=torch.float32),
+        sensor_yaw=torch.zeros(1, dtype=torch.float32),
+    )
+
+    query = torch.tensor([[[0.0, 1.0]]], dtype=torch.float32)
+
+    torch.testing.assert_close(height_at(terrain, query), torch.tensor([[1.25]], dtype=torch.float32))
+    torch.testing.assert_close(semantic_at(terrain, query), torch.tensor([[1]], dtype=torch.long))
+
+
 def test_mpc_manager_terrain_from_env_carries_scanner_pose() -> None:
     cfg = _task_cfg()
     manager = create_trajectory_manager(cfg, device="cpu")
@@ -402,6 +456,18 @@ def test_mpc_result_and_package_do_not_depend_on_old_mode_fields() -> None:
         "swing_clearance_terrain",
         "touchdown_surface",
         "touchdown_semantic",
+        "stance_semantic",
+        "semantic_contact_avoid",
+        "high_obstacle_avoidance",
+        "body_collision",
+        "leg_collision",
+        "obstacle_risk_linear_scale",
+        "obstacle_risk_yaw_scale",
+        "obstacle_risk_linear_trigger_count",
+        "obstacle_risk_yaw_trigger_count",
+        "obstacle_risk_trigger_horizon_index",
+        "obstacle_risk_trigger_semantic_class",
+        "low_small_crossing",
         "swing_direction",
         "ik_joint_limit",
         "ik_fk_residual",
@@ -586,6 +652,102 @@ def test_mpc_touchdown_semantic_loss_penalizes_small_and_large_obstacles() -> No
     assert float(loss[0]) > 0.0
 
 
+def test_mpc_heightfield_collision_losses_penalize_body_knee_and_shank() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    height[:, 2, 2] = 0.20
+    terrain = MpcPlannerTerrain(
+        height_map=height,
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    root = torch.zeros((1, 2, 3), dtype=torch.float32)
+    rpy = torch.zeros_like(root)
+    root[..., 2] = 0.22
+    knee = torch.zeros((1, 2, 4, 3), dtype=torch.float32)
+    knee[..., 2] = 0.21
+    shank = knee.unsqueeze(-2).expand(1, 2, 4, 2, 3).clone()
+
+    body_loss = body_heightfield_collision_loss(
+        terrain,
+        root,
+        rpy,
+        bottom_offset_z=-0.18,
+        margin_m=0.04,
+        stencil_xy=((0.0, 0.0),),
+    )
+    leg_loss = knee_shank_heightfield_collision_loss(
+        terrain,
+        knee,
+        shank,
+        knee_margin_m=0.04,
+        shank_margin_m=0.04,
+    )
+
+    assert body_loss.shape == (1,)
+    assert leg_loss.shape == (1,)
+    assert float(body_loss[0]) > 0.0
+    assert float(leg_loss[0]) > 0.0
+
+
+def test_mpc_leg_collision_loss_amplifies_sparse_shank_collisions() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 3, 3), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 3, 3), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    knee = torch.zeros((1, 6, 4, 3), dtype=torch.float32)
+    knee[..., 2] = 0.10
+    shank = torch.zeros((1, 6, 4, 2, 3), dtype=torch.float32)
+    shank[..., 2] = 0.10
+    shank[:, 4, 1, 0, 2] = -0.01
+
+    loss = knee_shank_heightfield_collision_loss(
+        terrain,
+        knee,
+        shank,
+        knee_margin_m=0.0,
+        shank_margin_m=0.0,
+        worst_deficit_weight=8.0,
+    )
+
+    mean_only = ((0.0 - (-0.01)) ** 2) / float(6 * 4 * 2)
+    assert float(loss[0]) > mean_only * 8.0
+
+
+def test_mpc_stance_semantic_loss_penalizes_obstacle_contact_frames() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    semantic[:, 2, 2] = 1
+    semantic[:, 2, 3] = 2
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-1.0, 1.0), world_y_range=(-1.0, 1.0))
+    foot = torch.tensor(
+        [[
+            [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
+            [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
+        ]],
+        dtype=torch.float32,
+    )
+    contact = torch.zeros((1, 2, 4), dtype=torch.float32)
+    contact[:, :, 0] = 1.0
+    contact[:, :, 1] = 1.0
+
+    loss = stance_semantic_obstacle_loss(
+        terrain,
+        foot,
+        contact,
+        ground_ids=(0,),
+        small_ids=(1,),
+        large_ids=(2,),
+        small_weight=10.0,
+        large_weight=50.0,
+    )
+
+    assert loss.shape == (1,)
+    assert float(loss[0]) > 10.0
+
+
 def test_mpc_stance_and_swing_terrain_losses_use_height_map() -> None:
     terrain = MpcPlannerTerrain(
         height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
@@ -606,6 +768,109 @@ def test_mpc_stance_and_swing_terrain_losses_use_height_map() -> None:
     assert torch.isfinite(swing_loss).all()
 
 
+def test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions() -> None:
+    cfg = MpcPlannerCfg()
+
+    assert cfg.runtime.optimize_steps == 24
+    assert cfg.runtime.lr == pytest.approx(2.0e-2)
+    assert cfg.runtime.contact_threshold == pytest.approx(0.40)
+    assert cfg.runtime.nominal_swing_height_m == pytest.approx(0.12)
+    assert cfg.losses.swing_center_urgency.weight == pytest.approx(1.5)
+    assert cfg.losses.swing_clearance_terrain.min_clearance_m == pytest.approx(0.12)
+    assert cfg.losses.swing_clearance_terrain.weight == pytest.approx(12.0)
+    assert cfg.losses.swing_clearance_terrain.worst_deficit_weight == pytest.approx(12.0)
+    assert cfg.losses.swing_clearance_terrain.boundary_min_swing_prob == pytest.approx(0.40)
+    assert cfg.losses.swing_clearance_terrain.boundary_weight == pytest.approx(0.50)
+    assert cfg.losses.leg_collision.weight == pytest.approx(16.0)
+    assert cfg.losses.leg_collision.knee_margin_m == pytest.approx(0.06)
+    assert cfg.losses.leg_collision.shank_margin_m == pytest.approx(0.06)
+    assert cfg.losses.leg_collision.worst_deficit_weight == pytest.approx(16.0)
+
+
+def test_mpc_swing_clearance_loss_amplifies_sparse_heightfield_collisions() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 3, 3), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 3, 3), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    foot = torch.zeros((1, 6, 4, 3), dtype=torch.float32)
+    foot[..., 2] = 0.10
+    foot[:, 4, 1, 2] = -0.02
+    swing = torch.zeros((1, 6, 4), dtype=torch.float32)
+    swing[:, :, 1] = 1.0
+
+    loss = swing_clearance_terrain_loss(
+        terrain,
+        foot,
+        swing,
+        min_clearance_m=0.02,
+        worst_deficit_weight=4.0,
+    )
+
+    mean_only = ((0.02 - (-0.02)) ** 2) / 6.0
+    assert float(loss[0]) > mean_only * 4.0
+
+
+def test_mpc_swing_clearance_loss_uses_exported_swing_threshold() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 3, 3), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 3, 3), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    foot = torch.zeros((1, 2, 1, 3), dtype=torch.float32)
+    foot[:, :, :, 2] = -0.02
+    swing = torch.tensor([[[0.59], [0.61]]], dtype=torch.float32)
+
+    loss = swing_clearance_terrain_loss(
+        terrain,
+        foot,
+        swing,
+        min_clearance_m=0.0,
+        min_swing_prob=0.60,
+        hard_active_weight=True,
+    )
+
+    assert loss.shape == (1,)
+    assert float(loss[0]) == pytest.approx(0.0004)
+
+
+def test_mpc_swing_clearance_loss_penalizes_boundary_swing_halo() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 3, 3), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 3, 3), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    foot = torch.zeros((1, 3, 1, 3), dtype=torch.float32)
+    foot[:, :, :, 2] = -0.02
+    swing = torch.tensor([[[0.44], [0.50], [0.61]]], dtype=torch.float32)
+
+    active_only = swing_clearance_terrain_loss(
+        terrain,
+        foot,
+        swing,
+        min_clearance_m=0.0,
+        min_swing_prob=0.60,
+        hard_active_weight=True,
+    )
+    loss = swing_clearance_terrain_loss(
+        terrain,
+        foot,
+        swing,
+        min_clearance_m=0.0,
+        min_swing_prob=0.60,
+        hard_active_weight=True,
+        boundary_min_swing_prob=0.45,
+        boundary_weight=0.25,
+    )
+
+    expected_boundary = 0.25 * ((0.50 - 0.45) / (0.60 - 0.45)) * 0.0004
+    assert float(active_only[0]) == pytest.approx(0.0004)
+    assert float(loss[0]) == pytest.approx(0.0004 + expected_boundary)
+
+
 def test_mpc_stance_ground_loss_is_not_diluted_by_non_contact_frames() -> None:
     terrain = MpcPlannerTerrain(
         height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
@@ -621,6 +886,147 @@ def test_mpc_stance_ground_loss_is_not_diluted_by_non_contact_frames() -> None:
     loss = stance_ground_loss(terrain, foot, contact)
 
     assert float(loss[0]) > 0.05
+
+
+def test_mpc_stance_ground_loss_ignores_frames_below_contact_threshold() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-1, 1),
+        world_y_range=(-1, 1),
+    )
+    foot = torch.zeros((1, 3, 4, 3), dtype=torch.float32)
+    contact = torch.zeros((1, 3, 4), dtype=torch.float32)
+    foot[:, 1, 0, 2] = 0.10
+    contact[:, 1, 0] = 0.30
+
+    below_threshold = stance_ground_loss(terrain, foot, contact, min_contact_prob=0.40)
+    contact[:, 1, 0] = 0.60
+    above_threshold = stance_ground_loss(terrain, foot, contact, min_contact_prob=0.40)
+
+    assert float(below_threshold[0]) == pytest.approx(0.0, abs=1.0e-6)
+    assert float(above_threshold[0]) > 0.05
+
+
+def test_mpc_stance_semantic_loss_ignores_frames_below_contact_threshold() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-1, 1),
+        world_y_range=(-1, 1),
+    )
+    terrain.semantic_map[:, 2, 2] = 1
+    foot = torch.zeros((1, 3, 4, 3), dtype=torch.float32)
+    contact = torch.zeros((1, 3, 4), dtype=torch.float32)
+    contact[:, 1, 0] = 0.30
+
+    below_threshold = stance_semantic_obstacle_loss(
+        terrain,
+        foot,
+        contact,
+        ground_ids=(0,),
+        small_ids=(1,),
+        large_ids=(2,),
+        small_weight=10.0,
+        large_weight=50.0,
+        min_contact_prob=0.40,
+    )
+    contact[:, 1, 0] = 0.60
+    above_threshold = stance_semantic_obstacle_loss(
+        terrain,
+        foot,
+        contact,
+        ground_ids=(0,),
+        small_ids=(1,),
+        large_ids=(2,),
+        small_weight=10.0,
+        large_weight=50.0,
+        min_contact_prob=0.40,
+    )
+
+    assert float(below_threshold[0]) == pytest.approx(0.0, abs=1.0e-6)
+    assert float(above_threshold[0]) > 5.0
+
+
+def test_mpc_semantic_contact_avoidance_loss_pushes_contact_prob_off_obstacles() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    semantic[:, 2, 2] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-1, 1), world_y_range=(-1, 1))
+    foot = torch.zeros((1, 2, 1, 3), dtype=torch.float32)
+    contact = torch.tensor([[[0.8], [0.1]]], dtype=torch.float32)
+
+    loss = semantic_contact_avoidance_loss(
+        terrain,
+        foot,
+        contact,
+        ground_ids=(0,),
+        small_ids=(1,),
+        large_ids=(2,),
+        small_weight=10.0,
+        large_weight=50.0,
+        activation_margin=0.05,
+    )
+
+    assert float(loss[0]) == pytest.approx((0.8**2 + 0.1**2) / 2.0)
+
+
+def test_mpc_semantic_contact_avoidance_loss_penalizes_worst_contact_frame() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    semantic[:, 2, 2] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-1, 1), world_y_range=(-1, 1))
+    foot = torch.zeros((1, 3, 1, 3), dtype=torch.float32)
+    contact = torch.tensor([[[0.8], [0.1], [0.0]]], dtype=torch.float32)
+
+    loss = semantic_contact_avoidance_loss(
+        terrain,
+        foot,
+        contact,
+        ground_ids=(0,),
+        small_ids=(1,),
+        large_ids=(2,),
+        small_weight=10.0,
+        large_weight=50.0,
+        activation_margin=0.05,
+        worst_contact_weight=3.0,
+    )
+
+    mean_term = (0.8**2 + 0.1**2 + 0.0**2) / 3.0
+    worst_term = 3.0 * 0.8**2
+    assert float(loss[0]) == pytest.approx(mean_term + worst_term)
+
+
+def test_mpc_semantic_contact_avoidance_loss_has_xy_gradient_from_soft_field() -> None:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    semantic[:, 4, 4] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.4, 0.4), world_y_range=(-0.4, 0.4))
+    foot = torch.zeros((1, 2, 1, 3), dtype=torch.float32, requires_grad=True)
+    with torch.no_grad():
+        foot[:, 0, 0, 0] = 0.08
+        foot[:, 1, 0, 0] = 0.28
+    contact = torch.tensor([[[0.8], [0.8]]], dtype=torch.float32)
+
+    loss = semantic_contact_avoidance_loss(
+        terrain,
+        foot,
+        contact,
+        ground_ids=(0,),
+        small_ids=(1,),
+        large_ids=(2,),
+        small_weight=10.0,
+        large_weight=50.0,
+        activation_margin=0.05,
+        soft_margin_m=0.20,
+        soft_field_weight=1.0,
+        soft_worst_field_weight=0.0,
+    )
+
+    assert float(loss[0]) > 0.0
+    loss.sum().backward()
+    assert foot.grad is not None
+    assert float(torch.abs(foot.grad[..., :2]).sum().item()) > 0.0
 
 
 def test_mpc_support_stability_uses_contact_threshold_per_leg() -> None:
@@ -647,8 +1053,8 @@ def test_mpc_support_stability_uses_contact_threshold_per_leg() -> None:
         contact_threshold=cfg.runtime.contact_threshold,
     )
 
-    assert float(diffuse_loss[0]) > 0.4
-    assert float(one_leg_loss[0]) > 0.3
+    assert float(diffuse_loss[0]) == pytest.approx(2.0 * (cfg.runtime.contact_threshold - 0.30))
+    assert float(one_leg_loss[0]) == pytest.approx(cfg.runtime.contact_threshold - 0.10)
     assert float(stable_loss[0]) == pytest.approx(0.0, abs=1.0e-6)
 
 
@@ -676,6 +1082,456 @@ def test_mpc_tracking_loss_honors_velocity_and_yaw_weights() -> None:
 
     assert float(yaw_free[0]) == pytest.approx(0.0, abs=1e-6)
     assert float(yaw_penalized[0]) > 1.5
+
+
+def test_mpc_obstacle_risk_scales_use_all_scanner_obstacle_cells() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    height[:, 2, 4] = 0.45
+    semantic[:, 2, 4] = 2
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-1.0, 1.0), world_y_range=(-1.0, 1.0))
+    root = torch.zeros((1, 4, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float32)
+
+    scales = obstacle_risk_scales(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        large_ids=(2,),
+        high_small_relative_height_m=0.30,
+        linear_corridor_width_m=0.35,
+        linear_forward_distance_m=1.0,
+        yaw_swept_radius_m=0.35,
+        linear_scale_when_blocked=0.5,
+        yaw_scale_when_blocked=0.5,
+        linear_speed_eps=1.0e-4,
+        yaw_speed_eps=1.0e-4,
+    )
+
+    assert scales.linear_scale.shape == (1,)
+    assert scales.yaw_scale.shape == (1,)
+    assert float(scales.linear_scale[0]) == pytest.approx(0.5)
+    assert int(scales.linear_trigger_count[0]) > 0
+    assert int(scales.trigger_semantic_class[0]) == 2
+
+
+def test_mpc_obstacle_risk_scales_classify_sparse_small_semantics_by_nearby_height() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    semantic[:, 2, 3] = 1
+    height[:, 2, 4] = 0.46
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.5, 0.5), world_y_range=(-0.5, 0.5))
+    root = torch.zeros((1, 4, 3), dtype=torch.float32)
+    root[:, :, 0] = -0.35
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    scales = obstacle_risk_scales(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        large_ids=(2,),
+        high_small_relative_height_m=0.30,
+        linear_corridor_width_m=0.35,
+        linear_forward_distance_m=1.0,
+        yaw_swept_radius_m=0.50,
+        linear_scale_when_blocked=0.5,
+        yaw_scale_when_blocked=0.5,
+        linear_speed_eps=1.0e-4,
+        yaw_speed_eps=1.0e-4,
+    )
+
+    assert float(scales.linear_scale[0]) == pytest.approx(0.5)
+    assert int(scales.linear_trigger_count[0]) > 0
+    assert int(scales.trigger_semantic_class[0]) == 1
+
+
+def test_mpc_obstacle_risk_scales_trigger_when_planned_root_path_nears_high_obstacle() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    height[:, 2, 4] = 0.45
+    semantic[:, 2, 4] = 2
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.5, 0.5), world_y_range=(-0.5, 0.5))
+    root = torch.zeros((1, 4, 3), dtype=torch.float32)
+    root[:, :, 0] = torch.linspace(-0.35, 0.25, 4)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    rpy[..., 2] = 0.8
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    scales = obstacle_risk_scales(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        large_ids=(2,),
+        high_small_relative_height_m=0.30,
+        linear_corridor_width_m=0.25,
+        linear_forward_distance_m=1.0,
+        yaw_swept_radius_m=0.50,
+        linear_scale_when_blocked=0.5,
+        yaw_scale_when_blocked=0.5,
+        linear_speed_eps=1.0e-4,
+        yaw_speed_eps=1.0e-4,
+    )
+
+    assert float(scales.linear_scale[0]) == pytest.approx(0.5)
+    assert int(scales.linear_trigger_count[0]) > 0
+
+
+def test_mpc_default_obstacle_risk_width_catches_path_near_high_small() -> None:
+    cfg = MpcPlannerCfg()
+    height = torch.zeros((1, 11, 11), dtype=torch.float32)
+    semantic = torch.zeros((1, 11, 11), dtype=torch.long)
+    height[:, 9, 5] = 0.45
+    semantic[:, 9, 5] = 1
+    terrain = MpcPlannerTerrain(
+        height_map=height,
+        semantic_map=semantic,
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+    )
+    root = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root[:, :, 0] = torch.linspace(-0.2, 0.2, 25)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    scales = obstacle_risk_scales(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+        large_ids=cfg.losses.touchdown_semantic.large_ids,
+        high_small_relative_height_m=cfg.losses.obstacle_risk.high_small_relative_height_m,
+        linear_corridor_width_m=cfg.losses.obstacle_risk.linear_corridor_width_m,
+        linear_forward_distance_m=cfg.losses.obstacle_risk.linear_forward_distance_m,
+        yaw_swept_radius_m=cfg.losses.obstacle_risk.yaw_swept_radius_m,
+        linear_scale_when_blocked=cfg.losses.obstacle_risk.linear_scale_when_blocked,
+        yaw_scale_when_blocked=cfg.losses.obstacle_risk.yaw_scale_when_blocked,
+        linear_speed_eps=cfg.losses.obstacle_risk.linear_speed_eps,
+        yaw_speed_eps=cfg.losses.obstacle_risk.yaw_speed_eps,
+    )
+
+    assert cfg.losses.obstacle_risk.linear_corridor_width_m == pytest.approx(0.40)
+    assert float(scales.linear_scale[0]) == pytest.approx(0.5)
+
+
+def test_mpc_obstacle_risk_scales_handle_yaw_only_swept_region() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    height[:, 2, 3] = 0.45
+    semantic[:, 2, 3] = 2
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-1.0, 1.0), world_y_range=(-1.0, 1.0))
+    root = torch.zeros((1, 4, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.0, 0.0, 0.4]], dtype=torch.float32)
+
+    scales = obstacle_risk_scales(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        large_ids=(2,),
+        high_small_relative_height_m=0.30,
+        linear_corridor_width_m=0.35,
+        linear_forward_distance_m=1.0,
+        yaw_swept_radius_m=0.60,
+        linear_scale_when_blocked=0.5,
+        yaw_scale_when_blocked=0.5,
+        linear_speed_eps=1.0e-4,
+        yaw_speed_eps=1.0e-4,
+    )
+
+    assert float(scales.linear_scale[0]) == pytest.approx(1.0)
+    assert float(scales.yaw_scale[0]) == pytest.approx(0.5)
+    assert int(scales.yaw_trigger_count[0]) > 0
+
+
+def test_mpc_high_obstacle_avoidance_loss_pushes_root_laterally() -> None:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    height[:, 4, 4] = 0.55
+    semantic[:, 4, 4] = 2
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.4, 0.4), world_y_range=(-0.4, 0.4))
+    root_center = torch.zeros((1, 5, 3), dtype=torch.float32, requires_grad=True)
+    root_left = torch.zeros((1, 5, 3), dtype=torch.float32)
+    with torch.no_grad():
+        root_center[..., 0] = torch.linspace(-0.30, 0.10, 5)
+        root_center[..., 2] = 0.65
+        root_left.copy_(root_center.detach())
+        root_left[..., 1] = 0.40
+    rpy = torch.zeros_like(root_center)
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    center_loss = high_obstacle_avoidance_loss(
+        terrain,
+        root_center,
+        rpy,
+        command,
+        small_ids=(1,),
+        large_ids=(2,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.35,
+        forward_distance_m=0.80,
+        lateral_clearance_m=0.34,
+        longitudinal_influence_m=0.45,
+        linear_speed_eps=1.0e-4,
+    )
+    left_loss = high_obstacle_avoidance_loss(
+        terrain,
+        root_left,
+        rpy.detach(),
+        command,
+        small_ids=(1,),
+        large_ids=(2,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.35,
+        forward_distance_m=0.80,
+        lateral_clearance_m=0.34,
+        longitudinal_influence_m=0.45,
+        linear_speed_eps=1.0e-4,
+    )
+
+    assert float(center_loss[0]) > float(left_loss[0])
+    center_loss.sum().backward()
+    assert root_center.grad is not None
+    assert float(root_center.grad[..., 1].abs().sum().item()) > 0.0
+
+
+def test_mpc_loss_registry_scales_tracking_when_high_obstacle_blocks_command() -> None:
+    _, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float32)
+    nominal = build_nominal_trajectory(state, command, MpcPlannerTerrain(
+        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    ), cfg.runtime)
+    variables = init_optimization_variables(nominal, cfg.runtime)
+    decoded = decode_trajectory(nominal, variables, cfg.runtime)
+    decoded = DecodedMpcTrajectory(
+        root_pos=torch.zeros_like(decoded.root_pos),
+        root_rpy=torch.zeros_like(decoded.root_rpy),
+        foot_pos=decoded.foot_pos,
+        swing_center=decoded.swing_center,
+        swing_width=decoded.swing_width,
+        swing_start=decoded.swing_start,
+        swing_end=decoded.swing_end,
+        swing_prob=decoded.swing_prob,
+        contact_prob=decoded.contact_prob,
+    )
+    clean = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    blocked_height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    blocked_sem = torch.zeros((1, 5, 5), dtype=torch.long)
+    blocked_height[:, 2, 4] = 0.45
+    blocked_sem[:, 2, 4] = 2
+    blocked = MpcPlannerTerrain(
+        height_map=blocked_height,
+        semantic_map=blocked_sem,
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+
+    _, _, clean_breakdown = compute_total_loss(decoded, nominal, state, command, clean, cfg)
+    _, _, blocked_breakdown = compute_total_loss(decoded, nominal, state, command, blocked, cfg)
+
+    assert float(blocked_breakdown["obstacle_risk_linear_scale"][0]) == pytest.approx(0.5)
+    assert float(blocked_breakdown["tracking"][0]) < float(clean_breakdown["tracking"][0])
+    assert float(blocked_breakdown["obstacle_risk_linear_trigger_count"][0]) > 0.0
+
+
+def test_mpc_low_small_crossing_progress_loss_encourages_root_to_pass_low_small_obstacle() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    height[:, 2, 3] = 0.16
+    semantic[:, 2, 3] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.5, 0.5), world_y_range=(-0.5, 0.5))
+    root_before = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root_before[..., 2] = 0.30
+    root_before[:, 0, 0] = -0.35
+    root_before[:, -1, 0] = -0.05
+    root_after = root_before.clone()
+    root_after[:, -1, 0] = 0.33
+    rpy = torch.zeros_like(root_before)
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    before = low_small_crossing_progress_loss(
+        terrain,
+        root_before,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        linear_speed_eps=1.0e-4,
+    )
+    after = low_small_crossing_progress_loss(
+        terrain,
+        root_after,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        linear_speed_eps=1.0e-4,
+    )
+
+    assert before.shape == (1,)
+    assert float(before[0]) > 0.01
+    assert float(after[0]) == pytest.approx(0.0, abs=1.0e-6)
+
+
+def test_mpc_low_small_crossing_progress_loss_ignores_high_small_obstacle() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    height[:, 2, 3] = 0.46
+    semantic[:, 2, 3] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.5, 0.5), world_y_range=(-0.5, 0.5))
+    root = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    loss = low_small_crossing_progress_loss(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        linear_speed_eps=1.0e-4,
+    )
+
+    assert float(loss[0]) == pytest.approx(0.0, abs=1.0e-6)
+
+
+def test_mpc_low_small_crossing_ignores_sparse_semantic_small_when_nearby_height_is_too_high() -> None:
+    height = torch.zeros((1, 5, 5), dtype=torch.float32)
+    semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+    semantic[:, 2, 3] = 1
+    height[:, 2, 4] = 0.46
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.5, 0.5), world_y_range=(-0.5, 0.5))
+    root = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    root[:, 0, 0] = -0.35
+    root[:, -1, 0] = -0.05
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+
+    loss = low_small_crossing_progress_loss(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        linear_speed_eps=1.0e-4,
+    )
+
+    assert float(loss[0]) == pytest.approx(0.0, abs=1.0e-6)
+
+
+def test_mpc_low_small_crossing_progress_loss_accounts_for_visible_obstacle_depth() -> None:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    height[:, 4, 5] = 0.16
+    semantic[:, 4, 5] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.4, 0.4), world_y_range=(-0.4, 0.4))
+    root_partial = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root_partial[..., 2] = 0.30
+    root_partial[:, 0, 1] = -0.35
+    root_partial[:, -1, 1] = -0.08
+    root_crossed = root_partial.clone()
+    root_crossed[:, -1, 1] = 0.34
+    rpy = torch.zeros_like(root_partial)
+    command = torch.tensor([[0.0, 0.25, 0.0]], dtype=torch.float32)
+
+    partial = low_small_crossing_progress_loss(
+        terrain,
+        root_partial,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        obstacle_depth_m=0.24,
+        linear_speed_eps=1.0e-4,
+    )
+    crossed = low_small_crossing_progress_loss(
+        terrain,
+        root_crossed,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        obstacle_depth_m=0.24,
+        linear_speed_eps=1.0e-4,
+    )
+
+    assert float(partial[0]) > 0.01
+    assert float(crossed[0]) == pytest.approx(0.0, abs=1.0e-6)
+
+
+def test_mpc_low_small_crossing_progress_loss_uses_scanner_positive_y_cells_for_lateral_commands() -> None:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    height[:, 8, 4] = 0.16
+    semantic[:, 8, 4] = 1
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.4, 0.4), world_y_range=(-0.4, 0.4))
+    root = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    root[:, 0, 1] = -0.35
+    root[:, -1, 1] = -0.08
+    rpy = torch.zeros_like(root)
+    command = torch.tensor([[0.0, 0.25, 0.0]], dtype=torch.float32)
+
+    loss = low_small_crossing_progress_loss(
+        terrain,
+        root,
+        rpy,
+        command,
+        small_ids=(1,),
+        high_small_relative_height_m=0.30,
+        corridor_width_m=0.25,
+        forward_distance_m=1.0,
+        pass_margin_m=0.06,
+        obstacle_depth_m=0.24,
+        linear_speed_eps=1.0e-4,
+    )
+
+    assert float(loss[0]) > 0.01
 
 
 def test_mpc_root_support_geometry_losses_are_finite() -> None:
@@ -868,6 +1724,179 @@ def test_mpc_semantic_obstacle_loss_allows_cleared_swing_over_obstacle() -> None
     assert float(low[0]) > float(high[0])
 
 
+def test_mpc_semantic_obstacle_loss_has_body_xy_gradient_from_soft_field() -> None:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    semantic[:, 4, 4] = 2
+    terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.4, 0.4), world_y_range=(-0.4, 0.4))
+    root = torch.zeros((1, 2, 3), dtype=torch.float32, requires_grad=True)
+    with torch.no_grad():
+        root[:, 0, 0] = 0.08
+        root[:, 1, 0] = 0.28
+        root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    foot = torch.zeros((1, 2, 4, 3), dtype=torch.float32)
+    foot[..., 2] = 0.20
+    contact = torch.zeros((1, 2, 4), dtype=torch.float32)
+    swing = torch.ones_like(contact)
+
+    loss = semantic_obstacle_loss(
+        terrain,
+        root,
+        rpy,
+        foot,
+        contact,
+        swing,
+        small_weight=1.0,
+        large_weight=10.0,
+        body_weight=1.0,
+        foot_weight=0.0,
+        body_stencil_radius_m=0.0,
+        soft_margin_m=0.20,
+        body_soft_field_weight=1.0,
+        body_soft_worst_field_weight=0.0,
+    )
+
+    assert float(loss[0]) > 0.0
+    loss.sum().backward()
+    assert root.grad is not None
+    assert float(torch.abs(root.grad[..., :2]).sum().item()) > 0.0
+
+
+def test_mpc_default_semantic_obstacle_loss_ignores_crossable_small_but_keeps_large() -> None:
+    cfg = MpcPlannerCfg()
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    root = torch.zeros((1, 2, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    foot = torch.zeros((1, 2, 4, 3), dtype=torch.float32)
+    foot[..., 0] = 0.35
+    foot[..., 2] = 0.20
+    contact = torch.zeros((1, 2, 4), dtype=torch.float32)
+    swing = torch.ones_like(contact)
+
+    small_semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    small_semantic[:, 4, 4] = 1
+    small_terrain = MpcPlannerTerrain(
+        height_map=height.clone(),
+        semantic_map=small_semantic,
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+    large_semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    large_semantic[:, 4, 4] = 2
+    large_terrain = MpcPlannerTerrain(
+        height_map=height.clone(),
+        semantic_map=large_semantic,
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+
+    small_loss = semantic_obstacle_loss(
+        small_terrain,
+        root,
+        rpy,
+        foot,
+        contact,
+        swing,
+        small_weight=cfg.losses.semantic_obstacle.small_weight,
+        large_weight=cfg.losses.semantic_obstacle.large_weight,
+        body_weight=cfg.losses.semantic_obstacle.body_weight,
+        foot_weight=cfg.losses.semantic_obstacle.foot_weight,
+        body_stencil_radius_m=0.0,
+        soft_margin_m=cfg.losses.semantic_obstacle.soft_margin_m,
+        body_soft_field_weight=cfg.losses.semantic_obstacle.body_soft_field_weight,
+        body_soft_worst_field_weight=cfg.losses.semantic_obstacle.body_soft_worst_field_weight,
+        foot_soft_field_weight=cfg.losses.semantic_obstacle.foot_soft_field_weight,
+        foot_soft_worst_field_weight=cfg.losses.semantic_obstacle.foot_soft_worst_field_weight,
+        high_small_relative_height_m=cfg.losses.semantic_obstacle.high_small_relative_height_m,
+    )
+    large_loss = semantic_obstacle_loss(
+        large_terrain,
+        root,
+        rpy,
+        foot,
+        contact,
+        swing,
+        small_weight=cfg.losses.semantic_obstacle.small_weight,
+        large_weight=cfg.losses.semantic_obstacle.large_weight,
+        body_weight=cfg.losses.semantic_obstacle.body_weight,
+        foot_weight=cfg.losses.semantic_obstacle.foot_weight,
+        body_stencil_radius_m=0.0,
+        soft_margin_m=cfg.losses.semantic_obstacle.soft_margin_m,
+        body_soft_field_weight=cfg.losses.semantic_obstacle.body_soft_field_weight,
+        body_soft_worst_field_weight=cfg.losses.semantic_obstacle.body_soft_worst_field_weight,
+        foot_soft_field_weight=cfg.losses.semantic_obstacle.foot_soft_field_weight,
+        foot_soft_worst_field_weight=cfg.losses.semantic_obstacle.foot_soft_worst_field_weight,
+        high_small_relative_height_m=cfg.losses.semantic_obstacle.high_small_relative_height_m,
+    )
+
+    assert float(small_loss[0]) == pytest.approx(0.0, abs=1.0e-7)
+    assert float(large_loss[0]) > 0.0
+
+
+def test_mpc_semantic_obstacle_loss_penalizes_high_small_swing_but_ignores_low_small() -> None:
+    cfg = MpcPlannerCfg()
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    semantic[:, 4, 4] = 1
+    low_height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    low_height[:, 4, 4] = 0.16
+    high_height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    high_height[:, 4, 4] = 0.46
+    low = MpcPlannerTerrain(
+        height_map=low_height,
+        semantic_map=semantic.clone(),
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+    high = MpcPlannerTerrain(
+        height_map=high_height,
+        semantic_map=semantic.clone(),
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+    root = torch.zeros((1, 1, 3), dtype=torch.float32)
+    root[..., 0] = -0.30
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    foot = torch.zeros((1, 1, 4, 3), dtype=torch.float32)
+    foot[..., 2] = 0.20
+    contact = torch.zeros((1, 1, 4), dtype=torch.float32)
+    swing = torch.ones_like(contact)
+
+    low_loss = semantic_obstacle_loss(
+        low,
+        root,
+        rpy,
+        foot,
+        contact,
+        swing,
+        small_weight=cfg.losses.semantic_obstacle.small_weight,
+        large_weight=cfg.losses.semantic_obstacle.large_weight,
+        body_weight=0.0,
+        foot_weight=1.0,
+        body_stencil_radius_m=0.0,
+        high_small_relative_height_m=cfg.losses.semantic_obstacle.high_small_relative_height_m,
+    )
+    high_loss = semantic_obstacle_loss(
+        high,
+        root,
+        rpy,
+        foot,
+        contact,
+        swing,
+        small_weight=cfg.losses.semantic_obstacle.small_weight,
+        large_weight=cfg.losses.semantic_obstacle.large_weight,
+        body_weight=0.0,
+        foot_weight=1.0,
+        body_stencil_radius_m=0.0,
+        high_small_relative_height_m=cfg.losses.semantic_obstacle.high_small_relative_height_m,
+    )
+
+    assert float(low_loss[0]) == pytest.approx(0.0, abs=1.0e-7)
+    assert float(high_loss[0]) > 0.0
+
+
 def test_mpc_backend_has_no_foothold_memory_or_output_grounding_symbols() -> None:
     root = GO2PVCNN_ROOT / "extension" / "batch_mpc_planner"
     source = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py"))
@@ -928,6 +1957,28 @@ def test_mpc_loss_registry_no_longer_uses_deleted_terms() -> None:
         assert token not in source, token
 
 
+def test_mpc_t302_losses_do_not_introduce_cpu_hot_path_patterns() -> None:
+    root = GO2PVCNN_ROOT / "extension" / "batch_mpc_planner"
+    files = [
+        root / "kinematics.py",
+        root / "losses" / "kinematics.py",
+        root / "losses" / "terrain_clearance.py",
+        root / "losses" / "tracking.py",
+        root / "losses" / "registry.py",
+        root / "planner.py",
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+    forbidden = [
+        ".cpu().numpy(",
+        ".numpy()",
+        "for env_id in range(",
+        "for batch_idx in range(",
+    ]
+    for token in forbidden:
+        assert token not in source, token
+
+
 def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
     terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     cfg.diagnostics.enabled = True
@@ -944,6 +1995,15 @@ def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
         "swing_clearance_terrain",
         "touchdown_surface",
         "touchdown_semantic",
+        "stance_semantic",
+        "body_collision",
+        "leg_collision",
+        "obstacle_risk_linear_scale",
+        "obstacle_risk_yaw_scale",
+        "obstacle_risk_linear_trigger_count",
+        "obstacle_risk_yaw_trigger_count",
+        "obstacle_risk_trigger_horizon_index",
+        "obstacle_risk_trigger_semantic_class",
         "swing_direction",
         "ik_joint_limit",
         "ik_fk_residual",
@@ -952,6 +2012,41 @@ def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
         "support_plane_rp",
     }
     assert expected.issubset(result.loss_breakdown)
+
+
+def test_mpc_cost_breakdown_exposes_t302_collision_and_risk_diagnostics() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    cfg.diagnostics.enabled = False
+    cfg.runtime.optimize_steps = 1
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    expected = {
+        "cost_total",
+        "stance_semantic",
+        "semantic_contact_avoid",
+        "low_small_crossing",
+        "body_collision",
+        "leg_collision",
+        "obstacle_risk_linear_scale",
+        "obstacle_risk_yaw_scale",
+    }
+    assert expected.issubset(result.cost_breakdown)
+
+
+def test_mpc_viewer_adapter_exposes_cost_breakdown_when_diagnostics_disabled() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    cfg.diagnostics.enabled = False
+    cfg.runtime.optimize_steps = 1
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+    viewer_result = _adapt_mpc_result_for_viewer(result)
+
+    assert result.loss_breakdown is None
+    assert viewer_result.loss_breakdown is not None
+    assert "obstacle_risk_linear_scale" in viewer_result.loss_breakdown
+    assert "obstacle_risk_yaw_scale" in viewer_result.loss_breakdown
+    assert "semantic_contact_avoid" in viewer_result.loss_breakdown
 
 
 def test_mpc_root_height_loss_penalizes_z_drift_from_nominal() -> None:
@@ -1021,6 +2116,30 @@ def test_task_cfg_can_override_loss_and_diagnostics_parameters() -> None:
         mpc_loss_stance_ground_weight=3.0,
         mpc_loss_swing_clearance_terrain_min_clearance_m=0.06,
         mpc_loss_touchdown_semantic_large_weight=80.0,
+        mpc_loss_touchdown_semantic_small_ids=(3,),
+        mpc_loss_stance_semantic_small_weight=12.0,
+        mpc_loss_stance_semantic_large_ids=(4, 5),
+        mpc_loss_semantic_contact_avoid_weight=7.0,
+        mpc_loss_semantic_contact_avoid_activation_margin=0.08,
+        mpc_loss_semantic_contact_avoid_worst_contact_weight=4.0,
+        mpc_loss_semantic_contact_avoid_soft_margin_m=0.16,
+        mpc_loss_semantic_contact_avoid_soft_field_weight=3.0,
+        mpc_loss_semantic_contact_avoid_soft_worst_field_weight=5.0,
+        mpc_loss_semantic_obstacle_soft_margin_m=0.22,
+        mpc_loss_semantic_obstacle_body_soft_field_weight=6.0,
+        mpc_loss_semantic_obstacle_body_soft_worst_field_weight=7.0,
+        mpc_loss_semantic_obstacle_foot_soft_field_weight=8.0,
+        mpc_loss_semantic_obstacle_foot_soft_worst_field_weight=9.0,
+        mpc_loss_body_collision_margin_m=0.07,
+        mpc_loss_leg_collision_shank_sample_count=3,
+        mpc_loss_obstacle_risk_high_small_relative_height_m=0.25,
+        mpc_loss_obstacle_risk_linear_scale_when_blocked=0.4,
+        mpc_loss_obstacle_risk_yaw_scale_when_blocked=0.6,
+        mpc_loss_low_small_crossing_weight=9.0,
+        mpc_loss_low_small_crossing_corridor_width_m=0.33,
+        mpc_loss_low_small_crossing_obstacle_depth_m=0.31,
+        mpc_loss_high_obstacle_avoidance_weight=11.0,
+        mpc_loss_high_obstacle_avoidance_lateral_clearance_m=0.37,
         mpc_loss_touchdown_surface_max_slope=0.45,
         mpc_loss_root_foot_center_weight=1.3,
         mpc_loss_root_height_enabled=False,
@@ -1047,6 +2166,30 @@ def test_task_cfg_can_override_loss_and_diagnostics_parameters() -> None:
     assert cfg.losses.stance_ground.weight == pytest.approx(3.0)
     assert cfg.losses.swing_clearance_terrain.min_clearance_m == pytest.approx(0.06)
     assert cfg.losses.touchdown_semantic.large_weight == pytest.approx(80.0)
+    assert cfg.losses.touchdown_semantic.small_ids == (3,)
+    assert cfg.losses.stance_semantic.small_weight == pytest.approx(12.0)
+    assert cfg.losses.stance_semantic.large_ids == (4, 5)
+    assert cfg.losses.semantic_contact_avoid.weight == pytest.approx(7.0)
+    assert cfg.losses.semantic_contact_avoid.activation_margin == pytest.approx(0.08)
+    assert cfg.losses.semantic_contact_avoid.worst_contact_weight == pytest.approx(4.0)
+    assert cfg.losses.semantic_contact_avoid.soft_margin_m == pytest.approx(0.16)
+    assert cfg.losses.semantic_contact_avoid.soft_field_weight == pytest.approx(3.0)
+    assert cfg.losses.semantic_contact_avoid.soft_worst_field_weight == pytest.approx(5.0)
+    assert cfg.losses.semantic_obstacle.soft_margin_m == pytest.approx(0.22)
+    assert cfg.losses.semantic_obstacle.body_soft_field_weight == pytest.approx(6.0)
+    assert cfg.losses.semantic_obstacle.body_soft_worst_field_weight == pytest.approx(7.0)
+    assert cfg.losses.semantic_obstacle.foot_soft_field_weight == pytest.approx(8.0)
+    assert cfg.losses.semantic_obstacle.foot_soft_worst_field_weight == pytest.approx(9.0)
+    assert cfg.losses.body_collision.margin_m == pytest.approx(0.07)
+    assert cfg.losses.leg_collision.shank_sample_count == 3
+    assert cfg.losses.obstacle_risk.high_small_relative_height_m == pytest.approx(0.25)
+    assert cfg.losses.obstacle_risk.linear_scale_when_blocked == pytest.approx(0.4)
+    assert cfg.losses.obstacle_risk.yaw_scale_when_blocked == pytest.approx(0.6)
+    assert cfg.losses.low_small_crossing.weight == pytest.approx(9.0)
+    assert cfg.losses.low_small_crossing.corridor_width_m == pytest.approx(0.33)
+    assert cfg.losses.low_small_crossing.obstacle_depth_m == pytest.approx(0.31)
+    assert cfg.losses.high_obstacle_avoidance.weight == pytest.approx(11.0)
+    assert cfg.losses.high_obstacle_avoidance.lateral_clearance_m == pytest.approx(0.37)
     assert cfg.losses.touchdown_surface.max_slope == pytest.approx(0.45)
     assert cfg.losses.root_foot_center.weight == pytest.approx(1.3)
     assert cfg.losses.root_height.enabled is False

@@ -1,0 +1,45 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_mpc_obstacle_risk_scales_trigger_when_planned_root_path_nears_high_obstacle _
+
+    def test_mpc_obstacle_risk_scales_trigger_when_planned_root_path_nears_high_obstacle() -> None:
+        height = torch.zeros((1, 5, 5), dtype=torch.float32)
+        semantic = torch.zeros((1, 5, 5), dtype=torch.long)
+        height[:, 2, 4] = 0.45
+        semantic[:, 2, 4] = 2
+        terrain = MpcPlannerTerrain(height_map=height, semantic_map=semantic, world_x_range=(-0.5, 0.5), world_y_range=(-0.5, 0.5))
+        root = torch.zeros((1, 4, 3), dtype=torch.float32)
+        root[:, :, 0] = torch.linspace(-0.35, 0.25, 4)
+        root[..., 2] = 0.30
+        rpy = torch.zeros_like(root)
+        rpy[..., 2] = 0.8
+        command = torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32)
+    
+        scales = obstacle_risk_scales(
+            terrain,
+            root,
+            rpy,
+            command,
+            small_ids=(1,),
+            large_ids=(2,),
+            high_small_relative_height_m=0.30,
+            linear_corridor_width_m=0.25,
+            linear_forward_distance_m=1.0,
+            yaw_swept_radius_m=0.50,
+            linear_scale_when_blocked=0.5,
+            yaw_scale_when_blocked=0.5,
+            linear_speed_eps=1.0e-4,
+            yaw_speed_eps=1.0e-4,
+        )
+    
+>       assert float(scales.linear_scale[0]) == pytest.approx(0.5)
+E       assert 1.0 == 0.5 ± 5.0e-07
+E         
+E         comparison failed
+E         Obtained: 1.0
+E         Expected: 0.5 ± 5.0e-07
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:1183: AssertionError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_obstacle_risk_scales_trigger_when_planned_root_path_nears_high_obstacle
+1 failed in 2.05s

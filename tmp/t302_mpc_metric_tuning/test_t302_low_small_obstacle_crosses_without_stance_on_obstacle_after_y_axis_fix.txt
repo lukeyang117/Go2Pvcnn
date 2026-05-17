@@ -1,0 +1,43 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.2, pluggy-1.6.0 -- /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/mydisk/lhy/testPvcnnWithIsaacsim/Go2Pvcnn
+plugins: mock-3.15.1, hydra-core-1.3.2, anyio-4.12.0, flaky-3.8.1
+collecting ... collected 1 item
+
+Go2Pvcnn/tests/test_mpc_body_leg_collision_headless.py::test_t302_low_small_obstacle_crosses_without_stance_on_obstacle PASSED [100%]
+
+============================== 1 passed in 23.74s ==============================
+[Info] [isaaclab.managers.manager_base] [RewardTermCfg:feet_slide] Found entity 'robot'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[15, 16, 17, 18]]
+2026-05-16 21:40:46 [12,751ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:feet_slide] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[4, 8, 14, 18]]
+2026-05-16 21:40:46 [12,751ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:undesired_contacts] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['Head_.*', '.*_hip', '.*_thigh', '.*_calf'] [[1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17]]
+2026-05-16 21:40:46 [12,752ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:reference_foot_pos] Found entity 'robot'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[15, 16, 17, 18]]
+2026-05-16 21:40:46 [12,752ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:reference_contact] Found entity 'contact_forces'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[4, 8, 14, 18]]
+2026-05-16 21:40:46 [12,752ms] [Info] [isaaclab.managers.manager_base] [RewardTermCfg:reference_touchdown] Found entity 'robot'.
+	Joint names: None [slice(None, None, None)]
+	Body names: ['.*_foot'] [[15, 16, 17, 18]]
+2026-05-16 21:40:56 [22,744ms] [Verbose] [carb] Client omni.usd acquiring interface omni::gpufoundation::IGpuFoundationFactory 0.1 from <default plugin>
+2026-05-16 21:40:56 [22,744ms] [Verbose] [carb] Returning interface 0x5688ad77ac30 as omni::gpufoundation::IGpuFoundationFactory 0.1 to client omni.usd
+2026-05-16 21:40:57 [22,893ms] [Verbose] [carb] Client omni.physx.foundation.plugin acquiring interface omni::kit::renderer::IGpuFoundation 1.1 from <default plugin>
+2026-05-16 21:40:57 [22,893ms] [Info] [omni.physx.plugin] Using CUDA device ordinal 0.
+2026-05-16 21:40:57 [22,908ms] [Info] [omni.kit.app.plugin] [23.099s] Simulation App Shutting Down
+2026-05-16 21:40:57 [22,908ms] [Verbose] [carb] Client omni.usd acquiring interface carb::progress::IProgress 1.0 from <default plugin>
+2026-05-16 21:40:57 [22,908ms] [Verbose] [carb] Returning interface 0x5688ad703e10 as carb::progress::IProgress 1.0 to client omni.usd
+2026-05-16 21:40:57 [22,908ms] [Verbose] [carb] Client carb.profiler.python acquiring interface carb::profiler::IProfiler 1.5 from carb.profiler-tracy.plugin
+2026-05-16 21:40:57 [22,908ms] [Verbose] [carb] Starting plugin discovery.
+2026-05-16 21:40:57 [22,908ms] [Verbose] [carb] Searching plugins in folder: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/
+2026-05-16 21:40:57 [22,908ms] [Verbose] [carb] Sorting and loading 1 matched plugins
+2026-05-16 21:40:57 [22,909ms] [Verbose] [carb] Finished plugin discovery.
+2026-05-16 21:40:57 [22,909ms] [Verbose] [carb] Client carb.profiler.python acquiring interface carb::profiler::IProfiler 1.5 from carb.profiler-tracy.plugin
+2026-05-16 21:40:57 [22,909ms] [Verbose] [carb] Client carb.python acquiring interface carb::logging::ILogging 1.2 from <default plugin>
+2026-05-16 21:40:57 [22,909ms] [Verbose] [carb] Returning interface 0x5688ac8b95b0 as carb::logging::ILogging 1.2 to client carb.python

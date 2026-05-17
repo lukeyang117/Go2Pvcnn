@@ -1,0 +1,52 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_mpc_semantic_obstacle_loss_penalizes_high_small_swing_but_ignores_low_small _
+
+    def test_mpc_semantic_obstacle_loss_penalizes_high_small_swing_but_ignores_low_small() -> None:
+        cfg = MpcPlannerCfg()
+        semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+        semantic[:, 4, 4] = 1
+        low_height = torch.zeros((1, 9, 9), dtype=torch.float32)
+        low_height[:, 4, 4] = 0.16
+        high_height = torch.zeros((1, 9, 9), dtype=torch.float32)
+        high_height[:, 4, 4] = 0.46
+        low = MpcPlannerTerrain(
+            height_map=low_height,
+            semantic_map=semantic.clone(),
+            world_x_range=(-0.4, 0.4),
+            world_y_range=(-0.4, 0.4),
+        )
+        high = MpcPlannerTerrain(
+            height_map=high_height,
+            semantic_map=semantic.clone(),
+            world_x_range=(-0.4, 0.4),
+            world_y_range=(-0.4, 0.4),
+        )
+        root = torch.zeros((1, 1, 3), dtype=torch.float32)
+        root[..., 2] = 0.30
+        rpy = torch.zeros_like(root)
+        foot = torch.zeros((1, 1, 4, 3), dtype=torch.float32)
+        foot[..., 2] = 0.20
+        contact = torch.zeros((1, 1, 4), dtype=torch.float32)
+        swing = torch.ones_like(contact)
+    
+        low_loss = semantic_obstacle_loss(
+            low,
+            root,
+            rpy,
+            foot,
+            contact,
+            swing,
+            small_weight=cfg.losses.semantic_obstacle.small_weight,
+            large_weight=cfg.losses.semantic_obstacle.large_weight,
+            body_weight=0.0,
+            foot_weight=1.0,
+            body_stencil_radius_m=0.0,
+>           high_small_relative_height_m=cfg.losses.semantic_obstacle.high_small_relative_height_m,
+        )
+E       AttributeError: 'MpcSemanticObstacleLossCfg' object has no attribute 'high_small_relative_height_m'
+
+Go2Pvcnn/tests/test_batch_mpc_backend.py:1875: AttributeError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_semantic_obstacle_loss_penalizes_high_small_swing_but_ignores_low_small
+1 failed in 1.97s

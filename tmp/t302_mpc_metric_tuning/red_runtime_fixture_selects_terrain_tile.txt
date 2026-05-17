@@ -1,0 +1,27 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_real_runtime_fixture_selects_requested_terrain_tile ___________
+
+    def test_real_runtime_fixture_selects_requested_terrain_tile():
+        calls = []
+    
+        class FakeViewer:
+            @staticmethod
+            def _apply_viewer_terrain_selection(scene, *, env_id: int, terrain_row: int, terrain_col: int):
+                calls.append((scene, env_id, terrain_row, terrain_col))
+                return torch.tensor((float(terrain_row), float(terrain_col), 0.0), dtype=torch.float32)
+    
+        fake_scene = object()
+        fixture = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+        fixture._viewer = FakeViewer()
+        fixture.base_env = type("FakeBaseEnv", (), {"scene": fake_scene})()
+        fixture.terrain_row = 1
+        fixture.terrain_col = 2
+    
+>       origin = fixture.select_terrain_tile(terrain_row=3, terrain_col=4)
+E       AttributeError: 'RealViewerRuntimeFixture' object has no attribute 'select_terrain_tile'
+
+Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py:401: AttributeError
+=========================== short test summary info ============================
+FAILED Go2Pvcnn/tests/test_viewer_runtime_diagnostics.py::test_real_runtime_fixture_selects_requested_terrain_tile
+1 failed in 1.85s

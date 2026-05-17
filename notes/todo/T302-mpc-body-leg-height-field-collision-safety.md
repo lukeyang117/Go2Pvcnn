@@ -5,9 +5,12 @@
 - T302 is a new design branch related to [T300e](T300e-mpc-continuous-swing-window-plan.md).
 - Purpose: add body/leg/foot height-field collision safety, semantic touchdown/stance obstacle rejection, and high-obstacle speed/yaw risk scaling to the active `batch_mpc_planner` MPC backend.
 - Written design: [../../docs/superpowers/specs/2026-05-16-mpc-body-leg-height-field-collision-safety-design.md](../../docs/superpowers/specs/2026-05-16-mpc-body-leg-height-field-collision-safety-design.md)
-- Status: design recorded; subagent requirements-coverage review found no P0 gaps; implementation plan is now written below.
+- Status: implemented and verified in the active `batch_mpc_planner` MPC backend.
 - Subagent coverage review found no P0 gaps; P1 clarifications were folded into the spec for semantic-small classification, all-direction scanner-mask risk detection, and T300e regression baseline reuse.
-- Implementation has not started. The current gate is choosing an execution mode for the written TDD plan.
+- Implementation adds GPU FK knee/shank samples, body/leg height-field collision losses, semantic stance obstacle rejection, high-obstacle tracking risk scaling, result diagnostics, COBBLESTONE headless coverage, and semantic low-small/large obstacle acceptance tests.
+- 2026-05-16 23:48 follow-up: T302 headless metrics were broadened to cover COBBLESTONE mixed velocity commands, low-small crossing for forward/back/lateral commands, high-small command-direction deweight/avoid behavior, large forward obstacle clearance, stance semantic collision ratio, and root-bottom/swing-foot/knee/shank collision ratios.
+- 2026-05-17 metric-driven tuning follow-up: stance losses now ignore frames below the exported `contact_threshold`, swing clearance now uses the exported swing threshold `1-contact_threshold`, and production defaults are `contact_threshold=0.40`, `min_clearance=0.12`, `swing_clearance weight=12`, `worst=12`, `optimize_steps=24`. Broad COBBLESTONE JSONL metrics keep root/knee/shank collision ratios at `0.0` and reduce the remaining swing-foot issue to one near-zero boundary sample (`min_swing_foot_clearance=-4.8e-05m`).
+- 2026-05-17 08:04 strict final follow-up: numeric strict testing then exposed residual high-small/large leg-collision risk, so production defaults were tightened to `leg_collision weight=16`, `knee_margin=0.06`, `shank_margin=0.06`, and `leg worst=16`. Fresh single-process real IsaacLab JSONL metrics now pass `17/17` strict rows with root-bottom/swing-foot/knee/shank collision ratios all `0.0`, low-small crossing in four directions, high-small non-crossing with `risk_linear_scale=0.5`, large forward/yaw deweighting, and stance semantic count `0`.
 
 ## Open Children
 
@@ -15,26 +18,36 @@
 | --- | --- | --- | --- | --- |
 | T302a | done | P0 | User spec review gate and subagent requirement coverage review are clean | `docs/superpowers/specs/2026-05-16-mpc-body-leg-height-field-collision-safety-design.md`, this page |
 | T302b | verify | P0 | TDD implementation plan is written in this branch page | `Go2Pvcnn/tests/`, `Go2Pvcnn/extension/batch_mpc_planner/` |
-| T302c | pending | P0 | Implement GPU kinematics outputs for knee/shank world samples without adding production files | `Go2Pvcnn/extension/batch_mpc_planner/losses/kinematics.py` |
-| T302d | pending | P0 | Implement height-field collision and semantic touchdown/stance losses | `terrain_clearance.py`, `registry.py`, `terrain.py`, `config.py` |
-| T302e | pending | P0 | Implement high-small/large command corridor and yaw-swept risk scaling for tracking losses | `tracking.py`, `registry.py`, `planner.py`, `config.py` |
-| T302f | pending | P0 | Add headless `env_isaacsim` acceptance for COBBLESTONE and flat semantic obstacles while preserving T300e metrics | `Go2Pvcnn/tests/` |
+| T302c | done | P0 | Implement GPU kinematics outputs for knee/shank world samples without adding production files | `Go2Pvcnn/extension/batch_mpc_planner/losses/kinematics.py` |
+| T302d | done | P0 | Implement height-field collision and semantic touchdown/stance losses | `terrain_clearance.py`, `registry.py`, `terrain.py`, `config.py` |
+| T302e | done | P0 | Implement high-small/large command corridor and yaw-swept risk scaling for tracking losses | `tracking.py`, `registry.py`, `planner.py`, `config.py` |
+| T302f | done | P0 | Add headless `env_isaacsim` acceptance for COBBLESTONE and flat semantic obstacles while preserving T300e metrics | `Go2Pvcnn/tests/` |
 
 ## Closed Children Archive
 
-- None yet.
+- T302c done: `MpcLegPoints` and `fk_leg_points_from_joint_angles` expose foot/knee/shank world samples; `evaluate_kinematics_for_loss` shares IK/FK data for losses.
+- T302d done: `body_heightfield_collision_loss`, `knee_shank_heightfield_collision_loss`, and `stance_semantic_obstacle_loss` are wired into `compute_total_loss`; stance uses semantic ids only, with `0` ground allowed and obstacle ids penalized.
+- T302e done: `obstacle_risk_scales` scans all terrain cells, handles command-corridor and yaw-only swept-region risk, and scales tracking loss while exporting non-loss diagnostics.
+- T302f done: headless T302 tests cover COBBLESTONE planned body/foot/knee/shank clearance, low small-obstacle crossing without stance on obstacles, and large/yaw obstacle risk scaling.
+- T302f follow-up done: headless T302 tests now also cover mixed COBBLESTONE velocity combinations, multi-direction low-small crossing, high-small non-crossing/deweight behavior, large forward obstacle clearance, and explicit root-bottom collision ratio.
+- T302 metric tuning done: numeric sweeps under [../../tmp/t302_mpc_metric_tuning/](../../tmp/t302_mpc_metric_tuning/) drove the final loss/config changes; `opt32` was not selected because `opt24` is required for future RL throughput and the final residual is a numerical boundary case.
+- T302 strict final tuning done: high-small/large knee and shank residuals drove the leg-collision defaults to `weight=16`, `knee/shank margin=0.06`, `worst=16`; fresh strict JSONL probes under [../../tmp/t302_mpc_metric_tuning/](../../tmp/t302_mpc_metric_tuning/) show `17/17` pass with all tested collision ratios `0.0`.
 
 ## Related Logs
 
 - [../log/2026-05-16-2200-t302-mpc-body-leg-collision-design.md](../log/2026-05-16-2200-t302-mpc-body-leg-collision-design.md)
 - [../log/2026-05-16-2231-t302-implementation-plan.md](../log/2026-05-16-2231-t302-implementation-plan.md)
+- [../log/2026-05-16-2309-t302-mpc-body-leg-collision-implementation.md](../log/2026-05-16-2309-t302-mpc-body-leg-collision-implementation.md)
+- [../log/2026-05-16-2348-t302-expanded-headless-metrics.md](../log/2026-05-16-2348-t302-expanded-headless-metrics.md)
+- [../log/2026-05-17-t302-mpc-metric-tuning.md](../log/2026-05-17-t302-mpc-metric-tuning.md)
+- [../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md](../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md)
 - T300e baseline acceptance: [../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
 
 ## Git Refs
 
 - Last Feature Commit: `pending`
-- Last Verified Commit: `pending`
-- Current Work Ref: `working tree on top of 3843555`
+- Last Verified Commit: `working tree on top of 769f7d4`
+- Current Work Ref: `working tree on top of 769f7d4`
 - Key Files:
   - [../../docs/superpowers/specs/2026-05-16-mpc-body-leg-height-field-collision-safety-design.md](../../docs/superpowers/specs/2026-05-16-mpc-body-leg-height-field-collision-safety-design.md)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/config.py](../../Go2Pvcnn/extension/batch_mpc_planner/config.py)
@@ -43,11 +56,19 @@
   - [../../Go2Pvcnn/extension/batch_mpc_planner/losses/terrain_clearance.py](../../Go2Pvcnn/extension/batch_mpc_planner/losses/terrain_clearance.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/losses/registry.py](../../Go2Pvcnn/extension/batch_mpc_planner/losses/registry.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/losses/tracking.py](../../Go2Pvcnn/extension/batch_mpc_planner/losses/tracking.py)
-  - [../../Go2Pvcnn/tests](../../Go2Pvcnn/tests)
+  - [../../Go2Pvcnn/extension/batch_mpc_planner/kinematics.py](../../Go2Pvcnn/extension/batch_mpc_planner/kinematics.py)
+  - [../../Go2Pvcnn/extension/batch_mpc_planner/planner.py](../../Go2Pvcnn/extension/batch_mpc_planner/planner.py)
+  - [../../Go2Pvcnn/extension/semantic_course.py](../../Go2Pvcnn/extension/semantic_course.py)
+  - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_semantic_viewer_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_semantic_viewer_env_cfg.py)
+  - [../../Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py](../../Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py)
+  - [../../Go2Pvcnn/tests/test_batch_mpc_backend.py](../../Go2Pvcnn/tests/test_batch_mpc_backend.py)
+  - [../../Go2Pvcnn/tests/test_mpc_body_leg_collision_headless.py](../../Go2Pvcnn/tests/test_mpc_body_leg_collision_headless.py)
 
 ## Next Step
 
-- Choose implementation mode and execute the plan below with TDD. Recommended: subagent-driven execution with one worker per independent slice and main-agent integration review.
+- Broaden runtime confidence beyond the compact headless acceptance by adding longer command-switch/yaw sequences and 4096-scale counters if T300e/T302 become the active training rollout target.
+- Treat the full-file T302 pytest fixture-reuse hang as an IsaacLab harness caveat; prefer the strict single-process JSONL probes for per-case numeric acceptance until fixture reuse is fixed.
 
 ## T302 Implementation Plan
 

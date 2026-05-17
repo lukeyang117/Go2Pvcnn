@@ -1,0 +1,33 @@
+{
+  "anchor_xy": [
+    15.122620839333498,
+    1.4420323970560998
+  ],
+  "high_avoid": 0.0,
+  "risk_count": 0.0,
+  "risk_linear_scale": 1.0,
+  "root0_xy": [
+    14.586169242858887,
+    1.730827808380127
+  ],
+  "root0_yaw": 0.38257434560846404,
+  "root_ground_z": 0.0,
+  "small_body_forward_max": 0.44744411505118326,
+  "small_body_forward_min": 0.3322754025754918,
+  "small_body_lateral_max": -0.41059539692785657,
+  "small_body_lateral_min": -0.5257649509591265,
+  "small_count": 109,
+  "small_forward_max": 0.586451530456543,
+  "small_forward_min": 0.4864521026611328,
+  "small_height_delta_max": 0.44499969482421875,
+  "small_lateral_max": -0.23879528045654297,
+  "small_lateral_min": -0.33879542350769043,
+  "small_nearby_delta_max": 0.44499969482421875,
+  "summary": {
+    "dx": 0.2546234130859375,
+    "dy": -0.07707381248474121,
+    "dyaw": -0.25784341738396455,
+    "dz": -0.13503733277320862,
+    "standstill": false
+  }
+}
