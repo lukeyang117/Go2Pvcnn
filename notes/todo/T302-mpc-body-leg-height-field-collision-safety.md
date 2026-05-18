@@ -11,6 +11,7 @@
 - 2026-05-16 23:48 follow-up: T302 headless metrics were broadened to cover COBBLESTONE mixed velocity commands, low-small crossing for forward/back/lateral commands, high-small command-direction deweight/avoid behavior, large forward obstacle clearance, stance semantic collision ratio, and root-bottom/swing-foot/knee/shank collision ratios.
 - 2026-05-17 metric-driven tuning follow-up: stance losses now ignore frames below the exported `contact_threshold`, swing clearance now uses the exported swing threshold `1-contact_threshold`, and production defaults are `contact_threshold=0.40`, `min_clearance=0.12`, `swing_clearance weight=12`, `worst=12`, `optimize_steps=24`. Broad COBBLESTONE JSONL metrics keep root/knee/shank collision ratios at `0.0` and reduce the remaining swing-foot issue to one near-zero boundary sample (`min_swing_foot_clearance=-4.8e-05m`).
 - 2026-05-17 08:04 strict final follow-up: numeric strict testing then exposed residual high-small/large leg-collision risk, so production defaults were tightened to `leg_collision weight=16`, `knee_margin=0.06`, `shank_margin=0.06`, and `leg worst=16`. Fresh single-process real IsaacLab JSONL metrics now pass `17/17` strict rows with root-bottom/swing-foot/knee/shank collision ratios all `0.0`, low-small crossing in four directions, high-small non-crossing with `risk_linear_scale=0.5`, large forward/yaw deweighting, and stance semantic count `0`.
+- 2026-05-18 T302g child created: independent MPC semantic RL train/play config design and implementation plan are recorded without changing T302 loss defaults or together defaults. T302g acceptance requires 4096 collect-data under `10s` and no T302 strict metric regression.
 
 ## Open Children
 
@@ -22,6 +23,7 @@
 | T302d | done | P0 | Implement height-field collision and semantic touchdown/stance losses | `terrain_clearance.py`, `registry.py`, `terrain.py`, `config.py` |
 | T302e | done | P0 | Implement high-small/large command corridor and yaw-swept risk scaling for tracking losses | `tracking.py`, `registry.py`, `planner.py`, `config.py` |
 | T302f | done | P0 | Add headless `env_isaacsim` acceptance for COBBLESTONE and flat semantic obstacles while preserving T300e metrics | `Go2Pvcnn/tests/` |
+| T302g | todo | P0 | Add independent MPC semantic RL train/play config with high-res semantic scanner, foot-only imitation, swing collision reward, dirty-subset 4096 timing gate, and T302 non-regression gate | [T302g branch](T302g-mpc-semantic-rl-training-config.md) |
 
 ## Closed Children Archive
 
@@ -41,6 +43,7 @@
 - [../log/2026-05-16-2348-t302-expanded-headless-metrics.md](../log/2026-05-16-2348-t302-expanded-headless-metrics.md)
 - [../log/2026-05-17-t302-mpc-metric-tuning.md](../log/2026-05-17-t302-mpc-metric-tuning.md)
 - [../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md](../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md)
+- [../log/2026-05-18-1036-t302g-mpc-semantic-rl-training-design-and-plan.md](../log/2026-05-18-1036-t302g-mpc-semantic-rl-training-design-and-plan.md)
 - T300e baseline acceptance: [../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
 
 ## Git Refs
