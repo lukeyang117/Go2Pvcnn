@@ -27,6 +27,9 @@ class SemanticGridRayCasterCfg(RayCasterCfg):
     height_scan_offset: float = 0.5
     """Subtracted from elevation per ray (matches :func:`isaaclab.envs.mdp.height_scan` default)."""
 
+    max_update_envs_per_call: int = 512
+    """Maximum env rows to ray-cast in one explicit subset refresh."""
+
     def __post_init__(self):
         from go2_pvcnn.sensor.semantic_raycaster.semantic_ray_caster import SemanticGridRayCaster
 

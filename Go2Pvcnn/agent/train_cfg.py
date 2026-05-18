@@ -9,7 +9,8 @@ def get_train_cfg(experiment_name: str) -> dict:
 
     Args:
         experiment_name: One of "teacher_semantic", "teacher_without_semantic", "teacher_elevation",
-            "teacher_elevation_semantic_map", "teacher_elevation_trajectory"
+            "teacher_elevation_semantic_map", "teacher_elevation_trajectory",
+            "teacher_elevation_trajectory_mpc_semantic"
 
     Returns:
         train_cfg dict for OnPolicyRunner
@@ -24,6 +25,8 @@ def get_train_cfg(experiment_name: str) -> dict:
         return _teacher_elevation_semantic_map_train_cfg()
     if experiment_name == "teacher_elevation_trajectory":
         return _teacher_elevation_trajectory_train_cfg()
+    if experiment_name == "teacher_elevation_trajectory_mpc_semantic":
+        return _teacher_elevation_trajectory_mpc_semantic_train_cfg()
     raise ValueError(f"Unknown experiment: {experiment_name}")
 
 
@@ -208,6 +211,16 @@ def _teacher_elevation_trajectory_train_cfg() -> dict:
     return _teacher_elevation_train_cfg()
 
 
+def _teacher_elevation_trajectory_mpc_semantic_train_cfg() -> dict:
+    """Training config for MPC semantic trajectory imitation."""
+    cfg = _teacher_elevation_semantic_map_train_cfg()
+    cfg["obs_groups"] = {
+        "policy": ["policy_elevation_semantic_map", "policy_state"],
+        "critic": ["critic_elevation_semantic_map", "critic_state"],
+    }
+    return cfg
+
+
 def _teacher_without_semantic_train_cfg() -> dict:
     """Training config for teacher_without_semantic (state-only, no CNN)."""
     return {
@@ -243,4 +256,3 @@ def _teacher_without_semantic_train_cfg() -> dict:
             "critic": ["critic"],
         },
     }
-

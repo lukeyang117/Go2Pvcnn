@@ -37,3 +37,30 @@ def downsampled_height_scan(env, sensor_cfg, target_size: int = 16, offset: floa
         raise ValueError(f"height_scan length {n_rays} is not a perfect square")
     high_res = flat.reshape(env.num_envs, side, side)
     return downsample_height_map(high_res, target_size=target_size).unsqueeze(1)
+
+
+def _semantic_priority_pool2d(semantic_map: torch.Tensor, target_size: int) -> torch.Tensor:
+    """Downsample semantic ids by priority instead of averaging class labels."""
+    if semantic_map.ndim != 3:
+        raise ValueError(f"Expected (batch, H, W), got shape {tuple(semantic_map.shape)}")
+    pooled = F.adaptive_max_pool2d(semantic_map.to(dtype=torch.float32).unsqueeze(1), (target_size, target_size))
+    return pooled.squeeze(1).to(dtype=semantic_map.dtype)
+
+
+def downsampled_elevation_semantic_scan(env, sensor_cfg, target_size: int = 16) -> torch.Tensor:
+    """Return a 2-channel CNN map from a high-resolution semantic height scanner.
+
+    Channel 0 is area-pooled elevation. Channel 1 is priority-pooled semantic id
+    where larger ids have higher priority: terrain=0, small obstacle=1,
+    large obstacle=2.
+    """
+    try:
+        sensor = env.scene.sensors[sensor_cfg.name]
+    except Exception:  # noqa: BLE001 - Isaac containers and tests are both duck-typed.
+        sensor = getattr(env.scene.sensors, sensor_cfg.name)
+    data = sensor.data
+    if getattr(data, "elevation_map", None) is None or getattr(data, "semantic_map", None) is None:
+        raise RuntimeError(f"{sensor_cfg.name} elevation_map/semantic_map not initialized")
+    elevation = downsample_height_map(data.elevation_map, target_size=target_size)
+    semantic = _semantic_priority_pool2d(data.semantic_map.to(dtype=torch.long), target_size=target_size)
+    return torch.stack((elevation, semantic.to(dtype=elevation.dtype)), dim=1)

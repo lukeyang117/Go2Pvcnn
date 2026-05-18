@@ -1,0 +1,60 @@
+{
+  "rows": [
+    {
+      "batch": 1,
+      "cost_mean": 2.294609308242798,
+      "device": "cuda:1",
+      "elapsed_ms": 1839.8410445079207,
+      "horizon": 25,
+      "iteration": 0,
+      "optimize_steps": 24,
+      "warmup": true
+    },
+    {
+      "batch": 1,
+      "cost_mean": 2.186660051345825,
+      "device": "cuda:1",
+      "elapsed_ms": 1823.2331592589617,
+      "horizon": 25,
+      "iteration": 1,
+      "optimize_steps": 24,
+      "warmup": false
+    },
+    {
+      "batch": 1,
+      "cost_mean": 2.186660051345825,
+      "device": "cuda:1",
+      "elapsed_ms": 1847.4528593942523,
+      "horizon": 25,
+      "iteration": 2,
+      "optimize_steps": 24,
+      "warmup": false
+    },
+    {
+      "batch": 1,
+      "cost_mean": 2.186660051345825,
+      "device": "cuda:1",
+      "elapsed_ms": 2059.468859806657,
+      "horizon": 25,
+      "iteration": 3,
+      "optimize_steps": 24,
+      "warmup": false
+    }
+  ],
+  "summary": {
+    "batch": 1,
+    "device": "cuda:1",
+    "horizon": 25,
+    "max_measured_ms": 2059.468859806657,
+    "mean_measured_ms": 1910.0516261532903,
+    "measured_elapsed_ms": [
+      1823.2331592589617,
+      1847.4528593942523,
+      2059.468859806657
+    ],
+    "min_measured_ms": 1823.2331592589617,
+    "num_envs": 1,
+    "optimize_steps": 24,
+    "warmup_elapsed_ms": 1839.8410445079207
+  }
+}

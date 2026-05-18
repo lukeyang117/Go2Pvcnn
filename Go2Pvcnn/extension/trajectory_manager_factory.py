@@ -8,6 +8,10 @@ import torch
 
 
 VALID_PLANNER_BACKENDS = ("together", "legacy", "mpc")
+TRAJECTORY_MANAGER_EXPERIMENTS = (
+    "teacher_elevation_trajectory",
+    "teacher_elevation_trajectory_mpc_semantic",
+)
 
 
 def planner_backend_from_cfg(cfg) -> str:
@@ -135,17 +139,18 @@ def attach_trajectory_manager(env, cfg, *, device=None):
 
 
 def attach_trajectory_manager_if_enabled(env, cfg, *, experiment_name: str | None = None, device=None):
-    if experiment_name is not None and experiment_name != "teacher_elevation_trajectory":
+    if experiment_name is not None and experiment_name not in TRAJECTORY_MANAGER_EXPERIMENTS:
         return None
     if not getattr(cfg, "planner_owned_reference_cache", False):
-        if experiment_name == "teacher_elevation_trajectory":
-            raise RuntimeError("teacher_elevation_trajectory requires planner_owned_reference_cache=True")
+        if experiment_name in TRAJECTORY_MANAGER_EXPERIMENTS:
+            raise RuntimeError(f"{experiment_name} requires planner_owned_reference_cache=True")
         return None
     return attach_trajectory_manager(env, cfg, device=device)
 
 
 __all__ = [
     "VALID_PLANNER_BACKENDS",
+    "TRAJECTORY_MANAGER_EXPERIMENTS",
     "attach_trajectory_manager",
     "attach_trajectory_manager_if_enabled",
     "create_trajectory_manager",

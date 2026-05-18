@@ -16,6 +16,7 @@ In scope:
 - Add a reward helper that uses IsaacLab robot body buffers, not planner FK, to penalize swing/leg collision risk.
 - Add tests for config wiring, semantic priority pooling, foot-only imitation reward wiring, dirty-subset MPC replanning, and 4096 real IsaacLab collect-data timing.
 - Add notes/log entries under the T302 tree.
+- Use `notes/todo/T302g-mpc-semantic-rl-training-config.md` as the execution todo source of truth. Do not create a separate new implementation plan document for the next implementation pass.
 
 Out of scope:
 
@@ -36,6 +37,13 @@ Parent relationship:
 - related-to `T300e`
 
 T302 parent remains the authority for collision-safety implementation and strict metric baselines. The new child records RL integration and performance evidence.
+
+Implementation tracking:
+
+- the T302g branch page owns the detailed child todo tree
+- each child node records files, acceptance, and verification evidence
+- the existing initial plan document is historical context only after this spec hardening
+- no new plan file should be created for the next implementation pass unless the user explicitly asks for one
 
 ## Task And File Layout
 
@@ -62,7 +70,7 @@ Modify:
 - `Go2Pvcnn/tests/test_batch_mpc_backend.py`
   - Adds focused local/unit tests for config and helper contracts.
 - `Go2Pvcnn/tests/test_mpc_runtime_headless.py`
-  - Adds real 4096 IsaacLab timing/counter acceptance.
+  - Adds real 4096 IsaacLab timing/counter acceptance that instantiates the new task, not the old viewer/play task.
 
 ## New Env Config
 
@@ -112,6 +120,15 @@ reference_height_scanner_name = "semantic_height_scanner"
 
 MPC and `swing_leg_collision_reward` consume the high-resolution scanner directly. The policy/critic only consume the downsampled map.
 
+Coordinate query contract:
+
+- reward-side high-resolution map queries must not map world `xy` into a fixed unrotated range
+- helper code must transform world body/link points into the scanner grid frame with the scanner pose and yaw
+- for the current yaw-attached scanner, the transform must use `scanner.data.pos_w`, `scanner.data.quat_w`, and the scanner pattern `size/resolution`
+- the index order must match `SemanticGridRayCaster` map layout and its `grid_pattern` flatten order
+- tests must include a translated and yawed scanner case so a fixed-world-range implementation fails
+- if a future scanner helper exposes an official world-point query API, the reward should call that helper instead of duplicating coordinate math
+
 ## CNN Observation Contract
 
 Observation shape:
@@ -146,6 +163,8 @@ planner_backend = "mpc"
 reference_height_scanner_name = "semantic_height_scanner"
 ```
 
+Both train and play config classes must set all four fields explicitly. They must not rely on inherited defaults for `planner_owned_reference_cache` or `use_batched_reference_trajectory`.
+
 Every MPC replan must read current IsaacLab robot buffers:
 
 - `robot.data.root_pos_w`
@@ -155,27 +174,53 @@ Every MPC replan must read current IsaacLab robot buffers:
 
 It must not roll forward from the previous MPC reference/cache as the source of current robot state.
 
-For 4096 training, replanning must stay dirty-subset based:
+For 4096 training, the new semantic task uses a global synchronized MPC replan mode, not the earlier dirty-subset refresh mode:
 
-- reset envs mark reset dirty
-- command/velocity changes mark command dirty
-- interval and stale envs mark lower-priority dirty
-- each refresh selects at most `mpc_max_dirty_envs_per_step`
-- `plan_segment(...)` receives only the selected rows
+- all environments share the same global MPC replan tick
+- the default target is full 4096-env MPC planning at that tick
+- `mpc_parallel_plan_batch_size` controls the maximum number of environments passed to one `plan_segment(...)` call
+- the default `mpc_parallel_plan_batch_size` is `4096`
+- if a 4096 call OOMs or proves unstable on the current GPU, only this resource knob should be reduced first, for example to `256`, `128`, or `64`
+- reducing `mpc_parallel_plan_batch_size` is an execution-detail fallback; it must preserve one logical global replan generation
+- each global generation snapshots all current IsaacLab robot states, commands, and scanner terrain before planning
+- chunked execution, when used, consumes that frozen snapshot rather than rereading live env state between chunks
 - result rows scatter back into a full-shaped cache
+- only environments with a successful new MPC plan receive MPC imitation reward for that generation
+
+Reset and command-change handling inside a generation:
+
+- if an environment resets after the global MPC plan, its `reference_foot_pos` reward is disabled until the next global replan tick
+- if an environment's velocity command changes after the global MPC plan, its `reference_foot_pos` reward is disabled until the next global replan tick
+- those environments are not replanned immediately in the middle of the interval
+- non-MPC rewards, including `swing_leg_collision_reward`, remain active
+- the disabled imitation reward must be implemented as a mask, not by tracking stale MPC foot targets
+
+Optional MPC reward sampling:
+
+- the default is to enable `reference_foot_pos` reward for every successfully planned environment
+- a later resource/learning experiment may add reward sampling across the successful set
+- reward sampling must be explicit and must not be confused with planning batch size; sampling rewards does not by itself reduce MPC planning time
 
 Default training parameters:
 
 ```python
 reference_trajectory_horizon = 50
 reference_replan_interval_steps = 50
-mpc_max_dirty_envs_per_step = 256
+mpc_replan_mode = "global_sync"
+mpc_parallel_plan_batch_size = 4096
 mpc_max_stale_steps = 100
 mpc_optimize_steps = 24
 mpc_diagnostics_emit_runtime_counters = False
 ```
 
 Diagnostics may be enabled in tests.
+
+Performance tuning constraint:
+
+- default `mpc_optimize_steps` remains `24`
+- timing work may optimize tensor paths, batching, caching, scanner queries, global snapshot handling, and `mpc_parallel_plan_batch_size`
+- timing work must not lower MPC collision/semantic loss quality, disable T302 safety losses, shorten the policy-facing foot reference horizon, or reduce optimizer quality just to pass the `10s` gate
+- any proposed MPC-quality change must first pass the T302 strict metric gate and preserve policy-facing foot trajectory shape/horizon
 
 ## Reward Contract
 
@@ -199,6 +244,7 @@ Add `swing_leg_collision_reward` as an RL reward term.
 Source of current robot geometry:
 
 - read IsaacLab simulated body/link positions from `robot.data.body_pos_w`
+- use link/body samples for `.*_thigh`, `.*_calf`, and `.*_foot`; do not reconstruct those samples from joint angles
 - prefer body-name filtering for `.*_thigh`, `.*_calf`, and `.*_foot`
 - do not solve FK from joint angles inside the reward
 - do not use MPC cache/reference as current state
@@ -208,6 +254,15 @@ Terrain source:
 - `semantic_height_scanner.data.elevation_map`
 - `semantic_height_scanner.data.semantic_map`
 - scanner pose/yaw for local-to-world query alignment as needed
+
+Swing/stance signal:
+
+- classify swing/stance from current IsaacLab contact state, not from planner contact imitation or MPC cache
+- use `contact_forces` with `body_names=".*_foot"` as the default contact source
+- a leg is stance when its current foot contact force magnitude is above `swing_collision_contact_force_threshold`
+- a leg is swing otherwise
+- map each `thigh/calf/foot` body sample to its leg by body name and broadcast that leg's swing/stance weight to all samples from the leg
+- if the current task lacks the configured contact sensor or foot body mapping, raise a clear `RuntimeError`
 
 Behavior:
 
@@ -221,6 +276,7 @@ Suggested exposed params:
 ```python
 swing_collision_height_margin_m = 0.04
 swing_collision_semantic_margin_m = 0.02
+swing_collision_contact_force_threshold = 1.0
 swing_collision_swing_weight = 1.0
 swing_collision_stance_weight = 0.25
 swing_collision_small_weight = 1.0
@@ -230,20 +286,34 @@ swing_collision_reward_scale = -1.0
 
 The reward must be vectorized and must not introduce per-env Python loops.
 
+Reward tests must prove:
+
+- same body/sample collision is penalized more strongly in swing than stance
+- large obstacle overlap is penalized more strongly than small obstacle overlap
+- translated/yawed scanner map queries hit the expected cell
+- the reward source does not call planner FK/IK helpers and does not read MPC reference cache as current state
+
 ## 4096 Collect-Data Performance Gate
 
 Add a real IsaacLab headless test for the new task at `num_envs=4096`.
 
 Acceptance:
 
-- collect-data / rollout collection timing is measured.
+- the test instantiates `Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0` or directly instantiates `TeacherElevationTrajectoryMpcSemanticEnvCfg`
+- the test asserts the active config class, `scene.num_envs == 4096`, `reference_height_scanner_name == "semantic_height_scanner"`, `planner_backend == "mpc"`, and the new observation/reward terms are active
+- the test must not rely on the current `viewer_runtime_diagnostics` fixture unless that fixture is extended with explicit `task_id` / `env_cfg_cls` selection and assertions proving the new task is active
+- collect-data / rollout collection timing is measured through the RSL-RL rollout collection path when available; raw `env.step(...)` timing alone is not sufficient for final acceptance
 - each measured collect-data pass must be under `10s`.
-- runtime counters show dirty-subset replanning:
-  - `selected_dirty_count <= mpc_max_dirty_envs_per_step`
-  - `dirty_backlog == dirty_count - selected_dirty_count`
+- runtime counters show global synchronized replanning:
+  - `replan_mode == "global_sync"`
+  - `planned_env_count == 4096` on full successful generations
+  - `parallel_plan_batch_size == mpc_parallel_plan_batch_size`
+  - `plan_chunk_count` records how many `plan_segment(...)` chunks were used
+  - `plan_success_count` and `reference_reward_enabled_count` are recorded
+  - reset/command-changed environments inside the interval reduce `reference_reward_enabled_count` until the next global generation
   - `planner_ms` and `cache_ms` are recorded when diagnostics are enabled.
 
-If timing exceeds `10s`, implementation is not complete. Optimize tensor paths, dirty-subset scheduling, reward sampling, terrain subset building, and avoid CPU/GPU sync. Do not reduce MPC effect quality to pass timing.
+If timing exceeds `10s`, implementation is not complete. First try full `mpc_parallel_plan_batch_size=4096`; if it OOMs or is unstable, reduce that parameter while preserving the global-generation semantics. Optimize tensor paths, snapshot reuse, reward masking, terrain building, and avoid CPU/GPU sync. Do not reduce MPC effect quality to pass timing.
 
 ## T302 Non-Regression Gate
 
@@ -277,14 +347,18 @@ Local/unit:
 - dual map observation shape
 - config defaults
 - train/play parser experiment choices
-- Gym registration
+- Gym registration with `gym.spec(...)` for both new Gym ids
+- regression assertion that existing `teacher_elevation_trajectory` mapping/default planner path remains unchanged
 - foot-only reference reward wiring
-- swing reward reads body positions, not planner FK
-- manager dirty-subset counters
+- swing reward reads current IsaacLab body/contact state, not planner FK/cache
+- swing reward applies stronger swing than stance weighting
+- scanner map query handles translation and yaw
+- manager global-sync replan counters
+- reset/command change disables MPC imitation reward until the next global replan
+- `mpc_parallel_plan_batch_size` chunks planning without changing global generation semantics
 
 Real IsaacLab:
 
 - new task smoke with small env count
-- 4096 collect-data timing under `10s`
+- 4096 RSL-RL collect-data timing under `10s` on the new MPC semantic task
 - T302 strict/headless non-regression evidence
-

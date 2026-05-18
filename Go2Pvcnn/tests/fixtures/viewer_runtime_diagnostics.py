@@ -789,6 +789,9 @@ class RealViewerRuntimeFixture:
         semantic_small_height_m: float | None = None,
         cobblestone_num_rows: int | None = None,
         cobblestone_num_cols: int | None = None,
+        task_id: str | None = None,
+        env_cfg_cls=None,
+        env_cfg_entry_point: str | None = None,
     ) -> None:
         self._closed = False
         self.env = None
@@ -804,6 +807,10 @@ class RealViewerRuntimeFixture:
             self._gym = gym
             self._viewer = viewer_module
             self._batched_generate_trajectory = batched_generate_trajectory
+            if env_cfg_cls is None and env_cfg_entry_point is not None:
+                module_name, class_name = env_cfg_entry_point.rsplit(":", 1)
+                module = __import__(module_name, fromlist=[class_name])
+                env_cfg_cls = getattr(module, class_name)
             self.num_envs = int(num_envs)
             self.device = str(device)
             self.terrain = str(terrain)
@@ -816,15 +823,29 @@ class RealViewerRuntimeFixture:
             self.terrain_row = 0
             self.terrain_col = 0
 
-            args_cli = SimpleNamespace(
-                num_envs=self.num_envs,
-                device=self.device,
-                terrain=self.terrain,
-                planner_backend=self.planner_backend,
-                n_frames=self.requested_n_frames,
-                plan_dt=0.02,
-            )
-            self.env_cfg = self._viewer._build_env_cfg(args_cli)
+            self.task_id = task_id or "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0"
+            if env_cfg_cls is None:
+                args_cli = SimpleNamespace(
+                    num_envs=self.num_envs,
+                    device=self.device,
+                    terrain=self.terrain,
+                    planner_backend=self.planner_backend,
+                    n_frames=self.requested_n_frames,
+                    plan_dt=0.02,
+                )
+                self.env_cfg = self._viewer._build_env_cfg(args_cli)
+            else:
+                self.env_cfg = env_cfg_cls()
+                self.env_cfg.scene.num_envs = self.num_envs
+                self.env_cfg.scene.env_spacing = 6.0
+                self.env_cfg.sim.device = self.device
+                self.env_cfg.sim.render_interval = self.env_cfg.decimation
+                if hasattr(self.env_cfg.events, "push_robot"):
+                    self.env_cfg.events.push_robot = None
+                self.env_cfg.commands.base_velocity.debug_vis = False
+                self.env_cfg.commands.base_velocity.ranges = self.env_cfg.commands.base_velocity.limit_ranges
+                self.env_cfg.planner_backend = self.planner_backend
+                self.env_cfg.reference_trajectory_horizon = self.requested_n_frames
             if semantic_small_height_m is not None:
                 from extension.semantic_course import SMALL_OBSTACLE_DIAMETER
 
@@ -846,7 +867,7 @@ class RealViewerRuntimeFixture:
             self.plan_dt = float(getattr(self.env_cfg, "plan_dt", self.env_cfg.decimation * self.env_cfg.sim.dt))
 
             self.env = self._gym.make(
-                "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
+                self.task_id,
                 cfg=self.env_cfg,
                 render_mode=None,
             )

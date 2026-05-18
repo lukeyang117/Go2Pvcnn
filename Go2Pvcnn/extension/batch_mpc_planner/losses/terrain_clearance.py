@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..terrain import _world_to_grid, height_at, semantic_at, slope_at, support_at
+from ..terrain import TerrainQueryCache, _world_to_grid, height_at, semantic_at, slope_at, support_at
 from ..types import MpcPlannerTerrain
 
 
@@ -127,8 +127,10 @@ def stance_ground_loss(
     contact_prob: Tensor,
     *,
     min_contact_prob: float = 0.0,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
-    terrain_z = height_at(terrain, foot_pos[..., :2]).to(dtype=foot_pos.dtype, device=foot_pos.device)
+    foot_xy = foot_pos[..., :2]
+    terrain_z = height_at(terrain, foot_xy, cache=query_cache).to(dtype=foot_pos.dtype, device=foot_pos.device)
     err = _smooth_l1_small(foot_pos[..., 2], terrain_z)
     weight = contact_prob.to(dtype=foot_pos.dtype)
     if float(min_contact_prob) > 0.0:
@@ -147,8 +149,10 @@ def swing_clearance_terrain_loss(
     hard_active_weight: bool = False,
     boundary_min_swing_prob: float = 0.0,
     boundary_weight: float = 0.0,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
-    terrain_z = height_at(terrain, foot_pos[..., :2]).to(dtype=foot_pos.dtype, device=foot_pos.device)
+    foot_xy = foot_pos[..., :2]
+    terrain_z = height_at(terrain, foot_xy, cache=query_cache).to(dtype=foot_pos.dtype, device=foot_pos.device)
     deficit = torch.relu(terrain_z + float(min_clearance_m) - foot_pos[..., 2])
     weight = swing_prob.to(dtype=foot_pos.dtype)
     if float(min_swing_prob) > 0.0:
@@ -183,6 +187,7 @@ def body_heightfield_collision_loss(
     bottom_offset_z: float,
     margin_m: float,
     stencil_xy: tuple[tuple[float, float], ...],
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
     """Penalize root-bottom samples that penetrate the height field."""
     offsets = torch.as_tensor(stencil_xy, dtype=root_pos.dtype, device=root_pos.device)
@@ -195,7 +200,7 @@ def body_heightfield_collision_loss(
     oy = offsets[:, 1].view(1, 1, -1)
     sample_xy = torch.stack((cy * ox - sy * oy, sy * ox + cy * oy), dim=-1) + root_pos[..., None, :2]
     sample_z = root_pos[..., None, 2] + float(bottom_offset_z)
-    terrain_z = height_at(terrain, sample_xy).to(dtype=root_pos.dtype, device=root_pos.device)
+    terrain_z = height_at(terrain, sample_xy, cache=query_cache).to(dtype=root_pos.dtype, device=root_pos.device)
     deficit = torch.relu(terrain_z + float(margin_m) - sample_z)
     return deficit.square().mean(dim=(1, 2))
 
@@ -208,11 +213,14 @@ def knee_shank_heightfield_collision_loss(
     knee_margin_m: float,
     shank_margin_m: float,
     worst_deficit_weight: float = 0.0,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
     """Penalize planned knee and shank sample points that collide with the height field."""
-    knee_h = height_at(terrain, knee_pos_world[..., :2]).to(dtype=knee_pos_world.dtype, device=knee_pos_world.device)
+    knee_xy = knee_pos_world[..., :2]
+    shank_xy = shank_sample_world[..., :2]
+    knee_h = height_at(terrain, knee_xy, cache=query_cache).to(dtype=knee_pos_world.dtype, device=knee_pos_world.device)
     knee_deficit = torch.relu(knee_h + float(knee_margin_m) - knee_pos_world[..., 2])
-    shank_h = height_at(terrain, shank_sample_world[..., :2]).to(
+    shank_h = height_at(terrain, shank_xy, cache=query_cache).to(
         dtype=shank_sample_world.dtype,
         device=shank_sample_world.device,
     )
@@ -287,6 +295,7 @@ def obstacle_risk_scales(
     yaw_scale_when_blocked: float,
     linear_speed_eps: float,
     yaw_speed_eps: float,
+    query_cache: TerrainQueryCache | None = None,
 ) -> ObstacleRiskScales:
     batch = int(root_pos.shape[0])
     dtype = root_pos.dtype
@@ -315,7 +324,8 @@ def obstacle_risk_scales(
     grid_sem = semantic.reshape(batch, -1)
     root0 = root_pos[:, 0]
     rpy0 = root_rpy[:, 0]
-    root_ground_z = height_at(terrain, root0[:, None, :2]).reshape(batch).to(dtype=dtype, device=device)
+    root0_xy = root0[:, None, :2]
+    root_ground_z = height_at(terrain, root0_xy, cache=query_cache).reshape(batch).to(dtype=dtype, device=device)
     small = _semantic_id_mask(grid_sem, small_ids)
     large = _semantic_id_mask(grid_sem, large_ids)
     high_small = torch.logical_and(small, (nearby_grid_z - root_ground_z[:, None]) > float(high_small_relative_height_m))
@@ -385,6 +395,7 @@ def low_small_crossing_progress_loss(
     pass_margin_m: float,
     obstacle_depth_m: float = 0.0,
     linear_speed_eps: float,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
     """Encourage crossing low small obstacles that lie in the commanded path."""
     batch = int(root_pos.shape[0])
@@ -405,7 +416,8 @@ def low_small_crossing_progress_loss(
 
     root0 = root_pos[:, 0]
     root_end = root_pos[:, -1]
-    root_ground_z = height_at(terrain, root0[:, None, :2]).reshape(batch).to(dtype=dtype, device=device)
+    root0_xy = root0[:, None, :2]
+    root_ground_z = height_at(terrain, root0_xy, cache=query_cache).reshape(batch).to(dtype=dtype, device=device)
     low_small = torch.logical_and(
         _semantic_id_mask(grid_sem, small_ids),
         (nearby_grid_z - root_ground_z[:, None]) <= float(high_small_relative_height_m),
@@ -457,6 +469,7 @@ def high_obstacle_avoidance_loss(
     lateral_clearance_m: float,
     longitudinal_influence_m: float,
     linear_speed_eps: float,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
     """Push the root path laterally around large and too-high small obstacles in the command corridor."""
     batch = int(root_pos.shape[0])
@@ -497,7 +510,8 @@ def high_obstacle_avoidance_loss(
     )
     left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
 
-    root_ground_z = height_at(terrain, root0[:, None, :2]).reshape(batch).to(dtype=dtype, device=device)
+    root0_xy = root0[:, None, :2]
+    root_ground_z = height_at(terrain, root0_xy, cache=query_cache).reshape(batch).to(dtype=dtype, device=device)
     small = _semantic_id_mask(grid_sem, small_ids)
     large = _semantic_id_mask(grid_sem, large_ids)
     high_small = torch.logical_and(small, (nearby_grid_z - root_ground_z[:, None]) > float(high_small_relative_height_m))
@@ -572,17 +586,19 @@ def touchdown_surface_loss(
     support_height_weight: float,
     support_slope_weight: float,
     invalid_support_weight: float,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
     touchdown_xy = touchdown_w[..., :2]
     touchdown_z = touchdown_w[..., 2]
-    terrain_z = height_at(terrain, touchdown_xy).to(dtype=touchdown_w.dtype, device=touchdown_w.device)
-    slope = slope_at(terrain, touchdown_xy, sample_step=float(slope_sample_step)).to(dtype=touchdown_w.dtype, device=touchdown_w.device)
+    terrain_z = height_at(terrain, touchdown_xy, cache=query_cache).to(dtype=touchdown_w.dtype, device=touchdown_w.device)
+    slope = slope_at(terrain, touchdown_xy, sample_step=float(slope_sample_step), cache=query_cache).to(dtype=touchdown_w.dtype, device=touchdown_w.device)
     support_xy, support_z, support_slope, invalid = support_at(
         terrain,
         touchdown_xy,
         search_radius=float(support_search_radius),
         search_step=float(support_search_step),
         max_support_slope=float(max_support_slope),
+        cache=query_cache,
     )
     support_xy = support_xy.to(dtype=touchdown_w.dtype, device=touchdown_w.device)
     support_z = support_z.to(dtype=touchdown_w.dtype, device=touchdown_w.device)
@@ -611,8 +627,9 @@ def touchdown_semantic_loss(
     *,
     small_weight: float,
     large_weight: float,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
-    semantic = semantic_at(terrain, touchdown_xy)
+    semantic = semantic_at(terrain, touchdown_xy, cache=query_cache)
     small = (semantic == 1).to(dtype=torch.float32, device=touchdown_xy.device)
     large = (semantic >= 2).to(dtype=torch.float32, device=touchdown_xy.device)
     return (float(small_weight) * small + float(large_weight) * large).mean(dim=-1)
@@ -629,8 +646,10 @@ def stance_semantic_obstacle_loss(
     small_weight: float,
     large_weight: float,
     min_contact_prob: float = 0.0,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
-    semantic = semantic_at(terrain, foot_pos[..., :2])
+    foot_xy = foot_pos[..., :2]
+    semantic = semantic_at(terrain, foot_xy, cache=query_cache)
     ground = _semantic_id_mask(semantic, ground_ids)
     small = torch.logical_and(_semantic_id_mask(semantic, small_ids), torch.logical_not(ground))
     large = torch.logical_and(_semantic_id_mask(semantic, large_ids), torch.logical_not(ground))
@@ -659,10 +678,12 @@ def semantic_contact_avoidance_loss(
     soft_margin_m: float = 0.0,
     soft_field_weight: float = 0.0,
     soft_worst_field_weight: float = 0.0,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
-    terrain_z = height_at(terrain, foot_pos[..., :2]).to(dtype=foot_pos.dtype, device=foot_pos.device)
+    foot_xy = foot_pos[..., :2]
+    terrain_z = height_at(terrain, foot_xy, cache=query_cache).to(dtype=foot_pos.dtype, device=foot_pos.device)
     near_terrain = foot_pos[..., 2] <= terrain_z + float(activation_margin)
-    semantic = semantic_at(terrain, foot_pos[..., :2])
+    semantic = semantic_at(terrain, foot_xy, cache=query_cache)
     ground = _semantic_id_mask(semantic, ground_ids)
     small = torch.logical_and(_semantic_id_mask(semantic, small_ids), torch.logical_not(ground))
     large = torch.logical_and(_semantic_id_mask(semantic, large_ids), torch.logical_not(ground))
@@ -722,10 +743,13 @@ def semantic_obstacle_loss(
     foot_soft_field_weight: float = 0.0,
     foot_soft_worst_field_weight: float = 0.0,
     high_small_relative_height_m: float | None = None,
+    query_cache: TerrainQueryCache | None = None,
 ) -> Tensor:
-    root_ground = height_at(terrain, root_pos[..., :2]).to(dtype=root_pos.dtype, device=root_pos.device)
-    foot_sem = semantic_at(terrain, foot_pos[..., :2])
-    terrain_z = height_at(terrain, foot_pos[..., :2]).to(dtype=foot_pos.dtype, device=foot_pos.device)
+    root_xy = root_pos[..., :2]
+    foot_xy = foot_pos[..., :2]
+    root_ground = height_at(terrain, root_xy, cache=query_cache).to(dtype=root_pos.dtype, device=root_pos.device)
+    foot_sem = semantic_at(terrain, foot_xy, cache=query_cache)
+    terrain_z = height_at(terrain, foot_xy, cache=query_cache).to(dtype=foot_pos.dtype, device=foot_pos.device)
     foot_small_mask = foot_sem == 1
     if high_small_relative_height_m is not None:
         foot_small_mask = torch.logical_and(
@@ -753,10 +777,10 @@ def semantic_obstacle_loss(
     ox = offsets[:, 0].view(1, 1, -1)
     oy = offsets[:, 1].view(1, 1, -1)
     body_xy = torch.stack((cy * ox - sy * oy, sy * ox + cy * oy), dim=-1) + root_pos[..., None, :2]
-    body_sem = semantic_at(terrain, body_xy)
+    body_sem = semantic_at(terrain, body_xy, cache=query_cache)
     body_small_mask = body_sem == 1
     if high_small_relative_height_m is not None:
-        body_height = height_at(terrain, body_xy).to(dtype=root_pos.dtype, device=root_pos.device)
+        body_height = height_at(terrain, body_xy, cache=query_cache).to(dtype=root_pos.dtype, device=root_pos.device)
         body_small_mask = torch.logical_and(
             body_small_mask,
             (body_height - root_ground[..., None]) > float(high_small_relative_height_m),
@@ -785,7 +809,8 @@ def semantic_obstacle_loss(
             dtype=root_pos.dtype,
             device=root_pos.device,
         ).reshape(int(height.shape[0]), int(height.shape[1]), int(height.shape[2]))
-        root0_ground = height_at(terrain, root_pos[:, :1, :2]).reshape(root_pos.shape[0], 1, 1).to(
+        root0_xy = root_pos[:, :1, :2]
+        root0_ground = height_at(terrain, root0_xy, cache=query_cache).reshape(root_pos.shape[0], 1, 1).to(
             dtype=root_pos.dtype,
             device=root_pos.device,
         )

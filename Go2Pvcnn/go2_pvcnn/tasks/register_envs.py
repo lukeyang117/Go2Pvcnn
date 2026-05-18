@@ -21,6 +21,10 @@ from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import (
     TeacherElevationTrajectoryEnvCfg,
     TeacherElevationTrajectoryEnvCfg_PLAY,
 )
+from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+    TeacherElevationTrajectoryMpcSemanticEnvCfg,
+    TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
+)
 
 ##
 # Register Gym environments
@@ -179,6 +183,26 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": TeacherElevationTrajectoryMpcSemanticEnvCfg,
+        "rsl_rl_cfg_entry_point": None,
+    },
+)
+
+gym.register(
+    id="Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": None,
+    },
+)
+
 print("[go2_pvcnn] Registered Go2 PVCNN environments:")
 print("[go2_pvcnn]   - Go2PvcnnEnv (training)")
 print("[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)")
@@ -195,3 +219,5 @@ print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + 
 print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)")
 print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)")
 print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)")
+print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0 (MPC semantic trajectory)")
+print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0 (MPC semantic play)")

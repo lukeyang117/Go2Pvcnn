@@ -39,10 +39,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "teacher_elevation",
             "teacher_elevation_semantic_map",
             "teacher_elevation_trajectory",
+            "teacher_elevation_trajectory_mpc_semantic",
         ],
         help="Experiment/task: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
         "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
-        "teacher_elevation_trajectory (high-res elevation + trajectory reward)",
+        "teacher_elevation_trajectory (high-res elevation + trajectory reward), "
+        "teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward)",
     )
     parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
     parser.add_argument(
@@ -61,8 +63,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--planner-backend",
         type=str,
         default=None,
-        choices=["together", "legacy"],
-        help="For teacher_elevation_trajectory: trajectory planner backend.",
+        choices=["together", "legacy", "mpc"],
+        help="For trajectory experiments: trajectory planner backend.",
     )
 
     AppLauncher.add_app_launcher_args(parser)
@@ -393,7 +395,7 @@ def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> 
     if manager is not None:
         print(
             f"[Planner] Attached {getattr(manager, 'planner_backend', 'legacy')} trajectory manager "
-            "for teacher_elevation_trajectory",
+            f"for {experiment_name}",
             flush=True,
         )
 
@@ -413,6 +415,9 @@ def main() -> int:
     from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg_PLAY
     from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg_PLAY
     from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg_PLAY
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
+    )
     from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg_PLAY
     from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -435,6 +440,10 @@ def main() -> int:
         "teacher_elevation_trajectory": (
             TeacherElevationTrajectoryEnvCfg_PLAY,
             "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
+        ),
+        "teacher_elevation_trajectory_mpc_semantic": (
+            TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
+            "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
         ),
     }
 
@@ -460,7 +469,7 @@ def main() -> int:
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
-    if experiment_name == "teacher_elevation_trajectory":
+    if experiment_name in ("teacher_elevation_trajectory", "teacher_elevation_trajectory_mpc_semantic"):
         _configure_reference_trajectory(
             env_cfg,
             use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),

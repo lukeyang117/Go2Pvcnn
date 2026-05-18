@@ -87,7 +87,31 @@ def ik_fk_residual_loss(
 ) -> Tensor:
     """Penalize foot targets that cannot be reproduced after IK + FK."""
     solved = solve_joint_angles_from_trajectory(root_pos, root_rpy, foot_pos, clamp_to_limits=True)
-    fk_foot = fk_feet_from_joint_angles(root_pos, root_rpy, solved)
+    return ik_fk_residual_loss_from_joint_angles(root_pos, root_rpy, foot_pos, contact_prob, solved, contact_weight=contact_weight)
+
+
+def ik_fk_residual_loss_from_joint_angles(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    foot_pos: Tensor,
+    contact_prob: Tensor,
+    joint_angles: Tensor,
+    *,
+    contact_weight: float,
+) -> Tensor:
+    """Penalize foot targets using precomputed clamped IK joint angles."""
+    fk_foot = fk_feet_from_joint_angles(root_pos, root_rpy, joint_angles)
+    return ik_fk_residual_loss_from_fk(foot_pos, contact_prob, fk_foot, contact_weight=contact_weight)
+
+
+def ik_fk_residual_loss_from_fk(
+    foot_pos: Tensor,
+    contact_prob: Tensor,
+    fk_foot: Tensor,
+    *,
+    contact_weight: float,
+) -> Tensor:
+    """Penalize foot targets using precomputed clamped-IK FK foot positions."""
     residual = torch.linalg.vector_norm(fk_foot - foot_pos, dim=-1)
     base = residual.mean(dim=(1, 2))
     contact_w = contact_prob.to(dtype=residual.dtype)
@@ -100,6 +124,8 @@ __all__ = [
     "MpcKinematicsForLoss",
     "evaluate_kinematics_for_loss",
     "ik_fk_residual_loss",
+    "ik_fk_residual_loss_from_fk",
+    "ik_fk_residual_loss_from_joint_angles",
     "joint_limit_loss_from_root_foot",
     "solve_ik_for_loss",
 ]

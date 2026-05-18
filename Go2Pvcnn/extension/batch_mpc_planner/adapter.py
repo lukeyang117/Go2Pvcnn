@@ -44,13 +44,13 @@ def result_new_ok_mask(result, *, num_envs: int, device: torch.device) -> Tensor
     safe_fallback = getattr(result, "safe_fallback", None)
     if feasible is None and safe_fallback is None:
         return torch.ones(num_envs, dtype=torch.bool, device=device)
-    feasible_t = torch.zeros(num_envs, dtype=torch.bool, device=device)
-    fallback_t = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    feasible_t = torch.ones(num_envs, dtype=torch.bool, device=device)
     if feasible is not None:
         feasible_t = torch.as_tensor(feasible, dtype=torch.bool, device=device)
     if safe_fallback is not None:
         fallback_t = torch.as_tensor(safe_fallback, dtype=torch.bool, device=device)
-    return torch.logical_or(feasible_t, fallback_t)
+        feasible_t = torch.logical_and(feasible_t, torch.logical_not(fallback_t))
+    return feasible_t
 
 
 def standstill_cache_from_state(states, *, horizon: int) -> ReferenceTrajectoryCache:

@@ -21,8 +21,10 @@ import argparse
 import math
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+from types import MethodType
 
 import torch
 
@@ -88,10 +90,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "teacher_elevation",
             "teacher_elevation_semantic_map",
             "teacher_elevation_trajectory",
+            "teacher_elevation_trajectory_mpc_semantic",
         ],
         help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
         "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
-        "teacher_elevation_trajectory (high-res elevation + trajectory reward).",
+        "teacher_elevation_trajectory (high-res elevation + trajectory reward), "
+        "teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward).",
     )
     parser.add_argument(
         "--verbose-planner",
@@ -104,7 +108,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="together",
         choices=["together", "legacy", "mpc"],
-        help="For teacher_elevation_trajectory: trajectory planner backend (together/legacy/mpc).",
+        help="For trajectory experiments: trajectory planner backend (together/legacy/mpc).",
     )
 
     AppLauncher.add_app_launcher_args(parser)
@@ -177,8 +181,153 @@ def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> 
     if manager is not None:
         print(
             f"[Planner] Attached {getattr(manager, 'planner_backend', 'legacy')} trajectory manager "
-            "for teacher_elevation_trajectory"
+            f"for {experiment_name}"
         )
+
+
+class _StepTimingProbe:
+    """Compact per-env-step timer for locating slow 4096 rollout stages."""
+
+    def __init__(self, env, *, label: str, max_prints: int = 5, cuda_sync: bool = True):
+        self.env = env
+        self.label = label
+        self.max_prints = max(0, int(max_prints))
+        self.cuda_sync = bool(cuda_sync)
+        self.step_idx = 0
+        self.totals: dict[str, float] = {}
+        self.counts: dict[str, int] = {}
+        self._orig_step = env.step
+
+    def _sync(self) -> None:
+        device = torch.device(getattr(self.env, "device", "cpu"))
+        if self.cuda_sync and device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+
+    def _now(self) -> float:
+        self._sync()
+        return time.perf_counter()
+
+    def record(self, name: str, elapsed: float) -> None:
+        self.totals[name] = self.totals.get(name, 0.0) + float(elapsed)
+        self.counts[name] = self.counts.get(name, 0) + 1
+
+    def wrap_method(self, obj, method_name: str, label: str) -> None:
+        if obj is None or not hasattr(obj, method_name):
+            return
+        original = getattr(obj, method_name)
+        if getattr(original, "_t302g_timed", False):
+            return
+
+        def timed(*args, **kwargs):
+            t0 = self._now()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                self.record(label, self._now() - t0)
+
+        timed._t302g_timed = True  # type: ignore[attr-defined]
+        setattr(obj, method_name, timed)
+
+    def wrap_env_step(self) -> None:
+        def timed_step(env_self, action):
+            self.step_idx += 1
+            self.totals = {}
+            self.counts = {}
+            t0 = self._now()
+            try:
+                return self._orig_step(action)
+            finally:
+                total = self._now() - t0
+                self.record("env.step.total", total)
+                if self.step_idx <= self.max_prints:
+                    ordered = [
+                        "env.step.total",
+                        "action.process",
+                        "action.apply",
+                        "scene.write",
+                        "sim.step",
+                        "scene.update",
+                        "termination.compute",
+                        "reward.compute",
+                        "reset_idx",
+                        "command.compute",
+                        "event.interval",
+                        "observation.compute",
+                    ]
+                    parts = []
+                    for key in ordered:
+                        if key in self.totals:
+                            parts.append(f"{key}={self.totals[key] * 1000.0:.2f}ms/{self.counts[key]}")
+                    extra = [key for key in self.totals if key not in ordered]
+                    for key in sorted(extra):
+                        parts.append(f"{key}={self.totals[key] * 1000.0:.2f}ms/{self.counts[key]}")
+                    print(f"[Timing][{self.label}] step={self.step_idx} " + " ".join(parts), flush=True)
+                    manager = getattr(env_self, "_trajectory_manager", None)
+                    if manager is not None and hasattr(manager, "runtime_counters"):
+                        counters = manager.runtime_counters()
+                        if counters:
+                            formatted = " ".join(f"{key}={value}" for key, value in sorted(counters.items()))
+                            print(f"[Timing][{self.label}][mpc_counters] step={self.step_idx} {formatted}", flush=True)
+
+        self.env.step = MethodType(timed_step, self.env)
+
+    def wrap_reward_terms(self) -> None:
+        manager = getattr(self.env, "reward_manager", None)
+        if manager is None or getattr(manager, "_t302g_reward_terms_timed", False):
+            return
+        original_compute = manager.compute
+
+        def timed_reward_compute(dt: float):
+            manager._reward_buf[:] = 0.0
+            term_parts = []
+            for name, term_cfg in zip(manager._term_names, manager._term_cfgs):
+                if term_cfg.weight == 0.0:
+                    continue
+                t0 = self._now()
+                value = term_cfg.func(manager._env, **term_cfg.params) * term_cfg.weight * dt
+                elapsed = self._now() - t0
+                self.record(f"reward.term.{name}", elapsed)
+                if self.step_idx <= self.max_prints:
+                    term_parts.append(f"{name}={elapsed * 1000.0:.2f}ms")
+                manager._reward_buf += value
+                manager._episode_sums[name] += value
+                manager._step_reward[:, manager._term_names.index(name)] = value / dt
+            if self.step_idx <= self.max_prints and term_parts:
+                print(f"[Timing][{self.label}][reward_terms] step={self.step_idx} " + " ".join(term_parts), flush=True)
+            return manager._reward_buf
+
+        timed_reward_compute._t302g_timed = True  # type: ignore[attr-defined]
+        manager.compute = timed_reward_compute
+        manager._t302g_reward_terms_timed = True
+        manager._t302g_original_compute = original_compute
+
+
+def _attach_step_timing_probe(env, experiment_name: str) -> None:
+    enabled = os.environ.get("T302G_STEP_TIMING", "")
+    if not enabled and experiment_name != "teacher_elevation_trajectory_mpc_semantic":
+        return
+    max_prints = int(os.environ.get("T302G_STEP_TIMING_STEPS", "5"))
+    cuda_sync = os.environ.get("T302G_STEP_TIMING_CUDA_SYNC", "1") != "0"
+    probe = _StepTimingProbe(env, label=experiment_name, max_prints=max_prints, cuda_sync=cuda_sync)
+    probe.wrap_method(env.action_manager, "process_action", "action.process")
+    probe.wrap_method(env.action_manager, "apply_action", "action.apply")
+    probe.wrap_method(env.scene, "write_data_to_sim", "scene.write")
+    probe.wrap_method(env.scene, "update", "scene.update")
+    probe.wrap_method(env.sim, "step", "sim.step")
+    probe.wrap_method(env.termination_manager, "compute", "termination.compute")
+    probe.wrap_method(env.reward_manager, "compute", "reward.compute")
+    probe.wrap_method(env.observation_manager, "compute", "observation.compute")
+    probe.wrap_method(env.command_manager, "compute", "command.compute")
+    probe.wrap_method(env.event_manager, "apply", "event.interval")
+    probe.wrap_method(env, "_reset_idx", "reset_idx")
+    probe.wrap_reward_terms()
+    probe.wrap_env_step()
+    env._t302g_step_timing_probe = probe
+    print(
+        f"[Timing] Enabled env.step timing for {experiment_name}: "
+        f"max_prints={max_prints}, cuda_sync={cuda_sync}",
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -193,6 +342,9 @@ def main() -> int:
     from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
     from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg
     from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        TeacherElevationTrajectoryMpcSemanticEnvCfg,
+    )
     from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
     from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
@@ -271,6 +423,10 @@ def main() -> int:
             TeacherElevationTrajectoryEnvCfg,
             "Isaac-Teacher-Elevation-Trajectory-Go2-v0",
         ),
+        "teacher_elevation_trajectory_mpc_semantic": (
+            TeacherElevationTrajectoryMpcSemanticEnvCfg,
+            "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
+        ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
     env_cfg = env_cfg_cls()
@@ -283,7 +439,7 @@ def main() -> int:
         env_cfg.seed = args_cli.seed
 
     # Planner verbosity is owned by the planner/manager path; the train CLI only toggles it.
-    if args_cli.experiment == "teacher_elevation_trajectory":
+    if args_cli.experiment in ("teacher_elevation_trajectory", "teacher_elevation_trajectory_mpc_semantic"):
         setattr(env_cfg, "verbose_planner", bool(getattr(args_cli, "verbose_planner", False)))
         if getattr(args_cli, "planner_backend", None) is not None:
             setattr(env_cfg, "planner_backend", str(args_cli.planner_backend))
@@ -329,6 +485,7 @@ def main() -> int:
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env: ManagerBasedRLEnv = env.unwrapped
     _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
+    _attach_step_timing_probe(base_env, experiment_name)
     
     print(f"[Env] Environment created successfully")
     print(f"  - observation_space: {env.observation_space}")
@@ -470,7 +627,7 @@ def main() -> int:
     
     # Training configuration from agent module
     train_cfg = get_train_cfg(experiment_name)
-    if experiment_name == "teacher_elevation_trajectory":
+    if experiment_name in ("teacher_elevation_trajectory", "teacher_elevation_trajectory_mpc_semantic"):
         # 4096-env trajectory runs with CNN elevation maps can exceed 24GB cards when
         # rollout horizon/minibatch are too large. Keep the CLI unchanged and apply a
         # runtime memory guardrail on the trainer config.
@@ -479,7 +636,7 @@ def main() -> int:
             old_steps = int(train_cfg["num_steps_per_env"])
             train_cfg["num_steps_per_env"] = 24
             print(
-                "[Runner][MemGuard] teacher_elevation_trajectory @ 4096 envs: "
+                f"[Runner][MemGuard] {experiment_name} @ 4096 envs: "
                 f"num_steps_per_env {old_steps} -> {train_cfg['num_steps_per_env']}"
             )
         algorithm_cfg = train_cfg.get("algorithm", {})
@@ -491,7 +648,7 @@ def main() -> int:
             if old_mini_batches < min_mini_batches:
                 algorithm_cfg["num_mini_batches"] = min_mini_batches
                 print(
-                    "[Runner][MemGuard] teacher_elevation_trajectory @ 4096 envs: "
+                    f"[Runner][MemGuard] {experiment_name} @ 4096 envs: "
                     f"num_mini_batches {old_mini_batches} -> {min_mini_batches}"
                 )
 

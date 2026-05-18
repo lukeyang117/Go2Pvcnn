@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 
 
@@ -263,8 +264,27 @@ def reference_foot_pos_reward(
     cache, frame_ids = _select_reference_frame(env)
     current_foot = _current_foot_positions_root(env, asset_cfg)
     ref_foot = _reference_field(env, cache, "foot_pos_root", frame_ids).to(dtype=current_foot.dtype)
+    if os.environ.get("T302G_DEBUG_REF_REWARD_FINITE", "0").strip() == "1":
+        if torch.any(~torch.isfinite(ref_foot)) or torch.any(~torch.isfinite(current_foot)):
+            manager = _trajectory_manager(env)
+            mask = None
+            if manager is not None and hasattr(manager, "reference_reward_mask"):
+                mask = manager.reference_reward_mask().detach().cpu().tolist()
+            print(
+                "[MPC][ReferenceFootRewardNonFinite] "
+                f"current_has_nonfinite={bool(torch.any(~torch.isfinite(current_foot)).item())} "
+                f"ref_has_nonfinite={bool(torch.any(~torch.isfinite(ref_foot)).item())} "
+                f"frame_ids={frame_ids.detach().cpu().tolist()} "
+                f"reward_mask={mask}",
+                flush=True,
+            )
     err = foot_position_error(current_foot, ref_foot)
-    return exponential_tracking_reward(err, sigma=sigma)
+    reward = exponential_tracking_reward(err, sigma=sigma)
+    manager = _trajectory_manager(env)
+    if manager is not None and hasattr(manager, "reference_reward_mask"):
+        mask = manager.reference_reward_mask().to(device=reward.device, dtype=reward.dtype)
+        reward = reward * mask
+    return reward
 
 
 def reference_contact_reward(
@@ -305,6 +325,135 @@ def reference_touchdown_reward(
     return exponential_tracking_reward(err, sigma=sigma)
 
 
+def _scene_get(scene, name: str):
+    try:
+        return scene[name]
+    except Exception:  # noqa: BLE001 - Isaac scene containers and tests are both duck-typed.
+        return getattr(scene, name)
+
+
+def _sensor_get(scene, name: str):
+    sensors = getattr(scene, "sensors", None)
+    if sensors is not None:
+        try:
+            return sensors[name]
+        except Exception:  # noqa: BLE001
+            if hasattr(sensors, name):
+                return getattr(sensors, name)
+    return _scene_get(scene, name)
+
+
+def _normalize_body_name(name: str) -> str:
+    return str(name).split("/")[-1].split(":")[-1].lower()
+
+
+def _body_ids_and_names(robot, pattern: str):
+    body_ids, body_names = robot.find_bodies(pattern)
+    return [int(i) for i in body_ids], list(body_names)
+
+
+def _leg_prefix(name: str) -> str:
+    normalized = _normalize_body_name(name)
+    return normalized.split("_", 1)[0]
+
+
+def _scanner_terrain(scanner, *, device):
+    from extension.batch_mpc_planner.terrain import MpcPlannerTerrain
+    from extension.convention import extract_yaw_batch
+
+    elevation = torch.as_tensor(scanner.data.elevation_map, dtype=torch.float32, device=device)
+    semantic = torch.as_tensor(scanner.data.semantic_map, dtype=torch.long, device=device)
+    pattern_cfg = getattr(getattr(scanner, "cfg", None), "pattern_cfg", None)
+    size = getattr(pattern_cfg, "size", (1.5, 1.5))
+    half_x = 0.5 * float(size[0])
+    half_y = 0.5 * float(size[1])
+    sensor_pos = torch.as_tensor(scanner.data.pos_w, dtype=torch.float32, device=device)
+    sensor_quat = torch.as_tensor(scanner.data.quat_w, dtype=torch.float32, device=device)
+    return MpcPlannerTerrain(
+        height_map=elevation,
+        semantic_map=semantic,
+        world_x_range=(-half_x, half_x),
+        world_y_range=(-half_y, half_y),
+        sensor_pos_w=sensor_pos,
+        sensor_yaw=extract_yaw_batch(sensor_quat),
+    )
+
+
+def swing_leg_collision_reward(
+    env,
+    clearance: float = 0.04,
+    contact_force_threshold: float = 1.0,
+    stance_weight: float = 0.25,
+    swing_weight: float = 1.0,
+    terrain_weight: float = 1.0,
+    small_obstacle_weight: float = 2.0,
+    large_obstacle_weight: float = 5.0,
+    asset_cfg=None,
+    sensor_cfg=None,
+    scanner_cfg=None,
+) -> torch.Tensor:
+    """Penalize current leg bodies that intersect the semantic height field.
+
+    This uses IsaacLab's current body/contact/scanner buffers. It intentionally
+    does not use planner FK/IK or reference-cache state.
+    """
+    from extension.batch_mpc_planner.terrain import height_at, semantic_at
+
+    if asset_cfg is None:
+        from isaaclab.managers import SceneEntityCfg
+
+        asset_cfg = SceneEntityCfg("robot")
+    if sensor_cfg is None:
+        from isaaclab.managers import SceneEntityCfg
+
+        sensor_cfg = SceneEntityCfg("contact_forces", body_names=".*_foot")
+    if scanner_cfg is None:
+        from isaaclab.managers import SceneEntityCfg
+
+        scanner_cfg = SceneEntityCfg("semantic_height_scanner")
+
+    device = torch.device(getattr(env, "device", "cpu"))
+    robot = _scene_get(env.scene, asset_cfg.name)
+    contact_sensor = _sensor_get(env.scene, sensor_cfg.name)
+    scanner = _sensor_get(env.scene, scanner_cfg.name)
+
+    leg_body_ids, leg_body_names = _body_ids_and_names(robot, ".*_(thigh|calf|foot)")
+    if len(leg_body_ids) == 0:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=device)
+    foot_body_ids, foot_body_names = _body_ids_and_names(robot, ".*_foot")
+    leg_ids = torch.as_tensor(leg_body_ids, dtype=torch.long, device=device)
+    body_pos = torch.as_tensor(robot.data.body_pos_w, dtype=torch.float32, device=device)[:, leg_ids, :]
+
+    force_ids = getattr(sensor_cfg, "body_ids", None)
+    if force_ids is None:
+        force_ids = list(range(len(foot_body_ids)))
+    force_ids_t = torch.as_tensor(force_ids, dtype=torch.long, device=device)
+    forces = torch.as_tensor(contact_sensor.data.net_forces_w, dtype=torch.float32, device=device)[:, force_ids_t, :]
+    foot_contact = torch.linalg.norm(forces, dim=-1) > float(contact_force_threshold)
+
+    foot_prefix_to_col = {_leg_prefix(name): i for i, name in enumerate(foot_body_names)}
+    leg_contact_cols = [foot_prefix_to_col.get(_leg_prefix(name), -1) for name in leg_body_names]
+    valid_cols = torch.as_tensor([max(0, col) for col in leg_contact_cols], dtype=torch.long, device=device)
+    leg_has_foot = torch.as_tensor([col >= 0 for col in leg_contact_cols], dtype=torch.bool, device=device)
+    stance = foot_contact[:, valid_cols] & leg_has_foot.unsqueeze(0)
+    leg_weight = torch.where(
+        stance,
+        torch.full_like(body_pos[..., 2], float(stance_weight)),
+        torch.full_like(body_pos[..., 2], float(swing_weight)),
+    )
+
+    terrain = _scanner_terrain(scanner, device=device)
+    body_xy = body_pos[..., :2]
+    terrain_z = height_at(terrain, body_xy).to(dtype=body_pos.dtype, device=device)
+    semantic = semantic_at(terrain, body_xy).to(device=device)
+    clearance_violation = (terrain_z + float(clearance) - body_pos[..., 2]).clamp_min(0.0)
+    semantic_weight = torch.ones_like(clearance_violation) * float(terrain_weight)
+    semantic_weight = torch.where(semantic == 1, torch.full_like(semantic_weight, float(small_obstacle_weight)), semantic_weight)
+    semantic_weight = torch.where(semantic >= 2, torch.full_like(semantic_weight, float(large_obstacle_weight)), semantic_weight)
+    penalty = clearance_violation * semantic_weight * leg_weight
+    return -penalty.sum(dim=1)
+
+
 def zero_reference_reward(env, value: float = 0.0) -> torch.Tensor:
     """Fallback constant reward."""
     return torch.full((env.num_envs,), float(value), device=env.device)
@@ -329,6 +478,7 @@ __all__ = [
     "reference_touchdown_reward",
     "root_orientation_error",
     "root_position_error",
+    "swing_leg_collision_reward",
     "touchdown_position_error",
     "zero_reference_reward",
 ]

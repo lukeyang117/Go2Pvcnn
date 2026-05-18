@@ -9,6 +9,8 @@ import math
 import statistics
 from typing import Any, NamedTuple, Literal
 
+from isaaclab.terrains import TerrainImporter
+
 
 SEMANTIC_COURSE_ROOT = "/World/semantic_course"
 SEMANTIC_COURSE_SMALL_ROOT = f"{SEMANTIC_COURSE_ROOT}/small"
@@ -659,6 +661,36 @@ def spawn_semantic_course_prestartup(
 
     if scene.num_envs > 0:
         set_scene_env_to_representative_stage(scene, env_id=0, stage=default_stage)
+
+
+class SemanticCourseTerrainImporter(TerrainImporter):
+    """Terrain importer that creates the static semantic course before scene sensors initialize."""
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.spawn_static_semantic_course()
+
+    def spawn_static_semantic_course(self) -> None:
+        if self.terrain_origins is None:
+            raise RuntimeError("Semantic course generation requires terrain origins from a generated terrain.")
+        ensure_semantic_course_roots()
+        clear_semantic_course_children()
+        terrain_generator = getattr(self.cfg, "terrain_generator", None)
+        anchors = build_course_anchors(
+            self.terrain_origins,
+            terrain_generator=terrain_generator,
+            tile_size=getattr(self.cfg, "semantic_course_tile_size", None),
+            semantic_course_seed=int(getattr(self.cfg, "semantic_course_seed", DEFAULT_SEMANTIC_COURSE_SEED)),
+            layout_cfg=getattr(self.cfg, "semantic_course_layout_cfg", DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG),
+            scale_profile_overrides=getattr(self.cfg, "semantic_course_scale_profile_overrides", None),
+        )
+        obstacles = _ground_with_runtime_terrain_sampler(
+            anchors,
+            device=self.device,
+            grounding_cfg=getattr(self.cfg, "semantic_course_grounding_cfg", DEFAULT_SEMANTIC_COURSE_GROUNDING_CFG),
+        )
+        for obstacle in obstacles:
+            _spawn_grounded_shape(obstacle)
 
 
 def ensure_semantic_course_roots() -> None:

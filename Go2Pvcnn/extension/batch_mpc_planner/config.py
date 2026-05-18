@@ -22,9 +22,7 @@ class MpcRuntimeCfg:
     detach_cache_on_write: bool = True
     heavy_loss_stride: int = 2
     heavy_loss_enable_from_iter: int = 8
-    selection_mode: str = "fixed_topk_priority"
-    max_dirty_envs_per_step: int = 256
-    target_dirty_ratio: float = 0.05
+    parallel_plan_batch_size: int = 4096
     randomize_replan_phase: bool = True
     randomize_command_phase: bool = True
     command_hard_lin_delta: float = 0.25
@@ -332,7 +330,9 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     runtime.dt = _copy_if_has(task_cfg, "plan_dt", float, runtime.dt)
     runtime.replan_interval_steps = _copy_if_has(task_cfg, "reference_replan_interval_steps", int, runtime.replan_interval_steps)
     runtime.max_stale_steps = _copy_if_has(task_cfg, "mpc_max_stale_steps", int, runtime.max_stale_steps)
-    runtime.max_dirty_envs_per_step = _copy_if_has(task_cfg, "mpc_max_dirty_envs_per_step", int, runtime.max_dirty_envs_per_step)
+    runtime.parallel_plan_batch_size = _copy_if_has(
+        task_cfg, "mpc_parallel_plan_batch_size", int, runtime.parallel_plan_batch_size
+    )
     runtime.optimize_steps = _copy_if_has(task_cfg, "mpc_optimize_steps", int, runtime.optimize_steps)
     runtime.lr = _copy_if_has(task_cfg, "mpc_lr", float, runtime.lr)
     runtime.contact_threshold = _copy_if_has(task_cfg, "mpc_contact_threshold", float, runtime.contact_threshold)
@@ -565,10 +565,8 @@ def validate_mpc_config(cfg: MpcPlannerCfg) -> None:
         raise ValueError("runtime.dt must be positive")
     if cfg.runtime.optimize_steps < 0:
         raise ValueError("runtime.optimize_steps must be >= 0")
-    if cfg.runtime.max_dirty_envs_per_step <= 0:
-        raise ValueError("runtime.max_dirty_envs_per_step must be positive")
-    if cfg.runtime.selection_mode not in ("fixed_topk_priority",):
-        raise ValueError("runtime.selection_mode must be 'fixed_topk_priority'")
+    if cfg.runtime.parallel_plan_batch_size <= 0:
+        raise ValueError("runtime.parallel_plan_batch_size must be positive")
     if cfg.runtime.touchdown_event_cap <= 0:
         raise ValueError("runtime.touchdown_event_cap must be positive")
     if len(cfg.runtime.leg_phase_offsets) != 4:

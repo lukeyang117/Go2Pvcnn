@@ -274,6 +274,7 @@ class SemanticGridRayCaster(RayCaster):
         self._grid_ny: int = 0
         self._combined_wp_mesh = None
         self._face_semantic_ids: torch.Tensor | None = None
+        self._late_semantic_mesh_refresh_done = False
         try:
             self._semantic_dbg_remaining = max(0, int(os.environ.get("SEMANTIC_RAYCASTER_DEBUG", "0")))
         except ValueError:
@@ -288,12 +289,23 @@ class SemanticGridRayCaster(RayCaster):
         vertex_offset = 0
         for mesh_prim_path in self.cfg.mesh_prim_paths:
             semantic_id = int(self.cfg.mesh_semantic_ids[mesh_prim_path])
-            submeshes = _usd_prim_to_world_trimeshes(mesh_prim_path)
+            try:
+                submeshes = _usd_prim_to_world_trimeshes(mesh_prim_path)
+            except RuntimeError as exc:
+                if semantic_id == 0:
+                    raise
+                logger.info(
+                    "SemanticGridRayCaster: late semantic root %r is not available yet; skipping semantic=%d. Error: %s",
+                    mesh_prim_path,
+                    semantic_id,
+                    exc,
+                )
+                continue
             if not submeshes:
                 if semantic_id == 0:
                     raise RuntimeError(f"No supported geometry descendants under required root: {mesh_prim_path!r}")
                 logger.info(
-                    "SemanticGridRayCaster: semantic root %r is present but empty; skipping semantic=%d.",
+                    "SemanticGridRayCaster: late semantic root %r is present but empty; skipping semantic=%d.",
                     mesh_prim_path,
                     semantic_id,
                 )
@@ -351,6 +363,31 @@ class SemanticGridRayCaster(RayCaster):
                 flush=True,
             )
 
+    def _has_all_configured_semantic_ids(self) -> bool:
+        if self._face_semantic_ids is None:
+            return False
+        present = torch.unique(self._face_semantic_ids).detach().cpu().tolist()
+        required = {int(v) for v in self.cfg.mesh_semantic_ids.values() if int(v) != 0}
+        return required.issubset({int(v) for v in present})
+
+    def _semantic_roots_have_geometry(self) -> bool:
+        for mesh_prim_path in self.cfg.mesh_prim_paths:
+            semantic_id = int(self.cfg.mesh_semantic_ids[mesh_prim_path])
+            if semantic_id == 0:
+                continue
+            if _usd_prim_to_world_trimeshes(mesh_prim_path):
+                return True
+        return False
+
+    def _refresh_late_semantic_mesh_if_needed(self) -> None:
+        """Rebuild the warp mesh if startup-generated semantic ids 1/2 appeared after sensor init."""
+        if self._late_semantic_mesh_refresh_done or self._has_all_configured_semantic_ids():
+            return
+        if not self._semantic_roots_have_geometry():
+            return
+        self._initialize_warp_meshes()
+        self._late_semantic_mesh_refresh_done = self._has_all_configured_semantic_ids()
+
     def _initialize_rays_impl(self):
         super()._initialize_rays_impl()
         nx, ny = _grid_nx_ny_from_pattern(self.cfg, self._device)
@@ -370,9 +407,35 @@ class SemanticGridRayCaster(RayCaster):
                 flush=True,
             )
 
+    def update_env_ids(self, env_ids: Sequence[int] | torch.Tensor):
+        """Refresh only selected env rows without triggering SensorBase's full outdated pass."""
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device).reshape(-1)
+        if int(ids.numel()) == 0:
+            return self._data
+        if int(ids.numel()) > 0:
+            valid = torch.logical_and(ids >= 0, ids < self._num_envs)
+            if not bool(torch.all(valid)):
+                bad = ids[torch.logical_not(valid)]
+                raise IndexError(
+                    f"SemanticGridRayCaster env_ids out of bounds for num_envs={self._num_envs}; "
+                    f"first bad ids={bad[:8].tolist()}"
+                )
+        chunk_size = max(1, int(getattr(self.cfg, "max_update_envs_per_call", 64)))
+        for chunk_ids in ids.split(chunk_size):
+            self._update_buffers_impl(chunk_ids)
+            self._timestamp_last_update[chunk_ids] = self._timestamp[chunk_ids]
+            self._is_outdated[chunk_ids] = False
+        return self._data
+
+    def _update_outdated_buffers(self):
+        outdated_env_ids = self._is_outdated.nonzero().squeeze(-1)
+        if len(outdated_env_ids) > 0:
+            self.update_env_ids(outdated_env_ids)
+
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         if self._combined_wp_mesh is None or self._face_semantic_ids is None:
             raise RuntimeError("SemanticGridRayCaster: combined mesh not initialized.")
+        self._refresh_late_semantic_mesh_if_needed()
 
         # Inline pose + world rays (matches pre-``_update_ray_infos`` RayCaster; works with XFormPrim / XformPrimView).
         if isinstance(self._view, physx.ArticulationView):

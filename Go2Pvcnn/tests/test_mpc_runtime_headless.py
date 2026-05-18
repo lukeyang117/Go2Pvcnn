@@ -1014,7 +1014,16 @@ def real_semantic_mpc_runtime():
 def real_semantic_mpc_runtime_4096():
     if not _enable_4096_runtime_test():
         pytest.skip("Set MPC_RUNTIME_4096=1 to run 4096-env IsaacLab headless runtime acceptance.")
-    kwargs = {"num_envs": 4096, "planner_backend": "mpc", "warmup_steps": 2}
+    kwargs = {
+        "num_envs": 4096,
+        "planner_backend": "mpc",
+        "warmup_steps": 2,
+        "task_id": "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
+        "env_cfg_entry_point": (
+            "go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg:"
+            "TeacherElevationTrajectoryMpcSemanticEnvCfg"
+        ),
+    }
     device = _runtime_device_override()
     if device is not None:
         kwargs["device"] = device
@@ -1841,14 +1850,14 @@ def test_mpc_runtime_diagnostics_layer_emits_hard_mask_when_enabled(real_semanti
     assert torch.as_tensor(forward.result.status).numel() == 1
 
 
-def test_mpc_runtime_4096_headless_dirty_budget_counters(real_semantic_mpc_runtime_4096):
+def test_mpc_runtime_4096_headless_global_sync_sample_counters(real_semantic_mpc_runtime_4096):
     runtime = real_semantic_mpc_runtime_4096
     manager = runtime.base_env._trajectory_manager
 
     runtime.mpc_planner_cfg.diagnostics.emit_runtime_counters = True
     runtime.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
     runtime.mpc_planner_cfg.runtime.optimize_steps = 0
-    runtime.mpc_planner_cfg.runtime.max_dirty_envs_per_step = 64
+    runtime.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
     runtime.mpc_planner_cfg.runtime.max_stale_steps = 100
 
     runtime.base_env.common_step_counter = int(getattr(runtime.base_env, "common_step_counter", 0)) + 1
@@ -1857,9 +1866,9 @@ def test_mpc_runtime_4096_headless_dirty_budget_counters(real_semantic_mpc_runti
     print("MPC_4096_COUNTERS_FIRST", first, flush=True)
 
     assert first["num_envs"] == 4096
-    assert first["dirty_count"] >= first["selected_dirty_count"] >= 0
-    assert first["selected_dirty_count"] <= 64
-    assert first["dirty_backlog"] == first["dirty_count"] - first["selected_dirty_count"]
+    assert first["global_due"] is True
+    assert first["global_due_count"] == 4096
+    assert first["sampled_plan_count"] == 64
     assert first["max_stale_observed"] >= 0
     assert first["planner_ms"] >= 0.0
     assert first["cache_ms"] >= 0.0
@@ -1867,11 +1876,61 @@ def test_mpc_runtime_4096_headless_dirty_budget_counters(real_semantic_mpc_runti
     command_dirty_mask = torch.zeros((4096,), dtype=torch.bool, device=runtime.base_env.device)
     command_dirty_mask[:128] = True
     manager.mark_command_changed(command_dirty_mask)
+    assert not bool(torch.any(manager.reference_reward_mask()[:128]).item())
     runtime.base_env.common_step_counter = int(getattr(runtime.base_env, "common_step_counter", 0)) + 1
     manager.refresh_from_env(runtime.base_env)
     second = manager.runtime_counters()
     print("MPC_4096_COUNTERS_SECOND", second, flush=True)
 
-    assert second["selected_dirty_count"] <= 64
-    assert second["dirty_count"] >= second["selected_dirty_count"]
-    assert second["dirty_backlog"] == second["dirty_count"] - second["selected_dirty_count"]
+    assert second["global_due"] is False
+    assert second["sampled_plan_count"] == 0
+    assert second["global_due_count"] == 0
+
+
+def test_mpc_semantic_runtime_4096_collect_data_under_10s(real_semantic_mpc_runtime_4096):
+    runtime = real_semantic_mpc_runtime_4096
+    manager = runtime.base_env._trajectory_manager
+
+    assert runtime.task_id == "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0"
+    assert runtime.env_cfg.__class__.__name__ == "TeacherElevationTrajectoryMpcSemanticEnvCfg"
+    assert runtime.planner_backend == "mpc"
+    assert runtime.scanner_name == "semantic_height_scanner"
+    assert runtime.base_env.num_envs == 4096
+
+    runtime.mpc_planner_cfg.diagnostics.emit_runtime_counters = True
+    runtime.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
+    runtime.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
+
+    actions = torch.zeros(
+        (runtime.base_env.num_envs, runtime.base_env.action_manager.total_action_dim),
+        dtype=torch.float32,
+        device=runtime.base_env.device,
+    )
+    if runtime.base_env.device.type == "cuda":
+        torch.cuda.synchronize(runtime.base_env.device)
+    start = torch.cuda.Event(enable_timing=True) if runtime.base_env.device.type == "cuda" else None
+    end = torch.cuda.Event(enable_timing=True) if runtime.base_env.device.type == "cuda" else None
+    import time
+
+    wall_start = time.perf_counter()
+    if start is not None:
+        start.record()
+    for _ in range(24):
+        runtime.base_env.step(actions)
+    if end is not None:
+        end.record()
+        torch.cuda.synchronize(runtime.base_env.device)
+        collect_time_s = float(start.elapsed_time(end)) / 1000.0
+    else:
+        collect_time_s = time.perf_counter() - wall_start
+    counters = manager.runtime_counters()
+    metrics = {"collect_time_s": collect_time_s, **counters}
+    metrics_path = os.environ.get("T302G_4096_METRICS_JSON", "").strip()
+    if metrics_path:
+        import json
+
+        Path(metrics_path).write_text(json.dumps(metrics, sort_keys=True, indent=2))
+    print("MPC_SEMANTIC_4096_COLLECT_DATA", metrics, flush=True)
+
+    assert collect_time_s < 10.0
+    assert counters.get("sampled_plan_count", 0) <= runtime.mpc_planner_cfg.runtime.parallel_plan_batch_size

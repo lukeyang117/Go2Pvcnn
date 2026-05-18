@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import ast
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ from extension.batch_mpc_planner.config import MpcPlannerCfg, planner_cfg_from_t
 from extension.batch_mpc_planner.kinematics import (
     fk_feet_from_joint_angles,
     fk_leg_points_from_joint_angles,
+    solve_joint_angles_from_trajectory,
 )
 from extension.batch_mpc_planner.losses.contact import support_stability_loss
 from extension.batch_mpc_planner.losses.gait_coupling import (
@@ -53,10 +55,17 @@ from extension.batch_mpc_planner.terrain import (
     support_at,
 )
 from extension.batch_mpc_planner.losses.kinematics import ik_fk_residual_loss
+from extension.batch_mpc_planner.losses.kinematics import ik_fk_residual_loss_from_joint_angles
 from extension.batch_mpc_planner.losses.registry import compute_total_loss
 from extension.batch_mpc_planner.nominal import build_nominal_trajectory
 from extension.batch_mpc_planner.types import MpcPlannerTerrain, MpcRobotState
 from extension.batch_mpc_planner.variables import DecodedMpcTrajectory, decode_trajectory, init_optimization_variables
+from extension.mdp.observations import (
+    _semantic_priority_pool2d,
+    downsample_height_map,
+    downsampled_elevation_semantic_scan,
+)
+from extension.mdp.rewards_reference import swing_leg_collision_reward
 from extension.trajectory_manager_factory import create_trajectory_manager, planner_backend_from_cfg
 from extension.viz.go2_foostep_planner import _adapt_mpc_result_for_viewer
 
@@ -70,7 +79,7 @@ def _task_cfg(**overrides):
         "reference_replan_interval_steps": 3,
         "plan_dt": 0.02,
         "mpc_max_stale_steps": 6,
-        "mpc_max_dirty_envs_per_step": 2,
+        "mpc_parallel_plan_batch_size": 2,
         "mpc_optimize_steps": 0,
         "mpc_diagnostics_enabled": False,
     }
@@ -112,6 +121,124 @@ class _FakeRobot:
         return [0, 1, 2, 3], ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
 
 
+class _FakeLegRobot:
+    def __init__(self, body_pos_w: torch.Tensor) -> None:
+        self.data = SimpleNamespace(
+            body_pos_w=body_pos_w,
+            body_names=[
+                "FL_thigh",
+                "FL_calf",
+                "FL_foot",
+                "FR_thigh",
+                "FR_calf",
+                "FR_foot",
+            ],
+        )
+
+    def find_bodies(self, pattern):
+        if pattern == ".*_foot":
+            return [2, 5], ["FL_foot", "FR_foot"]
+        return [0, 1, 2, 3, 4, 5], self.data.body_names
+
+
+def test_swing_leg_collision_reward_uses_current_body_contacts_and_semantics() -> None:
+    body_pos = torch.tensor(
+        [
+            [
+                [-0.5, -0.5, 0.02],
+                [-0.5, -0.5, 0.02],
+                [-0.5, -0.5, 0.00],
+                [0.5, 0.5, 0.02],
+                [0.5, 0.5, 0.02],
+                [0.5, 0.5, 0.00],
+            ]
+        ],
+        dtype=torch.float32,
+    )
+    contact_forces = torch.zeros((1, 2, 3), dtype=torch.float32)
+    contact_forces[0, 0, 2] = 5.0
+    scanner = SimpleNamespace(
+        data=SimpleNamespace(
+            elevation_map=torch.full((1, 3, 3), 0.05, dtype=torch.float32),
+            semantic_map=torch.tensor([[[1, 0, 0], [0, 0, 0], [0, 0, 2]]], dtype=torch.long),
+            pos_w=torch.zeros((1, 3), dtype=torch.float32),
+            quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32),
+        ),
+        cfg=SimpleNamespace(pattern_cfg=SimpleNamespace(size=(1.0, 1.0))),
+    )
+    env = SimpleNamespace(
+        num_envs=1,
+        device=torch.device("cpu"),
+        scene=SimpleNamespace(
+            robot=_FakeLegRobot(body_pos),
+            contact_forces=SimpleNamespace(data=SimpleNamespace(net_forces_w=contact_forces)),
+            sensors=SimpleNamespace(
+                semantic_height_scanner=scanner,
+                contact_forces=SimpleNamespace(data=SimpleNamespace(net_forces_w=contact_forces)),
+            ),
+        ),
+    )
+
+    penalty = swing_leg_collision_reward(
+        env,
+        asset_cfg=SimpleNamespace(name="robot"),
+        sensor_cfg=SimpleNamespace(name="contact_forces", body_ids=[0, 1]),
+        scanner_cfg=SimpleNamespace(name="semantic_height_scanner"),
+        clearance=0.04,
+        contact_force_threshold=1.0,
+        stance_weight=0.25,
+        swing_weight=1.0,
+        small_obstacle_weight=2.0,
+        large_obstacle_weight=5.0,
+    )
+
+    assert penalty.shape == (1,)
+    assert penalty.item() < 0.0
+    per_leg_clearance = 0.07 + 0.07 + 0.09
+    stance_small = per_leg_clearance * 0.25 * 2.0
+    swing_large = per_leg_clearance * 1.0 * 5.0
+    assert penalty.item() == pytest.approx(-(stance_small + swing_large), rel=1.0e-5)
+
+
+def test_downsampled_semantic_scan_preserves_priority_and_shape() -> None:
+    elevation = torch.arange(16, dtype=torch.float32).reshape(1, 4, 4)
+    semantic = torch.tensor(
+        [
+            [
+                [0, 0, 1, 0],
+                [0, 2, 0, 0],
+                [1, 0, 0, 0],
+                [0, 0, 0, 2],
+            ]
+        ],
+        dtype=torch.long,
+    )
+    env = SimpleNamespace(
+        num_envs=1,
+        scene=SimpleNamespace(
+            sensors=SimpleNamespace(
+                semantic_height_scanner=SimpleNamespace(
+                    data=SimpleNamespace(
+                        elevation_map=elevation,
+                        semantic_map=semantic,
+                    )
+                )
+            )
+        ),
+    )
+
+    obs = downsampled_elevation_semantic_scan(
+        env,
+        sensor_cfg=SimpleNamespace(name="semantic_height_scanner"),
+        target_size=2,
+    )
+
+    assert obs.shape == (1, 2, 2, 2)
+    torch.testing.assert_close(obs[:, 0], downsample_height_map(elevation, target_size=2))
+    torch.testing.assert_close(obs[:, 1], torch.tensor([[[2.0, 1.0], [1.0, 2.0]]]))
+    assert int(_semantic_priority_pool2d(semantic, target_size=1).item()) == 2
+
+
 def _fake_env(*, num_envs: int = 3, device: torch.device | None = None, flatten_ray_hits: bool = False):
     device = device or torch.device("cpu")
     ray_hits_grid = torch.zeros((num_envs, 5, 5, 3), dtype=torch.float32, device=device)
@@ -141,6 +268,27 @@ def _fake_env(*, num_envs: int = 3, device: torch.device | None = None, flatten_
         common_step_counter=0,
         _trajectory_reference_cache=None,
     )
+
+
+class _SubsetOnlyScanner:
+    def __init__(self, *, num_envs: int, device: torch.device) -> None:
+        self.update_calls: list[torch.Tensor] = []
+        self._data = SimpleNamespace(
+            ray_hits_w=torch.zeros((num_envs, 5, 5, 3), dtype=torch.float32, device=device),
+            semantic_map=torch.zeros((num_envs, 5, 5), dtype=torch.long, device=device),
+            pos_w=torch.zeros((num_envs, 3), dtype=torch.float32, device=device),
+            quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32, device=device).expand(num_envs, -1),
+        )
+        self.cfg = SimpleNamespace(pattern_cfg=SimpleNamespace(size=(1.0, 1.0)))
+
+    @property
+    def data(self):
+        raise AssertionError("manager should refresh selected scanner env ids before reading scanner data")
+
+    def update_env_ids(self, env_ids):
+        ids = torch.as_tensor(env_ids, dtype=torch.long).cpu()
+        self.update_calls.append(ids.clone())
+        return self._data
 
 
 def _mpc_plan_inputs(*, batch: int = 2, horizon: int = 6):
@@ -371,6 +519,73 @@ def test_factory_rejects_unknown_backend_with_valid_backend_hint() -> None:
         planner_backend_from_cfg(_task_cfg(planner_backend="dense_mpc"))
 
 
+def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> None:
+    cfg_path = GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py"
+    old_cfg_path = GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py"
+    source = cfg_path.read_text()
+    tree = ast.parse(source)
+
+    class_names = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg" in class_names
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" in class_names
+    assert 'planner_backend: str = "mpc"' in source
+    assert 'reference_height_scanner_name: str = "semantic_height_scanner"' in source
+    assert "planner_owned_reference_cache: bool = True" in source
+    assert "use_batched_reference_trajectory: bool = True" in source
+    assert "mpc_parallel_plan_batch_size: int = 4096" in source
+    assert "mpc_max_dirty_envs_per_step" not in source
+    assert "replicate_physics = True" in source
+    assert "replicate_physics=True" in source
+    assert "SemanticCourseTerrainImporter" in source
+    assert "self.scene.terrain.class_type = SemanticCourseTerrainImporter" in source
+    assert "generate_semantic_course = None" in source
+    assert 'mode="startup"' not in source
+    assert 'mode="prestartup"' not in source
+    assert "height_scanner = None" in source
+    assert "semantic_height_scanner = SemanticGridRayCasterCfg" in source
+    assert "resolution=0.01" in source
+    assert "size=[1.5, 1.5]" in source
+    assert "downsampled_elevation_semantic_scan" in source
+    assert "reference_root_pose = None" in source
+    assert "reference_joint_pos = None" in source
+    assert "reference_foot_pos" in source
+
+    old_source = old_cfg_path.read_text()
+    assert 'planner_backend: str = "together"' in old_source
+    assert "height_scanner = RayCasterCfg" in old_source
+
+
+def test_semantic_raycaster_refreshes_mesh_after_startup_course_generation() -> None:
+    source = (GO2PVCNN_ROOT / "go2_pvcnn/sensor/semantic_raycaster/semantic_ray_caster.py").read_text()
+
+    assert "_refresh_late_semantic_mesh_if_needed" in source
+    assert "semantic ids 1/2" in source
+    assert "self._refresh_late_semantic_mesh_if_needed()" in source
+    assert "torch.unique(self._face_semantic_ids)" in source
+    assert "late semantic root" in source
+    assert "except RuntimeError as exc" in source
+
+
+def test_mpc_semantic_train_play_parsers_and_gym_registration_are_isolated() -> None:
+    train_source = (GO2PVCNN_ROOT / "scripts/train.py").read_text()
+    play_source = (GO2PVCNN_ROOT / "scripts/play.py").read_text()
+    register_source = (GO2PVCNN_ROOT / "go2_pvcnn/tasks/register_envs.py").read_text()
+    agent_source = (GO2PVCNN_ROOT / "agent/train_cfg.py").read_text()
+    factory_source = (GO2PVCNN_ROOT / "extension/trajectory_manager_factory.py").read_text()
+
+    assert "teacher_elevation_trajectory_mpc_semantic" in train_source
+    assert "teacher_elevation_trajectory_mpc_semantic" in play_source
+    assert '"mpc"' in play_source
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg" in train_source
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" in play_source
+    assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0" in register_source
+    assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0" in register_source
+    assert "TeacherElevationTrajectoryEnvCfg" in register_source
+    assert "TeacherElevationTrajectoryEnvCfg_PLAY" in register_source
+    assert "_teacher_elevation_trajectory_mpc_semantic_train_cfg" in agent_source
+    assert "teacher_elevation_trajectory_mpc_semantic" in factory_source
+
+
 def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_shapes() -> None:
     cfg = _task_cfg()
     manager = create_trajectory_manager(cfg, device="cpu")
@@ -423,6 +638,166 @@ def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_sha
     assert next_step_cache is env._trajectory_reference_cache
     assert next_step_cache.root_pos_w.shape == (3, 6, 3)
     assert manager.current_frame_ids().shape == (3,)
+
+
+def test_mpc_manager_global_sync_samples_parallel_plan_batch_size() -> None:
+    device = torch.device("cpu")
+    num_envs = 3
+    scanner = _SubsetOnlyScanner(num_envs=num_envs, device=device)
+    env = _fake_env(num_envs=num_envs, device=device)
+    env.scene.sensors.height_scanner = scanner
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=2)
+    manager = create_trajectory_manager(cfg, device="cpu")
+
+    manager.refresh_from_env(env)
+
+    assert scanner.update_calls
+    assert int(scanner.update_calls[0].numel()) == 2
+    assert all(int(call.numel()) <= 2 for call in scanner.update_calls)
+
+
+def test_mpc_global_sync_reference_reward_mask_only_enables_sampled_rows() -> None:
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=2)
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    manager.refresh_from_env(env)
+
+    mask = manager.reference_reward_mask()
+    assert mask.shape == (3,)
+    assert int(torch.count_nonzero(mask).item()) == 2
+    assert mask.dtype == torch.bool
+
+
+def test_mpc_global_sync_reset_or_command_change_disables_existing_plan_reward() -> None:
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=3)
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    manager.refresh_from_env(env)
+    assert torch.all(manager.reference_reward_mask())
+
+    reset_mask = torch.tensor([False, True, False])
+    manager.reset_envs(reset_mask)
+    mask_after_reset = manager.reference_reward_mask()
+    assert mask_after_reset.tolist() == [True, False, True]
+
+    command_mask = torch.tensor([True, False, False])
+    manager.mark_command_changed(command_mask)
+    mask_after_command = manager.reference_reward_mask()
+    assert mask_after_command.tolist() == [False, False, True]
+
+
+def test_mpc_global_sync_does_not_replan_unsampled_or_command_changed_rows_before_interval() -> None:
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=2, reference_replan_interval_steps=3)
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    manager.refresh_from_env(env)
+    first_mask = manager.reference_reward_mask().clone()
+    assert int(torch.count_nonzero(first_mask).item()) == 2
+
+    manager.mark_command_changed(first_mask)
+    env.common_step_counter = 1
+    manager.refresh_from_env(env)
+    second_mask = manager.reference_reward_mask()
+
+    assert not bool(torch.any(second_mask).item())
+
+
+def test_mpc_global_sync_keeps_existing_reward_mask_between_replan_ticks() -> None:
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=3, reference_replan_interval_steps=3)
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    manager.refresh_from_env(env)
+    first_mask = manager.reference_reward_mask().clone()
+    assert torch.all(first_mask)
+
+    env.common_step_counter = 1
+    manager.refresh_from_env(env)
+    second_mask = manager.reference_reward_mask()
+
+    assert second_mask.tolist() == first_mask.tolist()
+
+
+def test_mpc_global_sync_safe_fallback_rows_do_not_enable_imitation_reward(monkeypatch) -> None:
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=2)
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    original_plan_segment = plan_segment
+
+    def _fake_plan_segment(*args, **kwargs):
+        result = original_plan_segment(*args, **kwargs)
+        batch = int(result.root_pos.shape[0])
+        feasible = torch.ones(batch, dtype=torch.bool, device=result.root_pos.device)
+        safe_fallback = torch.zeros(batch, dtype=torch.bool, device=result.root_pos.device)
+        feasible[0] = False
+        safe_fallback[0] = True
+        return type(result)(
+            root_pos=result.root_pos,
+            root_rpy=result.root_rpy,
+            foot_pos=result.foot_pos,
+            joint_angles=result.joint_angles,
+            contact_state=result.contact_state,
+            touchdown_seq=result.touchdown_seq,
+            planned_touchdown_w=result.planned_touchdown_w,
+            cost_total=result.cost_total,
+            cost_breakdown=result.cost_breakdown,
+            status=result.status,
+            feasible=feasible,
+            safe_fallback=safe_fallback,
+            loss_breakdown=result.loss_breakdown,
+            hard_reason_mask=result.hard_reason_mask,
+        )
+
+    monkeypatch.setattr("extension.batch_mpc_planner.manager.plan_segment", _fake_plan_segment)
+
+    manager.refresh_from_env(env)
+    mask = manager.reference_reward_mask()
+
+    assert mask.shape == (3,)
+    assert int(torch.count_nonzero(mask).item()) == 1
+    assert not bool(mask[0].item())
+
+
+def test_mpc_global_sync_nonfinite_result_rows_do_not_enable_imitation_reward(monkeypatch) -> None:
+    cfg = _task_cfg(mpc_parallel_plan_batch_size=2)
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    original_plan_segment = plan_segment
+
+    def _fake_plan_segment(*args, **kwargs):
+        result = original_plan_segment(*args, **kwargs)
+        root_pos = result.root_pos.clone()
+        root_pos[0, 0, 0] = torch.nan
+        return type(result)(
+            root_pos=root_pos,
+            root_rpy=result.root_rpy,
+            foot_pos=result.foot_pos,
+            joint_angles=result.joint_angles,
+            contact_state=result.contact_state,
+            touchdown_seq=result.touchdown_seq,
+            planned_touchdown_w=result.planned_touchdown_w,
+            cost_total=result.cost_total,
+            cost_breakdown=result.cost_breakdown,
+            status=result.status,
+            feasible=result.feasible,
+            safe_fallback=result.safe_fallback,
+            loss_breakdown=result.loss_breakdown,
+            hard_reason_mask=result.hard_reason_mask,
+        )
+
+    monkeypatch.setattr("extension.batch_mpc_planner.manager.plan_segment", _fake_plan_segment)
+
+    manager.refresh_from_env(env)
+    mask = manager.reference_reward_mask()
+
+    assert mask.shape == (3,)
+    assert int(torch.count_nonzero(mask).item()) == 1
+    assert not bool(mask[0].item())
 
 
 def test_mpc_manager_supports_flattened_scanner_ray_hits_shape() -> None:
@@ -509,6 +884,93 @@ def test_mpc_result_and_package_do_not_depend_on_old_mode_fields() -> None:
                 violations.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {token}")
 
     assert violations == []
+
+
+def test_mpc_profile_prints_plan_optimizer_and_loss_stages(monkeypatch, capsys) -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs()
+    cfg.runtime.optimize_steps = 1
+    cfg.diagnostics.emit_runtime_counters = True
+    cfg.diagnostics.profile_cuda_sync = False
+    monkeypatch.setenv("T302G_MPC_PROFILE_LIMIT", "1")
+
+    plan_segment(terrain, state, command, cfg=cfg)
+
+    out = capsys.readouterr().out
+    assert "[MPC profile]" in out
+    assert "plan.normalize_ms=" in out
+    assert "optimizer.total_ms=" in out
+    assert "loss.total_ms=" in out
+
+
+def test_ik_fk_residual_reuses_precomputed_ik_without_changing_value() -> None:
+    _, state, _, cfg = _mpc_plan_inputs(batch=2, horizon=6)
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((2, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((2, 5, 5), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    nominal = build_nominal_trajectory(state, torch.tensor([[0.2, 0.0, 0.0], [0.1, 0.0, 0.0]]), terrain, cfg.runtime)
+    decoded = decode_trajectory(nominal, init_optimization_variables(nominal, cfg.runtime), cfg.runtime)
+    solved = solve_joint_angles_from_trajectory(decoded.root_pos, decoded.root_rpy, decoded.foot_pos, clamp_to_limits=True)
+
+    expected = ik_fk_residual_loss(
+        decoded.root_pos,
+        decoded.root_rpy,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        contact_weight=cfg.losses.ik_fk_residual.contact_weight,
+    )
+    actual = ik_fk_residual_loss_from_joint_angles(
+        decoded.root_pos,
+        decoded.root_rpy,
+        decoded.foot_pos,
+        decoded.contact_prob,
+        solved,
+        contact_weight=cfg.losses.ik_fk_residual.contact_weight,
+    )
+
+    torch.testing.assert_close(actual, expected)
+
+
+def test_mpc_plan_segment_skips_optimizer_for_zero_command(monkeypatch) -> None:
+    terrain, state, _, cfg = _mpc_plan_inputs(batch=2, horizon=6)
+    cfg.runtime.optimize_steps = 24
+    command = torch.zeros((2, 3), dtype=torch.float32)
+
+    def _fail_optimizer(*args, **kwargs):
+        raise AssertionError("optimizer should not run for all-zero command batch")
+
+    monkeypatch.setattr("extension.batch_mpc_planner.planner.optimize_variables", _fail_optimizer)
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    expected_foot = state.foot_pos[:, None, :, :].expand_as(result.foot_pos)
+    torch.testing.assert_close(result.foot_pos, expected_foot)
+    assert torch.all(result.contact_state)
+    assert torch.all(result.feasible)
+
+
+def test_mpc_plan_segment_optimizes_only_nonzero_command_rows(monkeypatch) -> None:
+    terrain, state, _, cfg = _mpc_plan_inputs(batch=2, horizon=6)
+    cfg.runtime.optimize_steps = 0
+    command = torch.tensor([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]], dtype=torch.float32)
+    seen_batches: list[int] = []
+    import extension.batch_mpc_planner.planner as planner_module
+
+    real_optimizer = planner_module.optimize_variables
+
+    def _record_optimizer(nominal, *args, **kwargs):
+        seen_batches.append(int(nominal["root_pos"].shape[0]))
+        return real_optimizer(nominal, *args, **kwargs)
+
+    monkeypatch.setattr("extension.batch_mpc_planner.planner.optimize_variables", _record_optimizer)
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    assert seen_batches == [1]
+    torch.testing.assert_close(result.foot_pos[0], state.foot_pos[0].unsqueeze(0).expand_as(result.foot_pos[0]))
+    assert not torch.allclose(result.foot_pos[1], state.foot_pos[1].unsqueeze(0).expand_as(result.foot_pos[1]))
 
 
 def test_mpc_decode_uses_continuous_swing_window_variables() -> None:
@@ -1981,6 +2443,7 @@ def test_mpc_t302_losses_do_not_introduce_cpu_hot_path_patterns() -> None:
 
 def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
     terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command[:, 0] = 0.2
     cfg.diagnostics.enabled = True
     cfg.runtime.optimize_steps = 1
 
@@ -2016,6 +2479,7 @@ def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
 
 def test_mpc_cost_breakdown_exposes_t302_collision_and_risk_diagnostics() -> None:
     terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command[:, 0] = 0.2
     cfg.diagnostics.enabled = False
     cfg.runtime.optimize_steps = 1
 
@@ -2036,6 +2500,7 @@ def test_mpc_cost_breakdown_exposes_t302_collision_and_risk_diagnostics() -> Non
 
 def test_mpc_viewer_adapter_exposes_cost_breakdown_when_diagnostics_disabled() -> None:
     terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command[:, 0] = 0.2
     cfg.diagnostics.enabled = False
     cfg.runtime.optimize_steps = 1
 
@@ -2075,7 +2540,6 @@ def test_mpc_root_height_loss_penalizes_z_drift_from_nominal() -> None:
 def test_mpc_manager_runtime_counters_emit_when_enabled() -> None:
     cfg = _task_cfg(
         mpc_diagnostics_emit_runtime_counters=True,
-        mpc_max_dirty_envs_per_step=2,
         mpc_optimize_steps=0,
     )
     manager = create_trajectory_manager(cfg, device="cpu")
@@ -2085,12 +2549,30 @@ def test_mpc_manager_runtime_counters_emit_when_enabled() -> None:
     counters = manager.runtime_counters()
 
     assert counters["num_envs"] == 3
-    assert counters["dirty_count"] >= counters["selected_dirty_count"] >= 0
-    assert counters["dirty_backlog"] == counters["dirty_count"] - counters["selected_dirty_count"]
-    assert counters["selected_dirty_count"] <= cfg.mpc_max_dirty_envs_per_step
+    assert counters["global_due"] is True
+    assert counters["global_due_count"] == 3
+    assert 0 <= counters["sampled_plan_count"] <= cfg.mpc_parallel_plan_batch_size
     assert counters["max_stale_observed"] >= 0
     assert counters["planner_ms"] >= 0.0
     assert counters["cache_ms"] >= 0.0
+
+
+def test_mpc_manager_global_sync_runtime_counters_report_sampled_count() -> None:
+    cfg = _task_cfg(
+        mpc_parallel_plan_batch_size=2,
+        mpc_diagnostics_emit_runtime_counters=True,
+        mpc_optimize_steps=0,
+    )
+    manager = create_trajectory_manager(cfg, device="cpu")
+    env = _fake_env(num_envs=3)
+
+    manager.refresh_from_env(env)
+    counters = manager.runtime_counters()
+
+    assert counters["num_envs"] == 3
+    assert counters["global_due"] is True
+    assert counters["global_due_count"] == 3
+    assert counters["sampled_plan_count"] == 2
 
 
 def test_touchdown_event_cap_is_configurable() -> None:
@@ -2149,6 +2631,7 @@ def test_task_cfg_can_override_loss_and_diagnostics_parameters() -> None:
         mpc_nominal_swing_height_m=0.12,
         mpc_nominal_yaw_stride_scale=0.55,
         mpc_loss_kinematics_joint_limit_margin_rad=0.14,
+        mpc_parallel_plan_batch_size=123,
         mpc_diagnostics_enabled=True,
         mpc_diagnostics_emit_viewer_fields=False,
     )
@@ -2199,6 +2682,7 @@ def test_task_cfg_can_override_loss_and_diagnostics_parameters() -> None:
     assert cfg.runtime.nominal_swing_height_m == pytest.approx(0.12)
     assert cfg.runtime.nominal_yaw_stride_scale == pytest.approx(0.55)
     assert cfg.losses.kinematics.joint_limit_margin_rad == pytest.approx(0.14)
+    assert cfg.runtime.parallel_plan_batch_size == 123
     assert cfg.diagnostics.enabled is True
     assert cfg.diagnostics.emit_viewer_fields is False
 
@@ -2247,3 +2731,18 @@ def test_mpc_plan_segment_runs_under_inference_mode_when_optimize_steps_positive
     assert torch.isfinite(result.joint_angles).all()
     assert result.contact_state.any()
     assert torch.logical_not(result.contact_state).any()
+
+
+def test_mpc_plan_segment_accepts_inputs_created_under_inference_mode() -> None:
+    cfg = MpcPlannerCfg()
+    cfg.runtime.horizon_steps = 6
+    cfg.runtime.optimize_steps = 1
+    cfg.diagnostics.enabled = True
+
+    with torch.inference_mode():
+        terrain, state, command, _ = _mpc_plan_inputs(batch=2, horizon=6)
+        result = plan_segment(terrain, state, command, cfg=cfg)
+
+    assert result.root_pos.shape == (2, 6, 3)
+    assert torch.isfinite(result.cost_total).all()
+    assert torch.isfinite(result.root_pos).all()

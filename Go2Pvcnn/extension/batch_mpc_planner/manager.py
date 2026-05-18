@@ -1,7 +1,8 @@
-"""Asynchronous fixed-budget trajectory manager for MPC backend."""
+"""Fixed-interval global-sync trajectory manager for MPC backend."""
 
 from __future__ import annotations
 
+import os
 import time
 
 import torch
@@ -20,7 +21,7 @@ from .adapter import (
 )
 from .config import MpcPlannerCfg, planner_cfg_from_task_cfg
 from .planner import plan_segment
-from .terrain import build_mpc_terrain_from_scanner, subset_mpc_terrain
+from .terrain import build_mpc_terrain_from_scanner
 from .types import MpcRobotState
 
 
@@ -31,7 +32,7 @@ def _normalize_body_name(name: str) -> str:
 
 
 class MpcTrajectoryManager:
-    """Planner-owned cache manager with asynchronous per-env dirty scheduling."""
+    """Planner-owned cache manager for MPC reference trajectories."""
 
     planner_backend = "mpc"
 
@@ -40,14 +41,13 @@ class MpcTrajectoryManager:
         self._device = torch.device(device)
         self._cache: ReferenceTrajectoryCache | None = None
         self._phase_counter: Tensor | None = None
-        self._pending_reset_mask: Tensor | None = None
-        self._pending_command_mask: Tensor | None = None
-        self._last_replan_step: Tensor | None = None
         self._foot_body_ids: Tensor | None = None
         self._last_refresh_step_token = None
         self._manager_step = 0
+        self._last_global_replan_step = -10_000
         self._runtime_counters: dict[str, float | int] = {}
         self._max_stale_observed = 0
+        self._reference_reward_mask: Tensor | None = None
 
     @staticmethod
     def _named_get(container, name: str):
@@ -79,12 +79,8 @@ class MpcTrajectoryManager:
     def _ensure_state(self, num_envs: int) -> None:
         if self._phase_counter is None or int(self._phase_counter.shape[0]) != num_envs:
             self._phase_counter = torch.zeros(num_envs, dtype=torch.long, device=self._device)
-        if self._pending_reset_mask is None or int(self._pending_reset_mask.shape[0]) != num_envs:
-            self._pending_reset_mask = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
-        if self._pending_command_mask is None or int(self._pending_command_mask.shape[0]) != num_envs:
-            self._pending_command_mask = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
-        if self._last_replan_step is None or int(self._last_replan_step.shape[0]) != num_envs:
-            self._last_replan_step = torch.full((num_envs,), -10_000, dtype=torch.long, device=self._device)
+        if self._reference_reward_mask is None or int(self._reference_reward_mask.shape[0]) != num_envs:
+            self._reference_reward_mask = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
 
     def _foot_ids(self, robot) -> Tensor:
         if self._foot_body_ids is None:
@@ -153,6 +149,31 @@ class MpcTrajectoryManager:
             sensor_yaw=extract_yaw_batch(sensor_quat),
         )
 
+    def _terrain_subset_from_env(self, env, env_ids: Tensor):
+        root = self._env_root(env)
+        scanner = self._named_get(root.scene.sensors, self._scanner_name())
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device).reshape(-1)
+        if hasattr(scanner, "update_env_ids"):
+            data = scanner.update_env_ids(ids)
+        else:
+            data = scanner.data
+        ray_hits = torch.as_tensor(data.ray_hits_w, dtype=torch.float32, device=self._device).index_select(0, ids)
+        semantic_map_value = getattr(data, "semantic_map", None)
+        semantic_map = None
+        if semantic_map_value is not None:
+            semantic_map = torch.as_tensor(semantic_map_value, dtype=torch.long, device=self._device).index_select(0, ids)
+        world_x_range, world_y_range = self._terrain_ranges_from_scanner(scanner)
+        sensor_pos = torch.as_tensor(data.pos_w, dtype=torch.float32, device=self._device).index_select(0, ids)
+        sensor_quat = torch.as_tensor(data.quat_w, dtype=torch.float32, device=self._device).index_select(0, ids)
+        return build_mpc_terrain_from_scanner(
+            ray_hits,
+            world_x_range=world_x_range,
+            world_y_range=world_y_range,
+            semantic_map=semantic_map,
+            sensor_pos_w=sensor_pos,
+            sensor_yaw=extract_yaw_batch(sensor_quat),
+        )
+
     def _commands_from_env(self, env) -> Tensor:
         root = self._env_root(env)
         command = root.command_manager.get_command(self._command_name())
@@ -174,16 +195,18 @@ class MpcTrajectoryManager:
         )
 
     @staticmethod
-    def _select_dirty_rows(score: Tensor, budget: int) -> tuple[Tensor, Tensor]:
-        if int(score.shape[0]) == 0:
-            empty_ids = torch.empty(0, dtype=torch.long, device=score.device)
-            return empty_ids, torch.zeros_like(score, dtype=torch.bool)
-        k = min(max(1, int(budget)), int(score.shape[0]))
-        values, idx = torch.topk(score, k=k, dim=0, largest=True, sorted=False)
-        valid = values > 0
-        selected = torch.zeros_like(score, dtype=torch.bool)
-        selected.scatter_(0, idx, valid)
-        return idx, selected
+    def _sample_global_rows(num_envs: int, sample_count: int, *, device: torch.device) -> tuple[Tensor, Tensor]:
+        if num_envs <= 0:
+            empty_ids = torch.empty(0, dtype=torch.long, device=device)
+            return empty_ids, torch.zeros(0, dtype=torch.bool, device=device)
+        count = min(max(1, int(sample_count)), int(num_envs))
+        if count >= int(num_envs):
+            ids = torch.arange(num_envs, dtype=torch.long, device=device)
+        else:
+            ids = torch.randperm(num_envs, device=device)[:count]
+        selected = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        selected[ids] = True
+        return ids, selected
 
     @staticmethod
     def _optional_count(value: Tensor, *, enabled: bool) -> int:
@@ -203,10 +226,10 @@ class MpcTrajectoryManager:
         *,
         cfg: MpcPlannerCfg,
         num_envs: int,
-        dirty_count: int,
-        selected_dirty_count: int,
-        dirty_backlog: int,
+        global_due_count: int,
+        sampled_plan_count: int,
         max_stale_observed: int,
+        global_due: bool,
         planner_ms: float,
         cache_ms: float,
     ) -> None:
@@ -214,9 +237,9 @@ class MpcTrajectoryManager:
             return
         self._runtime_counters = {
             "num_envs": int(num_envs),
-            "dirty_count": int(dirty_count),
-            "selected_dirty_count": int(selected_dirty_count),
-            "dirty_backlog": int(dirty_backlog),
+            "global_due": bool(global_due),
+            "global_due_count": int(global_due_count),
+            "sampled_plan_count": int(sampled_plan_count),
             "max_stale_observed": int(max_stale_observed),
             "planner_ms": float(planner_ms),
             "cache_ms": float(cache_ms),
@@ -224,6 +247,57 @@ class MpcTrajectoryManager:
 
     def runtime_counters(self) -> dict[str, float | int]:
         return dict(self._runtime_counters)
+
+    def _debug_nonfinite_result(self, result, selected_ids: Tensor) -> None:
+        if os.environ.get("T302G_DEBUG_MPC_FINITE", "0").strip() != "1":
+            return
+
+        fields = {
+            "root_pos": result.root_pos,
+            "root_rpy": result.root_rpy,
+            "foot_pos": result.foot_pos,
+            "joint_angles": result.joint_angles,
+            "planned_touchdown_w": result.planned_touchdown_w,
+            "cost_total": result.cost_total,
+        }
+        bad_fields: list[str] = []
+        for name, value in fields.items():
+            tensor = torch.as_tensor(value)
+            if torch.any(~torch.isfinite(tensor)):
+                bad_fields.append(name)
+        if not bad_fields:
+            return
+
+        feasible = torch.as_tensor(getattr(result, "feasible", None), dtype=torch.bool, device=self._device)
+        safe_fallback = torch.as_tensor(getattr(result, "safe_fallback", None), dtype=torch.bool, device=self._device)
+        print(
+            "[MPC][NonFiniteResult] "
+            f"selected_env_ids={selected_ids.detach().cpu().tolist()} "
+            f"bad_fields={bad_fields} "
+            f"feasible={feasible.detach().cpu().tolist()} "
+            f"safe_fallback={safe_fallback.detach().cpu().tolist()}",
+            flush=True,
+        )
+
+    def _finite_result_row_mask(self, result, *, num_envs: int) -> Tensor:
+        mask = torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        fields = (
+            result.root_pos,
+            result.root_rpy,
+            result.foot_pos,
+            result.joint_angles,
+            result.planned_touchdown_w,
+            result.cost_total,
+        )
+        for value in fields:
+            tensor = torch.as_tensor(value, device=self._device)
+            if tensor.ndim == 0:
+                mask = torch.logical_and(mask, torch.isfinite(tensor).expand_as(mask))
+                continue
+            reduce_dims = tuple(range(1, tensor.ndim))
+            row_finite = torch.all(torch.isfinite(tensor), dim=reduce_dims) if reduce_dims else torch.isfinite(tensor)
+            mask = torch.logical_and(mask, row_finite.to(dtype=torch.bool, device=self._device))
+        return mask
 
     def refresh_from_env(self, env):
         root = self._env_root(env)
@@ -244,30 +318,24 @@ class MpcTrajectoryManager:
         num_envs = int(episode_length_buf.shape[0])
         self._ensure_state(num_envs)
         assert self._phase_counter is not None
-        assert self._pending_reset_mask is not None
-        assert self._pending_command_mask is not None
-        assert self._last_replan_step is not None
+        assert self._reference_reward_mask is not None
 
         cache_valid = self._cache_shape_valid(num_envs=num_envs, horizon=horizon)
         first_mask = torch.ones(num_envs, dtype=torch.bool, device=self._device) if not cache_valid else torch.zeros(
             num_envs, dtype=torch.bool, device=self._device
         )
-        age = torch.full_like(self._last_replan_step, self._manager_step) - self._last_replan_step
-        interval_mask = age >= int(cfg.runtime.replan_interval_steps)
-        stale_mask = age >= int(cfg.runtime.max_stale_steps)
-
-        score = torch.zeros(num_envs, dtype=torch.float32, device=self._device)
-        score = torch.where(interval_mask, torch.full_like(score, 1.0), score)
-        score = torch.where(stale_mask, torch.full_like(score, 2.0), score)
-        score = torch.where(self._pending_command_mask, torch.full_like(score, 3.0), score)
-        score = torch.where(self._pending_reset_mask, torch.full_like(score, 4.0), score)
-        score = torch.where(first_mask, torch.full_like(score, 5.0), score)
-        _, selected = self._select_dirty_rows(score, int(cfg.runtime.max_dirty_envs_per_step))
+        global_age = self._manager_step - int(self._last_global_replan_step)
+        global_due = bool(not cache_valid) or global_age >= int(cfg.runtime.replan_interval_steps)
+        if global_due:
+            _, selected = self._sample_global_rows(
+                num_envs, int(cfg.runtime.parallel_plan_batch_size), device=self._device
+            )
+        else:
+            selected = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
         selected_ids = torch.nonzero(selected, as_tuple=False).squeeze(-1)
-        dirty_count = self._optional_count(score > 0, enabled=counters_enabled)
-        selected_dirty_count = self._optional_count(selected, enabled=counters_enabled)
-        dirty_backlog = max(0, dirty_count - selected_dirty_count)
-        max_stale_now = self._optional_max(age, enabled=counters_enabled)
+        global_due_count = int(num_envs) if counters_enabled and global_due else 0
+        sampled_plan_count = self._optional_count(selected, enabled=counters_enabled)
+        max_stale_now = int(global_age) if counters_enabled else 0
         self._max_stale_observed = max(self._max_stale_observed, max_stale_now)
 
         if not cache_valid:
@@ -282,7 +350,6 @@ class MpcTrajectoryManager:
             plan_t0 = self._profile_now(sync=timing_sync) if counters_enabled else 0.0
             states = self._state_from_env(env)
             command = self._commands_from_env(env)
-            terrain = self._terrain_from_env(env)
             sub_states = MpcRobotState(
                 root_pos=states.root_pos.index_select(0, selected_ids),
                 root_rpy=states.root_rpy.index_select(0, selected_ids),
@@ -291,8 +358,9 @@ class MpcTrajectoryManager:
                 foot_vel=states.foot_vel.index_select(0, selected_ids) if states.foot_vel is not None else None,
             )
             sub_command = command.index_select(0, selected_ids)
-            sub_terrain = subset_mpc_terrain(terrain, selected_ids)
+            sub_terrain = self._terrain_subset_from_env(env, selected_ids)
             result = plan_segment(sub_terrain, sub_states, sub_command, cfg=cfg)
+            self._debug_nonfinite_result(result, selected_ids)
 
             sub_new_cache = mpc_result_to_reference_cache(result)
             sub_fallback_cache = standstill_cache_from_state(sub_states, horizon=horizon)
@@ -302,7 +370,11 @@ class MpcTrajectoryManager:
             scatter_cache_rows(full_fallback_cache, sub_fallback_cache, selected_ids)
 
             ok_sub = result_new_ok_mask(result, num_envs=int(selected_ids.shape[0]), device=self._device)
-            gated_ok_sub = torch.logical_and(ok_sub, selected.index_select(0, selected_ids))
+            finite_row_mask = self._finite_result_row_mask(result, num_envs=int(selected_ids.shape[0]))
+            gated_ok_sub = torch.logical_and(
+                torch.logical_and(ok_sub, finite_row_mask),
+                selected.index_select(0, selected_ids),
+            )
             replace_mask.scatter_(0, selected_ids, gated_ok_sub)
             fallback_mask.scatter_(
                 0,
@@ -335,9 +407,11 @@ class MpcTrajectoryManager:
         # standstill fallback cache; keep their phase at the cache origin.
         reset_phase = torch.logical_or(torch.logical_or(replace_mask, fallback_mask), first_mask)
         self._phase_counter = torch.where(reset_phase, torch.zeros_like(advanced), advanced)
-        self._last_replan_step = torch.where(selected_any, torch.full_like(self._last_replan_step, self._manager_step), self._last_replan_step)
-        self._pending_reset_mask = torch.logical_and(self._pending_reset_mask, torch.logical_not(selected_any))
-        self._pending_command_mask = torch.logical_and(self._pending_command_mask, torch.logical_not(selected_any))
+        if int(selected_ids.numel()) > 0:
+            self._reference_reward_mask = replace_mask
+            self._last_global_replan_step = self._manager_step
+        else:
+            self._reference_reward_mask = self._reference_reward_mask
         root._trajectory_reference_cache = self._cache
         if counters_enabled:
             total_ms = (self._profile_now(sync=timing_sync) - refresh_t0) * 1000.0
@@ -345,14 +419,19 @@ class MpcTrajectoryManager:
             self._record_runtime_counters(
                 cfg=cfg,
                 num_envs=num_envs,
-                dirty_count=dirty_count,
-                selected_dirty_count=selected_dirty_count,
-                dirty_backlog=dirty_backlog,
+                global_due_count=global_due_count,
+                sampled_plan_count=sampled_plan_count,
                 max_stale_observed=self._max_stale_observed,
+                global_due=global_due,
                 planner_ms=planner_ms,
                 cache_ms=cache_ms,
             )
         return self._cache
+
+    def reference_reward_mask(self) -> Tensor:
+        if self._reference_reward_mask is None:
+            raise RuntimeError("trajectory manager has no reference reward mask; call refresh_from_env() first")
+        return self._reference_reward_mask
 
     def current_reference(self) -> dict[str, Tensor]:
         if self._cache is None or self._phase_counter is None:
@@ -377,27 +456,22 @@ class MpcTrajectoryManager:
 
     def reset_envs(self, env_mask: Tensor) -> None:
         if self._phase_counter is None:
-            self._pending_reset_mask = torch.as_tensor(env_mask, dtype=torch.bool, device=self._device).clone()
             return
         mask = torch.as_tensor(env_mask, dtype=torch.bool, device=self._phase_counter.device)
         if mask.shape != self._phase_counter.shape:
             raise ValueError(f"env_mask must have shape {tuple(self._phase_counter.shape)}, got {tuple(mask.shape)}")
-        if self._pending_reset_mask is None or self._pending_reset_mask.shape != mask.shape:
-            self._pending_reset_mask = torch.zeros_like(mask)
-        self._pending_reset_mask = torch.logical_or(self._pending_reset_mask, mask)
         self._phase_counter = torch.where(mask, torch.zeros_like(self._phase_counter), self._phase_counter)
+        if self._reference_reward_mask is not None and self._reference_reward_mask.shape == mask.shape:
+            self._reference_reward_mask = torch.logical_and(self._reference_reward_mask, torch.logical_not(mask))
 
     def mark_command_changed(self, env_mask: Tensor | None = None, *_, **__) -> None:
         if env_mask is None:
-            if self._pending_command_mask is None:
-                return
-            self._pending_command_mask = torch.ones_like(self._pending_command_mask)
+            if self._reference_reward_mask is not None:
+                self._reference_reward_mask = torch.zeros_like(self._reference_reward_mask)
             return
         mask = torch.as_tensor(env_mask, dtype=torch.bool, device=self._device)
-        if self._pending_command_mask is None or self._pending_command_mask.shape != mask.shape:
-            self._pending_command_mask = mask.clone()
-        else:
-            self._pending_command_mask = torch.logical_or(self._pending_command_mask, mask)
+        if self._reference_reward_mask is not None and self._reference_reward_mask.shape == mask.shape:
+            self._reference_reward_mask = torch.logical_and(self._reference_reward_mask, torch.logical_not(mask))
 
 
 __all__ = ["MpcTrajectoryManager"]

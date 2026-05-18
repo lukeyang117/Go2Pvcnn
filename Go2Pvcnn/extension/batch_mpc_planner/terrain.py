@@ -3,12 +3,33 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
 from .types import MpcPlannerTerrain
+
+
+@dataclass
+class TerrainQueryCache:
+    """Per-loss-call cache for repeated height/semantic grid samples."""
+
+    height: dict[tuple[int, str], Tensor] = field(default_factory=dict)
+    semantic: dict[int, Tensor] = field(default_factory=dict)
+
+
+def _query_cache_key(points_xy: Tensor, mode: str | None = None) -> tuple:
+    points = torch.as_tensor(points_xy)
+    base = (
+        int(points.data_ptr()),
+        tuple(points.shape),
+        tuple(points.stride()),
+        str(points.device),
+        str(points.dtype),
+    )
+    return (*base, str(mode)) if mode is not None else base
 
 
 def _safe_norm(value: Tensor, *, dim: int, eps: float = 1.0e-12) -> Tensor:
@@ -188,8 +209,19 @@ def _world_to_grid(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
     return torch.stack((x_norm, y_norm), dim=-1)
 
 
-def height_at(terrain: MpcPlannerTerrain, points_xy: Tensor, mode: str = "bilinear") -> Tensor:
+def height_at(
+    terrain: MpcPlannerTerrain,
+    points_xy: Tensor,
+    mode: str = "bilinear",
+    *,
+    cache: TerrainQueryCache | None = None,
+) -> Tensor:
     """Sample terrain height at world-frame xy points."""
+    if cache is not None:
+        key = _query_cache_key(points_xy, mode)
+        cached = cache.height.get(key)
+        if cached is not None:
+            return cached
     height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32)
     if height_map.ndim == 2:
         height_map = height_map.unsqueeze(0)
@@ -203,18 +235,34 @@ def height_at(terrain: MpcPlannerTerrain, points_xy: Tensor, mode: str = "biline
         padding_mode="border",
     )
     out = sampled[:, 0, :, 0].reshape(original_shape)
-    return out.squeeze(0) if single_batch else out
+    out = out.squeeze(0) if single_batch else out
+    if cache is not None:
+        cache.height[_query_cache_key(points_xy, mode)] = out
+    return out
 
 
-def semantic_at(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
+def semantic_at(
+    terrain: MpcPlannerTerrain,
+    points_xy: Tensor,
+    *,
+    cache: TerrainQueryCache | None = None,
+) -> Tensor:
     """Nearest-neighbor sample semantic ids at world-frame xy points."""
+    if cache is not None:
+        key = _query_cache_key(points_xy)
+        cached = cache.semantic.get(key)
+        if cached is not None:
+            return cached
     height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32)
     if height_map.ndim == 2:
         height_map = height_map.unsqueeze(0)
     points, original_shape, single_batch = _batched_query_xy(terrain, points_xy)
     if terrain.semantic_map is None:
         out = torch.zeros(original_shape, dtype=torch.long, device=points.device)
-        return out.squeeze(0) if single_batch else out
+        out = out.squeeze(0) if single_batch else out
+        if cache is not None:
+            cache.semantic[_query_cache_key(points_xy)] = out
+        return out
     semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.float32, device=points.device)
     if semantic.ndim == 2:
         semantic = semantic.unsqueeze(0)
@@ -227,19 +275,28 @@ def semantic_at(terrain: MpcPlannerTerrain, points_xy: Tensor) -> Tensor:
         padding_mode="border",
     )
     out = sampled[:, 0, :, 0].round().to(dtype=torch.long).reshape(original_shape)
-    return out.squeeze(0) if single_batch else out
+    out = out.squeeze(0) if single_batch else out
+    if cache is not None:
+        cache.semantic[_query_cache_key(points_xy)] = out
+    return out
 
 
-def slope_at(terrain: MpcPlannerTerrain, points_xy: Tensor, sample_step: float = 0.03) -> Tensor:
+def slope_at(
+    terrain: MpcPlannerTerrain,
+    points_xy: Tensor,
+    sample_step: float = 0.03,
+    *,
+    cache: TerrainQueryCache | None = None,
+) -> Tensor:
     """Estimate terrain slope magnitude by finite differences."""
     points = torch.as_tensor(points_xy, dtype=torch.float32, device=terrain.height_map.device)
     step = float(sample_step)
     dx = torch.tensor([step, 0.0], dtype=points.dtype, device=points.device)
     dy = torch.tensor([0.0, step], dtype=points.dtype, device=points.device)
-    hx0 = height_at(terrain, points - dx)
-    hx1 = height_at(terrain, points + dx)
-    hy0 = height_at(terrain, points - dy)
-    hy1 = height_at(terrain, points + dy)
+    hx0 = height_at(terrain, points - dx, cache=cache)
+    hx1 = height_at(terrain, points + dx, cache=cache)
+    hy0 = height_at(terrain, points - dy, cache=cache)
+    hy1 = height_at(terrain, points + dy, cache=cache)
     dzdx = (hx1 - hx0) / max(2.0 * step, 1.0e-6)
     dzdy = (hy1 - hy0) / max(2.0 * step, 1.0e-6)
     return torch.sqrt(dzdx.square() + dzdy.square() + 1.0e-12)
@@ -251,6 +308,8 @@ def support_at(
     search_radius: float,
     search_step: float,
     max_support_slope: float,
+    *,
+    cache: TerrainQueryCache | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Find nearby semantic-terrain support points with finite fallback."""
     points, original_shape, single_batch = _batched_query_xy(terrain, points_xy)
@@ -264,9 +323,9 @@ def support_at(
     candidates = points.unsqueeze(2) + offsets.view(1, 1, -1, 2)
     candidate_shape = candidates.shape
     flat_candidates = candidates.reshape(candidate_shape[0], -1, 2)
-    cand_z = height_at(terrain, flat_candidates).reshape(candidate_shape[:3])
-    cand_slope = slope_at(terrain, flat_candidates, sample_step=step).reshape(candidate_shape[:3])
-    cand_semantic = semantic_at(terrain, flat_candidates).reshape(candidate_shape[:3])
+    cand_z = height_at(terrain, flat_candidates, cache=cache).reshape(candidate_shape[:3])
+    cand_slope = slope_at(terrain, flat_candidates, sample_step=step, cache=cache).reshape(candidate_shape[:3])
+    cand_semantic = semantic_at(terrain, flat_candidates, cache=cache).reshape(candidate_shape[:3])
     legal = torch.logical_and(cand_semantic == 0, cand_slope <= float(max_support_slope))
     dist = _safe_norm(offsets, dim=-1).view(1, 1, -1)
     score = dist + cand_slope + torch.where(legal, torch.zeros_like(cand_slope), torch.full_like(cand_slope, 1.0e6))
@@ -276,10 +335,10 @@ def support_at(
     support_xy = candidates.gather(2, gather_xy).squeeze(2)
     support_z = cand_z.gather(2, idx.unsqueeze(-1)).squeeze(-1)
     support_slope = cand_slope.gather(2, idx.unsqueeze(-1)).squeeze(-1)
-    query_z = height_at(terrain, points.reshape(points.shape[0], -1, 2)).reshape(points.shape[:2])
+    query_z = height_at(terrain, points.reshape(points.shape[0], -1, 2), cache=cache).reshape(points.shape[:2])
     support_xy = torch.where(invalid.unsqueeze(-1), points, support_xy)
     support_z = torch.where(invalid, query_z, support_z)
-    query_slope = slope_at(terrain, points.reshape(points.shape[0], -1, 2), sample_step=step).reshape(points.shape[:2])
+    query_slope = slope_at(terrain, points.reshape(points.shape[0], -1, 2), sample_step=step, cache=cache).reshape(points.shape[:2])
     support_slope = torch.where(invalid, query_slope, support_slope)
     support_xy = support_xy.reshape(*original_shape, 2)
     support_z = support_z.reshape(original_shape)
@@ -297,4 +356,5 @@ __all__ = [
     "slope_at",
     "subset_mpc_terrain",
     "support_at",
+    "TerrainQueryCache",
 ]

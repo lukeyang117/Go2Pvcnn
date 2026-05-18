@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -245,6 +246,23 @@ class PPO:
 
             # Recompute actions log prob and entropy for current batch of transitions
             # Note: We need to do this because we updated the policy with the new parameters
+            if os.environ.get("T302G_DEBUG_PPO_FINITE", "0").strip() == "1":
+                checks = {
+                    "advantages_batch": advantages_batch,
+                    "returns_batch": returns_batch,
+                    "old_actions_log_prob_batch": old_actions_log_prob_batch,
+                    "old_mu_batch": old_mu_batch,
+                    "old_sigma_batch": old_sigma_batch,
+                }
+                for name, value in checks.items():
+                    tensor = torch.as_tensor(value)
+                    if torch.any(~torch.isfinite(tensor)):
+                        print(
+                            f"[PPO][NonFiniteInput] {name} "
+                            f"has_nan={bool(torch.any(torch.isnan(tensor)).item())} "
+                            f"has_inf={bool(torch.any(torch.isinf(tensor)).item())}",
+                            flush=True,
+                        )
             self.policy.act(obs_batch, masks=masks_batch, hidden_state=hidden_states_batch[0])
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             value_batch = self.policy.evaluate(obs_batch, masks=masks_batch, hidden_state=hidden_states_batch[1])
@@ -309,6 +327,24 @@ class PPO:
                 value_loss = (returns_batch - value_batch).pow(2).mean()
 
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+            if os.environ.get("T302G_DEBUG_PPO_FINITE", "0").strip() == "1":
+                loss_checks = {
+                    "actions_log_prob_batch": actions_log_prob_batch,
+                    "value_batch": value_batch,
+                    "ratio": ratio,
+                    "surrogate_loss": surrogate_loss,
+                    "value_loss": value_loss,
+                    "loss": loss,
+                }
+                for name, value in loss_checks.items():
+                    tensor = torch.as_tensor(value)
+                    if torch.any(~torch.isfinite(tensor)):
+                        print(
+                            f"[PPO][NonFiniteForward] {name} "
+                            f"has_nan={bool(torch.any(torch.isnan(tensor)).item())} "
+                            f"has_inf={bool(torch.any(torch.isinf(tensor)).item())}",
+                            flush=True,
+                        )
 
             # Symmetry loss
             if self.symmetry:

@@ -22,7 +22,7 @@
 | 地形查询 | 直接用 Isaac Lab ray hits tensor，`F.grid_sample` 双线性插值 |
 | 代码组织 | 重写 `Go2Pvcnn/extension/`，保留 rewards/observations/metrics |
 | 配置位置 | `go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py` |
-| replan 策略 | 固定间隔全量 replan |
+| replan 策略 | 固定间隔 global sync replan；每次随机抽 `mpc_parallel_plan_batch_size` 个环境做 MPC 规划与 imitation reward |
 | 验证 | 数值对齐测试，agent 在终端执行 |
 
 ## 1. 目录结构
@@ -328,28 +328,63 @@ def batched_generate_trajectory(terrain, states, commands, requested_n_frames, d
 
 ## 3. Isaac Lab 集成
 
-### 3.1 固定间隔全量 Replan
+### 3.1 固定间隔 Global Sync Replan + 随机规划子集
+
+训练时不再采用 per-env dirty-subset 的异步补规划语义。MPC 刷新由全局步数统一控制：到达 `reference_replan_interval_steps` 时，所有环境进入同一个 replan generation，但实际参与本轮 MPC 规划的环境数由 `mpc_parallel_plan_batch_size` 控制。
+
+`mpc_parallel_plan_batch_size` 在该模式下的语义是 **每个 global replan tick 随机抽取多少个环境执行 MPC 规划，并为这些环境开启 MPC imitation reward**。它不是内部 chunk size。默认值设为 `4096`，表示 4096 环境全量参与；如果实测显存或时间不可接受，可调小为 `1024`、`512`、`256`、`64` 等。调小后，未被随机抽中的环境本轮不做 MPC 规划，也不开启 `reference_foot_pos` imitation reward。
+
+核心规则：
+
+- 每次 global replan tick 先生成本轮候选环境集合：
+  - `sample_count = min(num_envs, mpc_parallel_plan_batch_size)`
+  - 从 `0..num_envs-1` 随机抽 `sample_count` 个环境
+  - 默认 `4096` 时等价于全量规划
+- 只读取被抽中环境的当前 IsaacLab 状态、terrain、semantic map 和 command。
+- 只对被抽中的环境调用 `batched_generate_trajectory` / `plan_segment`。
+- 规划成功的环境写入 full reference cache，并设置 `reference_reward_mask=True`。
+- 未抽中的环境不规划，`reference_reward_mask=False`。
+- 中途 reset 或 command changed 的环境不触发立即 replan。即使该环境已经在本轮获得了有效 MPC plan，也必须立刻执行 `reference_reward_mask[env] = false`，直到下一次 global replan tick 重新随机抽样并规划成功。
+- `swing_leg_collision_reward` 等当前状态奖励不受该 mask 影响；mask 只控制 MPC 足端轨迹 imitation reward。
 
 ```python
 class BatchedTrajectoryManager:
-    """固定间隔全量 replan，间隔期间消费缓存的参考轨迹。"""
+    """固定间隔 global sync replan，间隔期间只让有效样本消费 MPC 参考轨迹。"""
 
     def __init__(self, cfg, device):
         self._cfg = cfg
         self._cache: BatchedTrajectoryResult | None = None
         self._phase_counter: Tensor     # (N,) 当前 phase index
+        self._reference_reward_mask: Tensor  # (N,) 当前 step 是否启用 imitation reward
         self._step_counter: int = 0     # 全局步数计数器
 
     def step(self, terrain, states, commands):
-        """每个 env step 调用。到 replan 间隔 → 全量重规划。"""
+        """每个 env step 调用。到 replan 间隔 → 随机抽样规划子集。"""
         if self._step_counter % self._cfg.replan_interval_steps == 0:
-            self._cache = batched_generate_trajectory(
-                terrain, states, commands,
+            env_ids = self._sample_replan_env_ids(
+                num_envs=states.root_pos.shape[0],
+                sample_count=self._cfg.mpc_parallel_plan_batch_size,
+            )
+            sub_result = batched_generate_trajectory(
+                terrain.index_select_envs(env_ids),
+                states.index_select_envs(env_ids),
+                commands.index_select(0, env_ids),
                 self._cfg.horizon, self._cfg.dt, self._cfg,
             )
-            self._phase_counter.zero_()
+            self._scatter_result_to_cache(env_ids, sub_result)
+            self._reference_reward_mask.zero_()
+            self._reference_reward_mask[env_ids] = sub_result.valid_mask
+            self._phase_counter[env_ids] = 0
         self._phase_counter += 1
         self._step_counter += 1
+
+    def mark_reset_or_command_changed(self, env_mask: Tensor):
+        """中途失配环境不立即重规划；已获得 MPC plan 的环境也必须关闭 imitation reward。"""
+        self._reference_reward_mask = torch.where(
+            env_mask,
+            torch.zeros_like(self._reference_reward_mask),
+            self._reference_reward_mask,
+        )
 
     def current_reference(self) -> dict[str, Tensor]:
         """返回当前 phase 对应的参考帧。phase 超出 horizon 时 clamp。"""
@@ -357,9 +392,9 @@ class BatchedTrajectoryManager:
         return self._cache.gather_at_phase(idx)
 ```
 
-env reset 时不触发额外 replan，只重置该环境的 `phase_counter`。`_step_counter` 是**全局**的（不随单个 env reset 重置），控制全量 replan 的节奏。下次固定间隔到来时统一 replan。
+env reset 或速度命令变化时不触发额外 replan，只关闭该环境的 `reference_reward_mask`。这条规则也适用于已经获得 MPC plan 的环境：reset/command changed 一发生，就设置 `reference_reward_mask[env] = false`。`_step_counter` 是**全局**的（不随单个 env reset 重置），控制 global replan 的节奏。下次固定间隔到来时重新随机抽样；如果该环境被抽中且规划成功，再重新开启 imitation reward。
 
-**与旧 runtime 的行为差异**：`human-10-extension-planner-runtime.md` 列出了 4 种 replan 触发条件（reset、horizon 末尾、command 变化、状态偏离）。新方案简化为仅固定间隔触发。这是有意为之——GPU 上 replan 足够快（毫秒级），不需要精细的按需触发来节省 CPU 时间。实现者不应"恢复"旧的按需触发逻辑。
+**与旧 runtime 的行为差异**：`human-10-extension-planner-runtime.md` 列出了 4 种 replan 触发条件（reset、horizon 末尾、command 变化、状态偏离）。新方案简化为仅固定间隔 global sync 触发；reset 和 command 变化只会关闭当前环境的 imitation reward，不会把该环境插队进中途 replan。实现者不应恢复 per-env dirty-subset 补规划逻辑。
 
 ### 3.2 Env Config
 
@@ -375,6 +410,7 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
     use_batched_reference_trajectory: bool = True
     reference_trajectory_horizon: int = 50
     reference_replan_interval_steps: int = 250
+    mpc_parallel_plan_batch_size: int = 4096  # 每个 global replan tick 随机抽多少环境做 MPC + imitation reward
 
     # 候选搜索（teacher 覆盖值；raw 默认值可能不同，以此处为准）
     replan_velocity_scales: list[float] = [1.0, 0.8, 0.6]
@@ -404,6 +440,13 @@ class TeacherElevationTrajectoryEnvCfg(TeacherElevationEnvCfg):
 ### 3.3 Reward 消费
 
 `rewards_reference.py` 中的 reward 函数签名不变，仍通过 `env.unwrapped._trajectory_reference_cache` 获取参考数据。`BatchedTrajectoryManager.current_reference()` 写入该位置。
+
+MPC 足端轨迹 imitation reward 必须乘以 `BatchedTrajectoryManager.reference_reward_mask()`：
+
+- 被本轮 global replan 随机抽中且规划成功的环境：reward 开启。
+- 未抽中的环境：reward 为 0。
+- 中途 reset 或 command changed 的环境：无论之前是否已获得 MPC plan，立即执行 `reference_reward_mask[env] = false`，reward 立即变为 0。
+- 下一次 global replan tick 后，重新按随机抽样和规划成功状态决定是否开启。
 
 ### 3.4 register_envs.py
 
