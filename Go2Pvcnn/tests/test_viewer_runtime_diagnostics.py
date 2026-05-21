@@ -31,11 +31,53 @@ from extension.batched_together_planner.types import TogetherPlannerStatus
 from extension.batched_planner.types import LEG_ORDER
 from tests.fixtures import viewer_runtime_diagnostics as viewer_diag
 from tests.fixtures.viewer_runtime_diagnostics import build_command_cases, scanner_sync_steps
+from extension.viz import go2_foostep_planner as viewer_module
+from extension.batch_mpc_planner.types import MpcPlannerTerrain
 
 
 def _make_real_runtime_fixture(**kwargs):
     assert hasattr(viewer_diag, "make_real_runtime_fixture")
     return viewer_diag.make_real_runtime_fixture(**kwargs)
+
+
+def test_viewer_mpc_zero_command_drains_until_grounded_landing_frame() -> None:
+    root_pos = torch.zeros((1, 5, 3), dtype=torch.float32)
+    root_pos[0, :, 0] = torch.linspace(0.0, 0.2, 5)
+    root_quat = torch.zeros((1, 5, 4), dtype=torch.float32)
+    root_quat[..., 0] = 1.0
+    foot_pos = torch.zeros((1, 5, 4, 3), dtype=torch.float32)
+    foot_pos[:, :, :, 0] = torch.tensor([0.2, 0.2, -0.2, -0.2]).view(1, 1, 4)
+    foot_pos[:, :, :, 1] = torch.tensor([0.1, -0.1, 0.1, -0.1]).view(1, 1, 4)
+    foot_pos[:, 0, 0, 2] = 0.10
+    foot_pos[:, 1, 0, 2] = 0.08
+    foot_pos[:, 2, 0, 2] = 0.04
+    contact_state = torch.ones((1, 5, 4), dtype=torch.bool)
+    contact_state[:, :3, 0] = False
+    result = viewer_module.ViewerTrajectoryResult(
+        num_frames=5,
+        root_pos_w=root_pos,
+        root_quat_w=root_quat,
+        joint_angles=torch.zeros((1, 5, 12), dtype=torch.float32),
+        foot_pos_w=foot_pos,
+        foot_pos_root=foot_pos - root_pos.unsqueeze(2),
+        contact_state=contact_state,
+        planned_touchdown_w=foot_pos[:, -1],
+    )
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+    )
+
+    assert viewer_module._viewer_should_drain_before_zero_replan(
+        backend="mpc",
+        result=result,
+        playback_frame=1,
+        teleop_values=torch.zeros((1, 3), dtype=torch.float32),
+        last_cmd=torch.tensor([[0.3, 0.0, 0.0]], dtype=torch.float32),
+    )
+    assert viewer_module._viewer_find_grounded_all_feet_frame(result, terrain, start_frame=1) == 3
 
 
 def _t116_grounded_diag(

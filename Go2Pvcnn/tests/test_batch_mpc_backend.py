@@ -2447,18 +2447,25 @@ def test_mpc_plan_segment_outputs_grounded_touchdowns_and_locked_stance() -> Non
 def test_mpc_plan_segment_keeps_zero_command_standstill() -> None:
     terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     cfg.runtime.optimize_steps = 1
+    state = MpcRobotState(
+        root_pos=state.root_pos,
+        root_rpy=state.root_rpy,
+        foot_pos=state.foot_pos.clone(),
+        joint_angles=state.joint_angles,
+    )
+    state.foot_pos[:, 0, 2] = 0.12
+    state.foot_pos[:, 1, 2] = 0.08
 
     result = plan_segment(terrain, state, command, cfg=cfg)
 
     torch.testing.assert_close(result.root_pos, state.root_pos[:, None, :].expand_as(result.root_pos))
     torch.testing.assert_close(result.root_rpy, state.root_rpy[:, None, :].expand_as(result.root_rpy))
-    torch.testing.assert_close(result.foot_pos, state.foot_pos[:, None, :, :].expand_as(result.foot_pos))
     torch.testing.assert_close(result.joint_angles, state.joint_angles[:, None, :].expand_as(result.joint_angles))
     assert result.contact_state.all()
-    torch.testing.assert_close(
-        result.planned_touchdown_w,
-        state.foot_pos[:, None, :, :].expand_as(result.planned_touchdown_w),
-    )
+    expected_foot = state.foot_pos.clone()
+    expected_foot[:, :, 2] = height_at(terrain, expected_foot[:, :, :2])
+    torch.testing.assert_close(result.foot_pos, expected_foot[:, None, :, :].expand_as(result.foot_pos))
+    torch.testing.assert_close(result.planned_touchdown_w, expected_foot[:, None, :, :].expand_as(result.planned_touchdown_w))
 
 
 def test_mpc_loss_registry_no_longer_uses_deleted_terms() -> None:

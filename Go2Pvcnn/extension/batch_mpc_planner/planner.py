@@ -12,6 +12,7 @@ from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_tim
 from .nominal import build_nominal_trajectory
 from .optimizer import optimize_variables
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
+from .terrain import height_at
 from .types import MPC_HARD_REASON_COUNT, MpcPlannerResult, MpcPlannerStatus, MpcPlannerTerrain, MpcRobotState
 from .variables import MpcOptimizationVariables, init_optimization_variables
 
@@ -74,7 +75,13 @@ def _zero_command_mask(command: Tensor, *, batch: int, device: torch.device) -> 
     return torch.linalg.vector_norm(cmd[:, :3], dim=-1) <= 1.0e-5
 
 
-def _standstill_result_from_state(state: MpcRobotState, *, horizon: int, cfg: MpcPlannerCfg) -> MpcPlannerResult:
+def _standstill_result_from_state(
+    state: MpcRobotState,
+    *,
+    horizon: int,
+    cfg: MpcPlannerCfg,
+    terrain: MpcPlannerTerrain | None = None,
+) -> MpcPlannerResult:
     root_pos0 = torch.as_tensor(state.root_pos)
     device = root_pos0.device
     dtype = root_pos0.dtype
@@ -82,13 +89,17 @@ def _standstill_result_from_state(state: MpcRobotState, *, horizon: int, cfg: Mp
     root_rpy0 = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)
     foot0 = torch.as_tensor(state.foot_pos, dtype=dtype, device=device)
     joint0 = torch.as_tensor(state.joint_angles, dtype=dtype, device=device)
+    foot_standstill = foot0
+    if terrain is not None:
+        terrain_z = height_at(terrain, foot0[..., :2]).to(dtype=dtype, device=device)
+        foot_standstill = torch.cat((foot0[..., :2], terrain_z.unsqueeze(-1)), dim=-1)
     root_pos = root_pos0[:, None, :].expand(batch, int(horizon), 3).contiguous()
     root_rpy = root_rpy0[:, None, :].expand(batch, int(horizon), 3).contiguous()
-    foot_pos = foot0[:, None, :, :].expand(batch, int(horizon), 4, 3).contiguous()
+    foot_pos = foot_standstill[:, None, :, :].expand(batch, int(horizon), 4, 3).contiguous()
     joint_angles = joint0[:, None, :].expand(batch, int(horizon), 12).contiguous()
     contact_state = torch.ones((batch, int(horizon), 4), dtype=torch.bool, device=device)
-    touchdown_seq = foot0.unsqueeze(2).expand(batch, 4, int(cfg.runtime.touchdown_event_cap), 3).contiguous()
-    planned_touchdown_w = foot0[:, None, :, :].expand(batch, int(horizon), 4, 3).contiguous()
+    touchdown_seq = foot_standstill.unsqueeze(2).expand(batch, 4, int(cfg.runtime.touchdown_event_cap), 3).contiguous()
+    planned_touchdown_w = foot_standstill[:, None, :, :].expand(batch, int(horizon), 4, 3).contiguous()
     cost_total = torch.zeros((batch,), dtype=dtype, device=device)
     status = torch.full((batch,), int(MpcPlannerStatus.OK), dtype=torch.long, device=device)
     feasible = torch.ones((batch,), dtype=torch.bool, device=device)
@@ -220,10 +231,10 @@ def plan_segment(
             profile.add_stage("plan.zero_command_standstill", (profile.now() - plan_t0) * 1000.0)
             profile.add_stage("plan.total", (profile.now() - plan_t0) * 1000.0)
             maybe_print_mpc_profile(profile, cfg=cfg)
-        return _standstill_result_from_state(state, horizon=horizon_for_zero, cfg=cfg)
+        return _standstill_result_from_state(state, horizon=horizon_for_zero, cfg=cfg, terrain=terrain)
     if bool(torch.any(zero_mask_pre)):
         nonzero_ids = torch.nonzero(torch.logical_not(zero_mask_pre), as_tuple=False).squeeze(-1)
-        base = _standstill_result_from_state(state, horizon=horizon_for_zero, cfg=cfg)
+        base = _standstill_result_from_state(state, horizon=horizon_for_zero, cfg=cfg, terrain=terrain)
         subset = plan_segment(
             _subset_terrain(terrain, nonzero_ids),
             _subset_state(state, nonzero_ids),

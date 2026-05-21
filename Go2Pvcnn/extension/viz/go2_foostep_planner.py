@@ -523,6 +523,75 @@ def _viewer_loop_need_replan(
     return False
 
 
+def _viewer_command_is_zero(command: torch.Tensor, *, atol: float = 1.0e-5) -> bool:
+    values = torch.as_tensor(command, dtype=torch.float64)
+    if values.ndim != 2 or int(values.shape[-1]) < 3:
+        return False
+    return bool(torch.linalg.vector_norm(values[:, :3], dim=-1).max().item() <= float(atol))
+
+
+def _viewer_plan_has_motion(result, *, atol: float = 1.0e-5) -> bool:
+    if result is None:
+        return False
+    root_pos = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
+    root_quat = torch.as_tensor(result.root_quat_w, dtype=torch.float64)
+    return not bool(
+        torch.allclose(root_pos, root_pos[:, :1], atol=atol, rtol=0.0)
+        and torch.allclose(root_quat, root_quat[:, :1], atol=atol, rtol=0.0)
+    )
+
+
+def _viewer_find_grounded_all_feet_frame(
+    result,
+    terrain,
+    *,
+    start_frame: int,
+    tol_m: float = 0.02,
+) -> int | None:
+    if result is None:
+        return None
+    from extension.batch_mpc_planner.terrain import height_at
+
+    foot_pos = torch.as_tensor(result.foot_pos_w, dtype=torch.float32)
+    if foot_pos.ndim != 4:
+        return None
+    start = max(0, min(int(start_frame), int(foot_pos.shape[1]) - 1))
+    terrain_z = height_at(terrain, foot_pos[..., :2].reshape(int(foot_pos.shape[0]), -1, 2)).to(
+        dtype=foot_pos.dtype,
+        device=foot_pos.device,
+    ).reshape(foot_pos.shape[:3])
+    grounded = torch.abs(foot_pos[..., 2] - terrain_z) <= float(tol_m)
+    all_landed = grounded.all(dim=(0, 2))
+    future = torch.nonzero(all_landed[start:], as_tuple=False)
+    if int(future.numel()) == 0:
+        return None
+    return int(start + future[0, 0].item())
+
+
+def _viewer_should_drain_before_zero_replan(
+    *,
+    backend: str,
+    result,
+    playback_frame: int,
+    teleop_values: torch.Tensor,
+    last_cmd: torch.Tensor | None,
+    atol: float = 1.0e-3,
+) -> bool:
+    if str(backend).lower() != "mpc":
+        return False
+    if result is None or last_cmd is None:
+        return False
+    if int(playback_frame) >= int(result.num_frames):
+        return False
+    if not _viewer_command_is_zero(teleop_values):
+        return False
+    if _viewer_command_is_zero(last_cmd):
+        return False
+    if torch.allclose(torch.as_tensor(teleop_values), torch.as_tensor(last_cmd), atol=atol):
+        return False
+    return _viewer_plan_has_motion(result)
+
+
 def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
     """Write the planner frame pose/joints into the displayed robot.
 
@@ -2014,16 +2083,39 @@ def main() -> int:
                     teleop_values=active_cmd.values,
                     last_cmd=last_cmd,
                 )
+                drain_zero_replan = False
+                if need_replan and _viewer_should_drain_before_zero_replan(
+                    backend=args_cli.planner_backend,
+                    result=result,
+                    playback_frame=playback_frame,
+                    teleop_values=active_cmd.values,
+                    last_cmd=last_cmd,
+                ):
+                    if args_cli.planner_backend == "mpc":
+                        drain_terrain, _ = _compute_mpc_local_terrain(scanner)
+                        landing_frame = _viewer_find_grounded_all_feet_frame(
+                            result,
+                            drain_terrain,
+                            start_frame=playback_frame,
+                        )
+                    else:
+                        landing_frame = None
+                    if landing_frame is None:
+                        drain_zero_replan = True
+                    elif playback_frame <= landing_frame:
+                        drain_zero_replan = True
+                    if drain_zero_replan:
+                        need_replan = False
                 loop_diag = (_format_command_values(active_cmd.values), need_replan)
                 if loop_diag != last_loop_diag:
-                    print(
-                        "[Viewer][Loop] "
-                        f"teleop_cmd={loop_diag[0]} "
-                        f"need_replan={need_replan} "
-                        f"playback_frame={playback_frame} "
-                        f"cycle={plan_cycle}",
-                        flush=True,
-                    )
+                    # print(
+                    #     "[Viewer][Loop] "
+                    #     f"teleop_cmd={loop_diag[0]} "
+                    #     f"need_replan={need_replan} "
+                    #     f"playback_frame={playback_frame} "
+                    #     f"cycle={plan_cycle}",
+                    #     flush=True,
+                    # )
                     last_loop_diag = loop_diag
 
                 if need_replan:
@@ -2071,16 +2163,16 @@ def main() -> int:
                         semantic_map,
                         int(args_cli.heightmap_viz_stride),
                     )
-                    print(
-                        _format_viewer_plan_line(
-                            backend=args_cli.planner_backend,
-                            cycle=plan_cycle,
-                            command=active_cmd.values,
-                            result=result,
-                            semantic_diagnostics=semantic_diag,
-                        ),
-                        flush=True,
-                    )
+                    # print(
+                    #     _format_viewer_plan_line(
+                    #         backend=args_cli.planner_backend,
+                    #         cycle=plan_cycle,
+                    #         command=active_cmd.values,
+                    #         result=result,
+                    #         semantic_diagnostics=semantic_diag,
+                    #     ),
+                    #     flush=True,
+                    # )
                     playback_frame = 0
 
                     planner_state = _planner_state_from_reference_result(result, frame_idx=0)
@@ -2114,17 +2206,17 @@ def main() -> int:
                         _format_xyz(_quat_wxyz_to_rpy(planner_frame.root_quat[0])),
                     )
                     if actual_summary != last_actual_summary:
-                        print(
-                            "[Viewer][ActualBase] "
-                            f"cycle={max(plan_cycle - 1, 0)} "
-                            f"actual_pos={actual_summary[0]} "
-                            f"actual_quat_raw={actual_summary[1]} "
-                            f"actual_rpy_if_wxyz={actual_summary[2]} "
-                            f"actual_rpy_if_xyzw={actual_summary[3]} "
-                            f"plan_pos={actual_summary[4]} "
-                            f"plan_rpy={actual_summary[5]}",
-                            flush=True,
-                        )
+                        # print(
+                        #     "[Viewer][ActualBase] "
+                        #     f"cycle={max(plan_cycle - 1, 0)} "
+                        #     f"actual_pos={actual_summary[0]} "
+                        #     f"actual_quat_raw={actual_summary[1]} "
+                        #     f"actual_rpy_if_wxyz={actual_summary[2]} "
+                        #     f"actual_rpy_if_xyzw={actual_summary[3]} "
+                        #     f"plan_pos={actual_summary[4]} "
+                        #     f"plan_rpy={actual_summary[5]}",
+                        #     flush=True,
+                        # )
                         last_actual_summary = actual_summary
                     actual_kin = _read_actual_kinematic_state(base_env, foot_ids)
                     joint_err = actual_kin["joint_pos_planner"] - planner_frame.joint_angles
@@ -2137,17 +2229,23 @@ def main() -> int:
                         float(foot_err_norm.mean().item()),
                     )
                     if kinematic_summary != last_kinematic_summary:
-                        print(
-                            "[Viewer][ActualKinematics] "
-                            f"cycle={max(plan_cycle - 1, 0)} "
-                            f"joint_err_max={kinematic_summary[0]:0.6f} "
-                            f"joint_err_mean={kinematic_summary[1]:0.6f} "
-                            f"foot_err_max={kinematic_summary[2]:0.6f} "
-                            f"foot_err_mean={kinematic_summary[3]:0.6f}",
-                            flush=True,
-                        )
+                        # print(
+                        #     "[Viewer][ActualKinematics] "
+                        #     f"cycle={max(plan_cycle - 1, 0)} "
+                        #     f"joint_err_max={kinematic_summary[0]:0.6f} "
+                        #     f"joint_err_mean={kinematic_summary[1]:0.6f} "
+                        #     f"foot_err_max={kinematic_summary[2]:0.6f} "
+                        #     f"foot_err_mean={kinematic_summary[3]:0.6f}",
+                        #     flush=True,
+                        # )
                         last_kinematic_summary = kinematic_summary
                     playback_frame += 1
+                    if drain_zero_replan and landing_frame is not None and playback_frame > landing_frame:
+                        last_cmd = active_cmd.values.clone()
+                        result = None
+                        continue
+                    if drain_zero_replan:
+                        continue
 
                 last_cmd = active_cmd.values.clone()
 
@@ -2180,10 +2278,10 @@ def main() -> int:
                         f"actual_rpy_xyzw_dbg=({actual_rpy_xyzw[0]:+0.2f}, {actual_rpy_xyzw[1]:+0.2f}, {actual_rpy_xyzw[2]:+0.2f}) "
                         f"frame={display_frame}/{result.num_frames}"
                     )
-                    if status != last_status:
-                        sys.stdout.write(status)
-                        sys.stdout.flush()
-                        last_status = status
+                    # if status != last_status:
+                    #     sys.stdout.write(status)
+                    #     sys.stdout.flush()
+                    #     last_status = status
         except KeyboardInterrupt:
             print("\n[Viewer] Ctrl-C received; shutting down.", flush=True)
         finally:
