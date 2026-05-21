@@ -51,7 +51,7 @@ def optimize_variables(
                 if profile is not None:
                     profile.add_stage("optimizer.zero_grad", (profile.now() - iter_t0) * 1000.0)
                 decode_t0 = profile.now() if profile is not None else 0.0
-                decoded = decode_trajectory(nominal, variables, runtime)
+                decoded = decode_trajectory(nominal, variables, runtime, terrain=terrain)
                 if profile is not None:
                     profile.add_stage("optimizer.decode", (profile.now() - decode_t0) * 1000.0)
                 loss_t0 = profile.now() if profile is not None else 0.0
@@ -85,7 +85,7 @@ def optimize_variables(
             profile.add_stage("optimizer.loop", (profile.now() - opt_t0) * 1000.0)
 
         decode_t0 = profile.now() if profile is not None else 0.0
-        decoded = decode_trajectory(nominal, variables, runtime)
+        decoded = decode_trajectory(nominal, variables, runtime, terrain=terrain)
         if profile is not None:
             profile.add_stage("optimizer.final_decode", (profile.now() - decode_t0) * 1000.0)
         loss_t0 = profile.now() if profile is not None else 0.0

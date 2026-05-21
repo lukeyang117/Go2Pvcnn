@@ -8,6 +8,8 @@ import torch
 from torch import Tensor
 
 from .config import MpcRuntimeCfg
+from .terrain import height_at
+from .types import MpcPlannerTerrain
 
 
 @dataclass
@@ -99,10 +101,47 @@ def _circular_abs_distance(a: Tensor, b: Tensor) -> Tensor:
     return torch.abs(diff)
 
 
+def _sample_time_noncyclic(values: Tensor, phase: Tensor) -> Tensor:
+    batch, horizon, legs, *tail = values.shape
+    pos = torch.clamp(phase, 0.0, 1.0) * float(max(horizon - 1, 1))
+    i0 = torch.floor(pos).to(dtype=torch.long).clamp(0, horizon - 1)
+    i1 = (i0 + 1).clamp(0, horizon - 1)
+    alpha = (pos - torch.floor(pos)).to(dtype=values.dtype)
+    b = torch.arange(batch, device=values.device).view(batch, 1).expand(batch, legs)
+    l = torch.arange(legs, device=values.device).view(1, legs).expand(batch, legs)
+    v0 = values[b, i0, l]
+    v1 = values[b, i1, l]
+    return torch.lerp(v0, v1, alpha.view(batch, legs, *([1] * len(tail))))
+
+
+def _ground_touchdowns_and_lock_stance(
+    terrain: MpcPlannerTerrain,
+    foot_pos: Tensor,
+    touchdown_phase: Tensor,
+) -> Tensor:
+    batch, horizon, legs, _ = foot_pos.shape
+    sampled_touchdown = _sample_time_noncyclic(foot_pos, touchdown_phase)
+    touchdown_xy = sampled_touchdown[..., :2]
+    touchdown_z = height_at(terrain, touchdown_xy).to(dtype=foot_pos.dtype, device=foot_pos.device)
+    grounded_touchdown = torch.cat((touchdown_xy, touchdown_z.unsqueeze(-1)), dim=-1)
+
+    touchdown_pos = torch.clamp(touchdown_phase, 0.0, 1.0) * float(max(horizon - 1, 1))
+    touchdown_frame = torch.floor(touchdown_pos).to(dtype=torch.long).clamp(0, horizon - 1)
+    frame_ids = torch.arange(horizon, dtype=torch.long, device=foot_pos.device).view(1, horizon, 1)
+    post_touchdown = frame_ids >= touchdown_frame.view(batch, 1, legs)
+    return torch.where(
+        post_touchdown.unsqueeze(-1),
+        grounded_touchdown[:, None, :, :].expand(batch, horizon, legs, 3),
+        foot_pos,
+    )
+
+
 def decode_trajectory(
     nominal: dict[str, Tensor],
     variables: MpcOptimizationVariables,
     runtime_cfg: MpcRuntimeCfg,
+    *,
+    terrain: MpcPlannerTerrain | None = None,
 ) -> DecodedMpcTrajectory:
     root_pos = nominal["root_pos"] + variables.root_pos_residual
     root_rpy = nominal["root_rpy"] + variables.root_rpy_residual
@@ -117,6 +156,9 @@ def decode_trajectory(
     swing_width = width_min + (width_max - width_min) * torch.sigmoid(variables.swing_width_raw)
     swing_start = torch.remainder(swing_center - 0.5 * swing_width, 1.0)
     swing_end = torch.remainder(swing_center + 0.5 * swing_width, 1.0)
+    touchdown_phase = torch.clamp(swing_center + 0.5 * swing_width, min=0.0, max=1.0)
+    if terrain is not None:
+        foot_pos = _ground_touchdowns_and_lock_stance(terrain, foot_pos, touchdown_phase)
 
     horizon = int(root_pos.shape[1])
     frame_phase = torch.arange(horizon, dtype=root_pos.dtype, device=root_pos.device).view(1, horizon, 1) / float(horizon)

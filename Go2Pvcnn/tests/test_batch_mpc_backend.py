@@ -1001,6 +1001,27 @@ def test_mpc_decode_uses_continuous_swing_window_variables() -> None:
     )
 
 
+def test_mpc_decode_grounded_touchdowns_lock_post_touchdown_stance() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
+    terrain = MpcPlannerTerrain(
+        height_map=torch.linspace(0.0, 0.08, 25, dtype=torch.float32).reshape(1, 5, 5).expand(2, -1, -1),
+        semantic_map=torch.zeros((2, 5, 5), dtype=torch.long),
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+    )
+    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
+    variables = init_optimization_variables(nominal, cfg.runtime)
+    with torch.no_grad():
+        variables.foot_pos_residual[..., 2].fill_(0.25)
+
+    decoded = decode_trajectory(nominal, variables, cfg.runtime, terrain=terrain)
+    touchdown = sample_touchdown_positions(decoded.foot_pos, decoded.swing_center, decoded.swing_width)
+    terrain_z = height_at(terrain, touchdown[..., :2])
+
+    torch.testing.assert_close(touchdown[..., 2], terrain_z, atol=1.0e-6, rtol=1.0e-6)
+    torch.testing.assert_close(decoded.foot_pos[:, -1], touchdown, atol=1.0e-6, rtol=1.0e-6)
+
+
 def test_mpc_nominal_integrates_body_frame_command_with_yaw() -> None:
     terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     state = MpcRobotState(
@@ -2359,13 +2380,12 @@ def test_mpc_semantic_obstacle_loss_penalizes_high_small_swing_but_ignores_low_s
     assert float(high_loss[0]) > 0.0
 
 
-def test_mpc_backend_has_no_foothold_memory_or_output_grounding_symbols() -> None:
+def test_mpc_backend_has_no_foothold_memory_symbols() -> None:
     root = GO2PVCNN_ROOT / "extension" / "batch_mpc_planner"
     source = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py"))
 
     forbidden = [
         "MpcFootholdMemory",
-        "_ground_contact_feet_to_terrain",
         "_initialize_foothold_memory",
         "_foothold_memory_for",
         "_update_foothold_memory",
@@ -2377,16 +2397,20 @@ def test_mpc_backend_has_no_foothold_memory_or_output_grounding_symbols() -> Non
         assert token not in source, token
 
 
-def test_mpc_plan_segment_outputs_optimized_feet_without_post_grounding() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+def test_mpc_plan_segment_outputs_grounded_touchdowns_and_locked_stance() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
     cfg.runtime.optimize_steps = 1
 
     result = plan_segment(terrain, state, command, cfg=cfg)
 
-    assert result.foot_pos.shape == (1, 25, 4, 3)
-    assert result.joint_angles.shape == (1, 25, 12)
-    assert result.touchdown_seq.shape[0:2] == (1, 4)
-    assert result.planned_touchdown_w.shape == (1, 25, 4, 3)
+    assert result.foot_pos.shape == (2, 25, 4, 3)
+    assert result.joint_angles.shape == (2, 25, 12)
+    assert result.touchdown_seq.shape[0:2] == (2, 4)
+    assert result.planned_touchdown_w.shape == (2, 25, 4, 3)
+    touchdown = result.planned_touchdown_w[1, 0]
+    terrain_z = height_at(terrain, touchdown[None, :, :2])[1]
+    torch.testing.assert_close(touchdown[:, 2], terrain_z, atol=1.0e-6, rtol=1.0e-6)
+    torch.testing.assert_close(result.foot_pos[1, -1], touchdown, atol=1.0e-6, rtol=1.0e-6)
 
 
 def test_mpc_plan_segment_keeps_zero_command_standstill() -> None:

@@ -111,7 +111,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["together", "legacy", "mpc"],
         help="Trajectory manager backend used by the task attachment path.",
     )
-    parser.add_argument("--vx-scale", type=float, default=1.0, help="Teleop forward/backward speed.")
+    parser.add_argument("--vx-scale", type=float, default=0.5, help="Teleop forward/backward speed.")
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
     parser.add_argument("--yaw-scale", type=float, default=1, help="Teleop yaw-rate command.")
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")

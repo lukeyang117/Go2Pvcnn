@@ -17,6 +17,7 @@
 - Safe throughput slice: heavy-loss scheduling and `optimize_steps` remain unchanged; zero/near-zero command rows are skipped before optimizer execution, terrain query cache is fixed-decoded equivalent, and IK/FK merge was not enabled because it changed optimized trajectories in CUDA probes. Evidence: [../log/2026-05-18-1419-t302g-mpc-safe-throughput-optimizations.md](../log/2026-05-18-1419-t302g-mpc-safe-throughput-optimizations.md).
 - Resource-limited 10-env T302 optimize-step sweep completed low-small + high-small subset for `5/15/20/25`: `20` was the only value with zero failures in the completed subset; `5` and `15` degraded, and `25` produced one stance-semantic anomaly. Evidence: [../log/2026-05-18-1521-t302-optimize-steps-small-sweep.md](../log/2026-05-18-1521-t302-optimize-steps-small-sweep.md).
 - Global-sync sampled MPC implementation now passes backend coverage: fixed global replan tick, random `mpc_parallel_plan_batch_size` planning subset, sampled-only imitation reward, continued tracking between global ticks, and reset/command reward-mask invalidation. The active runtime-counter vocabulary is now also cleaned to global-sync terms: `global_due`, `global_due_count`, and `sampled_plan_count`. Evidence: [../log/2026-05-18-1729-t302g-global-sync-sampled-mpc.md](../log/2026-05-18-1729-t302g-global-sync-sampled-mpc.md), [../log/2026-05-18-2200-t302g-global-sync-counter-cleanup.md](../log/2026-05-18-2200-t302g-global-sync-counter-cleanup.md).
+- Grounded touchdown output slice: `decode_trajectory(..., terrain=terrain)` now samples touchdown `z` from `height_at(terrain, touchdown_xy)` and locks touchdown-following stance foot positions to the same grounded point before loss/final export. This is a small decode-path behavior change for the current MPC path; semantic no-small-obstacle touchdown selection is still not included. Evidence: [../log/2026-05-21-1420-mpc-grounded-touchdown-output-lock.md](../log/2026-05-21-1420-mpc-grounded-touchdown-output-lock.md).
 - P0 acceptance:
   - independent new config file, train/play experiment, and Gym ids
   - high-resolution `semantic_height_scanner` for MPC and collision reward
@@ -65,6 +66,7 @@
 - [../log/2026-05-18-1419-t302g-mpc-safe-throughput-optimizations.md](../log/2026-05-18-1419-t302g-mpc-safe-throughput-optimizations.md)
 - [../log/2026-05-18-1521-t302-optimize-steps-small-sweep.md](../log/2026-05-18-1521-t302-optimize-steps-small-sweep.md)
 - [../log/2026-05-18-1729-t302g-global-sync-sampled-mpc.md](../log/2026-05-18-1729-t302g-global-sync-sampled-mpc.md)
+- [../log/2026-05-21-1420-mpc-grounded-touchdown-output-lock.md](../log/2026-05-21-1420-mpc-grounded-touchdown-output-lock.md)
 - T302 strict baseline: [../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md](../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md)
 
 ## Git Refs
