@@ -129,6 +129,7 @@ def _ground_touchdowns_and_lock_stance(
     touchdown_frame = torch.floor(touchdown_pos).to(dtype=torch.long).clamp(0, horizon - 1)
     frame_ids = torch.arange(horizon, dtype=torch.long, device=foot_pos.device).view(1, horizon, 1)
     post_touchdown = frame_ids >= touchdown_frame.view(batch, 1, legs)
+    post_touchdown = torch.logical_and(post_touchdown, frame_ids > 0)
     return torch.where(
         post_touchdown.unsqueeze(-1),
         grounded_touchdown[:, None, :, :].expand(batch, horizon, legs, 3),
@@ -143,9 +144,22 @@ def decode_trajectory(
     *,
     terrain: MpcPlannerTerrain | None = None,
 ) -> DecodedMpcTrajectory:
-    root_pos = nominal["root_pos"] + variables.root_pos_residual
-    root_rpy = nominal["root_rpy"] + variables.root_rpy_residual
-    foot_pos = nominal["foot_pos"] + variables.foot_pos_residual
+    root_pos_residual = variables.root_pos_residual
+    root_rpy_residual = variables.root_rpy_residual
+    foot_pos_residual = variables.foot_pos_residual
+    if int(root_pos_residual.shape[1]) > 0:
+        root_gate = torch.ones_like(root_pos_residual)
+        rpy_gate = torch.ones_like(root_rpy_residual)
+        foot_gate = torch.ones_like(foot_pos_residual)
+        root_gate[:, 0] = 0.0
+        rpy_gate[:, 0] = 0.0
+        foot_gate[:, 0] = 0.0
+        root_pos_residual = root_pos_residual * root_gate
+        root_rpy_residual = root_rpy_residual * rpy_gate
+        foot_pos_residual = foot_pos_residual * foot_gate
+    root_pos = nominal["root_pos"] + root_pos_residual
+    root_rpy = nominal["root_rpy"] + root_rpy_residual
+    foot_pos = nominal["foot_pos"] + foot_pos_residual
     center_prior = nominal["swing_center"]
     width_min = float(runtime_cfg.swing_window_min_width)
     width_max = float(runtime_cfg.swing_window_max_width)

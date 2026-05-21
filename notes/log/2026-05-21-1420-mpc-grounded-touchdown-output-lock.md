@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Record the small MPC decode change requested during T302g discussion: decoded touchdowns must land on the height map, and touchdown-following stance frames must keep the same foot coordinate.
+Record the small MPC decode change requested during T302g discussion: decoded touchdowns must land on the height map, touchdown-following stance frames must keep the same foot coordinate, and frame 0 must remain anchored to the current Go2 state for viewer handoff.
 
 ## Stage
 
@@ -17,7 +17,7 @@ Record the small MPC decode change requested during T302g discussion: decoded to
 
 ```bash
 python -m py_compile Go2Pvcnn/extension/batch_mpc_planner/planner.py Go2Pvcnn/extension/batch_mpc_planner/variables.py Go2Pvcnn/extension/batch_mpc_planner/optimizer.py Go2Pvcnn/tests/test_batch_mpc_backend.py
-pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k "decode_grounded_touchdowns or grounded_touchdowns or zero_command_standstill or continuous_swing_window"
+pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k "frame_zero_state_anchor or frame_zero_joint_state_anchor or decode_grounded_touchdowns or grounded_touchdowns"
 pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q
 ```
 
@@ -29,8 +29,8 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q
 
 ## Key Metrics
 
-- Targeted backend tests: `4 passed, 90 deselected`.
-- Full backend tests: `94 passed, 1 warning`.
+- Targeted backend tests: `4 passed, 92 deselected`.
+- Full backend tests: `96 passed, 1 warning`.
 - `py_compile`: exit `0`.
 
 ## Result
@@ -39,7 +39,7 @@ Pass.
 
 ## Conclusion
 
-`decode_trajectory(..., terrain=terrain)` now computes touchdown `xy` from the current sampled foot trajectory, samples touchdown `z` from `height_at(terrain, xy)`, and locks decoded foot positions from the touchdown frame through the remaining stance horizon to that grounded point. Optimizer loop decodes pass `terrain`, so losses and final export now see the same grounded/locked foot trajectory.
+`decode_trajectory(..., terrain=terrain)` now computes touchdown `xy` from the current sampled foot trajectory, samples touchdown `z` from `height_at(terrain, xy)`, and locks decoded foot positions from the touchdown frame through the remaining stance horizon to that grounded point. Optimizer loop decodes pass `terrain`, so losses and final export now see the same grounded/locked foot trajectory. Frame-0 root/rpy/foot residuals are gated to zero, touchdown locking skips frame 0, and `plan_segment(...)` writes frame-0 joint angles from the input state so viewer replans start from the current displayed Go2 state.
 
 ## Follow-Up
 

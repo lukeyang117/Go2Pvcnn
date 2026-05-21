@@ -277,6 +277,9 @@ def plan_segment(
     contact_state = torch.where(row_3, torch.ones_like(contact_state), contact_state)
     joint_seq = solve_joint_angles_from_trajectory(root_pos, root_rpy, foot_pos)
     state_joints = torch.as_tensor(state.joint_angles, dtype=joint_seq.dtype, device=joint_seq.device)[:, None, :].expand(batch, horizon, 12)
+    if horizon > 0:
+        joint_seq = joint_seq.clone()
+        joint_seq[:, 0, :] = state_joints[:, 0, :]
     joint_seq = torch.where(row_3, state_joints, joint_seq)
     touchdown_seq, planned_touchdown_w = _touchdown_export(
         foot_pos,

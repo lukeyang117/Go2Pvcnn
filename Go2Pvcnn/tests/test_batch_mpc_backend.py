@@ -1022,6 +1022,37 @@ def test_mpc_decode_grounded_touchdowns_lock_post_touchdown_stance() -> None:
     torch.testing.assert_close(decoded.foot_pos[:, -1], touchdown, atol=1.0e-6, rtol=1.0e-6)
 
 
+def test_mpc_decode_keeps_frame_zero_state_anchor() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
+    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
+    variables = init_optimization_variables(nominal, cfg.runtime)
+    with torch.no_grad():
+        variables.root_pos_residual.fill_(0.20)
+        variables.root_rpy_residual.fill_(0.10)
+        variables.foot_pos_residual.fill_(0.15)
+
+    decoded = decode_trajectory(nominal, variables, cfg.runtime, terrain=terrain)
+
+    torch.testing.assert_close(decoded.root_pos[:, 0], nominal["root_pos"][:, 0])
+    torch.testing.assert_close(decoded.root_rpy[:, 0], nominal["root_rpy"][:, 0])
+    torch.testing.assert_close(decoded.foot_pos[:, 0], nominal["foot_pos"][:, 0])
+
+
+def test_mpc_plan_segment_keeps_frame_zero_joint_state_anchor() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
+    cfg.runtime.optimize_steps = 1
+    state = MpcRobotState(
+        root_pos=state.root_pos,
+        root_rpy=state.root_rpy,
+        foot_pos=state.foot_pos,
+        joint_angles=torch.arange(24, dtype=torch.float32).reshape(2, 12) * 0.01,
+    )
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    torch.testing.assert_close(result.joint_angles[:, 0], state.joint_angles)
+
+
 def test_mpc_nominal_integrates_body_frame_command_with_yaw() -> None:
     terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     state = MpcRobotState(
