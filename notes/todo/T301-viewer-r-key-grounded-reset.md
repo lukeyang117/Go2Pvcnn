@@ -9,10 +9,12 @@
   - 仅把关节状态恢复到初始站立姿态
   - 再根据 semantic scanner / 高程图把足端重新贴回地面
 - 本轮已完成 viewer helper 代码修改与轻量单测，尚未补一个真实 headless runtime 的针对性 `R` 行为断言。
+- 新增 `T301b` step-mode 子节点：显式 `--step-mode` 下 viewer/play 进入空格单帧推进；暂停时 IsaacLab/Kit 窗口继续 render/pump，机器狗状态和轨迹 marker 只在空格节拍更新；`W/A/S/D/Q/E/R` 仍监听，其中运动命令只锁存为下一段轨迹输入，当前轨迹走完前不切换。轻量 pytest、`env_isaacsim` pytest/compile、真实 headless viewer smoke 已通过。
 
 ## Open Children
 
 - [T301a](#t301a-viewer-r-reset语义改造与helper验证): helper 语义与局部验证已完成，待补 runtime 级针对性断言。
+- [T301b](#t301b-step-mode空格单帧播放与轨迹边界命令切换): 新增显式 step-mode，按空格推进一帧，命令变化延迟到当前轨迹结束后生效；实现与 headless IsaacLab smoke 已完成，人工 livestream 手感仍可选验收。
 
 ## Closed Children Archive
 
@@ -21,14 +23,16 @@
 ## Related Logs
 
 - [../log/2026-05-15-2045-t301-viewer-r-key-grounded-reset.md](../log/2026-05-15-2045-t301-viewer-r-key-grounded-reset.md)
+- [../log/2026-05-22-0004-t301b-step-mode-viewer-play.md](../log/2026-05-22-0004-t301b-step-mode-viewer-play.md)
 
 ## Git Refs
 
 - Last Feature Commit: `pending`
-- Last Verified Commit: `24b59cb` plus working tree changes verified through [../log/2026-05-15-2045-t301-viewer-r-key-grounded-reset.md](../log/2026-05-15-2045-t301-viewer-r-key-grounded-reset.md)
-- Current Work Ref: `working tree on top of 24b59cb (T301 viewer R-key grounded reset)`
+- Last Verified Commit: `c92627d` plus working tree changes verified through [../log/2026-05-22-0004-t301b-step-mode-viewer-play.md](../log/2026-05-22-0004-t301b-step-mode-viewer-play.md)
+- Current Work Ref: `working tree on top of c92627d (T301b step-mode viewer/play)`
 - Key Files:
   - [../../Go2Pvcnn/extension/viz/go2_foostep_planner.py](../../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
+  - [../../Go2Pvcnn/scripts/play.py](../../Go2Pvcnn/scripts/play.py)
   - [../../Go2Pvcnn/tests/test_viewer_reset.py](../../Go2Pvcnn/tests/test_viewer_reset.py)
 
 ## Next Step
@@ -37,6 +41,10 @@
   - reset 前先人工改 root `xy/yaw`
   - 执行 viewer reset helper
   - 验证 root `xy/yaw` 保持不变、joint 恢复初始站姿、足端高度接近地面
+- 可选人工验收 `T301b`：
+  - 远程服务器用 `--headless --livestream 2 --step-mode` 启动 viewer
+  - 浏览器连接 WebRTC 后在终端按空格逐帧推进
+  - 在当前轨迹未播完时按 `W/A/S/D/Q/E`，确认只影响下一段轨迹
 
 ## Node Details
 
@@ -59,3 +67,32 @@
 - remaining risk:
   - 还没有真实终端按键 `R` 的 end-to-end 行为日志
   - 当前贴地策略使用四足平均高程修正 root z；若后续要适配更激烈地形，可能需要升级成 support-plane 级 reset
+
+### T301b step-mode空格单帧播放与轨迹边界命令切换
+
+- status: `verify`
+- why-created:
+  - 用户希望显式命令行参数启动 step-mode，在 IsaacLab 渲染/播放时默认暂停。
+  - 终端监听空格：每按一次空格只播放/推进一帧；不按就暂停。
+  - `W/A/S/D/Q/E/R` 键仍要监听；运动命令按下后只作为下一段轨迹输入，除非当前轨迹播放完，否则不切换轨迹。
+- implementation plan:
+  1. 在 viewer 侧新增 `ViewerStepGate` 与 `--step-mode` 参数；step-mode 下 `TerminalTeleop` 改成锁存命令，空格产生一次性 `step_requested`。
+  2. 修改 `_viewer_loop_need_replan`，支持 `defer_command_replan_until_trajectory_end=True`；step-mode 下命令变化不触发当前轨迹中途重规划，只有 `result is None`、轨迹耗尽、或 `R` reset 触发重规划。
+  3. viewer 主循环在 `_viewer_direct_playback_step` 前检查 step gate；未按空格时只 poll 键盘并继续 render/update IsaacLab 窗口，不播放下一帧。
+  4. viewer 轨迹 marker 和机器狗状态使用同一个空格节拍更新；未按空格时不刷新到下一段/下一帧轨迹点。
+  5. `play.py` 增加同名 `--step-mode` 和终端空格 gate；在 policy/env step 前等待空格，未按空格时继续 render/update 窗口，默认不改变非 step-mode 行为。
+  6. 先用轻量 pytest 覆盖 “命令变化不打断当前轨迹”“空格一次放行一帧”“暂停时窗口继续 render/update”“visualizer 只在放行帧更新”；再用 `env_isaacsim` 跑同一测试、`py_compile`，最后启动一次 headless IsaacLab viewer smoke 验证参数能进真实 runtime。
+- acceptance:
+  - 默认不传 `--step-mode` 时 viewer/play 行为不变。
+  - 传 `--step-mode` 后，空格是唯一机器狗/轨迹 marker 帧推进触发；`W/A/S/D/Q/E` 可在暂停期间改变下一段命令。
+  - 不按空格时 IsaacLab/Kit 窗口仍继续 render/pump，可控制窗口/相机/WebRTC。
+  - 当前轨迹 `playback_frame < result.num_frames` 时，运动命令变化不触发重规划；轨迹结束后使用最新锁存命令规划下一段。
+  - `R` 仍即时 reset。
+- evidence:
+  - local `python -m pytest Go2Pvcnn/tests/test_viewer_reset.py -q`: `8 passed`
+  - `env_isaacsim` `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest Go2Pvcnn/tests/test_viewer_reset.py -q`: `8 passed`
+  - `env_isaacsim` `py_compile`: exit `0`
+  - `git diff --check`: exit `0`
+  - real IsaacLab headless viewer smoke with `--step-mode`: scene/environment created, step-mode help printed, no-space interval stayed alive without playback output, PTY-fed space reached `[Viewer][Playback] path=render+scene_sync`, Ctrl-C exited cleanly
+- remaining risk:
+  - 真实人工终端按键节奏难以完全自动化；自动验证以 helper/parser/headless startup 为主，最终手感需要人工连 livestream 或本地 GUI 试用。

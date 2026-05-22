@@ -90,6 +90,16 @@ class ViewerResetSnapshot:
     joint_vel: torch.Tensor
 
 
+@dataclass
+class ViewerStepGate:
+    enabled: bool
+
+    def consume_frame_permission(self, *, step_requested: bool) -> bool:
+        if not self.enabled:
+            return True
+        return bool(step_requested)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
 
@@ -115,6 +125,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
     parser.add_argument("--yaw-scale", type=float, default=1, help="Teleop yaw-rate command.")
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")
+    parser.add_argument(
+        "--step-mode",
+        action="store_true",
+        default=False,
+        help="Pause playback and advance exactly one frame for each Space key press.",
+    )
     parser.add_argument("--heightmap-viz-stride", type=int, default=10, help="Subsample stride for heightmap markers.")
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
@@ -510,6 +526,7 @@ def _viewer_loop_need_replan(
     reset_requested: bool,
     teleop_values: torch.Tensor,
     last_cmd: torch.Tensor | None,
+    defer_command_replan_until_trajectory_end: bool = False,
     atol: float = 1e-3,
 ) -> bool:
     if result is None:
@@ -518,7 +535,11 @@ def _viewer_loop_need_replan(
         return True
     if reset_requested:
         return True
-    if last_cmd is not None and not torch.allclose(teleop_values, last_cmd, atol=atol):
+    if (
+        not defer_command_replan_until_trajectory_end
+        and last_cmd is not None
+        and not torch.allclose(teleop_values, last_cmd, atol=atol)
+    ):
         return True
     return False
 
@@ -739,6 +760,19 @@ def _viewer_direct_playback_step(base_env, result, *, frame_idx: int, sync_scene
     return "render+scene_sync" if sync_scene else "render-only"
 
 
+def _viewer_pump_paused_window(base_env, *, sleep_s: float = 0.01) -> None:
+    base_env.sim.render()
+    if hasattr(base_env.scene, "update"):
+        base_env.scene.update(float(base_env.physics_dt))
+    if sleep_s > 0.0:
+        time.sleep(float(sleep_s))
+
+
+def _viewer_update_visualizer_when_permitted(*, frame_permitted: bool, update_fn) -> None:
+    if frame_permitted:
+        update_fn()
+
+
 def _launch_app(args_cli: argparse.Namespace):
     from isaaclab.app import AppLauncher
 
@@ -831,6 +865,7 @@ def _joint_pos_robot_to_planner(robot, joint_pos: torch.Tensor) -> torch.Tensor:
 class TeleopCommand:
     values: torch.Tensor
     reset_requested: bool = False
+    step_requested: bool = False
 
 
 class TerminalTeleop:
@@ -845,10 +880,21 @@ class TerminalTeleop:
         "e": (2, -1.0),
     }
 
-    def __init__(self, *, device: torch.device, vx_scale: float, vy_scale: float, yaw_scale: float, timeout_s: float):
+    def __init__(
+        self,
+        *,
+        device: torch.device,
+        vx_scale: float,
+        vy_scale: float,
+        yaw_scale: float,
+        timeout_s: float,
+        latch_commands: bool = False,
+    ):
         self._device = device
         self._scales = torch.tensor([vx_scale, vy_scale, yaw_scale], dtype=torch.float64, device=device)
         self._timeout_s = float(timeout_s)
+        self._latch_commands = bool(latch_commands)
+        self._latched_values = torch.zeros((1, 3), dtype=torch.float64, device=device)
         self._last_seen: dict[str, float] = {}
         self._old_termios = None
         self._old_flags = None
@@ -885,11 +931,11 @@ class TerminalTeleop:
         import termios
 
         assert self._stdin_fd is not None
+        self._enabled = False
         if self._old_termios is not None:
             termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._old_termios)
         if self._old_flags is not None:
             fcntl.fcntl(self._stdin_fd, fcntl.F_SETFL, self._old_flags)
-        self._enabled = False
 
     def _install_cleanup_guards(self) -> None:
         if not self._atexit_registered:
@@ -918,6 +964,7 @@ class TerminalTeleop:
 
     def poll(self) -> TeleopCommand:
         reset_requested = False
+        step_requested = False
         if self._enabled:
             while True:
                 readable, _, _ = select.select([sys.stdin], [], [], 0.0)
@@ -932,20 +979,35 @@ class TerminalTeleop:
                     raise KeyboardInterrupt
                 if key == "x":
                     self._last_seen.clear()
+                    self._latched_values.zero_()
                     continue
                 if key == "r":
                     reset_requested = True
                     self._last_seen.clear()
+                    self._latched_values.zero_()
+                    continue
+                if key == " ":
+                    step_requested = True
                     continue
                 if key in self._KEY_AXIS:
-                    self._last_seen[key] = now
+                    axis, sign = self._KEY_AXIS[key]
+                    if self._latch_commands:
+                        self._latched_values[0, axis] = sign * self._scales[axis]
+                    else:
+                        self._last_seen[key] = now
+        if self._latch_commands:
+            return TeleopCommand(
+                values=self._latched_values.clone(),
+                reset_requested=reset_requested,
+                step_requested=step_requested,
+            )
         now = time.monotonic()
         values = torch.zeros((1, 3), dtype=torch.float64, device=self._device)
         for key, (axis, sign) in self._KEY_AXIS.items():
             last_seen = self._last_seen.get(key)
             if last_seen is not None and now - last_seen <= self._timeout_s:
                 values[0, axis] += sign * self._scales[axis]
-        return TeleopCommand(values=values, reset_requested=reset_requested)
+        return TeleopCommand(values=values, reset_requested=reset_requested, step_requested=step_requested)
 
 
 def _make_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]):
@@ -1966,6 +2028,7 @@ def _print_help() -> None:
     print("  Q/E : yaw left/right", flush=True)
     print("  X   : clear command", flush=True)
     print("  R   : reset environment", flush=True)
+    print("  Space : step one frame when --step-mode is enabled", flush=True)
     print("  Ctrl-C : quit\n", flush=True)
 
 
@@ -2002,6 +2065,8 @@ def main() -> int:
     print("[Viewer] Terrain source: teacher_elevation_trajectory env config", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
     print("[Viewer] Playback mode: kinematic (no physics)", flush=True)
+    if args_cli.step_mode:
+        print("[Viewer] Step mode: enabled; press Space to advance one frame.", flush=True)
     _print_help()
 
     selected_origin = _reset_viewer_env(
@@ -2029,6 +2094,7 @@ def main() -> int:
     plan_cycle = 0
     scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
     scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
+    step_gate = ViewerStepGate(enabled=bool(args_cli.step_mode))
 
     with TerminalTeleop(
         device=base_env.device,
@@ -2036,6 +2102,7 @@ def main() -> int:
         vy_scale=float(args_cli.vy_scale),
         yaw_scale=float(args_cli.yaw_scale),
         timeout_s=float(args_cli.key_hold_timeout),
+        latch_commands=bool(args_cli.step_mode),
     ) as teleop:
         last_status = None
         last_loop_diag = None
@@ -2050,6 +2117,7 @@ def main() -> int:
                     active_cmd = TeleopCommand(
                         values=scripted_command.clone(),
                         reset_requested=teleop_cmd.reset_requested,
+                        step_requested=teleop_cmd.step_requested,
                     )
 
                 if active_cmd.reset_requested:
@@ -2082,6 +2150,7 @@ def main() -> int:
                     reset_requested=active_cmd.reset_requested,
                     teleop_values=active_cmd.values,
                     last_cmd=last_cmd,
+                    defer_command_replan_until_trajectory_end=bool(args_cli.step_mode),
                 )
                 drain_zero_replan = False
                 if need_replan and _viewer_should_drain_before_zero_replan(
@@ -2117,6 +2186,11 @@ def main() -> int:
                     #     flush=True,
                     # )
                     last_loop_diag = loop_diag
+
+                frame_permitted = step_gate.consume_frame_permission(step_requested=active_cmd.step_requested)
+                if bool(args_cli.step_mode) and not frame_permitted and not active_cmd.reset_requested:
+                    _viewer_pump_paused_window(base_env)
+                    continue
 
                 if need_replan:
                     if result is not None and playback_frame > 0:
@@ -2175,19 +2249,25 @@ def main() -> int:
                     # )
                     playback_frame = 0
 
-                    planner_state = _planner_state_from_reference_result(result, frame_idx=0)
-                    root_yaw = extract_yaw_batch(planner_state.root_quat)
-                    visualizer.update(
-                        result=result,
-                        command=active_cmd.values,
-                        root_yaw=root_yaw,
-                        height_points_by_class=height_points_by_class,
+                    def _update_step_visualizer() -> None:
+                        planner_state = _planner_state_from_reference_result(result, frame_idx=0)
+                        root_yaw = extract_yaw_batch(planner_state.root_quat)
+                        visualizer.update(
+                            result=result,
+                            command=active_cmd.values,
+                            root_yaw=root_yaw,
+                            height_points_by_class=height_points_by_class,
+                        )
+
+                    _viewer_update_visualizer_when_permitted(
+                        frame_permitted=(frame_permitted or not bool(args_cli.step_mode)),
+                        update_fn=_update_step_visualizer,
                     )
                     plan_cycle += 1
                     if scripted_command is not None and scripted_cycles_remaining > 0:
                         scripted_cycles_remaining = max(0, scripted_cycles_remaining - 1)
 
-                if result is not None and playback_frame < result.num_frames:
+                if result is not None and playback_frame < result.num_frames and frame_permitted:
                     playback_path = _viewer_direct_playback_step(base_env, result, frame_idx=playback_frame)
                     if playback_path != last_playback_path:
                         print(
@@ -2246,6 +2326,8 @@ def main() -> int:
                         continue
                     if drain_zero_replan:
                         continue
+                elif result is not None and playback_frame < result.num_frames and args_cli.step_mode:
+                    time.sleep(0.01)
 
                 last_cmd = active_cmd.values.clone()
 

@@ -193,6 +193,22 @@ timeout -s INT -k 20s 60s /home/lhy/anaconda3/envs/env_isaacsim/bin/python \
 
 远程服务器上 `--webrtc-public-ip` 要填浏览器能访问到的服务器地址；不填时 viewer 会优先使用 `PUBLIC_IP`，再尝试从 `SSH_CONNECTION` 推断服务器 IP。默认 WebRTC port 是 `49100`；需要换端口时用 `--webrtc-port <port>`。
 
+step-mode 单帧 viewer：
+
+```bash
+/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --headless \
+  --livestream 2 \
+  --webrtc-public-ip 172.31.179.75 \
+  --device cuda:2 \
+  --num_envs 1 \
+  --terrain task \
+  --planner-backend together \
+  --step-mode
+```
+
+`--step-mode` 必须显式传入。启用后 viewer 默认暂停，终端里每按一次空格只推进一次机器狗状态，并在同一节拍更新轨迹 marker；不按空格时 IsaacLab/Kit 窗口仍持续 render/pump，因此可以继续控制窗口、相机或 WebRTC 视角。`W/A/S/D/Q/E/R` 仍监听。运动命令会锁存为下一段轨迹输入，当前轨迹未播放完时不会中途切换轨迹；`R` 仍即时 reset。
+
 legacy viewer 回滚：
 
 ```bash
@@ -256,6 +272,23 @@ teleop 键位：
   --device cuda:0
 ```
 
+step-mode policy 回放：
+
+```bash
+/home/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
+  --experiment teacher_elevation_trajectory \
+  --planner-backend together \
+  --run_dir 2026-04-27_19-13-54 \
+  --checkpoint model_0.pt \
+  --num_envs 1 \
+  --headless \
+  --livestream 2 \
+  --device cuda:0 \
+  --step-mode
+```
+
+play 侧 `--step-mode` 同样需要显式开启；启用后每按一次空格推进一个 policy/env step，不按空格时仍保持 IsaacLab/Kit 窗口 render/pump。
+
 legacy 回放：
 
 ```bash
@@ -316,6 +349,8 @@ viewer 侧：
   远程 WebRTC 对外地址。服务器远程浏览器黑屏时优先显式设置它，避免 IsaacLab 默认广告 `127.0.0.1`。
 - `--webrtc-port`
   WebRTC livestream 端口，默认 `49100`。
+- `--step-mode`
+  viewer/play 的显式单帧模式。viewer 中空格推进一个 kinematic playback frame，并同步刷新轨迹 marker；play 中空格推进一个 policy/env step。暂停期间窗口仍 render/pump，方便控制 IsaacLab 视角。viewer 的 `W/A/S/D/Q/E` 在 step-mode 下锁存为下一段轨迹命令，当前轨迹走完前不触发中途重规划。
 
 env cfg 侧关键字段：
 

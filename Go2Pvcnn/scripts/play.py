@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
+import select
+import signal
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 
 import numpy as np
 import torch
@@ -60,6 +63,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Print startup and loop timing diagnostics for WebRTC livestream bottlenecks.",
     )
     parser.add_argument(
+        "--step-mode",
+        action="store_true",
+        default=False,
+        help="Pause play loop and advance exactly one env/render step for each Space key press.",
+    )
+    parser.add_argument(
         "--planner-backend",
         type=str,
         default=None,
@@ -109,6 +118,98 @@ def _should_update_follow_camera(*, timestep: int, num_envs: int, livestream: in
     if livestream in (1, 2):
         return timestep % max(1, interval) == 0
     return True
+
+
+@dataclass
+class _TerminalStepGate:
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        self._stdin_fd = None
+        self._old_termios = None
+        self._old_flags = None
+        self._raw_enabled = False
+        self._old_signal_handlers: dict[int, object] = {}
+        self._atexit_registered = False
+
+    def __enter__(self) -> "_TerminalStepGate":
+        if not self.enabled:
+            return self
+        if not sys.stdin.isatty():
+            print("[WARN][play.py] stdin is not a TTY; --step-mode cannot receive Space key presses.", flush=True)
+            return self
+        import fcntl
+        import termios
+        import tty
+
+        self._stdin_fd = sys.stdin.fileno()
+        self._old_termios = termios.tcgetattr(self._stdin_fd)
+        self._old_flags = fcntl.fcntl(self._stdin_fd, fcntl.F_GETFL)
+        tty.setcbreak(self._stdin_fd)
+        fcntl.fcntl(self._stdin_fd, fcntl.F_SETFL, self._old_flags | os.O_NONBLOCK)
+        self._raw_enabled = True
+        self._install_cleanup_guards()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._remove_cleanup_guards()
+        self._restore_terminal_state()
+
+    def wait_for_step(self) -> bool:
+        if not self.enabled:
+            return True
+        if not self._raw_enabled:
+            sleep(0.05)
+            return False
+        while True:
+            readable, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if not readable:
+                return False
+            char = sys.stdin.read(1)
+            if not char:
+                return False
+            if char == "\x03":
+                raise KeyboardInterrupt
+            if char == " ":
+                return True
+
+    def _restore_terminal_state(self) -> None:
+        if not self._raw_enabled:
+            return
+        import fcntl
+        import termios
+
+        assert self._stdin_fd is not None
+        self._raw_enabled = False
+        if self._old_termios is not None:
+            termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._old_termios)
+        if self._old_flags is not None:
+            fcntl.fcntl(self._stdin_fd, fcntl.F_SETFL, self._old_flags)
+
+    def _install_cleanup_guards(self) -> None:
+        if not self._atexit_registered:
+            atexit.register(self._restore_terminal_state)
+            self._atexit_registered = True
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            self._old_signal_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, self._handle_signal)
+
+    def _remove_cleanup_guards(self) -> None:
+        if self._atexit_registered:
+            try:
+                atexit.unregister(self._restore_terminal_state)
+            except Exception:
+                pass
+            self._atexit_registered = False
+        for signum, handler in self._old_signal_handlers.items():
+            signal.signal(signum, handler)
+        self._old_signal_handlers.clear()
+
+    def _handle_signal(self, signum, frame) -> None:
+        self._restore_terminal_state()
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise SystemExit(128 + int(signum))
 
 
 def _compute_follow_camera_pose(robot_pos: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -290,6 +391,14 @@ def _install_env_step_probes(base_env, *, enabled: bool) -> _StepProbe:
     return probe
 
 
+def _pump_play_paused_window(base_env, *, sleep_s: float = 0.01) -> None:
+    base_env.sim.render()
+    if hasattr(base_env.scene, "update"):
+        base_env.scene.update(float(base_env.physics_dt))
+    if sleep_s > 0.0:
+        sleep(float(sleep_s))
+
+
 def _make_env_wrapper(env, *, gym_module, vec_env_cls, tensor_dict_cls, clip_actions: float | None = None):
     class SimpleRslRlEnvWrapper(vec_env_cls):
         """Simple wrapper for RSL-RL without PVCNN."""
@@ -464,6 +573,7 @@ def main() -> int:
     print(f"Number of environments: {args_cli.num_envs}")
     print(f"Livestream mode: {getattr(args_cli, 'livestream', 0)}")
     print(f"Debug livestream: {args_cli.debug_livestream}")
+    print(f"Step mode: {args_cli.step_mode}")
     print(f"{'=' * 80}\n")
 
     env_cfg = env_cfg_cls()
@@ -554,47 +664,54 @@ def main() -> int:
 
     print(f"\n{'=' * 80}")
     print("Starting Play Loop")
+    if args_cli.step_mode:
+        print("Step mode enabled: press Space to advance one env/render step.", flush=True)
     print(f"{'=' * 80}\n")
 
     try:
-        while simulation_app.is_running():
-            step_start = perf_counter()
-            with torch.inference_mode():
-                policy_start = perf_counter()
-                actions = policy(obs)
-                policy_s = perf_counter() - policy_start
+        with _TerminalStepGate(enabled=bool(args_cli.step_mode)) as step_gate:
+            while simulation_app.is_running():
+                if not step_gate.wait_for_step():
+                    if args_cli.step_mode:
+                        _pump_play_paused_window(base_env)
+                    continue
+                step_start = perf_counter()
+                with torch.inference_mode():
+                    policy_start = perf_counter()
+                    actions = policy(obs)
+                    policy_s = perf_counter() - policy_start
 
-                env_start = perf_counter()
-                obs, rewards, dones, extras = wrapped_env.step(actions)
-                env_step_s = perf_counter() - env_start
+                    env_start = perf_counter()
+                    obs, rewards, dones, extras = wrapped_env.step(actions)
+                    env_step_s = perf_counter() - env_start
 
-            timestep += 1
+                timestep += 1
 
-            camera_s = 0.0
-            if _should_update_follow_camera(
-                timestep=timestep,
-                num_envs=args_cli.num_envs,
-                livestream=getattr(args_cli, "livestream", 0),
-                interval=camera_interval,
-            ):
-                camera_start = perf_counter()
-                robot_pos = base_env.scene["robot"].data.root_pos_w[0].detach().cpu().numpy()
-                camera_position, target_position = _compute_follow_camera_pose(robot_pos)
-                base_env.sim.set_camera_view(camera_position, target_position)
-                camera_s = perf_counter() - camera_start
+                camera_s = 0.0
+                if _should_update_follow_camera(
+                    timestep=timestep,
+                    num_envs=args_cli.num_envs,
+                    livestream=getattr(args_cli, "livestream", 0),
+                    interval=camera_interval,
+                ):
+                    camera_start = perf_counter()
+                    robot_pos = base_env.scene["robot"].data.root_pos_w[0].detach().cpu().numpy()
+                    camera_position, target_position = _compute_follow_camera_pose(robot_pos)
+                    base_env.sim.set_camera_view(camera_position, target_position)
+                    camera_s = perf_counter() - camera_start
 
-            total_s = perf_counter() - step_start
-            debug.add_loop_sample(
-                policy_s=policy_s,
-                env_step_s=env_step_s,
-                camera_s=camera_s,
-                total_s=total_s,
-                timestep=timestep,
-                step_probe=step_probe.snapshot_and_reset() if args_cli.debug_livestream else None,
-            )
+                total_s = perf_counter() - step_start
+                debug.add_loop_sample(
+                    policy_s=policy_s,
+                    env_step_s=env_step_s,
+                    camera_s=camera_s,
+                    total_s=total_s,
+                    timestep=timestep,
+                    step_probe=step_probe.snapshot_and_reset() if args_cli.debug_livestream else None,
+                )
 
-            if args_cli.video and timestep == args_cli.video_length:
-                break
+                if args_cli.video and timestep == args_cli.video_length:
+                    break
 
     except KeyboardInterrupt:
         print("\n[Play] Interrupted by user")

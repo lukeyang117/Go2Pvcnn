@@ -17,6 +17,7 @@ if str(GO2PVCNN_ROOT) not in sys.path:
 
 from extension.batch_mpc_planner.types import MpcPlannerTerrain
 from extension.viz import go2_foostep_planner as viewer
+from scripts import play
 
 
 class _FakeRobot:
@@ -146,3 +147,61 @@ def test_viewer_ground_robot_from_scanner_shifts_root_z_to_match_ground(monkeypa
     assert scene.write_count == 1
     assert scene.update_count == 1
     assert sim.render_count == 1
+
+
+def test_viewer_step_mode_defers_command_replan_until_current_trajectory_finishes() -> None:
+    result = SimpleNamespace(num_frames=5)
+    previous = torch.tensor([[0.2, 0.0, 0.0]], dtype=torch.float64)
+    changed = torch.tensor([[0.0, 0.3, 0.0]], dtype=torch.float64)
+
+    assert not viewer._viewer_loop_need_replan(
+        result=result,
+        playback_frame=3,
+        reset_requested=False,
+        teleop_values=changed,
+        last_cmd=previous,
+        defer_command_replan_until_trajectory_end=True,
+    )
+    assert viewer._viewer_loop_need_replan(
+        result=result,
+        playback_frame=5,
+        reset_requested=False,
+        teleop_values=changed,
+        last_cmd=previous,
+        defer_command_replan_until_trajectory_end=True,
+    )
+
+
+def test_viewer_step_gate_requires_space_for_each_frame() -> None:
+    gate = viewer.ViewerStepGate(enabled=True)
+
+    assert not gate.consume_frame_permission(step_requested=False)
+    assert gate.consume_frame_permission(step_requested=True)
+    assert not gate.consume_frame_permission(step_requested=False)
+
+
+def test_play_step_gate_disabled_does_not_block() -> None:
+    gate = play._TerminalStepGate(enabled=False)
+
+    assert gate.wait_for_step()
+
+
+def test_viewer_step_mode_paused_loop_keeps_rendering_window() -> None:
+    base_env, _, scene, sim = _fake_base_env()
+
+    viewer._viewer_pump_paused_window(base_env, sleep_s=0.0)
+
+    assert sim.render_count == 1
+    assert scene.update_count == 1
+
+
+def test_viewer_step_mode_updates_visualizer_only_when_frame_is_permitted() -> None:
+    calls = []
+
+    def record_update() -> None:
+        calls.append("update")
+
+    viewer._viewer_update_visualizer_when_permitted(frame_permitted=False, update_fn=record_update)
+    viewer._viewer_update_visualizer_when_permitted(frame_permitted=True, update_fn=record_update)
+
+    assert calls == ["update"]
