@@ -37,17 +37,44 @@ COMMAND_ALIASES: dict[str, tuple[float, float, float]] = {
 }
 
 LEG_NAMES = ("FL", "FR", "RL", "RR")
+COBBLESTONE_SUBTERRAINS = (
+    "flat",
+    "random_rough",
+    "hf_pyramid_slope",
+    "hf_pyramid_slope_inv",
+    "boxes",
+    "pyramid_stairs",
+    "pyramid_stairs_inv",
+)
 
 
 def _parse_command(value: str) -> tuple[str, tuple[float, float, float]]:
     raw = value.strip()
     if raw in COMMAND_ALIASES:
         return raw, COMMAND_ALIASES[raw]
+    if ":" in raw:
+        name, values = raw.split(":", 1)
+        parts = [float(item) for item in values.replace(",", " ").split()]
+        if len(parts) != 3:
+            raise ValueError(f"Command must have three floats after ':', got {value!r}")
+        return name.strip(), (parts[0], parts[1], parts[2])
     parts = [float(item) for item in raw.replace(",", " ").split()]
     if len(parts) != 3:
         raise ValueError(f"Command must be a known name or three floats, got {value!r}")
     name = f"cmd_{parts[0]:+.2f}_{parts[1]:+.2f}_{parts[2]:+.2f}"
     return name, (parts[0], parts[1], parts[2])
+
+
+def _parse_float_list(value: str) -> tuple[float, ...]:
+    return tuple(float(item.strip()) for item in str(value).split(",") if item.strip())
+
+
+def _build_speed_grid_commands(*, vx_values: tuple[float, ...], vy_values: tuple[float, ...], yaw: float) -> tuple[str, ...]:
+    commands: list[str] = []
+    for vx in vx_values:
+        for vy in vy_values:
+            commands.append(f"grid_vx{vx:.2f}_vy{vy:.2f}_yaw{yaw:.2f}:{vx:.6f} {vy:.6f} {yaw:.6f}")
+    return tuple(commands)
 
 
 def _iter_true_runs(mask: torch.Tensor) -> list[tuple[int, int]]:
@@ -180,6 +207,7 @@ def _trajectory_summary(
     result,
     layer: str = "result",
     variant: str = "baseline",
+    terrain_case: str = "",
 ) -> list[dict[str, float | int | str]]:
     foot = torch.as_tensor(result.foot_pos_w, dtype=torch.float64)[0]
     contact = torch.as_tensor(result.contact_state, dtype=torch.bool)[0]
@@ -225,6 +253,7 @@ def _trajectory_summary(
             "type": "cycle_summary",
             "layer": layer,
             "variant": variant,
+            "terrain_case": terrain_case,
             "command": command_name,
             "cycle": int(cycle),
             "swing_run_count": len(rows),
@@ -239,6 +268,7 @@ def _trajectory_summary(
     for row in rows[1:]:
         row["layer"] = layer
         row["variant"] = variant
+        row["terrain_case"] = terrain_case
     return rows
 
 
@@ -259,6 +289,7 @@ def _trace_decode_layers(
     terrain,
     cfg,
     variant: str,
+    terrain_case: str,
 ) -> list[dict[str, float | int | str]]:
     nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
     variables = init_optimization_variables(nominal, cfg.runtime)
@@ -324,6 +355,7 @@ def _trace_decode_layers(
                 result=layer_result,
                 layer=layer_name,
                 variant=variant,
+                terrain_case=terrain_case,
             )
         )
     return rows
@@ -421,6 +453,42 @@ def _aggregate_variant_rows(rows: list[dict[str, float | int | str]]) -> list[di
     return out
 
 
+def _aggregate_terrain_case_rows(rows: list[dict[str, float | int | str]]) -> list[dict[str, float | int | str]]:
+    grouped: dict[str, list[dict[str, float | int | str]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("terrain_case", "")), []).append(row)
+    out: list[dict[str, float | int | str]] = []
+    for terrain_case, values in grouped.items():
+        scores = [_summary_score(row) for row in values]
+        jumps = [float(row["worst_max_to_median_step"]) for row in values if math.isfinite(float(row["worst_max_to_median_step"]))]
+        boundaries = [
+            float(row["worst_boundary_to_median_step"])
+            for row in values
+            if math.isfinite(float(row["worst_boundary_to_median_step"]))
+        ]
+        violations = [
+            float(row["worst_z_unimodal_violation_ratio"])
+            for row in values
+            if math.isfinite(float(row["worst_z_unimodal_violation_ratio"]))
+        ]
+        r2s = [float(row["min_z_quadratic_r2"]) for row in values if math.isfinite(float(row["min_z_quadratic_r2"]))]
+        out.append(
+            {
+                "type": "terrain_case_summary",
+                "terrain_case": terrain_case,
+                "cycle_count": len(values),
+                "score_mean": sum(scores) / max(len(scores), 1),
+                "score_max": max(scores) if scores else float("nan"),
+                "max_worst_max_to_median_step": max(jumps) if jumps else float("nan"),
+                "max_worst_boundary_to_median_step": max(boundaries) if boundaries else float("nan"),
+                "max_worst_z_unimodal_violation_ratio": max(violations) if violations else float("nan"),
+                "min_z_quadratic_r2": min(r2s) if r2s else float("nan"),
+            }
+        )
+    out.sort(key=lambda row: (float(row["score_mean"]), float(row["score_max"]), str(row["terrain_case"])))
+    return out
+
+
 def run_probe(
     *,
     device: str,
@@ -432,121 +500,194 @@ def run_probe(
     warmup_steps: int,
     trace_decode_layers: bool,
     variants: tuple[str, ...],
+    terrain_cases: tuple[str, ...],
 ) -> int:
-    runtime = RealViewerRuntimeFixture(
-        num_envs=1,
-        device=device,
-        terrain=terrain,
-        warmup_steps=warmup_steps,
-        requested_n_frames=requested_n_frames,
-        planner_backend="mpc",
-        task_id="Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
-        env_cfg_entry_point=(
-            "go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg:"
-            "TeacherElevationTrajectoryMpcSemanticEnvCfg"
-        ),
-    )
-    try:
-        print(
-            json.dumps(
+    all_summaries: list[dict[str, float | int | str]] = []
+    if terrain_cases == ("default",):
+        terrain_cases = (terrain,)
+    for terrain_case in terrain_cases:
+        runtime_kwargs = {
+            "num_envs": 1,
+            "device": device,
+            "terrain": terrain,
+            "warmup_steps": warmup_steps,
+            "requested_n_frames": requested_n_frames,
+            "planner_backend": "mpc",
+        }
+        if terrain == "cobblestone":
+            runtime_kwargs.update(
                 {
-                    "type": "probe_header",
-                    "device": device,
-                    "terrain": terrain,
-                    "cycles": int(cycles),
-                    "playback_frame": int(playback_frame),
-                    "requested_n_frames": int(requested_n_frames),
-                    "trace_decode_layers": bool(trace_decode_layers),
-                    "variants": list(variants),
-                    "warmup_steps": int(warmup_steps),
-                },
-                sort_keys=True,
-            ),
-            flush=True,
-        )
-        all_summaries: list[dict[str, float | int | str]] = []
-        for command_text in commands:
-            command_name, command_tuple = _parse_command(command_text)
-            for variant in variants:
-                runtime.reset()
-                command = torch.tensor([command_tuple], dtype=torch.float64, device=runtime.base_env.device)
-                state = runtime._single_env_state()
-                mpc_cfg = _variant_cfg(runtime.mpc_planner_cfg, variant)
-                for cycle in range(int(cycles)):
-                    terrain_obj = runtime._single_env_terrain()
-                    result = runtime._viewer._plan_viewer_trajectory(
-                        backend=runtime.planner_backend,
-                        terrain=terrain_obj,
-                        state=state,
-                        command=command,
-                        requested_n_frames=runtime.requested_n_frames,
-                        dt=runtime.plan_dt,
-                        legacy_cfg=runtime.planner_cfg,
-                        together_cfg=runtime.together_planner_cfg,
-                        mpc_cfg=mpc_cfg,
-                    )
-                    rows = _trajectory_summary(
+                    "task_id": "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
+                    "cobblestone_num_rows": 1,
+                    "cobblestone_num_cols": 1,
+                }
+            )
+            if terrain_case not in {"cobblestone", "all", "all_cobblestone"}:
+                runtime_kwargs["cobblestone_subterrain"] = terrain_case
+        else:
+            runtime_kwargs.update(
+                {
+                    "task_id": "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
+                    "env_cfg_entry_point": (
+                        "go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg:"
+                        "TeacherElevationTrajectoryMpcSemanticEnvCfg"
+                    ),
+                }
+            )
+        runtime = RealViewerRuntimeFixture(**runtime_kwargs)
+        try:
+            case_summaries: list[dict[str, float | int | str]] = []
+            print(
+                json.dumps(
+                    {
+                        "type": "terrain_case_header",
+                        "terrain": terrain,
+                        "terrain_case": terrain_case,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            if terrain == "cobblestone":
+                runtime.select_terrain_tile(terrain_row=0, terrain_col=0)
+            _run_probe_case(
+                runtime=runtime,
+                device=device,
+                terrain=terrain,
+                terrain_case=terrain_case,
+                cycles=cycles,
+                playback_frame=playback_frame,
+                commands=commands,
+                requested_n_frames=requested_n_frames,
+                warmup_steps=warmup_steps,
+                trace_decode_layers=trace_decode_layers,
+                variants=variants,
+                all_summaries=case_summaries,
+            )
+            all_summaries.extend(case_summaries)
+            for row in _aggregate_terrain_case_rows(case_summaries):
+                print(json.dumps(row, sort_keys=True), flush=True)
+        finally:
+            runtime.close()
+    variant_summaries = _aggregate_variant_rows(all_summaries)
+    for row in variant_summaries:
+        print(json.dumps(row, sort_keys=True), flush=True)
+    for row in _aggregate_terrain_case_rows(all_summaries):
+        print(json.dumps({**row, "type": "terrain_case_overall_summary"}, sort_keys=True), flush=True)
+    finite_jump = [
+        float(row["worst_max_to_median_step"])
+        for row in all_summaries
+        if math.isfinite(float(row["worst_max_to_median_step"]))
+    ]
+    finite_boundary = [
+        float(row["worst_boundary_to_median_step"])
+        for row in all_summaries
+        if math.isfinite(float(row["worst_boundary_to_median_step"]))
+    ]
+    finite_unimodal = [
+        float(row["worst_z_unimodal_violation_ratio"])
+        for row in all_summaries
+        if math.isfinite(float(row["worst_z_unimodal_violation_ratio"]))
+    ]
+    finite_r2 = [
+        float(row["min_z_quadratic_r2"])
+        for row in all_summaries
+        if math.isfinite(float(row["min_z_quadratic_r2"]))
+    ]
+    footer = {
+        "type": "probe_footer",
+        "cycle_count": len(all_summaries),
+        "best_variant": str(variant_summaries[0]["variant"]) if variant_summaries else "",
+        "best_variant_score_mean": float(variant_summaries[0]["score_mean"]) if variant_summaries else float("nan"),
+        "max_worst_max_to_median_step": max(finite_jump) if finite_jump else float("nan"),
+        "max_worst_boundary_to_median_step": max(finite_boundary) if finite_boundary else float("nan"),
+        "max_worst_z_unimodal_violation_ratio": max(finite_unimodal) if finite_unimodal else float("nan"),
+        "min_z_quadratic_r2": min(finite_r2) if finite_r2 else float("nan"),
+    }
+    print(json.dumps(footer, sort_keys=True), flush=True)
+    return 0
+
+
+def _run_probe_case(
+    *,
+    runtime,
+    device: str,
+    terrain: str,
+    terrain_case: str,
+    cycles: int,
+    playback_frame: int,
+    commands: tuple[str, ...],
+    requested_n_frames: int,
+    warmup_steps: int,
+    trace_decode_layers: bool,
+    variants: tuple[str, ...],
+    all_summaries: list[dict[str, float | int | str]],
+) -> None:
+    print(
+        json.dumps(
+            {
+                "type": "probe_header",
+                "device": device,
+                "terrain": terrain,
+                "terrain_case": terrain_case,
+                "cycles": int(cycles),
+                "playback_frame": int(playback_frame),
+                "requested_n_frames": int(requested_n_frames),
+                "trace_decode_layers": bool(trace_decode_layers),
+                "variants": list(variants),
+                "warmup_steps": int(warmup_steps),
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    for command_text in commands:
+        command_name, command_tuple = _parse_command(command_text)
+        for variant in variants:
+            runtime.reset()
+            command = torch.tensor([command_tuple], dtype=torch.float64, device=runtime.base_env.device)
+            state = runtime._single_env_state()
+            mpc_cfg = _variant_cfg(runtime.mpc_planner_cfg, variant)
+            for cycle in range(int(cycles)):
+                terrain_obj = runtime._single_env_terrain()
+                result = runtime._viewer._plan_viewer_trajectory(
+                    backend=runtime.planner_backend,
+                    terrain=terrain_obj,
+                    state=state,
+                    command=command,
+                    requested_n_frames=runtime.requested_n_frames,
+                    dt=runtime.plan_dt,
+                    legacy_cfg=runtime.planner_cfg,
+                    together_cfg=runtime.together_planner_cfg,
+                    mpc_cfg=mpc_cfg,
+                )
+                rows = _trajectory_summary(
+                    command_name=command_name,
+                    cycle=cycle,
+                    result=result,
+                    variant=variant,
+                    terrain_case=terrain_case,
+                )
+                all_summaries.append(rows[0])
+                for row in rows:
+                    print(json.dumps(row, sort_keys=True), flush=True)
+                if trace_decode_layers:
+                    trace_rows = _trace_decode_layers(
                         command_name=command_name,
                         cycle=cycle,
-                        result=result,
+                        state=state,
+                        command=command,
+                        terrain=terrain_obj,
+                        cfg=mpc_cfg,
                         variant=variant,
+                        terrain_case=terrain_case,
                     )
-                    all_summaries.append(rows[0])
-                    for row in rows:
+                    for row in trace_rows:
                         print(json.dumps(row, sort_keys=True), flush=True)
-                    if trace_decode_layers:
-                        trace_rows = _trace_decode_layers(
-                            command_name=command_name,
-                            cycle=cycle,
-                            state=state,
-                            command=command,
-                            terrain=terrain_obj,
-                            cfg=mpc_cfg,
-                            variant=variant,
-                        )
-                        for row in trace_rows:
-                            print(json.dumps(row, sort_keys=True), flush=True)
-                    frame_idx = min(int(playback_frame), int(result.num_frames) - 1)
-                    runtime._viewer._viewer_direct_playback_step(runtime.base_env, result, frame_idx=frame_idx)
-                    refresh_targeted_scanner_pose(runtime.base_env, runtime.scanner, minimum_steps=1, extra_steps=2)
-                    state = runtime._single_env_state()
-        variant_summaries = _aggregate_variant_rows(all_summaries)
-        for row in variant_summaries:
-            print(json.dumps(row, sort_keys=True), flush=True)
-        finite_jump = [
-            float(row["worst_max_to_median_step"])
-            for row in all_summaries
-            if math.isfinite(float(row["worst_max_to_median_step"]))
-        ]
-        finite_boundary = [
-            float(row["worst_boundary_to_median_step"])
-            for row in all_summaries
-            if math.isfinite(float(row["worst_boundary_to_median_step"]))
-        ]
-        finite_unimodal = [
-            float(row["worst_z_unimodal_violation_ratio"])
-            for row in all_summaries
-            if math.isfinite(float(row["worst_z_unimodal_violation_ratio"]))
-        ]
-        finite_r2 = [
-            float(row["min_z_quadratic_r2"])
-            for row in all_summaries
-            if math.isfinite(float(row["min_z_quadratic_r2"]))
-        ]
-        footer = {
-            "type": "probe_footer",
-            "cycle_count": len(all_summaries),
-            "best_variant": str(variant_summaries[0]["variant"]) if variant_summaries else "",
-            "best_variant_score_mean": float(variant_summaries[0]["score_mean"]) if variant_summaries else float("nan"),
-            "max_worst_max_to_median_step": max(finite_jump) if finite_jump else float("nan"),
-            "max_worst_boundary_to_median_step": max(finite_boundary) if finite_boundary else float("nan"),
-            "max_worst_z_unimodal_violation_ratio": max(finite_unimodal) if finite_unimodal else float("nan"),
-            "min_z_quadratic_r2": min(finite_r2) if finite_r2 else float("nan"),
-        }
-        print(json.dumps(footer, sort_keys=True), flush=True)
-        return 0
-    finally:
-        runtime.close()
+                frame_idx = min(int(playback_frame), int(result.num_frames) - 1)
+                runtime._viewer._viewer_direct_playback_step(runtime.base_env, result, frame_idx=frame_idx)
+                refresh_targeted_scanner_pose(runtime.base_env, runtime.scanner, minimum_steps=1, extra_steps=2)
+                state = runtime._single_env_state()
 
 
 def main() -> int:
@@ -575,10 +716,36 @@ def main() -> int:
         default="forward,yaw_left,forward_yaw_left",
         help="Comma-separated command aliases or semicolon-separated vx vy yaw triples.",
     )
+    parser.add_argument(
+        "--speed-grid",
+        action="store_true",
+        help="Ignore --commands and generate vx/vy/yaw command grid.",
+    )
+    parser.add_argument("--vx-values", default="0.0,0.5,1.0")
+    parser.add_argument("--vy-values", default="0.0,0.25,0.5")
+    parser.add_argument("--yaw-value", type=float, default=1.0)
+    parser.add_argument(
+        "--terrain-cases",
+        default="default",
+        help=(
+            "Comma-separated terrain cases. For cobblestone use all_cobblestone or one/more of: "
+            + ",".join(COBBLESTONE_SUBTERRAINS)
+        ),
+    )
     args = parser.parse_args()
-    command_text = str(args.commands).replace(";", ",")
-    commands = tuple(item.strip() for item in command_text.split(",") if item.strip())
+    if bool(args.speed_grid):
+        commands = _build_speed_grid_commands(
+            vx_values=_parse_float_list(str(args.vx_values)),
+            vy_values=_parse_float_list(str(args.vy_values)),
+            yaw=float(args.yaw_value),
+        )
+    else:
+        command_text = str(args.commands).replace(";", ",")
+        commands = tuple(item.strip() for item in command_text.split(",") if item.strip())
     variants = tuple(item.strip() for item in str(args.variants).split(",") if item.strip())
+    terrain_cases = tuple(item.strip() for item in str(args.terrain_cases).split(",") if item.strip())
+    if terrain_cases == ("all_cobblestone",):
+        terrain_cases = COBBLESTONE_SUBTERRAINS
     return run_probe(
         device=str(args.device),
         terrain=str(args.terrain),
@@ -589,6 +756,7 @@ def main() -> int:
         warmup_steps=int(args.warmup_steps),
         trace_decode_layers=bool(args.trace_decode_layers),
         variants=variants,
+        terrain_cases=terrain_cases,
     )
 
 

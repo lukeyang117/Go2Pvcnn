@@ -448,6 +448,44 @@ def test_cobblestone_runtime_grid_defaults_compact_and_accepts_metric_shape():
     assert metric.env_cfg.scene.terrain.max_init_terrain_level == 3
 
 
+def test_cobblestone_runtime_grid_can_select_single_subterrain():
+    class FakeSubTerrain:
+        def __init__(self, proportion: float):
+            self.proportion = proportion
+
+    class FakeTerrainGen:
+        num_rows = 10
+        num_cols = 20
+        curriculum = True
+        sub_terrains = {
+            "flat": FakeSubTerrain(0.1),
+            "boxes": FakeSubTerrain(0.2),
+        }
+
+    class FakeTerrainCfg:
+        terrain_generator = FakeTerrainGen()
+        max_init_terrain_level = 9
+
+    class FakeScene:
+        terrain = FakeTerrainCfg()
+
+    class FakeEnvCfg:
+        scene = FakeScene()
+
+    fixture = viewer_diag.RealViewerRuntimeFixture.__new__(viewer_diag.RealViewerRuntimeFixture)
+    fixture.terrain = "cobblestone"
+    fixture.env_cfg = FakeEnvCfg()
+    fixture._cobblestone_num_rows = 1
+    fixture._cobblestone_num_cols = 1
+    fixture._cobblestone_subterrain = "boxes"
+
+    fixture._configure_compact_cobblestone_runtime_grid()
+
+    terrain_gen = fixture.env_cfg.scene.terrain.terrain_generator
+    assert tuple(terrain_gen.sub_terrains) == ("boxes",)
+    assert terrain_gen.sub_terrains["boxes"].proportion == 1.0
+
+
 def test_real_runtime_fixture_selects_requested_terrain_tile():
     calls = []
 

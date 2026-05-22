@@ -80,6 +80,12 @@ class MpcSmoothnessLossCfg(MpcLossTermCfg):
 
 
 @dataclass
+class MpcFootTrajectoryRegularizationLossCfg(MpcLossTermCfg):
+    boundary_weight: float = 8.0
+    accel_weight: float = 8.0
+
+
+@dataclass
 class MpcContactRegularizationLossCfg(MpcLossTermCfg):
     binary_weight: float = 1.0
     transition_weight: float = 0.5
@@ -258,6 +264,9 @@ class MpcIkFkResidualLossCfg(MpcLossTermCfg):
 class MpcLossesCfg:
     tracking: MpcTrackingLossCfg = field(default_factory=MpcTrackingLossCfg)
     smoothness: MpcSmoothnessLossCfg = field(default_factory=MpcSmoothnessLossCfg)
+    foot_trajectory_regularization: MpcFootTrajectoryRegularizationLossCfg = field(
+        default_factory=MpcFootTrajectoryRegularizationLossCfg
+    )
     contact_regularization: MpcContactRegularizationLossCfg = field(default_factory=MpcContactRegularizationLossCfg)
     swing_window: MpcSwingWindowLossCfg = field(default_factory=lambda: MpcSwingWindowLossCfg(enabled=True, weight=0.8))
     diagonal_pair: MpcDiagonalPairLossCfg = field(default_factory=lambda: MpcDiagonalPairLossCfg(enabled=True, weight=1.0))
@@ -373,6 +382,25 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     _override_loss_term(task_cfg, prefix="mpc_loss_smoothness", loss_term=losses.smoothness)
     _set_if_has(task_cfg, "mpc_loss_smoothness_root_weight", float, losses.smoothness, "root_weight")
     _set_if_has(task_cfg, "mpc_loss_smoothness_foot_weight", float, losses.smoothness, "foot_weight")
+    _override_loss_term(
+        task_cfg,
+        prefix="mpc_loss_foot_trajectory_regularization",
+        loss_term=losses.foot_trajectory_regularization,
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_foot_trajectory_regularization_boundary_weight",
+        float,
+        losses.foot_trajectory_regularization,
+        "boundary_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_foot_trajectory_regularization_accel_weight",
+        float,
+        losses.foot_trajectory_regularization,
+        "accel_weight",
+    )
     _override_loss_term(task_cfg, prefix="mpc_loss_contact_regularization", loss_term=losses.contact_regularization)
     _set_if_has(task_cfg, "mpc_loss_contact_binary_weight", float, losses.contact_regularization, "binary_weight")
     _set_if_has(task_cfg, "mpc_loss_contact_transition_weight", float, losses.contact_regularization, "transition_weight")

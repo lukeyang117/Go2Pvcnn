@@ -21,4 +21,31 @@ def foot_smoothness_loss(foot_pos: Tensor) -> Tensor:
     return torch.linalg.norm(dfoot, dim=-1).mean(dim=(1, 2))
 
 
-__all__ = ["foot_smoothness_loss", "root_smoothness_loss"]
+def _weighted_mean(value: Tensor, weight: Tensor) -> Tensor:
+    weight = weight.to(dtype=value.dtype, device=value.device)
+    return (value * weight).sum(dim=(1, 2)) / weight.sum(dim=(1, 2)).clamp_min(1.0)
+
+
+def foot_boundary_smoothness_loss(foot_pos: Tensor, swing_prob: Tensor) -> Tensor:
+    if int(foot_pos.shape[1]) < 2:
+        return torch.zeros(foot_pos.shape[0], dtype=foot_pos.dtype, device=foot_pos.device)
+    step = torch.linalg.norm(foot_pos[:, 1:] - foot_pos[:, :-1], dim=-1)
+    boundary_weight = torch.abs(swing_prob[:, 1:] - swing_prob[:, :-1])
+    return _weighted_mean(step, boundary_weight)
+
+
+def foot_acceleration_smoothness_loss(foot_pos: Tensor, swing_prob: Tensor) -> Tensor:
+    if int(foot_pos.shape[1]) < 3:
+        return torch.zeros(foot_pos.shape[0], dtype=foot_pos.dtype, device=foot_pos.device)
+    accel = foot_pos[:, 2:] - 2.0 * foot_pos[:, 1:-1] + foot_pos[:, :-2]
+    accel_norm = torch.linalg.norm(accel, dim=-1)
+    swing_weight = swing_prob[:, 1:-1].clamp_min(0.0)
+    return _weighted_mean(accel_norm, swing_weight)
+
+
+__all__ = [
+    "foot_acceleration_smoothness_loss",
+    "foot_boundary_smoothness_loss",
+    "foot_smoothness_loss",
+    "root_smoothness_loss",
+]

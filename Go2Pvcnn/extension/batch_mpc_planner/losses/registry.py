@@ -24,7 +24,12 @@ from .gait_coupling import (
     swing_window_loss,
 )
 from .kinematics import evaluate_kinematics_for_loss, ik_fk_residual_loss, joint_limit_loss_from_root_foot
-from .smoothness import foot_smoothness_loss, root_smoothness_loss
+from .smoothness import (
+    foot_acceleration_smoothness_loss,
+    foot_boundary_smoothness_loss,
+    foot_smoothness_loss,
+    root_smoothness_loss,
+)
 from .terrain_clearance import (
     body_heightfield_collision_loss,
     finite_horizon_touchdown_phase,
@@ -129,6 +134,26 @@ def compute_total_loss(
     foot_s = _profiled("foot_smoothness", lambda: foot_smoothness_loss(decoded.foot_pos))
     smooth = losses.smoothness.root_weight * root_s + losses.smoothness.foot_weight * foot_s
     per_env = per_env + _weighted(losses.smoothness.enabled, losses.smoothness.weight, smooth, breakdown, "smoothness")
+
+    foot_boundary = _profiled(
+        "foot_boundary_smoothness",
+        lambda: foot_boundary_smoothness_loss(decoded.foot_pos, decoded.swing_prob),
+    )
+    foot_accel = _profiled(
+        "foot_acceleration_smoothness",
+        lambda: foot_acceleration_smoothness_loss(decoded.foot_pos, decoded.swing_prob),
+    )
+    foot_traj = (
+        losses.foot_trajectory_regularization.boundary_weight * foot_boundary
+        + losses.foot_trajectory_regularization.accel_weight * foot_accel
+    )
+    per_env = per_env + _weighted(
+        losses.foot_trajectory_regularization.enabled,
+        losses.foot_trajectory_regularization.weight,
+        foot_traj,
+        breakdown,
+        "foot_trajectory_regularization",
+    )
 
     cbin = _profiled("contact_binary", lambda: contact_binary_loss(decoded.contact_prob))
     ctran = _profiled("contact_transition", lambda: contact_transition_loss(decoded.contact_prob))

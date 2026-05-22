@@ -29,6 +29,10 @@ from extension.batch_mpc_planner.losses.gait_coupling import (
     support_plane_roll_pitch_loss,
     swing_center_urgency_order_loss,
 )
+from extension.batch_mpc_planner.losses.smoothness import (
+    foot_acceleration_smoothness_loss,
+    foot_boundary_smoothness_loss,
+)
 from extension.batch_mpc_planner.losses.terrain_clearance import (
     body_heightfield_collision_loss,
     high_obstacle_avoidance_loss,
@@ -1295,6 +1299,9 @@ def test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions() 
     assert cfg.losses.swing_clearance_terrain.worst_deficit_weight == pytest.approx(12.0)
     assert cfg.losses.swing_clearance_terrain.boundary_min_swing_prob == pytest.approx(0.40)
     assert cfg.losses.swing_clearance_terrain.boundary_weight == pytest.approx(0.50)
+    assert cfg.losses.foot_trajectory_regularization.weight == pytest.approx(1.0)
+    assert cfg.losses.foot_trajectory_regularization.boundary_weight == pytest.approx(8.0)
+    assert cfg.losses.foot_trajectory_regularization.accel_weight == pytest.approx(8.0)
     assert cfg.losses.leg_collision.weight == pytest.approx(16.0)
     assert cfg.losses.leg_collision.knee_margin_m == pytest.approx(0.06)
     assert cfg.losses.leg_collision.shank_margin_m == pytest.approx(0.06)
@@ -2518,6 +2525,7 @@ def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
         "swing_center_urgency",
         "stance_ground",
         "swing_clearance_terrain",
+        "foot_trajectory_regularization",
         "touchdown_surface",
         "touchdown_semantic",
         "stance_semantic",
@@ -2597,6 +2605,60 @@ def test_mpc_root_height_loss_penalizes_z_drift_from_nominal() -> None:
 
     assert "root_height" in breakdown
     assert float(breakdown["root_height"][0]) > 0.05
+
+
+def test_mpc_foot_trajectory_regularization_penalizes_boundary_and_acceleration_spikes() -> None:
+    foot = torch.zeros((1, 5, 1, 3), dtype=torch.float32)
+    foot[0, 1, 0, 0] = 1.0
+    foot[0, 2, 0, 0] = 2.0
+    foot[0, 3, 0, 0] = 10.0
+    foot[0, 4, 0, 0] = 11.0
+    swing_prob = torch.tensor([[[0.0], [0.0], [1.0], [0.0], [0.0]]], dtype=torch.float32)
+
+    boundary = foot_boundary_smoothness_loss(foot, swing_prob)
+    accel = foot_acceleration_smoothness_loss(foot, swing_prob)
+
+    assert float(boundary[0]) == pytest.approx(4.5)
+    assert float(accel[0]) == pytest.approx(7.0)
+
+
+def test_mpc_loss_breakdown_includes_foot_trajectory_regularization() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    nominal = build_nominal_trajectory(state, command[:1], terrain, cfg.runtime)
+    variables = init_optimization_variables(nominal, cfg.runtime)
+    decoded = decode_trajectory(nominal, variables, cfg.runtime)
+    spiked_foot = decoded.foot_pos.clone()
+    spiked_foot[:, 10, :, 0] = spiked_foot[:, 10, :, 0] + 1.0
+    spiked = DecodedMpcTrajectory(
+        root_pos=decoded.root_pos,
+        root_rpy=decoded.root_rpy,
+        foot_pos=spiked_foot,
+        swing_center=decoded.swing_center,
+        swing_width=decoded.swing_width,
+        swing_start=decoded.swing_start,
+        swing_end=decoded.swing_end,
+        swing_prob=decoded.swing_prob,
+        contact_prob=decoded.contact_prob,
+    )
+
+    _, _, breakdown = compute_total_loss(spiked, nominal, state, command[:1], terrain, cfg)
+
+    assert "foot_trajectory_regularization" in breakdown
+    assert float(breakdown["foot_trajectory_regularization"][0].detach()) > 0.0
+
+
+def test_mpc_task_cfg_overrides_foot_trajectory_regularization() -> None:
+    cfg = planner_cfg_from_task_cfg(
+        _task_cfg(
+            mpc_loss_foot_trajectory_regularization_weight=2.0,
+            mpc_loss_foot_trajectory_regularization_boundary_weight=3.0,
+            mpc_loss_foot_trajectory_regularization_accel_weight=4.0,
+        )
+    )
+
+    assert cfg.losses.foot_trajectory_regularization.weight == pytest.approx(2.0)
+    assert cfg.losses.foot_trajectory_regularization.boundary_weight == pytest.approx(3.0)
+    assert cfg.losses.foot_trajectory_regularization.accel_weight == pytest.approx(4.0)
 
 
 def test_mpc_manager_runtime_counters_emit_when_enabled() -> None:

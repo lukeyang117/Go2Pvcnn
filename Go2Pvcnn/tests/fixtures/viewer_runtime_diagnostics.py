@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import copy
 from dataclasses import dataclass
 import math
 import os
@@ -789,6 +790,7 @@ class RealViewerRuntimeFixture:
         semantic_small_height_m: float | None = None,
         cobblestone_num_rows: int | None = None,
         cobblestone_num_cols: int | None = None,
+        cobblestone_subterrain: str | None = None,
         task_id: str | None = None,
         env_cfg_cls=None,
         env_cfg_entry_point: str | None = None,
@@ -820,6 +822,7 @@ class RealViewerRuntimeFixture:
             self.heightmap_viz_stride = int(heightmap_viz_stride)
             self._cobblestone_num_rows = cobblestone_num_rows
             self._cobblestone_num_cols = cobblestone_num_cols
+            self._cobblestone_subterrain = cobblestone_subterrain
             self.terrain_row = 0
             self.terrain_col = 0
 
@@ -999,6 +1002,16 @@ class RealViewerRuntimeFixture:
         terrain_gen.num_rows = num_rows
         terrain_gen.num_cols = num_cols
         terrain_gen.curriculum = False
+        subterrain = getattr(self, "_cobblestone_subterrain", None)
+        if subterrain:
+            sub_terrains = getattr(terrain_gen, "sub_terrains", None)
+            if not isinstance(sub_terrains, dict) or str(subterrain) not in sub_terrains:
+                available = sorted(str(key) for key in sub_terrains) if isinstance(sub_terrains, dict) else []
+                raise ValueError(f"Unknown cobblestone subterrain {subterrain!r}; available={available}")
+            selected = copy.deepcopy(sub_terrains[str(subterrain)])
+            if hasattr(selected, "proportion"):
+                selected.proportion = 1.0
+            terrain_gen.sub_terrains = {str(subterrain): selected}
         if hasattr(terrain_cfg, "max_init_terrain_level"):
             terrain_cfg.max_init_terrain_level = max(0, num_rows - 1)
 
