@@ -136,10 +136,16 @@
     - wrap-around touchdown events now use finite-horizon endpoint sampling for touchdown losses/export, so phase-end touchdowns no longer wrap back to frame `0`.
     - backend suite now passes `43` tests; targeted `py_compile`, command-matrix pytest selector, root-cause probe, and `git diff --check` have clean artifacts in the acceptance log.
     - targeted `env_isaacsim` probe on `cuda:2` reports `backward_fast` actual last-stance airborne ratio mean `0.0`, mean max gap `0.00043m`, max gap `0.00171m`; mixed-yaw targeted commands stayed at `0.0` actual last-stance airborne ratio.
+  - 2026-05-22 user reported MPC viewer foot markers are discontinuous and non-parabolic during swing. A new IsaacLab probe [../../Go2Pvcnn/tests/mpc_swing_trajectory_quality_probe.py](../../Go2Pvcnn/tests/mpc_swing_trajectory_quality_probe.py) reproduces the issue numerically on task terrain:
+    - single `forward`: `worst_max_to_median_step=11.828948`, `worst_boundary_to_median_step=3.920286`, `min_z_quadratic_r2=0.399121`
+    - `forward,yaw_left,forward_yaw_left` two-cycle matrix: `max_worst_max_to_median_step=15.795617`, `max_worst_boundary_to_median_step=10.772456`, `min_z_quadratic_r2=0.300820`
+    - decode-layer tracing shows `nominal` and initial decode remain smooth (`R2≈0.994`, single-peak z, low jump ratios), while `optimized_decode_unlocked` is already broken (`forward R2=0.163466`, `worst_max_to_median_step=13.547757`; `yaw_left R2=0.206992`, `worst_max_to_median_step=10.599597`). Root cause is therefore optimizer-updated foot residual shape, with touchdown locking only a secondary terminal-frame effect.
+    - user requested no production code change yet, so the probe now supports test-only MPC config variants. A one-cycle `forward,yaw_left` sweep selected `smooth24` as best (`score_mean=12.851905`, `score_max=12.855396`) over same-sweep baseline (`score_mean=30.021703`), cutting worst jump ratio from `16.202209` to `5.248073` and boundary ratio from `8.982029` to `1.565717`. Learning-rate-only variants did not win (`lr_quarter score_mean=23.386617`, `lr_half score_mean=38.390182`).
 
 ## Open Children
 
 - [T300e](T300e-mpc-continuous-swing-window-plan.md): continuous swing-window MPC redesign is implemented; targeted `env_isaacsim` acceptance now cleans mixed-yaw, normal/backward-fast stance grounding, and command-matrix evidence. Broader long-horizon viewer/yaw and 4096 counter confidence remain open.
+- T300f: MPC swing trajectory quality root-cause. User screenshot/request reproduced as numeric discontinuity/non-parabolic metrics; decode tracing narrows first failure to optimized `foot_pos_residual` rather than marker rendering or initial nominal shape. Test-only sweep says stronger swing smoothness is the best direction so far; next step is a failing backend quality test and a minimal swing-shape regularizer, checked against T302 collision/obstacle regressions.
 - [T302](T302-mpc-body-leg-height-field-collision-safety.md): new related design branch for body/leg height-field collision safety, semantic stance/touchdown obstacle rejection, low-small crossing, high-small/large avoidance, and real `env_isaacsim` headless acceptance.
 
 ## Closed Children Archive
@@ -149,6 +155,7 @@
 
 ## Related Logs
 
+- [2026-05-22-1358-mpc-swing-trajectory-quality-reproduction.md](../log/2026-05-22-1358-mpc-swing-trajectory-quality-reproduction.md)
 - [2026-05-11-1050-t300-unified-dense-mpc-backend-design.md](../log/2026-05-11-1050-t300-unified-dense-mpc-backend-design.md)
 - [2026-05-11-1104-t300-subagent-design-review.md](../log/2026-05-11-1104-t300-subagent-design-review.md)
 - [2026-05-11-1110-t300-spec-hardening.md](../log/2026-05-11-1110-t300-spec-hardening.md)

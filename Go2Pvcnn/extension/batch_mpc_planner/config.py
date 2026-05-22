@@ -75,8 +75,8 @@ class MpcTrackingLossCfg(MpcLossTermCfg):
 
 @dataclass
 class MpcSmoothnessLossCfg(MpcLossTermCfg):
-    root_weight: float = 1.0
-    foot_weight: float = 1.0
+    root_weight: float = 24.0
+    foot_weight: float = 24.0
 
 
 @dataclass
