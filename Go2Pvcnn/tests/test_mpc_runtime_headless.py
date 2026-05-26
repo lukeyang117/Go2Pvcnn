@@ -474,46 +474,6 @@ def _binary_gate(weight: torch.Tensor, *, threshold: float) -> torch.Tensor:
     return (weight > float(threshold)).to(dtype=weight.dtype, device=weight.device)
 
 
-@contextmanager
-def _patched_mpc_nominal_builder(builder):
-    import extension.batch_mpc_planner.planner as mpc_planner_module
-
-    original = mpc_planner_module.build_nominal_trajectory
-
-    def compatible_builder(state, command, terrain, runtime_cfg):
-        return builder(state, command, terrain, runtime_cfg)
-
-    mpc_planner_module.build_nominal_trajectory = compatible_builder
-    try:
-        yield
-    finally:
-        mpc_planner_module.build_nominal_trajectory = original
-
-
-@contextmanager
-def _patched_mpc_loss(extra_loss_fn):
-    import extension.batch_mpc_planner.optimizer as optimizer_module
-    import extension.batch_mpc_planner.losses.registry as registry_module
-
-    original_registry = registry_module.compute_total_loss
-    original_optimizer = optimizer_module.compute_total_loss
-
-    def wrapped(decoded, nominal, state, command, terrain, cfg):
-        total_scalar, per_env, breakdown = original_registry(decoded, nominal, state, command, terrain, cfg)
-        extra = extra_loss_fn(decoded, nominal, state, command, terrain, cfg)
-        extra = torch.as_tensor(extra, dtype=per_env.dtype, device=per_env.device)
-        per_env = per_env + extra
-        breakdown["yawfix_extra"] = extra
-        return per_env.mean(), per_env, breakdown
-
-    registry_module.compute_total_loss = wrapped
-    optimizer_module.compute_total_loss = wrapped
-    try:
-        yield
-    finally:
-        registry_module.compute_total_loss = original_registry
-        optimizer_module.compute_total_loss = original_optimizer
-
 
 def _yawfix_anchor_weight(nominal: dict[str, torch.Tensor], command: torch.Tensor, *, yaw_threshold_start: float = 0.35) -> torch.Tensor:
     yaw_dom = _yaw_dominance(command, like=nominal["foot_pos"])
@@ -696,64 +656,11 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
         if variant_name == "dir5_diagnostics_only":
             cfg.diagnostics.enabled = True
 
-        if variant_name == "dir2_phase_continuity":
-            import extension.batch_mpc_planner.nominal as nominal_module
-
-            original_builder = nominal_module.build_nominal_trajectory
-
-            def phase_builder(state, command, terrain, runtime_cfg):
-                original_offsets = tuple(float(v) for v in runtime_cfg.leg_phase_offsets)
-                phase_shift = float(getattr(shared, "phase_shift", 0.0))
-                runtime_cfg.leg_phase_offsets = tuple((v + phase_shift) % 1.0 for v in original_offsets)
-                try:
-                    return original_builder(state, command, terrain, runtime_cfg)
-                finally:
-                    runtime_cfg.leg_phase_offsets = original_offsets
-
-            with _patched_mpc_nominal_builder(phase_builder):
-                yield
-        elif variant_name == "dir3_anchor_nominal_proxy":
-            import extension.batch_mpc_planner.nominal as nominal_module
-
-            original_builder = nominal_module.build_nominal_trajectory
-
-            def anchor_nominal_builder(state, command, terrain, runtime_cfg):
-                nominal = original_builder(state, command, terrain, runtime_cfg)
-                anchor = getattr(shared, "stance_anchor_w", None)
-                if anchor is None:
-                    return nominal
-                contact = nominal["contact_prior"] > 0.5
-                anchor_t = anchor.to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device).unsqueeze(1)
-                nominal["foot_pos"] = torch.where(contact.unsqueeze(-1), anchor_t, nominal["foot_pos"])
-                return nominal
-
-            with _patched_mpc_nominal_builder(anchor_nominal_builder):
-                yield
-        elif variant_name in {"dir6_yaw_anchor_nominal_proxy", "dir7_yaw_anchor_blend_proxy"}:
-            import extension.batch_mpc_planner.nominal as nominal_module
-
-            original_builder = nominal_module.build_nominal_trajectory
-
-            def yaw_anchor_nominal_builder(state, command, terrain, runtime_cfg):
-                nominal = original_builder(state, command, terrain, runtime_cfg)
-                anchor = getattr(shared, "stance_anchor_w", None)
-                if anchor is None:
-                    return nominal
-                contact = nominal["contact_prior"] > 0.5
-                yaw_weight = (_yaw_dominance(command, like=nominal["foot_pos"]) > 0.60).to(
-                    dtype=nominal["foot_pos"].dtype,
-                    device=nominal["foot_pos"].device,
-                )
-                if variant_name == "dir7_yaw_anchor_blend_proxy":
-                    yaw_weight = yaw_weight * 0.50
-                anchor_t = anchor.to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device).unsqueeze(1)
-                replacement = torch.lerp(nominal["foot_pos"], anchor_t, yaw_weight[:, None, None, :])
-                nominal["foot_pos"] = torch.where(contact.unsqueeze(-1), replacement, nominal["foot_pos"])
-                return nominal
-
-            with _patched_mpc_nominal_builder(yaw_anchor_nominal_builder):
-                yield
-        elif variant_name in {
+        retired_dense_variants = {
+            "dir2_phase_continuity",
+            "dir3_anchor_nominal_proxy",
+            "dir6_yaw_anchor_nominal_proxy",
+            "dir7_yaw_anchor_blend_proxy",
             "dir9_linear_body_seed_proxy",
             "dir10_yaw_anchor_linear_seed_proxy",
             "dir11_running_linear_body_seed_proxy",
@@ -766,185 +673,9 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
             "dir18_soft_gate_z_anchor_disp_cap_proxy",
             "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
             "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-        }:
-            import extension.batch_mpc_planner.nominal as nominal_module
-
-            original_builder = nominal_module.build_nominal_trajectory
-
-            def linear_seed_nominal_builder(state, command, terrain, runtime_cfg):
-                original_swing_height = float(runtime_cfg.nominal_swing_height_m)
-                if variant_name == "dir16_soft_gate_z_anchor_low_swing_proxy":
-                    runtime_cfg.nominal_swing_height_m = 0.022
-                initial_rel_body = getattr(shared, "initial_foot_rel_body", None)
-                running_rel_body = getattr(shared, "running_foot_rel_body", None)
-                rel_body_seed = initial_rel_body
-                if variant_name == "dir11_running_linear_body_seed_proxy" and running_rel_body is not None:
-                    rel_body_seed = running_rel_body
-                if variant_name in {
-                    "dir10_yaw_anchor_linear_seed_proxy",
-                    "dir12_stance_only_yaw_anchor_linear_seed_proxy",
-                    "dir13_strict_gate_yaw_anchor_linear_seed_proxy",
-                    "dir14_soft_gate_yaw_anchor_linear_seed_proxy",
-                    "dir15_soft_gate_z_anchor_proxy",
-                    "dir16_soft_gate_z_anchor_low_swing_proxy",
-                    "dir17_soft_gate_z_anchor_touchdown_ramp_proxy",
-                    "dir18_soft_gate_z_anchor_disp_cap_proxy",
-                    "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
-                    "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                } and running_rel_body is not None and initial_rel_body is not None:
-                    rel_body_seed = running_rel_body
-                seed_state = state
-                try:
-                    if rel_body_seed is not None:
-                        linear_dom = _linear_dominance(command, like=torch.as_tensor(state.foot_pos))
-                        if variant_name == "dir13_strict_gate_yaw_anchor_linear_seed_proxy":
-                            linear_weight = _binary_gate(linear_dom, threshold=0.75)
-                        elif variant_name in {
-                            "dir14_soft_gate_yaw_anchor_linear_seed_proxy",
-                            "dir15_soft_gate_z_anchor_proxy",
-                            "dir16_soft_gate_z_anchor_low_swing_proxy",
-                            "dir17_soft_gate_z_anchor_touchdown_ramp_proxy",
-                            "dir18_soft_gate_z_anchor_disp_cap_proxy",
-                            "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
-                            "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                        }:
-                            linear_weight = torch.clamp((linear_dom - 0.35) / 0.45, min=0.0, max=1.0)
-                        else:
-                            linear_weight = _binary_gate(linear_dom, threshold=0.60)
-                        linear_weight = linear_weight.to(
-                            dtype=torch.as_tensor(state.foot_pos).dtype,
-                            device=state.foot_pos.device,
-                        )
-                        seeded_foot = _foot_pos_from_body_rel(state, rel_body_seed).to(dtype=state.foot_pos.dtype)
-                        blended_foot = torch.lerp(
-                            torch.as_tensor(state.foot_pos, dtype=state.foot_pos.dtype, device=state.foot_pos.device),
-                            seeded_foot,
-                            linear_weight[:, None, :],
-                        )
-                        seed_state = _clone_mpc_state(state, foot_pos=blended_foot)
-                    nominal = original_builder(seed_state, command, terrain, runtime_cfg)
-                finally:
-                    runtime_cfg.nominal_swing_height_m = original_swing_height
-                if variant_name in {
-                    "dir10_yaw_anchor_linear_seed_proxy",
-                    "dir12_stance_only_yaw_anchor_linear_seed_proxy",
-                    "dir13_strict_gate_yaw_anchor_linear_seed_proxy",
-                    "dir14_soft_gate_yaw_anchor_linear_seed_proxy",
-                    "dir15_soft_gate_z_anchor_proxy",
-                    "dir16_soft_gate_z_anchor_low_swing_proxy",
-                    "dir17_soft_gate_z_anchor_touchdown_ramp_proxy",
-                    "dir18_soft_gate_z_anchor_disp_cap_proxy",
-                    "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
-                    "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                }:
-                    anchor = getattr(shared, "stance_anchor_w", None)
-                    if anchor is not None:
-                        contact = nominal["contact_prior"] > 0.5
-                        yaw_dom = _yaw_dominance(command, like=nominal["foot_pos"])
-                        if variant_name == "dir13_strict_gate_yaw_anchor_linear_seed_proxy":
-                            yaw_weight = _binary_gate(yaw_dom, threshold=0.75)
-                        elif variant_name in {
-                            "dir14_soft_gate_yaw_anchor_linear_seed_proxy",
-                            "dir15_soft_gate_z_anchor_proxy",
-                            "dir16_soft_gate_z_anchor_low_swing_proxy",
-                            "dir17_soft_gate_z_anchor_touchdown_ramp_proxy",
-                            "dir18_soft_gate_z_anchor_disp_cap_proxy",
-                            "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
-                            "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                        }:
-                            yaw_weight = torch.clamp((yaw_dom - 0.35) / 0.45, min=0.0, max=1.0)
-                        else:
-                            yaw_weight = _binary_gate(yaw_dom, threshold=0.60)
-                        yaw_weight = yaw_weight.to(
-                            dtype=nominal["foot_pos"].dtype,
-                            device=nominal["foot_pos"].device,
-                        )
-                        if variant_name == "dir12_stance_only_yaw_anchor_linear_seed_proxy":
-                            prior_contact = getattr(shared, "prev_contact_state", None)
-                            if prior_contact is not None:
-                                prior_contact_weight = prior_contact.to(
-                                    dtype=nominal["foot_pos"].dtype,
-                                    device=nominal["foot_pos"].device,
-                                )
-                                yaw_weight = yaw_weight * prior_contact_weight
-                        anchor_t = anchor.to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device).unsqueeze(1)
-                        effective_yaw_weight = yaw_weight
-                        if variant_name in {
-                            "dir18_soft_gate_z_anchor_disp_cap_proxy",
-                            "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                        }:
-                            anchor_delta = torch.linalg.vector_norm(anchor_t - nominal["foot_pos"], dim=-1)
-                            disp_cap = torch.clamp((0.11 - anchor_delta) / 0.06, min=0.20, max=1.0)
-                            effective_yaw_weight = effective_yaw_weight * disp_cap
-                        if variant_name in {
-                            "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
-                            "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                        }:
-                            yaw_dom_scalar = float(yaw_dom.mean().item())
-                            prev_yaw_dom = float(getattr(shared, "prev_yaw_dom", 0.0))
-                            if yaw_dom_scalar > 0.55:
-                                if prev_yaw_dom <= 0.35:
-                                    yaw_entry_steps = 0
-                                else:
-                                    yaw_entry_steps = int(getattr(shared, "yaw_entry_steps", 0)) + 1
-                            else:
-                                yaw_entry_steps = 999
-                            shared.prev_yaw_dom = yaw_dom_scalar
-                            shared.yaw_entry_steps = yaw_entry_steps
-                            ramp_scalar = 1.0 if yaw_entry_steps >= 999 else min(1.0, float(yaw_entry_steps + 1) / 4.0)
-                            effective_yaw_weight = effective_yaw_weight * torch.full_like(effective_yaw_weight, ramp_scalar)
-                        replacement = torch.lerp(
-                            nominal["foot_pos"],
-                            anchor_t,
-                            effective_yaw_weight.unsqueeze(-1),
-                        )
-                        nominal["foot_pos"] = torch.where(contact.unsqueeze(-1), replacement, nominal["foot_pos"])
-
-                        if variant_name in {
-                            "dir15_soft_gate_z_anchor_proxy",
-                            "dir16_soft_gate_z_anchor_low_swing_proxy",
-                            "dir17_soft_gate_z_anchor_touchdown_ramp_proxy",
-                            "dir18_soft_gate_z_anchor_disp_cap_proxy",
-                            "dir19_soft_gate_z_anchor_yaw_entry_ramp_proxy",
-                            "dir20_soft_gate_z_anchor_disp_cap_yaw_entry_ramp_proxy",
-                        }:
-                            z_anchor = anchor_t[..., 2:3]
-                            z_weight = torch.maximum(
-                                effective_yaw_weight[:, None, None, :],
-                                torch.clamp(
-                                    (_linear_dominance(command, like=nominal["foot_pos"]) - 0.35) / 0.45,
-                                    min=0.0,
-                                    max=1.0,
-                                )[:, None, None, :].to(dtype=nominal["foot_pos"].dtype, device=nominal["foot_pos"].device),
-                            )
-                            grounded_z = torch.lerp(nominal["foot_pos"][..., 2:3], z_anchor, z_weight.unsqueeze(-1))
-                            nominal["foot_pos"][..., 2:3] = torch.where(
-                                contact.unsqueeze(-1),
-                                grounded_z,
-                                nominal["foot_pos"][..., 2:3],
-                            )
-
-                            if variant_name == "dir17_soft_gate_z_anchor_touchdown_ramp_proxy":
-                                prev_contact = torch.cat((contact[:, :1], contact[:, :-1]), dim=1)
-                                rises = torch.logical_and(contact, torch.logical_not(prev_contact))
-                                pre_rise = torch.cat((rises[:, 1:], torch.zeros_like(rises[:, :1])), dim=1)
-                                settle_mask = torch.logical_or(rises, pre_rise).unsqueeze(-1)
-                                settled_z = torch.lerp(
-                                    nominal["foot_pos"][..., 2:3],
-                                    z_anchor,
-                                    0.85 * settle_mask.to(dtype=nominal["foot_pos"].dtype),
-                                )
-                                nominal["foot_pos"][..., 2:3] = torch.where(
-                                    settle_mask,
-                                    settled_z,
-                                    nominal["foot_pos"][..., 2:3],
-                                )
-                return nominal
-
-            with _patched_mpc_nominal_builder(linear_seed_nominal_builder):
-                yield
-        elif variant_name in {
             "yawfix1_horizon_anchor_blend",
+            "yawfix2_foot_spike_loss",
+            "yawfix3_touchdown_continuity_loss",
             "yawfix4_body_relative_yaw_anchor",
             "yawfix5_early_stance_guard",
             "yawfix4a_yaw_gate_body_anchor",
@@ -953,40 +684,9 @@ def _long_drift_variant_context(runtime, variant_name: str, shared: SimpleNamesp
             "yawfix4d_command_ramp",
             "yawfix4e_near_touchdown_mask",
             "yawfix4f_full_guarded_combo",
-        }:
-            import extension.batch_mpc_planner.nominal as nominal_module
-
-            original_builder = nominal_module.build_nominal_trajectory
-
-            def yawfix_nominal_builder(state, command, terrain, runtime_cfg):
-                return _with_yawfix_anchor_nominal(
-                    original_builder,
-                    state,
-                    command,
-                    terrain,
-                    runtime_cfg,
-                    memory,
-                    shared,
-                    variant_name,
-                )
-
-            with _patched_mpc_nominal_builder(yawfix_nominal_builder):
-                yield
-        elif variant_name == "yawfix2_foot_spike_loss":
-            with _patched_mpc_loss(_yawfix_foot_spike_extra_loss):
-                yield
-        elif variant_name == "yawfix3_touchdown_continuity_loss":
-            with _patched_mpc_loss(
-                lambda decoded, nominal, state, command, terrain, cfg: _yawfix_touchdown_continuity_extra_loss(
-                    decoded,
-                    nominal,
-                    state,
-                    command,
-                    cfg,
-                    shared,
-                )
-            ):
-                yield
+        }
+        if variant_name in retired_dense_variants:
+            yield
         else:
             yield
     finally:

@@ -13,27 +13,113 @@
   - Replace dense foot residual optimization with parametric root/foot trajectory optimization.
   - Optimize touchdown `xy` only; derive touchdown `z` from `height_at(terrain, touchdown_xy)`.
   - Decode root and foot cubic Bezier curves, sample 25 frames for losses, solve clamped IK, and export FK-realized feet.
+- 2026-05-26 14:50 update:
+  - T302k.1-T302k.4 are implemented in the working tree.
+  - `MpcRuntimeCfg.use_parametric_trajectory` now defaults to `True`; the old dense optimizer path is only kept as an explicit `False` legacy fallback for existing tests/callers.
+  - Default `plan_segment` now decodes parametric root/foot curves, solves clamped IK, and exports FK-realized `foot_pos`.
+  - Current parametric diagnostics expose `parametric_target_fk_error`; full terrain/semantic/gait sampled-frame loss replacement remains T302k.5.
+- 2026-05-26 15:24 update:
+  - T302k.5 local implementation added sampled-frame parametric losses and an Adam loop over parametric variables.
+  - T302k.6 added `parametric_v1` probe entrypoints for low-small and semantic obstacle probes.
+  - T302k.7 IsaacLab smoke on GPU3 shows low-small translation foot-over now succeeds with FK export error near zero, but high-small/large non-regression fails and touchdown endpoints still lag the realized swing.
+- 2026-05-26 15:54 update:
+  - T302k.9 added sampled loss keys for semantic avoidance, touchdown endpoint consistency, and swing foot height guarding.
+  - Parametric decode now uses existing high/large semantic command shaping for root geometry while preserving original command progress loss.
+  - Local focused suite passes, and low-small IsaacLab improves to `3/3` foot-over with no small contact/penetration.
+  - High-small/large IsaacLab still fails acceptance: `semantic_task_violation_count=6/6`, `large_avoid_success_count=0`, max semantic penetration about `0.0217`.
+  - Next step remains structural parametric curve constraint work, not old dense residual tuning.
+- 2026-05-26 16:49 update:
+  - T302k.10 fixed the parametric foot trajectory gait contract: foot XY/Z curves now use per-leg local swing phase from `swing_center`/`swing_width`, so diagonal trot pairs alternate instead of all four feet moving across the full horizon.
+  - Added a regression test that first reproduced all four feet moving together, then passed after local phase gating.
+  - Local focused suite passes, and GPU3 low-small smoke remains `3/3` foot-over with no small stance/touchdown/penetration.
+  - Remaining open issue: high-small/large rolling acceptance still needs root nominal acceleration/bias and semantic/touchdown constraints.
+- 2026-05-26 17:13 update:
+  - T302k.11 changed the parametric replan output contract for the initial frame: `result.foot_pos[:, 0]` now comes directly from current IsaacLab `state.foot_pos`, matching the already-current root/joint frame0 anchors.
+  - Frame1+ remains FK-realized from the clamped IK joint sequence, so the planner still exports physically realized future feet while avoiding an initial discontinuity when IsaacLab returns feet that differ from FK of the clamped joint anchor.
+  - Added regressions for parametric decode starting from current foot positions and `plan_segment` preserving frame0 foot state.
+  - Local focused suite passes: `227 passed, 1 warning`.
+- 2026-05-26 17:17 update:
+  - IsaacLab GPU3 low-small smoke confirms T302k.11 on real rollout: `max_replan_initial_foot_error=0.0` across forward, mixed lateral+yaw, and pure-yaw commands.
+  - The same run exposes the next issue: `max_replan_initial_touchdown_to_current_foot_error=0.4467m`, so planned touchdown markers still do not represent the current stance/current foot at replan boundaries.
+  - FK future export remains tight (`max_terminal_planned_vs_fk_foot_error=3.8e-6m`), but touchdown IK/FK mismatch remains high (`max_touchdown_ik_fk_error=0.6610m`).
+- 2026-05-26 17:57 update:
+  - T302k.8 removed the obsolete dense residual MPC path from source: `nominal.py`, `optimizer.py`, `variables.py`, and `losses/registry.py` are deleted.
+  - `plan_segment()` is now parametric-only; `MpcRuntimeCfg.use_parametric_trajectory` and task override `mpc_use_parametric_trajectory` are removed.
+  - Tests/probes no longer import or monkeypatch the deleted dense modules. Focused suite passed with `209 passed, 1 warning`, and source scan found no old dense symbols.
+  - IsaacLab GPU3 cleanup smoke executed successfully after cleanup; `max_replan_initial_foot_error=0.0`, but T302k.12 remains open with touchdown-current mismatch `0.4458m`.
+- 2026-05-26 19:49 update:
+  - Viewer MPC now treats teleop/scripted `vx vy yaw_rate` as root/body-frame command values and rotates linear XY into world frame at the viewer boundary before calling `plan_segment`.
+  - The MPC planner internal command contract remains unchanged; the conversion is scoped to `extension/viz/go2_foostep_planner.py` for `backend="mpc"`.
+  - TDD red reproduced the missing conversion helper, then focused viewer tests passed with `14 passed`; pycompile passed for the viewer file.
+- 2026-05-26 20:21 update:
+  - T302k.14 fixes the downstairs/sloped support attitude gap: parametric decode now fits a contact-weighted foot support plane in the yaw frame and ramps root roll/pitch toward that estimate after frame0.
+  - Frame0 root roll/pitch still preserves the current IsaacLab state to avoid a replan discontinuity.
+  - Focused red reproduced terminal pitch staying `0.0`; after the fix, the sloped/downstairs fixture reports terminal pitch `0.2354 rad` while frame0 remains `[0.0, 0.0]`.
+  - Verification passed both local pytest and the requested `env_isaacsim` Python environment.
+- 2026-05-26 20:40 update:
+  - T302k.15 reproduces the user's long-step/mid-replan foot deformation using flat terrain and commands for forward, backward, lateral left/right, and yaw left/right.
+  - The key metric is body-yaw relative foot position, not world foot position: `Rz(-yaw) * (foot_w - root_w)`.
+  - Frame0 replan alignment is not the problem (`max_frame0_rel_mismatch ~= 0`), and playback readback matches the planned frame (`~1e-6m`).
+  - The planned/current body-relative foot coordinates themselves drift over repeated replans. After 8 cycles with playback frame `24`, max relative drift reaches `0.278-0.314m`; lateral commands accumulate about `0.174m` in body-y, yaw commands accumulate coupled body-x/body-y drift.
+  - Likely cause: `decode_parametric_trajectory()` restarts fixed `swing_center`/phase every replan and uses current `state.foot_pos` as `foot0`, so a mid-swing/current-offset foot becomes the next segment's nominal start. The fix should add phase/contact/stance-anchor continuity, not readback plumbing.
+- 2026-05-26 21:33 update:
+  - T302k.15 local fix changes the full-cycle terminal foot anchor: frame0 still uses current IsaacLab `state.foot_pos`, but touchdown/terminal feet now anchor to a canonical body-yaw footprint under the terminal root instead of `foot0 + delta`.
+  - `touchdown_delta_raw` is de-meaned across legs, so it can reshape relative footholds but cannot translate the whole four-foot footprint independently from `root_goal_delta`.
+  - Red regression reproduced two-cycle accumulation (`0.0546m -> 0.1093m`) and now passes.
+  - `env_isaacsim` 8-cycle flat long-replan probe keeps `mpc_horizon_steps=25`, frame0/readback errors at zero or `~1e-6`, and reduces total relative drift: lateral `~0.278/0.288m -> ~0.088/0.087m`, yaw `~0.314/0.279m -> ~0.132/0.140m`, z drift `~0.26-0.27m -> ~0.009m`.
+  - Remaining follow-up: yaw body-x still grows mildly over cycles; explicit manager-carried gait/contact phase can further reduce this after visual acceptance.
 
 ## Open Children
 
 | Child | Status | Priority | Purpose | Primary Files |
 | --- | --- | --- | --- | --- |
-| T302k.1 | todo | P0 | Add parametric command-frame geometry helpers and curve sampling tests | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
-| T302k.2 | todo | P0 | Add `MpcParametricVariables` and initialization from nominal/current IsaacLab state | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/extension/batch_mpc_planner/variables.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
-| T302k.3 | todo | P0 | Decode parametric variables into 25-frame root and target-foot curves with touchdown z grounded from height map | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
-| T302k.4 | todo | P0 | Integrate clamped IK and FK-realized output contract behind a config/debug switch | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/extension/batch_mpc_planner/config.py`, `Go2Pvcnn/tests/test_batch_mpc_backend.py` |
-| T302k.5 | todo | P0 | Port/replace losses so 25 sampled frames use target-vs-FK reachability, terrain/semantic collision, gait, and curve regularization | `Go2Pvcnn/extension/batch_mpc_planner/losses/`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
-| T302k.6 | todo | P0 | Add low-small parametric crossing probe and prove focused local/unit gates before IsaacLab | `Go2Pvcnn/tests/mpc_low_small_reachable_crossing_probe.py`, `Go2Pvcnn/tests/test_mpc_low_small_reachable_crossing_probe.py` |
-| T302k.7 | todo | P0 | Run real IsaacLab rolling25 low-small/high-small/large acceptance and record notes/logs | `tmp/t302k-parametric-mpc/`, `notes/log/` |
-| T302k.8 | todo | P1 | Remove/demote obsolete dense-foot residual losses after parametric path is accepted | `Go2Pvcnn/extension/batch_mpc_planner/variables.py`, `Go2Pvcnn/extension/batch_mpc_planner/losses/`, `Go2Pvcnn/tests/` |
+| T302k.1 | done | P0 | Add parametric command-frame geometry helpers and curve sampling tests | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
+| T302k.2 | done | P0 | Add `MpcParametricVariables` and initialization from nominal/current IsaacLab state | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
+| T302k.3 | done | P0 | Decode parametric variables into 25-frame root and target-foot curves with touchdown z grounded from height map | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
+| T302k.4 | done | P0 | Integrate clamped IK and FK-realized default output contract | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/extension/batch_mpc_planner/config.py`, `Go2Pvcnn/tests/test_batch_mpc_backend.py` |
+| T302k.5 | verify | P0 | Port/replace losses so 25 sampled frames use target-vs-FK reachability, terrain/semantic collision, low-small crossing, gait, command progress, and curve regularization | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/tests/test_batch_mpc_backend.py` |
+| T302k.6 | verify | P0 | Add low-small parametric crossing probe and prove focused local/unit gates before IsaacLab | `Go2Pvcnn/tests/mpc_low_small_reachable_crossing_probe.py`, `Go2Pvcnn/tests/test_mpc_low_small_reachable_crossing_probe.py` |
+| T302k.7 | partial | P0 | Run real IsaacLab rolling25 low-small/high-small/large acceptance and record notes/logs | `tmp/t302k-parametric-mpc/`, `notes/log/` |
+| T302k.9 | partial | P0 | Add semantic avoidance and endpoint/touchdown constraints for parametric path after IsaacLab failures | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/tests/mpc_semantic_obstacle_jitter_probe.py` |
+| T302k.10 | verify | P0 | Make parametric foot curves obey trot pair swing windows instead of moving all four feet together | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
+| T302k.11 | verify | P0 | Make every parametric replan output start from current IsaacLab foot positions at frame0, with frame1+ FK-realized | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/tests/test_batch_mpc_backend.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
+| T302k.12 | todo | P0 | Make current stance/current-foot touchdowns consistent at replan boundaries instead of exporting only future touchdown targets | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/mpc_low_small_reachable_crossing_probe.py` |
+| T302k.8 | done | P1 | Remove obsolete dense-foot residual planner path and tests so current MPC is parametric-only | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/extension/batch_mpc_planner/config.py`, `Go2Pvcnn/tests/` |
+| T302k.13 | verify | P1 | Convert viewer MPC root/body-frame linear commands to world-frame commands before planning | `Go2Pvcnn/extension/viz/go2_foostep_planner.py`, `Go2Pvcnn/tests/test_viewer_reset.py` |
+| T302k.14 | verify | P1 | Make parametric root roll/pitch follow the foot support plane on sloped/downstairs terrain after frame0 | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
+| T302k.15 | verify | P0 | Fix long-step mid-replan body-relative foot drift by anchoring full-cycle terminal feet to a stable body-yaw footprint; remaining yaw body-x drift may need manager-carried phase/contact anchors | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
 
 ## Closed Children Archive
 
-- None yet.
+- T302k.1: Added `bounded_unit_interval`, `command_frame_axes`, and `cubic_bezier`; helper tests cover command-frame fallback and Bezier endpoints.
+- T302k.2: Added `MpcParametricVariables` and initialization tensors for touchdown xy deltas, foot/root Bezier controls, root goal/height, and diagonal timing parameters.
+- T302k.3: Added parametric decode to 25-frame root and foot target curves; touchdown z is sampled from `height_at`.
+- T302k.4: Integrated default parametric `plan_segment` output path; exported `foot_pos` is FK-realized from clamped IK, while old dense optimizer tests opt into `use_parametric_trajectory=False`.
+- T302k.5 local slice: Added sampled losses `parametric_reachability`, `parametric_terrain_clearance`, `parametric_semantic_contact`, `parametric_low_small_crossing`, `parametric_gait_regularization`, `parametric_command_progress`, and `parametric_curve_regularization`; `cost_total` now sums them and `optimize_steps` updates parametric variables.
+- T302k.6 local slice: Added `parametric_v1` as a probe/runtime variant that enables parametric planner output.
+- T302k.9 local slice: Added `parametric_semantic_avoidance`, `parametric_touchdown_endpoint`, and `parametric_foot_height_guard`; high/large semantic command shaping now feeds parametric decode. Local tests pass, but IsaacLab high/large remains unaccepted.
+- T302k.10 local slice: Replaced full-horizon foot Bezier phase with per-leg local swing phase. Contact/stanced legs hold their endpoint while the active diagonal pair follows the cubic foot curve.
+- T302k.11 local slice: Kept parametric decode anchored at current `state.foot_pos`; changed `plan_segment` parametric export so frame0 `foot_pos` is current IsaacLab foot state, while frame1+ remains FK-realized. Updated FK export tests to check frame1+.
+- T302k.8 cleanup: Deleted dense residual modules (`nominal.py`, `optimizer.py`, `variables.py`, `losses/registry.py`), removed the parametric feature switch, updated probes/tests away from old dense imports, and verified no old dense symbols remain in source.
+- T302k.13 local slice: Added `_viewer_mpc_world_command_from_root_frame()` and applied it only for viewer `backend="mpc"` so body-frame `vx/vy` is rotated by `state.root_rpy[:, 2]`; yaw-rate is unchanged.
+- T302k.14 local slice: Added contact-weighted support-plane roll/pitch estimation inside parametric decode, ramped roll/pitch after frame0, and added a downhill support-plane regression.
+- T302k.15 reproduction: `tmp/t302k-replan-direction-repro/root_relative_long_replan_probe.jsonl` shows body-yaw relative foot drift despite frame0 and playback readback alignment.
+- T302k.15 local slice: Added a two-cycle full-horizon regression and changed parametric touchdown generation so terminal feet anchor to terminal root plus a canonical body-yaw footprint; de-meaned four-leg touchdown deltas prevent global foot translation from accumulating separately from root progress. `env_isaacsim` confirms lateral/yaw drift reductions with `mpc_horizon_steps=25`.
 
 ## Related Logs
 
+- [../log/2026-05-26-2040-t302k-long-step-root-relative-foot-drift-repro.md](../log/2026-05-26-2040-t302k-long-step-root-relative-foot-drift-repro.md)
+- [../log/2026-05-26-2133-t302k-body-relative-foot-anchor-fix.md](../log/2026-05-26-2133-t302k-body-relative-foot-anchor-fix.md)
+- [../log/2026-05-26-2021-t302k-support-plane-root-roll-pitch.md](../log/2026-05-26-2021-t302k-support-plane-root-roll-pitch.md)
+- [../log/2026-05-26-1949-viewer-mpc-body-frame-command.md](../log/2026-05-26-1949-viewer-mpc-body-frame-command.md)
 - [../log/2026-05-26-1336-t302j-structured-low-small-touchdown-runtime.md](../log/2026-05-26-1336-t302j-structured-low-small-touchdown-runtime.md)
+- [../log/2026-05-26-1757-t302k-dense-path-retirement.md](../log/2026-05-26-1757-t302k-dense-path-retirement.md)
+- [../log/2026-05-26-1717-t302k-isaaclab-current-foot-touchdown-check.md](../log/2026-05-26-1717-t302k-isaaclab-current-foot-touchdown-check.md)
+- [../log/2026-05-26-1713-t302k-parametric-current-foot-replan-anchor.md](../log/2026-05-26-1713-t302k-parametric-current-foot-replan-anchor.md)
+- [../log/2026-05-26-1649-t302k-parametric-trot-phase-foot-curves.md](../log/2026-05-26-1649-t302k-parametric-trot-phase-foot-curves.md)
+- [../log/2026-05-26-1554-t302k-parametric-semantic-endpoint-losses.md](../log/2026-05-26-1554-t302k-parametric-semantic-endpoint-losses.md)
+- [../log/2026-05-26-1450-t302k-parametric-default-fk-output.md](../log/2026-05-26-1450-t302k-parametric-default-fk-output.md)
+- [../log/2026-05-26-1524-t302k-parametric-sampled-loss-and-isaaclab-smoke.md](../log/2026-05-26-1524-t302k-parametric-sampled-loss-and-isaaclab-smoke.md)
 - [../log/2026-05-26-1259-t302j-low-small-crossing-acceptance-test-contract.md](../log/2026-05-26-1259-t302j-low-small-crossing-acceptance-test-contract.md)
 - [../log/2026-05-25-1723-t302i-ik-clamp-foot-mismatch-trace.md](../log/2026-05-25-1723-t302i-ik-clamp-foot-mismatch-trace.md)
 - [../log/2026-05-25-1904-t302i-reachable-crossing-probe-baseline.md](../log/2026-05-25-1904-t302i-reachable-crossing-probe-baseline.md)
@@ -41,19 +127,19 @@
 
 ## Git Refs
 
-- Last Feature Commit: `d922eef` (design spec)
-- Last Verified Commit: `working tree @ d922eef`
-- Current Work Ref: `working tree on top of d922eef (2026-05-26)`
+- Last Feature Commit: `1b799cd` (parametric helper module)
+- Last Verified Commit: `working tree @ 1b799cd`
+- Current Work Ref: `working tree on top of 1b799cd (2026-05-26 15:24 +0800)`
 - Key Files:
   - [../../docs/superpowers/specs/2026-05-26-mpc-parametric-trajectory-contract-design.md](../../docs/superpowers/specs/2026-05-26-mpc-parametric-trajectory-contract-design.md)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/planner.py](../../Go2Pvcnn/extension/batch_mpc_planner/planner.py)
-  - [../../Go2Pvcnn/extension/batch_mpc_planner/variables.py](../../Go2Pvcnn/extension/batch_mpc_planner/variables.py)
+  - [../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/kinematics.py](../../Go2Pvcnn/extension/batch_mpc_planner/kinematics.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/config.py](../../Go2Pvcnn/extension/batch_mpc_planner/config.py)
 
 ## Next Step
 
-Implement T302k.1 first. Do not continue V9/V10/V11/V12 scalar-loss tuning unless it is needed as a regression comparison. The active execution path is parametric trajectory optimization:
+Continue high-small/large work next: use root nominal acceleration/bias and semantic/touchdown constraints, while preserving the new trot pair foot phase and frame0 current-foot replan anchor. The current parametric path can run under IsaacLab and crosses low-small with FK-realized future feet, but high-small/large avoidance still fails task acceptance and touchdown endpoints still lag realized swing. Do not continue V9/V10/V11/V12 scalar-loss tuning unless it is needed as a regression comparison. The active execution path is parametric trajectory optimization:
 
 ```text
 current IsaacLab state + command + terrain/semantic
@@ -941,3 +1027,4 @@ git commit -m "refactor: retire dense-foot mpc residual path"
 
 - why-created: Keeping dense residual repair losses as defaults would keep future agents tuning the old architecture.
 - acceptance: obsolete dense-foot residual losses are removed or demoted after parametric acceptance, with tests/logs updated.
+- status: closed locally on 2026-05-26 17:57; source cleanup, focused tests, pycompile, and IsaacLab cleanup smoke ran. Runtime smoke still shows the known T302k.12 touchdown-current mismatch.

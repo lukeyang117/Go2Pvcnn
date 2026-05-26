@@ -144,6 +144,7 @@
     - 2026-05-22 300-step cobblestone long-horizon sweep now covers all supplied subterrains with `vx in {0,0.5,1.0}`, `vy in {0,0.25,0.5}`, `yaw=1.0`, one independent IsaacLab process per subterrain. Worst terrain by average score is `boxes score_mean=44.013797`; next are `random_rough 43.667021`, `pyramid_stairs 42.763040`, `hf_pyramid_slope_inv 42.692781`, `pyramid_stairs_inv 41.402490`, `hf_pyramid_slope 40.975688`, `flat 38.809249`. Worst individual case is `boxes vx=0.50 vy=0.25 yaw=1.00`, `score=76.440777`, `jump=39.043692`, `boundary=29.212166`, `R2=0.417222`.
     - representative test-only regularizer sweep on the three worst terrains (`boxes`, `random_rough`, `pyramid_stairs`) selects `baseline__exp_boundary8+exp_accel8+exp_residual4`: average `score_mean 44.308045 -> 18.256209` (`58.797%` better), `score_max` `41.168%` better, jump `40.792%` better, boundary `62.441%` better, and R2 `+0.186653`. Direct `exp_parabola4` worsened average score by `1.340%`, so the current direct parabola form is not the first production direction.
     - user chose to productionize only `boundary8+accel8`, explicitly excluding residual/nominal tracking and parabola height constraints. Production now adds `foot_trajectory_regularization` with `boundary_weight=8.0` and `accel_weight=8.0`; backend `99 passed`. Focused 300-step worst-case repro improves `boxes vx=0.50 vy=0.25 yaw=1.00` from `score=76.440777`, `jump=39.043692`, `boundary=29.212166`, `R2=0.417222` to `score=20.870477`, `jump=4.720598`, `boundary=8.645891`, `R2=0.530423`.
+    - 2026-05-24 T302h adds a semantic-obstacle near-anchor reproduction probe that reuses the T300f swing metrics and adds root/foot acceleration plus semantic collision rates. First real IsaacLab 300-step pass reproduces semantic small stance contact and large swing-over/penetration with high root/foot acceleration spikes; follow-up test-only sweeps rank `body_stance_crossing` as a hypothesis, but a temporary production-default attempt failed and was reverted. See [T302h](T302h-semantic-obstacle-jitter-reproduction.md), [reproduction log](../log/2026-05-24-1110-mpc-semantic-obstacle-jitter-reproduction.md), and [variant log](../log/2026-05-24-1223-t302h-semantic-obstacle-variant-sweep.md).
 
 ## Open Children
 
@@ -159,6 +160,8 @@
 ## Related Logs
 
 - [2026-05-22-1358-mpc-swing-trajectory-quality-reproduction.md](../log/2026-05-22-1358-mpc-swing-trajectory-quality-reproduction.md)
+- [2026-05-24-1110-mpc-semantic-obstacle-jitter-reproduction.md](../log/2026-05-24-1110-mpc-semantic-obstacle-jitter-reproduction.md)
+- [2026-05-24-1223-t302h-semantic-obstacle-variant-sweep.md](../log/2026-05-24-1223-t302h-semantic-obstacle-variant-sweep.md)
 - [2026-05-11-1050-t300-unified-dense-mpc-backend-design.md](../log/2026-05-11-1050-t300-unified-dense-mpc-backend-design.md)
 - [2026-05-11-1104-t300-subagent-design-review.md](../log/2026-05-11-1104-t300-subagent-design-review.md)
 - [2026-05-11-1110-t300-spec-hardening.md](../log/2026-05-11-1110-t300-spec-hardening.md)

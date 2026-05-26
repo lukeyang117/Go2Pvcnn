@@ -20,9 +20,7 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT):
 
 from extension.batch_mpc_planner.config import MpcRuntimeCfg
 from extension.batch_mpc_planner.kinematics import _JOINT_LIMITS
-from extension.batch_mpc_planner.nominal import build_nominal_trajectory
 from extension.batched_planner.ik import batch_forward_kinematics
-from extension.convention import euler_to_quat_batch
 from Go2Pvcnn.tests.fixtures.viewer_runtime_diagnostics import make_real_runtime_fixture
 from Go2Pvcnn.tests.mpc_yaw_gait_failure_probe import (
     CUSTOM_COMMANDS,
@@ -129,31 +127,6 @@ def _summary(rows: list[dict[str, float]]) -> dict[str, float]:
     return out
 
 
-def _nominal_metrics(state, command: torch.Tensor, terrain, runtime_cfg: MpcRuntimeCfg) -> dict[str, float]:
-    nominal = build_nominal_trajectory(state, command, terrain, runtime_cfg)
-    root = torch.as_tensor(nominal["root_pos"], dtype=torch.float64)
-    rpy = torch.as_tensor(nominal["root_rpy"], dtype=torch.float64)
-    quat = euler_to_quat_batch(rpy[..., 0], rpy[..., 1], rpy[..., 2]).to(dtype=torch.float64)
-    foot = torch.as_tensor(nominal["foot_pos"], dtype=torch.float64)
-    contact = torch.as_tensor(nominal["contact_prior"] > 0.5, dtype=torch.bool)
-    rel = _body_relative_foot(root, quat, foot)
-    pair = _pair_left_right_alternation_stats(rel, contact, front_eps=0.01)
-    cmd = torch.as_tensor(command, dtype=torch.float64)
-    lin_speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    yaw_abs = torch.abs(cmd[:, 2])
-    swing_stride_active = (lin_speed > 0.08).to(dtype=torch.float64)
-    yaw_dom = yaw_abs / torch.clamp(lin_speed + yaw_abs, min=1.0e-6)
-    pair.update(
-        {
-            "nominal_yaw_dom": float(yaw_dom.mean().item()),
-            "nominal_lin_speed": float(lin_speed.mean().item()),
-            "nominal_yaw_abs": float(yaw_abs.mean().item()),
-            "nominal_swing_stride_active": float(swing_stride_active.mean().item()),
-        }
-    )
-    return pair
-
-
 def _plan_with_memory_exposed(runtime, terrain, state, command, memory):
     viewer = runtime._viewer
     result = viewer._plan_viewer_trajectory(
@@ -248,17 +221,13 @@ def main() -> int:
                     memory = None
                     for segment in segments:
                         command = _command_tensor(runtime, segment)
-                        nominal_rows: list[dict[str, float]] = []
                         runtime_rows: list[dict[str, float]] = []
                         for cycle_idx in range(cycles):
-                            nominal_metrics = _nominal_metrics(state, command, terrain, runtime.mpc_planner_cfg.runtime)
-                            nominal_rows.append(nominal_metrics)
                             result, memory, plan_memory = _plan_with_memory_exposed(runtime, terrain, state, command, memory)
                             metrics = _runtime_metrics(runtime, terrain, state, command, memory, result, plan_memory)
                             runtime_rows.append(metrics)
-                            handle.write(json.dumps({"kind": "cycle", "variant": variant_name, "seq": seq_name, "segment": segment, "cycle": cycle_idx, **nominal_metrics, **metrics}, ensure_ascii=False) + "\n")
+                            handle.write(json.dumps({"kind": "cycle", "variant": variant_name, "seq": seq_name, "segment": segment, "cycle": cycle_idx, **metrics}, ensure_ascii=False) + "\n")
                             state = viewer._mpc_state_from_env(runtime.base_env, runtime.foot_ids.tolist())
-                        handle.write(json.dumps({"kind": "nominal_segment", "variant": variant_name, "seq": seq_name, "segment": segment, "cycles": cycles, **_summary(nominal_rows)}, ensure_ascii=False) + "\n")
                         handle.write(json.dumps({"kind": "runtime_segment", "variant": variant_name, "seq": seq_name, "segment": segment, "cycles": cycles, **_summary(runtime_rows)}, ensure_ascii=False) + "\n")
                         handle.flush()
         print(output_path)

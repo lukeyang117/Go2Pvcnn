@@ -1,0 +1,264 @@
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260525_171443.log
+2026-05-25 09:14:43 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-25 09:14:43 [4ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-25 09:14:44 [192ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-25 09:14:44 [397ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-25 09:14:44 [688ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-25 09:14:44 [762ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+2026-05-25 09:14:48 [4,593ms] [Warning] [carb.cudainterop.plugin] CUDA_VISIBLE_DEVICES environment variable is set.
+2026-05-25 09:14:48 [4,593ms] [Warning] [carb.cudainterop.plugin] Note CUDA device enumeration and Omniverse device enumeration are different.
+2026-05-25 09:14:48 [4,593ms] [Warning] [carb.cudainterop.plugin] Setting CUDA_VISIBLE_DEVICES can lead to undesired behavior or crashes.
+2026-05-25 09:14:48 [4,597ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-25 09:14:48 [4,597ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-25 09:14:48 [4,598ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-25 09:14:48 [4,598ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-25 09:14:48 [4,599ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|--------------------------------------------------------------------------------------------[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0 (MPC semantic trajectory)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0 (MPC semantic play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains based on curriculum took : 0.004538 seconds
+[INFO]: Time taken for scene creation : 2.893620 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 1
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 0.751418 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 2 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++------------------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_semantic_map' (shape: (2, 16, 16)) |
++------------+----------------------------------------------+------------------------+
+|   Index    | Name                                         |         Shape          |
++------------+----------------------------------------------+------------------------+
+|     0      | elevation_semantic_map                       |      (2, 16, 16)       |
++------------+----------------------------------------------+------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++------------------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_semantic_map' (shape: (2, 16, 16)) |
++------------+----------------------------------------------+------------------------+
+|   Index    | Name                                         |         Shape          |
++------------+----------------------------------------------+------------------------+
+|     0      | elevation_semantic_map                       |      (2, 16, 16)       |
++------------+----------------------------------------------+------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 18 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_foot_pos    |      0.3 |
+|   17  | swing_leg_collision   |      1.0 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+[MPC profile] #1/5 profile=train_4096 batch=1 horizon=300 iters=24 optimizer.backward_ms=1189.488 optimizer.decode_ms=56.849 optimizer.final_decode_ms=1.882 optimizer.final_loss_ms=56.791 optimizer.grad_clip_ms=33.835 optimizer.loop_ms=3034.603 optimizer.loss_ms=1674.020 optimizer.step_ms=67.303 optimizer.total_ms=3093.329 optimizer.zero_grad_ms=4.551 plan.init_variables_ms=7.535 plan.nominal_ms=73.586 plan.normalize_ms=0.164 plan.postprocess_ms=3.730 plan.total_ms=3179.541 loss.total_ms=1694.412 loss.top_terms=semantic_contact_avoid_ms=230.764,low_small_foot_crossing_ms=152.060,semantic_obstacle_ms=142.158,touchdown_surface_ms=114.691,leg_kinematics_ms=106.725,low_small_foot_over_ms=99.601,swing_center_urgency_ms=99.362,ik_fk_residual_ms=81.236,obstacle_risk_ms=75.677,high_obstacle_avoidance_ms=59.905,swing_direction_ms=51.018,high_large_stepcap_ms=43.403
+{"cases": ["small"], "commands": ["forward_v050:0.50 0.00 0.00"], "cycles": 1, "device": "cuda:0", "lateral_offset_m": 0.0, "longitudinal_offset_m": -0.35, "playback_frame": 24, "requested_n_frames": 300, "semantic_small_height_m": null, "type": "probe_header", "variants": ["baseline"], "warmup_steps": 6}
+[MPC profile] #2/5 profile=train_4096 batch=1 horizon=25 iters=24 optimizer.backward_ms=1011.660 optimizer.decode_ms=34.559 optimizer.final_decode_ms=1.143 optimizer.final_loss_ms=43.181 optimizer.grad_clip_ms=17.742 optimizer.loop_ms=2110.623 optimizer.loss_ms=1020.017 optimizer.step_ms=16.509 optimizer.total_ms=2154.984 optimizer.zero_grad_ms=3.804 plan.init_variables_ms=0.215 plan.nominal_ms=4.735 plan.normalize_ms=0.188 plan.postprocess_ms=4.270 plan.total_ms=2168.255 loss.total_ms=1044.148 loss.top_terms=low_small_foot_crossing_ms=145.809,semantic_obstacle_ms=120.328,touchdown_surface_ms=80.476,semantic_contact_avoid_ms=67.566,leg_kinematics_ms=57.361,ik_fk_residual_ms=57.235,swing_center_urgency_ms=56.847,low_small_foot_over_ms=53.538,obstacle_risk_ms=39.817,swing_direction_ms=35.893,high_obstacle_avoidance_ms=33.573,high_large_stepcap_ms=31.158
+[MPC profile] #3/5 profile=train_4096 batch=1 horizon=25 iters=24 optimizer.backward_ms=1038.047 optimizer.decode_ms=36.848 optimizer.final_decode_ms=1.408 optimizer.final_loss_ms=46.617 optimizer.grad_clip_ms=12.825 optimizer.loop_ms=2235.777 optimizer.loss_ms=1124.940 optimizer.step_ms=14.446 optimizer.total_ms=2283.848 optimizer.zero_grad_ms=2.602 plan.init_variables_ms=0.217 plan.nominal_ms=3.707 plan.normalize_ms=0.138 plan.postprocess_ms=3.371 plan.total_ms=2294.377 loss.total_ms=1142.642 loss.top_terms=low_small_foot_crossing_ms=146.705,semantic_obstacle_ms=125.651,touchdown_surface_ms=91.454,semantic_contact_avoid_ms=70.271,swing_center_urgency_ms=64.698,leg_kinematics_ms=64.663,ik_fk_residual_ms=62.785,low_small_foot_over_ms=60.503,obstacle_risk_ms=46.208,swing_direction_ms=39.432,high_obstacle_avoidance_ms=37.412,high_large_stepcap_ms=34.649
+[MPC profile] #4/5 profile=train_4096 batch=1 horizon=25 iters=24 optimizer.backward_ms=1017.531 optimizer.decode_ms=36.980 optimizer.final_decode_ms=1.223 optimizer.final_loss_ms=43.110 optimizer.grad_clip_ms=18.128 optimizer.loop_ms=2225.739 optimizer.loss_ms=1128.135 optimizer.step_ms=15.380 optimizer.total_ms=2270.111 optimizer.zero_grad_ms=2.707 plan.init_variables_ms=0.218 plan.nominal_ms=3.578 plan.normalize_ms=0.135 plan.postprocess_ms=2.855 plan.total_ms=2279.080 loss.total_ms=1147.813 loss.top_terms=low_small_foot_crossing_ms=146.761,semantic_obstacle_ms=126.383,touchdown_surface_ms=91.870,semantic_contact_avoid_ms=70.233,swing_center_urgency_ms=66.088,ik_fk_residual_ms=63.570,leg_kinematics_ms=62.438,low_small_foot_over_ms=60.670,obstacle_risk_ms=47.202,swing_direction_ms=39.619,high_obstacle_avoidance_ms=37.320,high_large_stepcap_ms=35.375
+[MPC profile] #5/5 profile=train_4096 batch=1 horizon=25 iters=24 optimizer.backward_ms=1005.220 optimizer.decode_ms=33.309 optimizer.final_decode_ms=1.103 optimizer.final_loss_ms=42.105 optimizer.grad_clip_ms=16.217 optimizer.loop_ms=2123.247 optimizer.loss_ms=1043.578 optimizer.step_ms=15.756 optimizer.total_ms=2166.493 optimizer.zero_grad_ms=2.812 plan.init_variables_ms=0.166 plan.nominal_ms=3.257 plan.normalize_ms=0.125 plan.postprocess_ms=3.438 plan.total_ms=2175.925 loss.total_ms=1065.897 loss.top_terms=low_small_foot_crossing_ms=146.000,semantic_obstacle_ms=121.371,touchdown_surface_ms=84.649,semantic_contact_avoid_ms=67.516,ik_fk_residual_ms=58.850,swing_center_urgency_ms=58.599,leg_kinematics_ms=57.742,low_small_foot_over_ms=55.999,obstacle_risk_ms=40.130,swing_direction_ms=36.760,high_obstacle_avoidance_ms=34.866,high_large_stepcap_ms=32.261
+{"actual_foot_xyz": [15.393563270568848, 1.6480438709259033, 0.23198436200618744], "actual_joint": [0.6321667432785034, -0.6647061705589294, -0.8378000259399414, -0.3515467643737793, -0.6984146237373352, -0.8378000259399414, 0.0558265745639801, 0.39248132705688477, -1.2300323247909546, 0.061551570892333984, 0.48938795924186707, -1.327765941619873], "actual_root_xyz": [14.853938102722168, 1.426684021949768, 0.33265405893325806], "actual_vs_internal_fk_error_norm": 4.3419369772807227e-07, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 0.28666725864637815, "foot_error_xyz": [-0.02198505401611328, -0.16696715354919434, 0.23198436200618744], "frame": 24, "internal_fk_error_norm": 0.2866675128189922, "internal_fk_foot_xyz": [15.393562947165771, 1.6480438794734291, 0.23198465159478682], "joint_error_max_abs": 0.0, "planned_foot_xyz": [15.415548324584961, 1.8150110244750977, 0.0], "planned_joint": [0.6321667432785034, -0.6647061705589294, -0.8378000259399414, -0.3515467643737793, -0.6984146237373352, -0.8378000259399414, 0.0558265745639801, 0.39248132705688477, -1.2300323247909546, 0.061551570892333984, 0.48938795924186707, -1.327765941619873], "planned_root_xyz": [14.853938102722168, 1.426684021949768, 0.33265402913093567], "planned_touchdown_xyz": [15.415548324584961, 1.8150110244750977, 0.0], "root_error_norm": 2.9802322387695312e-08, "segment": 0, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 0}
+{"actual_foot_xyz": [15.507396697998047, 1.229779601097107, 0.19436679780483246], "actual_joint": [-0.10513849556446075, -0.8268537521362305, -0.8378000259399414, -0.1842670440673828, -0.7725505232810974, -0.8378000259399414, 0.3035360872745514, 0.39632195234298706, -1.0556164979934692, -0.3699546158313751, 0.2708898186683655, -0.9137446284294128], "actual_root_xyz": [14.959903717041016, 1.4197144508361816, 0.3181725740432739], "actual_vs_internal_fk_error_norm": 2.552437085246317e-07, "batch": 0, "command": "forward_v050", "contact_state": 1, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 0.1994308247894197, "foot_error_xyz": [0.029610633850097656, 0.03342771530151367, 0.19436679780483246], "frame": 24, "internal_fk_error_norm": 0.199431068980674, "internal_fk_foot_xyz": [15.507396804273855, 1.229779618059814, 0.19436702925044164], "joint_error_max_abs": 0.0, "planned_foot_xyz": [15.47778606414795, 1.1963518857955933, 0.0], "planned_joint": [-0.10513849556446075, -0.8268537521362305, -0.8378000259399414, -0.1842670440673828, -0.7725505232810974, -0.8378000259399414, 0.3035360872745514, 0.39632195234298706, -1.0556164979934692, -0.3699546158313751, 0.2708898186683655, -0.9137446284294128], "planned_root_xyz": [14.959903717041016, 1.4197144508361816, 0.3181725740432739], "planned_touchdown_xyz": [15.47778606414795, 1.1963518857955933, 0.0], "root_error_norm": 0.0, "segment": 1, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 1}
+{"actual_foot_xyz": [15.199127197265625, 1.0396850109100342, 0.035355862230062485], "actual_joint": [-0.29399678111076355, 1.8119977712631226, -2.377908706665039, 0.9770145416259766, 1.928929328918457, -2.191225528717041, 0.6789644956588745, 1.3153343200683594, -0.8378000259399414, -1.0166258811950684, 0.44761741161346436, -0.8378000259399414], "actual_root_xyz": [15.428691864013672, 1.456669569015503, 0.15076859295368195], "actual_vs_internal_fk_error_norm": 6.706043388471359e-07, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 0.21030938225559948, "foot_error_xyz": [0.20433998107910156, 0.035001516342163086, 0.03535678507830653], "frame": 24, "internal_fk_error_norm": 0.2103099956907765, "internal_fk_foot_xyz": [15.199127825282098, 1.039684853713495, 0.03535603714357685], "joint_error_max_abs": 0.0, "planned_foot_xyz": [14.994787216186523, 1.004683494567871, -9.228482440448715e-07], "planned_joint": [-0.29399678111076355, 1.8119977712631226, -2.377908706665039, 0.9770145416259766, 1.928929328918457, -2.191225528717041, 0.6789644956588745, 1.3153343200683594, -0.8378000259399414, -1.0166258811950684, 0.44761741161346436, -0.8378000259399414], "planned_root_xyz": [15.428691864013672, 1.456669569015503, 0.15076859295368195], "planned_touchdown_xyz": [14.994787216186523, 1.004683494567871, -9.228482440448715e-07], "root_error_norm": 0.0, "segment": 2, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 3}
+{"actual_foot_xyz": [15.37795352935791, 1.0842479467391968, -5.438923835754395e-07], "actual_joint": [-0.07000464200973511, 1.8025565147399902, -2.3258583545684814, 0.5942084789276123, 2.014897108078003, -2.0737826824188232, 0.8300090432167053, 1.1479531526565552, -1.0952520370483398, -0.7917419672012329, 0.7651845812797546, -1.2379653453826904], "actual_root_xyz": [15.643844604492188, 1.436881422996521, 0.15009765326976776], "actual_vs_internal_fk_error_norm": 9.611982508442333e-07, "batch": 0, "command": "forward_v050", "contact_state": 1, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 9.642364135742507e-07, "foot_error_xyz": [-9.5367431640625e-07, 1.1920928955078125e-07, -7.775798849252169e-08], "frame": 24, "internal_fk_error_norm": 4.148168363495248e-08, "internal_fk_foot_xyz": [15.377954473964216, 1.0842478107737423, -4.292869772160035e-07], "joint_error_max_abs": 0.0, "planned_foot_xyz": [15.377954483032227, 1.0842478275299072, -4.6613439508291776e-07], "planned_joint": [-0.07000464200973511, 1.8025565147399902, -2.3258583545684814, 0.5942084789276123, 2.014897108078003, -2.0737826824188232, 0.8300090432167053, 1.1479531526565552, -1.0952520370483398, -0.7917419672012329, 0.7651845812797546, -1.2379653453826904], "planned_root_xyz": [15.643844604492188, 1.436881422996521, 0.15009765326976776], "planned_touchdown_xyz": [15.377954483032227, 1.0842478275299072, -4.6613439508291776e-07], "root_error_norm": 0.0, "segment": 3, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 3}
+{"actual_foot_xyz": [15.81446647644043, 1.3039177656173706, 1.862645149230957e-07], "actual_joint": [-0.042016804218292236, 1.7193784713745117, -2.3013861179351807, 0.12202620506286621, 1.825413465499878, -1.689514398574829, 0.6303355097770691, 1.3567001819610596, -1.3581702709197998, -0.7737555503845215, 0.7614391446113586, -1.1240241527557373], "actual_root_xyz": [15.865193367004395, 1.4332456588745117, 0.15974299609661102], "actual_vs_internal_fk_error_norm": 9.454327703274043e-07, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 9.716939699784414e-07, "foot_error_xyz": [-9.5367431640625e-07, 0.0, 1.862645149230957e-07], "frame": 24, "internal_fk_error_norm": 3.182326798509764e-08, "internal_fk_foot_xyz": [15.814467407306692, 1.303917772532081, 2.1087907281502893e-08], "joint_error_max_abs": 0.0, "planned_foot_xyz": [15.814467430114746, 1.3039177656173706, 0.0], "planned_joint": [-0.042016804218292236, 1.7193784713745117, -2.3013861179351807, 0.12202620506286621, 1.825413465499878, -1.689514398574829, 0.6303355097770691, 1.3567001819610596, -1.3581702709197998, -0.7737555503845215, 0.7614391446113586, -1.1240241527557373], "planned_root_xyz": [15.865193367004395, 1.4332456588745117, 0.15974299609661102], "planned_touchdown_xyz": [15.814467430114746, 1.3039177656173706, 0.0], "root_error_norm": 0.0, "segment": 4, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 1}
+{"actual_foot_xyz": [16.021953582763672, 1.2663345336914062, -2.9802322387695312e-08], "actual_joint": [-0.0261458158493042, 1.7451462745666504, -2.2196717262268066, -0.01016145944595337, 1.7480714321136475, -1.5656707286834717, 0.6235780715942383, 1.2997171878814697, -1.1068378686904907, -0.6312572956085205, 1.0696567296981812, -1.4872806072235107], "actual_root_xyz": [16.08604621887207, 1.4154953956604004, 0.16289354860782623], "actual_vs_internal_fk_error_norm": 1.9093446869827905e-06, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 1.911302655318256e-06, "foot_error_xyz": [-1.9073486328125e-06, 1.1920928955078125e-07, -2.9802322387695312e-08], "frame": 24, "internal_fk_error_norm": 7.223433111539487e-09, "internal_fk_foot_xyz": [16.021955487716205, 1.2663344076729133, -2.672876919795897e-10], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.021955490112305, 1.2663344144821167, 0.0], "planned_joint": [-0.0261458158493042, 1.7451462745666504, -2.2196717262268066, -0.01016145944595337, 1.7480714321136475, -1.5656707286834717, 0.6235780715942383, 1.2997171878814697, -1.1068378686904907, -0.6312572956085205, 1.0696567296981812, -1.4872806072235107], "planned_root_xyz": [16.08604621887207, 1.4154953956604004, 0.16289353370666504], "planned_touchdown_xyz": [16.021955490112305, 1.2663344144821167, 0.0], "root_error_norm": 1.4901161193847656e-08, "segment": 5, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 1}
+{"actual_foot_xyz": [16.222063064575195, 1.2082000970840454, -2.2351741790771484e-08], "actual_joint": [0.07338804006576538, 1.7774441242218018, -2.0001425743103027, -0.2643257975578308, 1.6013221740722656, -1.3581904172897339, 0.5456402897834778, 1.3430448770523071, -0.9992241859436035, -0.6202894449234009, 1.1785361766815186, -1.487791895866394], "actual_root_xyz": [16.303735733032227, 1.400756597518921, 0.16147851943969727], "actual_vs_internal_fk_error_norm": 1.935785254208724e-06, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 1.922321988199064e-06, "foot_error_xyz": [1.9073486328125e-06, 2.384185791015625e-07, -2.2351741790771484e-08], "frame": 24, "internal_fk_error_norm": 1.7812459796546844e-08, "internal_fk_foot_xyz": [16.22206114439239, 1.2081998541502825, 1.1496994939408367e-08], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.222061157226562, 1.2081998586654663, 0.0], "planned_joint": [0.07338804006576538, 1.7774441242218018, -2.0001425743103027, -0.2643257975578308, 1.6013221740722656, -1.3581904172897339, 0.5456402897834778, 1.3430448770523071, -0.9992241859436035, -0.6202894449234009, 1.1785361766815186, -1.487791895866394], "planned_root_xyz": [16.303735733032227, 1.400756597518921, 0.16147851943969727], "planned_touchdown_xyz": [16.222061157226562, 1.2081998586654663, 0.0], "root_error_norm": 0.0, "segment": 6, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 1}
+{"actual_foot_xyz": [16.178564071655273, 1.1242636442184448, -1.4901161193847656e-07], "actual_joint": [0.18365886807441711, 1.7150037288665771, -1.7651807069778442, -0.33431878685951233, 1.533724308013916, -1.2096610069274902, 0.3316477835178375, 1.5888793468475342, -1.5428040027618408, -0.5790176391601562, 1.26401686668396, -1.586933970451355], "actual_root_xyz": [16.51875877380371, 1.3867446184158325, 0.16344238817691803], "actual_vs_internal_fk_error_norm": 1.9020547133332428e-06, "batch": 0, "command": "forward_v050", "contact_state": 1, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 1.9168709195716383e-06, "foot_error_xyz": [1.9073486328125e-06, 1.1920928955078125e-07, -1.4901161193847656e-07], "frame": 24, "internal_fk_error_norm": 2.7914259840731893e-08, "internal_fk_foot_xyz": [16.178562181415767, 1.124263517990923, 2.0910000175788923e-08], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.17856216430664, 1.1242635250091553, 0.0], "planned_joint": [0.18365886807441711, 1.7150037288665771, -1.7651807069778442, -0.33431878685951233, 1.533724308013916, -1.2096610069274902, 0.3316477835178375, 1.5888793468475342, -1.5428040027618408, -0.5790176391601562, 1.26401686668396, -1.586933970451355], "planned_root_xyz": [16.51875877380371, 1.3867446184158325, 0.16344238817691803], "planned_touchdown_xyz": [16.17856216430664, 1.1242635250091553, 0.0], "root_error_norm": 0.0, "segment": 7, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 3}
+{"actual_foot_xyz": [16.271041870117188, 1.608737587928772, 1.564621925354004e-07], "actual_joint": [0.16006314754486084, 1.7732529640197754, -1.9001529216766357, -0.3366507887840271, 1.5039957761764526, -1.0342633724212646, 0.4014813303947449, 1.5475878715515137, -1.2473074197769165, -0.5148244500160217, 1.398032784461975, -1.6484497785568237], "actual_root_xyz": [16.734874725341797, 1.3817052841186523, 0.15513356029987335], "actual_vs_internal_fk_error_norm": 1.931546025574828e-06, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 1.913755267735323e-06, "foot_error_xyz": [1.9073486328125e-06, 0.0, 1.564621925354004e-07], "frame": 24, "internal_fk_error_norm": 3.968925452588757e-08, "internal_fk_foot_xyz": [16.271039942492198, 1.608737593887631, 3.359461694940613e-08], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.271039962768555, 1.608737587928772, 0.0], "planned_joint": [0.16006314754486084, 1.7732529640197754, -1.9001529216766357, -0.3366507887840271, 1.5039957761764526, -1.0342633724212646, 0.4014813303947449, 1.5475878715515137, -1.2473074197769165, -0.5148244500160217, 1.398032784461975, -1.6484497785568237], "planned_root_xyz": [16.734874725341797, 1.3817052841186523, 0.15513356029987335], "planned_touchdown_xyz": [16.271039962768555, 1.608737587928772, 0.0], "root_error_norm": 0.0, "segment": 8, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 2}
+{"actual_foot_xyz": [16.892444610595703, 1.1817435026168823, -2.2351741790771484e-08], "actual_joint": [-0.010030031204223633, 1.787561297416687, -2.03153133392334, -0.2545534670352936, 1.6541101932525635, -1.5901252031326294, 0.2794908285140991, 1.5478602647781372, -1.1284639835357666, -0.42073819041252136, 1.4928773641586304, -1.67896568775177], "actual_root_xyz": [16.93246078491211, 1.3695733547210693, 0.16302227973937988], "actual_vs_internal_fk_error_norm": 1.9169876766108185e-06, "batch": 0, "command": "forward_v050", "contact_state": 1, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 1.9112009999390427e-06, "foot_error_xyz": [1.9073486328125e-06, 1.1920928955078125e-07, -2.2351741790771484e-08], "frame": 24, "internal_fk_error_norm": 1.2155733583160402e-08, "internal_fk_foot_xyz": [16.892442698155687, 1.1817433724063084, -9.007874446353981e-10], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.89244270324707, 1.1817433834075928, 0.0], "planned_joint": [-0.010030031204223633, 1.787561297416687, -2.03153133392334, -0.2545534670352936, 1.6541101932525635, -1.5901252031326294, 0.2794908285140991, 1.5478602647781372, -1.1284639835357666, -0.42073819041252136, 1.4928773641586304, -1.67896568775177], "planned_root_xyz": [16.93246078491211, 1.3695733547210693, 0.16302227973937988], "planned_touchdown_xyz": [16.89244270324707, 1.1817433834075928, 0.0], "root_error_norm": 0.0, "segment": 9, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 1}
+{"actual_foot_xyz": [16.657304763793945, 1.5677101612091064, -2.9802322387695312e-08], "actual_joint": [-0.011794507503509521, 1.8216850757598877, -1.9281901121139526, -0.33873751759529114, 1.575953483581543, -1.3850268125534058, 0.24631518125534058, 1.5623044967651367, -1.1319760084152222, -0.27636778354644775, 1.6174721717834473, -1.6939362287521362], "actual_root_xyz": [17.148597717285156, 1.366956114768982, 0.1615631878376007], "actual_vs_internal_fk_error_norm": 1.950742317991756e-06, "batch": 0, "command": "forward_v050", "contact_state": 0, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 1.911302655318256e-06, "foot_error_xyz": [1.9073486328125e-06, -1.1920928955078125e-07, -2.9802322387695312e-08], "frame": 24, "internal_fk_error_norm": 3.9947982452334515e-08, "internal_fk_foot_xyz": [16.65730281676039, 1.5677102786929258, -4.239207263001532e-09], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.657302856445312, 1.567710280418396, 0.0], "planned_joint": [-0.011794507503509521, 1.8216850757598877, -1.9281901121139526, -0.33873751759529114, 1.575953483581543, -1.3850268125534058, 0.24631518125534058, 1.5623044967651367, -1.1319760084152222, -0.27636778354644775, 1.6174721717834473, -1.6939362287521362], "planned_root_xyz": [17.148597717285156, 1.366956114768982, 0.1615631878376007], "planned_touchdown_xyz": [16.657302856445312, 1.567710280418396, 0.0], "root_error_norm": 0.0, "segment": 10, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 2}
+{"actual_foot_xyz": [16.983531951904297, 1.1891015768051147, 0.0], "actual_joint": [-0.0010133981704711914, 1.7554445266723633, -1.957734227180481, -0.31054815649986267, 1.5301649570465088, -1.2426402568817139, 0.1299440860748291, 1.7124733924865723, -1.6303677558898926, -0.22253036499023438, 1.6143369674682617, -1.8339323997497559], "actual_root_xyz": [17.34858512878418, 1.36324143409729, 0.17127716541290283], "actual_vs_internal_fk_error_norm": 2.5026757336837014e-07, "batch": 0, "command": "forward_v050", "contact_state": 1, "cycle": 0, "effective_candidate": "baseline", "foot_error_norm": 2.543602308364773e-07, "foot_error_xyz": [0.0, 2.384185791015625e-07, 8.863243294854328e-08], "frame": 24, "internal_fk_error_norm": 2.1985159624451574e-08, "internal_fk_foot_xyz": [16.983531942225024, 1.1891013364292433, -6.898992968573658e-08], "joint_error_max_abs": 0.0, "planned_foot_xyz": [16.983531951904297, 1.1891013383865356, -8.863243294854328e-08], "planned_joint": [-0.0010133981704711914, 1.7554445266723633, -1.957734227180481, -0.31054815649986267, 1.5301649570465088, -1.2426402568817139, 0.1299440860748291, 1.7124733924865723, -1.6303677558898926, -0.22253036499023438, 1.6143369674682617, -1.8339323997497559], "planned_root_xyz": [17.34858512878418, 1.36324143409729, 0.17127716541290283], "planned_touchdown_xyz": [16.983531951904297, 1.1891013383865356, -8.863243294854328e-08], "root_error_norm": 0.0, "segment": 11, "selected_candidate": "baseline", "semantic_class": "small", "type": "rolling_terminal_trace", "variant": "baseline", "worst_leg": 3}
+{"any_foot_step_frame": 22, "any_foot_step_leg": 3, "any_foot_step_max": 0.3822898864746094, "any_foot_step_to_median": 19.042371716091335, "command": "forward_v050", "command_path_lateral_error_max": 0.46880587935447693, "command_path_lateral_error_mean": 0.2173362821340561, "command_path_progress_error_final": 0.41095733642578125, "command_shape_left_score": 0.0, "command_shape_reason": "not_shape_variant", "command_shape_right_score": 0.0, "command_shape_side": 0, "command_shaped": 0, "crossed_obstacle_along_command": 1, "cycle": 0, "desired_crossing": 1, "effective_candidate": "baseline", "end_along_obstacle": 2.2259645462036133, "ever_crossed_obstacle_along_command": 1, "foot_accel_max": 0.5525405897101637, "foot_accel_max_to_mean": 22.19396378967773, "foot_accel_max_to_median": 54.62079127691321, "foot_accel_mean": 0.024895985005037577, "foot_accel_mean_for_ratio": 0.024895985005037577, "foot_accel_median": 0.01011593894546358, "foot_max_to_median_step": 37.654770018052986, "foot_on_large_rate": 0.0, "foot_on_semantic_rate": 0.0, "foot_on_small_rate": 0.0, "foot_over_low_small_frame_count": 33, "foot_over_low_small_max_clearance": 0.11821696162223816, "foot_over_low_small_min_lateral": 0.01634155958890915, "foot_over_low_small_rate": 0.06333333333333334, "foot_over_low_small_success": 1, "foot_semantic_penetration_rate": 0.0, "foot_step_anomaly_flag": 1, "foot_step_max": 0.38228989732461277, "foot_step_max_to_mean": 18.09857239630853, "foot_step_max_to_median": 37.654770018052986, "foot_step_mean": 0.021122654812408652, "foot_step_median": 0.0101524958761222, "large_avoid_success": 0, "large_penetration_rate": 0.0, "layer": "result", "max_abs_lateral_to_obstacle": 0.08303952217102051, "max_along_obstacle": 2.2259645462036133, "min_abs_lateral_to_obstacle": 0.0, "min_along_obstacle": -0.36260318756103516, "min_root_distance_to_obstacle": 0.004774431698024273, "min_z_quadratic_r2": 0.3968736375862214, "nominal_vx": 0.5, "nominal_vy": 0.0, "nominal_yaw": 0.0, "playback_foot_error_max": 0.28666725864637815, "playback_foot_error_mean": 0.12515643772683996, "playback_frame": 24, "playback_root_error_max": 2.9802322387695312e-08, "playback_root_error_mean": 2.9802322387695312e-08, "playback_terminal_foot_error_max": 0.0, "playback_terminal_root_error_max": 2.9802322387695312e-08, "replan_boundary_foot_anomaly_flag": 1, "replan_boundary_foot_step_frame": 24, "replan_boundary_foot_step_leg": 0, "replan_boundary_foot_step_max": 0.28666725754737854, "replan_boundary_foot_step_to_median": 14.279280384290866, "requested_vx": 0.5, "requested_vy": 0.0, "requested_yaw": 0.0, "rolling_segment_terminal_foot_error_leg": 0, "rolling_segment_terminal_foot_error_max": 0.28666725754737854, "rolling_segment_terminal_foot_error_segment": 0, "rolling_segment_terminal_root_error_max": 2.9802322387695312e-08, "root_accel_max": 0.2977069145410753, "root_accel_max_to_mean": 11.564393083738706, "root_accel_max_to_median": 21.73315082041199, "root_accel_mean": 0.025743410171667067, "root_accel_mean_for_ratio": 0.025743410171667067, "root_accel_median": 0.013698285950395468, "root_along_reverse_rate": 0.14381270903010032, "root_dx": 2.5759639739990234, "root_dy": -0.07879102230072021, "root_lateral_deviation_from_start_max": 0.08303952217102051, "root_max_to_median_step": 19.863567298877847, "root_on_large_rate": 0.0, "root_on_semantic_rate": 0.0, "root_on_small_rate": 0.0, "root_semantic_penetration_rate": 0.0, "root_step_max": 0.23925246072142317, "root_step_max_to_mean": 12.051721816149904, "root_step_max_to_median": 19.863567298877847, "root_step_mean": 0.019852139335046138, "root_step_median": 0.012044788185400074, "score": 675.7759841371806, "selected_candidate": "baseline", "selector_candidate_priority": 0.0, "semantic_anchor_x": 15.122620839333498, "semantic_anchor_y": 1.4420323970560998, "semantic_class": "small", "semantic_clearance_policy_violation": 0, "semantic_policy_margin_deficit": 0.0, "semantic_policy_violation": 0, "semantic_probe_seed": 462884173, "semantic_target_diameter": 0.12, "semantic_target_height": 0.16, "semantic_task_contact_violation": 0, "semantic_task_continuity_violation": 1, "semantic_task_violation": 1, "small_overpass_drift_limit": 0.22, "small_overpass_lane_limit": 0.12, "small_overpass_local_lateral": 0.0, "small_overpass_path_drift": 0.46880587935447693, "small_overpass_success": 0, "small_penetration_rate": 0.0, "stance_on_large_rate": 0.0, "stance_on_semantic_rate": 0.0, "stance_on_small_rate": 0.0, "start_along_obstacle": -0.34999942779541016, "swing_over_large_rate": 0.0, "swing_over_semantic_rate": 0.0, "swing_over_small_rate": 0.0, "swing_run_count": 48, "terminal_foot_anomaly_flag": 0, "terminal_foot_step_leg": 0, "terminal_foot_step_max": 0.0, "terminal_foot_step_to_median": 0.0, "terminal_stance_airborne_leg": 3, "terminal_stance_airborne_max": 4.761556056109839e-07, "terrain_case": "semantic_small", "touchdown_on_large_rate": 0.0, "touchdown_on_semantic_rate": 0.0, "touchdown_on_small_rate": 0.0, "type": "semantic_obstacle_cycle", "variant": "baseline", "worst_boundary_to_median_step": 7.339821738572841, "worst_foot_accel_frame": 24.0, "worst_foot_accel_leg": 0.0, "worst_foot_accel_value": 0.5525405897101637, "worst_foot_step_frame": 22.0, "worst_foot_step_leg": 3.0, "worst_foot_step_value": 0.38228989732461277, "worst_max_to_median_step": 11.18496640394194, "worst_root_accel_frame": 23.0, "worst_root_accel_value": 0.2977069145410753, "worst_z_unimodal_violation_ratio": 0.36363636363636365}
+{"command": "forward_v050", "cycle_count": 1, "foot_step_anomaly_count": 1, "large_avoid_success_count": 0, "max_any_foot_step_to_median": 19.042371716091335, "max_command_path_lateral_error": 0.46880587935447693, "max_command_path_progress_error": 0.41095733642578125, "max_foot_accel_max_to_mean": 22.19396378967773, "max_replan_boundary_foot_step_to_median": 14.279280384290866, "max_rolling_segment_terminal_foot_error": 0.28666725754737854, "max_rolling_segment_terminal_root_error": 2.9802322387695312e-08, "max_root_accel_max_to_mean": 11.564393083738706, "max_root_on_semantic_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_semantic_policy_violation": 0, "max_semantic_task_contact_violation": 0, "max_semantic_task_continuity_violation": 1, "max_stance_on_semantic_rate": 0.0, "max_terminal_foot_step_to_median": 0.0, "max_terminal_stance_airborne": 4.761556056109839e-07, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 7.339821738572841, "max_worst_max_to_median_step": 11.18496640394194, "min_root_distance_to_obstacle": 0.004774431698024273, "min_z_quadratic_r2": 0.3968736375862214, "replan_boundary_foot_anomaly_count": 1, "score_max": 675.7759841371806, "score_mean": 675.7759841371806, "semantic_class": "small", "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "terminal_foot_anomaly_count": 0, "type": "semantic_obstacle_summary", "variant": "baseline"}
+{"clearance_policy_violation_count": 0, "contact_violation_count": 0, "continuity_violation_count": 1, "cycle_count": 1, "foot_step_anomaly_count": 1, "large_avoid_success_count": 0, "max_any_foot_step_to_median": 19.042371716091335, "max_command_path_lateral_error": 0.46880587935447693, "max_command_path_progress_error": 0.41095733642578125, "max_foot_accel_max_to_mean": 22.19396378967773, "max_replan_boundary_foot_step_to_median": 14.279280384290866, "max_rolling_segment_terminal_foot_error": 0.28666725754737854, "max_rolling_segment_terminal_root_error": 2.9802322387695312e-08, "max_root_accel_max_to_mean": 11.564393083738706, "max_root_on_semantic_rate": 0.0, "max_semantic_penetration_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_stance_on_semantic_rate": 0.0, "max_terminal_foot_step_to_median": 0.0, "max_terminal_stance_airborne": 4.761556056109839e-07, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 7.339821738572841, "max_worst_max_to_median_step": 11.18496640394194, "min_root_distance_to_obstacle": 0.004774431698024273, "min_z_quadratic_r2": 0.3968736375862214, "policy_violation_count": 0, "replan_boundary_foot_anomaly_count": 1, "score_max": 675.7759841371806, "score_mean": 675.7759841371806, "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "terminal_foot_anomaly_count": 0, "type": "variant_summary", "variant": "baseline"}
+{"best_variant": "baseline", "best_variant_score_mean": 675.7759841371806, "cycle_count": 1, "large_avoid_success_count": 0, "max_foot_accel_max_to_mean": 22.19396378967773, "max_root_accel_max_to_mean": 11.564393083738706, "max_root_on_semantic_rate": 0.0, "max_stance_on_semantic_rate": 0.0, "max_touchdown_on_semantic_rate": 0.0, "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "summary_count": 1, "type": "probe_footer", "worst_score": 675.7759841371806}
+-|
+| 0   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 179683
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1903
+|---------------------------------------------------------------------------------------------|
+2026-05-25 09:14:48 [5,026ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-25 09:14:48 [5,026ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0 
+     0 934.51 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0 
+     0   1.42 
+
+   CPU     0 
+     0   3.23 
+2026-05-25 09:14:49 [5,700ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.

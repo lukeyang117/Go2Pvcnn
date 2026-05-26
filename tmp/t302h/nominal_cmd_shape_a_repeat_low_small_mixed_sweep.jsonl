@@ -1,0 +1,257 @@
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260524_190208.log
+2026-05-24 11:02:08 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-24 11:02:08 [4ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-24 11:02:08 [192ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-24 11:02:09 [397ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-24 11:02:09 [760ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-24 11:02:09 [829ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+2026-05-24 11:02:13 [4,607ms] [Warning] [carb.cudainterop.plugin] CUDA_VISIBLE_DEVICES environment variable is set.
+2026-05-24 11:02:13 [4,607ms] [Warning] [carb.cudainterop.plugin] Note CUDA device enumeration and Omniverse device enumeration are different.
+2026-05-24 11:02:13 [4,607ms] [Warning] [carb.cudainterop.plugin] Setting CUDA_VISIBLE_DEVICES can lead to undesired behavior or crashes.
+2026-05-24 11:02:13 [4,610ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 11:02:13 [4,610ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 11:02:13 [4,611ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 11:02:13 [4,611ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 11:02:13 [4,613ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|--------------------------------------------------------------------------------------------[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0 (MPC semantic trajectory)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0 (MPC semantic play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains based on curriculum took : 0.004613 seconds
+[INFO]: Time taken for scene creation : 2.707036 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 1
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 0.807869 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 2 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++------------------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_semantic_map' (shape: (2, 16, 16)) |
++------------+----------------------------------------------+------------------------+
+|   Index    | Name                                         |         Shape          |
++------------+----------------------------------------------+------------------------+
+|     0      | elevation_semantic_map                       |      (2, 16, 16)       |
++------------+----------------------------------------------+------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++------------------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_semantic_map' (shape: (2, 16, 16)) |
++------------+----------------------------------------------+------------------------+
+|   Index    | Name                                         |         Shape          |
++------------+----------------------------------------------+------------------------+
+|     0      | elevation_semantic_map                       |      (2, 16, 16)       |
++------------+----------------------------------------------+------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 18 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_foot_pos    |      0.3 |
+|   17  | swing_leg_collision   |      1.0 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+[MPC profile] #1/5 profile=train_4096 batch=1 horizon=300 iters=24 optimizer.backward_ms=1062.720 optimizer.decode_ms=59.866 optimizer.final_decode_ms=1.735 optimizer.final_loss_ms=51.840 optimizer.grad_clip_ms=34.082 optimizer.loop_ms=2777.245 optimizer.loss_ms=1542.339 optimizer.step_ms=64.381 optimizer.total_ms=2830.872 optimizer.zero_grad_ms=4.100 plan.init_variables_ms=8.626 plan.nominal_ms=65.889 plan.normalize_ms=1.139 plan.postprocess_ms=3.561 plan.total_ms=2912.063 loss.total_ms=1565.845 loss.top_terms=semantic_contact_avoid_ms=230.668,semantic_obstacle_ms=157.833,touchdown_surface_ms=134.383,leg_kinematics_ms=124.749,ik_fk_residual_ms=117.567,swing_center_urgency_ms=103.730,obstacle_risk_ms=81.840,high_obstacle_avoidance_ms=61.548,ik_joint_limit_ms=59.079,swing_direction_ms=53.205,leg_collision_ms=51.695,low_small_crossing_ms=36.500
+{"cases": ["small"], "commands": ["forward_yaw_v050_vy025_yaw100:0.50 0.25 1.00"], "cycles": 1, "device": "cuda:0", "lateral_offset_m": 0.0, "longitudinal_offset_m": -0.35, "playback_frame": 299, "requested_n_frames": 300, "semantic_small_height_m": null, "type": "probe_header", "variants": ["baseline", "nominal_cmd_shape_a_low_accel_anchor_v5", "loss_low_small_cont_v2"], "warmup_steps": 6}
+[MPC profile] #2/5 profile=train_4096 batch=1 horizon=300 iters=24 optimizer.backward_ms=963.905 optimizer.decode_ms=47.406 optimizer.final_decode_ms=1.870 optimizer.final_loss_ms=43.175 optimizer.grad_clip_ms=23.378 optimizer.loop_ms=2131.699 optimizer.loss_ms=1063.919 optimizer.step_ms=21.795 optimizer.total_ms=2176.799 optimizer.zero_grad_ms=3.577 plan.init_variables_ms=0.276 plan.nominal_ms=2.454 plan.normalize_ms=0.187 plan.postprocess_ms=3.533 plan.total_ms=2186.358 loss.total_ms=1077.391 loss.top_terms=semantic_obstacle_ms=137.440,touchdown_surface_ms=113.949,swing_center_urgency_ms=81.598,leg_kinematics_ms=80.552,ik_fk_residual_ms=80.402,semantic_contact_avoid_ms=74.015,obstacle_risk_ms=61.501,high_obstacle_avoidance_ms=56.493,swing_direction_ms=49.654,ik_joint_limit_ms=41.583,low_small_crossing_ms=32.616,leg_collision_ms=29.288
+{"command": "forward_yaw_v050_vy025_yaw100", "command_path_lateral_error_max": 0.5570929646492004, "command_path_lateral_error_mean": 0.10551183670759201, "command_path_progress_error_final": 0.5175583362579346, "command_shape_left_score": 0.0, "command_shape_reason": "not_shape_variant", "command_shape_right_score": 0.0, "command_shape_side": 0, "command_shaped": 0, "crossed_obstacle_along_command": 1, "cycle": 0, "desired_crossing": 1, "effective_candidate": "baseline", "end_along_obstacle": 0.008101880550384521, "ever_crossed_obstacle_along_command": 1, "foot_accel_max": 0.37701701044742425, "foot_accel_max_to_mean": 25.565652609813192, "foot_accel_max_to_median": 30.563341979809245, "foot_accel_mean": 0.014747012963115558, "foot_accel_median": 0.01233559506340927, "foot_max_to_median_step": 23.168442367383868, "foot_on_large_rate": 0.0, "foot_on_semantic_rate": 0.009166666666666667, "foot_on_small_rate": 0.009166666666666667, "foot_semantic_penetration_rate": 0.0, "foot_step_max": 0.26289927256142603, "foot_step_max_to_mean": 18.85743748881266, "foot_step_max_to_median": 23.168442367383868, "foot_step_mean": 0.013941410264114268, "foot_step_median": 0.011347300279950243, "large_avoid_success": 0, "large_penetration_rate": 0.0, "layer": "result", "max_abs_lateral_to_obstacle": 1.115842580795288, "max_along_obstacle": 0.12966804206371307, "min_abs_lateral_to_obstacle": 1.043081283569336e-07, "min_along_obstacle": -0.9726994633674622, "min_root_distance_to_obstacle": 0.11250945180654526, "min_z_quadratic_r2": 0.9013263522088231, "nominal_vx": 0.5, "nominal_vy": 0.25, "nominal_yaw": 1.0, "requested_vx": 0.5, "requested_vy": 0.25, "requested_yaw": 1.0, "root_accel_max": 0.4921882348088638, "root_accel_max_to_mean": 23.50194289118709, "root_accel_max_to_median": 27.41090680392263, "root_accel_mean": 0.020942448762116078, "root_accel_median": 0.017955926753157592, "root_along_reverse_rate": 0.5183946488294314, "root_dx": 0.22940349578857422, "root_dy": 0.3419327735900879, "root_lateral_deviation_from_start_max": 1.1158427000045776, "root_max_to_median_step": 36.744947839272236, "root_on_large_rate": 0.0, "root_on_semantic_rate": 0.0, "root_on_small_rate": 0.0, "root_semantic_penetration_rate": 0.0, "root_step_max": 0.5225086238850923, "root_step_max_to_mean": 30.15897381077184, "root_step_max_to_median": 36.744947839272236, "root_step_mean": 0.01732514598021464, "root_step_median": 0.014219876598291045, "score": 863.4442932366153, "selected_candidate": "baseline", "selector_candidate_priority": 0.0, "semantic_anchor_x": 15.122620839333498, "semantic_anchor_y": 1.4420323970560998, "semantic_class": "small", "semantic_clearance_policy_violation": 0, "semantic_policy_margin_deficit": 0.0, "semantic_policy_violation": 0, "semantic_target_diameter": 0.12, "semantic_target_height": 0.16, "semantic_task_contact_violation": 1, "semantic_task_continuity_violation": 0, "semantic_task_violation": 1, "small_overpass_drift_limit": 0.22, "small_overpass_lane_limit": 0.12, "small_overpass_local_lateral": 1.043081283569336e-07, "small_overpass_path_drift": 0.5570929646492004, "small_overpass_success": 0, "small_penetration_rate": 0.0, "stance_on_large_rate": 0.0, "stance_on_semantic_rate": 0.017713365539452495, "stance_on_small_rate": 0.017713365539452495, "start_along_obstacle": -0.3499998450279236, "swing_over_large_rate": 0.0, "swing_over_semantic_rate": 0.0, "swing_over_small_rate": 0.0, "swing_run_count": 4, "terrain_case": "semantic_small", "touchdown_on_large_rate": 0.0, "touchdown_on_semantic_rate": 0.0, "touchdown_on_small_rate": 0.0, "type": "semantic_obstacle_cycle", "variant": "baseline", "worst_boundary_to_median_step": 6.8315092204721335, "worst_foot_step_frame": 297.0, "worst_foot_step_leg": 1.0, "worst_foot_step_value": 0.26289927256142603, "worst_max_to_median_step": 11.159018845850563, "worst_z_unimodal_violation_ratio": 0.2905405405405405}
+[MPC profile] #3/5 profile=train_4096 batch=1 horizon=300 iters=64 optimizer.backward_ms=3028.446 optimizer.decode_ms=126.749 optimizer.final_decode_ms=1.819 optimizer.final_loss_ms=57.471 optimizer.grad_clip_ms=63.014 optimizer.loop_ms=6970.699 optimizer.loss_ms=3662.221 optimizer.step_ms=58.304 optimizer.total_ms=7030.053 optimizer.zero_grad_ms=9.080 plan.init_variables_ms=0.235 plan.nominal_ms=2.401 plan.normalize_ms=0.197 plan.postprocess_ms=4.123 plan.total_ms=7041.182 loss.total_ms=2815.270 loss.top_terms=semantic_obstacle_ms=360.912,touchdown_surface_ms=288.679,ik_fk_residual_ms=217.817,swing_center_urgency_ms=213.962,leg_kinematics_ms=213.600,semantic_contact_avoid_ms=194.036,obstacle_risk_ms=160.181,high_obstacle_avoidance_ms=144.327,swing_direction_ms=131.158,ik_joint_limit_ms=109.468,low_small_crossing_ms=77.593,leg_collision_ms=76.839
+{"command": "forward_yaw_v050_vy025_yaw100", "command_path_lateral_error_max": 0.4016246497631073, "command_path_lateral_error_mean": 0.09366337954998016, "command_path_progress_error_final": 0.3779945373535156, "command_shape_left_score": 0.0, "command_shape_reason": "low_small_cross", "command_shape_right_score": 0.0, "command_shape_side": 0, "command_shaped": 0, "crossed_obstacle_along_command": 0, "cycle": 0, "desired_crossing": 1, "effective_candidate": "nominal_cmd_shape_a_low_accel_anchor_v5", "end_along_obstacle": -0.13424359261989594, "ever_crossed_obstacle_along_command": 1, "foot_accel_max": 0.17161255996410946, "foot_accel_max_to_mean": 66.173403997581, "foot_accel_max_to_median": 95.08670667790425, "foot_accel_mean": 0.002593376637695453, "foot_accel_median": 0.0018048007545936795, "foot_max_to_median_step": 43.5075610034036, "foot_on_large_rate": 0.0, "foot_on_semantic_rate": 0.0, "foot_on_small_rate": 0.0, "foot_semantic_penetration_rate": 0.0, "foot_step_max": 0.17161255996410946, "foot_step_max_to_mean": 20.08885127303017, "foot_step_max_to_median": 43.5075610034036, "foot_step_mean": 0.008542676613595323, "foot_step_median": 0.003944430715173489, "large_avoid_success": 0, "large_penetration_rate": 0.0, "layer": "result", "max_abs_lateral_to_obstacle": 1.0484915971755981, "max_along_obstacle": 0.12261128425598145, "min_abs_lateral_to_obstacle": 1.043081283569336e-07, "min_along_obstacle": -0.9721766710281372, "min_root_distance_to_obstacle": 0.11258570849895477, "min_z_quadratic_r2": 0.983879709821331, "nominal_vx": 0.5, "nominal_vy": 0.25, "nominal_yaw": 1.0, "requested_vx": 0.5, "requested_vy": 0.25, "requested_yaw": 1.0, "root_accel_max": 0.07617108313261503, "root_accel_max_to_mean": 17.795598506298543, "root_accel_max_to_median": 31.08548934366944, "root_accel_mean": 0.004280332752262037, "root_accel_median": 0.002450374265963655, "root_along_reverse_rate": 0.5117056856187291, "root_dx": 0.13086605072021484, "root_dy": 0.22071349620819092, "root_lateral_deviation_from_start_max": 1.0484917163848877, "root_max_to_median_step": 22.182317729612407, "root_on_large_rate": 0.0, "root_on_semantic_rate": 0.0, "root_on_small_rate": 0.0, "root_semantic_penetration_rate": 0.0, "root_step_max": 0.24088687005324555, "root_step_max_to_mean": 18.46279297117022, "root_step_max_to_median": 22.182317729612407, "root_step_mean": 0.013047152206569834, "root_step_median": 0.010859409417424054, "score": 1155.9938252749478, "selected_candidate": "nominal_cmd_shape_a_low_accel_anchor_v5", "selector_candidate_priority": 0.0, "semantic_anchor_x": 15.122620839333498, "semantic_anchor_y": 1.4420323970560998, "semantic_class": "small", "semantic_clearance_policy_violation": 0, "semantic_policy_margin_deficit": 0.0, "semantic_policy_violation": 0, "semantic_target_diameter": 0.12, "semantic_target_height": 0.16, "semantic_task_contact_violation": 0, "semantic_task_continuity_violation": 1, "semantic_task_violation": 1, "small_overpass_drift_limit": 0.22, "small_overpass_lane_limit": 0.12, "small_overpass_local_lateral": 1.043081283569336e-07, "small_overpass_path_drift": 0.4016246497631073, "small_overpass_success": 0, "small_penetration_rate": 0.0, "stance_on_large_rate": 0.0, "stance_on_semantic_rate": 0.0, "stance_on_small_rate": 0.0, "start_along_obstacle": -0.3499998450279236, "swing_over_large_rate": 0.0, "swing_over_semantic_rate": 0.0, "swing_over_small_rate": 0.0, "swing_run_count": 5, "terrain_case": "semantic_small", "touchdown_on_large_rate": 0.0, "touchdown_on_semantic_rate": 0.0, "touchdown_on_small_rate": 0.0, "type": "semantic_obstacle_cycle", "variant": "nominal_cmd_shape_a_low_accel_anchor_v5", "worst_boundary_to_median_step": 4.591056632922953, "worst_foot_step_frame": 150.0, "worst_foot_step_leg": 3.0, "worst_foot_step_value": 0.17161255996410946, "worst_max_to_median_step": 1.5515407014425582, "worst_z_unimodal_violation_ratio": 0.0}
+[MPC profile] #4/5 profile=train_4096 batch=1 horizon=300 iters=40 optimizer.backward_ms=1884.908 optimizer.decode_ms=78.241 optimizer.final_decode_ms=1.777 optimizer.final_loss_ms=56.674 optimizer.grad_clip_ms=39.273 optimizer.loop_ms=4346.920 optimizer.loss_ms=2284.036 optimizer.step_ms=39.883 optimizer.total_ms=4405.434 optimizer.zero_grad_ms=5.943 plan.init_variables_ms=0.262 plan.nominal_ms=2.426 plan.normalize_ms=0.201 plan.postprocess_ms=3.617 plan.total_ms=4415.440 loss.total_ms=1771.527 loss.top_terms=semantic_obstacle_ms=230.099,touchdown_surface_ms=180.650,ik_fk_residual_ms=134.881,leg_kinematics_ms=134.395,swing_center_urgency_ms=134.391,semantic_contact_avoid_ms=122.337,obstacle_risk_ms=99.968,high_obstacle_avoidance_ms=91.376,swing_direction_ms=83.205,ik_joint_limit_ms=69.027,low_small_crossing_ms=49.490,leg_collision_ms=48.470
+{"command": "forward_yaw_v050_vy025_yaw100", "command_path_lateral_error_max": 0.5054970383644104, "command_path_lateral_error_mean": 0.10405917465686798, "command_path_progress_error_final": 0.49245208501815796, "command_shape_left_score": 0.0, "command_shape_reason": "not_shape_variant", "command_shape_right_score": 0.0, "command_shape_side": 0, "command_shaped": 0, "crossed_obstacle_along_command": 0, "cycle": 0, "desired_crossing": 1, "effective_candidate": "loss_low_small_cont_v2", "end_along_obstacle": -0.01809026300907135, "ever_crossed_obstacle_along_command": 1, "foot_accel_max": 0.1506325795743943, "foot_accel_max_to_mean": 14.54005185999976, "foot_accel_max_to_median": 17.25447076516955, "foot_accel_mean": 0.010359837848225995, "foot_accel_median": 0.008730060841881411, "foot_max_to_median_step": 11.596555129107317, "foot_on_large_rate": 0.0, "foot_on_semantic_rate": 0.0, "foot_on_small_rate": 0.0, "foot_semantic_penetration_rate": 0.0, "foot_step_max": 0.10752325960150014, "foot_step_max_to_mean": 9.113413470522724, "foot_step_max_to_median": 11.596555129107317, "foot_step_mean": 0.011798351951141404, "foot_step_median": 0.0092720000383232, "large_avoid_success": 0, "large_penetration_rate": 0.0, "layer": "result", "max_abs_lateral_to_obstacle": 1.0489966869354248, "max_along_obstacle": 0.11313305795192719, "min_abs_lateral_to_obstacle": 1.043081283569336e-07, "min_along_obstacle": -0.964508593082428, "min_root_distance_to_obstacle": 0.12243160605430603, "min_z_quadratic_r2": 0.45851718192112256, "nominal_vx": 0.5, "nominal_vy": 0.25, "nominal_yaw": 1.0, "requested_vx": 0.5, "requested_vy": 0.25, "requested_yaw": 1.0, "root_accel_max": 0.09498767522731733, "root_accel_max_to_mean": 6.761290976442368, "root_accel_max_to_median": 8.081352363414615, "root_accel_mean": 0.014048748317188622, "root_accel_median": 0.011753933123537527, "root_along_reverse_rate": 0.5551839464882943, "root_dx": 0.23462486267089844, "root_dy": 0.2729226350784302, "root_lateral_deviation_from_start_max": 1.0489968061447144, "root_max_to_median_step": 25.00693079574962, "root_on_large_rate": 0.0, "root_on_semantic_rate": 0.0, "root_on_small_rate": 0.0, "root_semantic_penetration_rate": 0.0, "root_step_max": 0.30989908095311564, "root_step_max_to_mean": 20.201731766611477, "root_step_max_to_median": 25.00693079574962, "root_step_mean": 0.015340223528029565, "root_step_median": 0.012392527635010234, "score": 221.23987708544462, "selected_candidate": "loss_low_small_cont_v2", "selector_candidate_priority": 0.0, "semantic_anchor_x": 15.122620839333498, "semantic_anchor_y": 1.4420323970560998, "semantic_class": "small", "semantic_clearance_policy_violation": 0, "semantic_policy_margin_deficit": 0.0, "semantic_policy_violation": 0, "semantic_target_diameter": 0.12, "semantic_target_height": 0.16, "semantic_task_contact_violation": 0, "semantic_task_continuity_violation": 0, "semantic_task_violation": 0, "small_overpass_drift_limit": 0.22, "small_overpass_lane_limit": 0.12, "small_overpass_local_lateral": 1.043081283569336e-07, "small_overpass_path_drift": 0.5054970383644104, "small_overpass_success": 1, "small_penetration_rate": 0.0, "stance_on_large_rate": 0.0, "stance_on_semantic_rate": 0.0, "stance_on_small_rate": 0.0, "start_along_obstacle": -0.3499998450279236, "swing_over_large_rate": 0.0, "swing_over_semantic_rate": 0.0, "swing_over_small_rate": 0.0, "swing_run_count": 5, "terrain_case": "semantic_small", "touchdown_on_large_rate": 0.0, "touchdown_on_semantic_rate": 0.0, "touchdown_on_small_rate": 0.0, "type": "semantic_obstacle_cycle", "variant": "loss_low_small_cont_v2", "worst_boundary_to_median_step": 3.121075889812721, "worst_foot_step_frame": 146.0, "worst_foot_step_leg": 3.0, "worst_foot_step_value": 0.10752325960150014, "worst_max_to_median_step": 17.109899489131504, "worst_z_unimodal_violation_ratio": 0.25806451612903225}
+{"command": "forward_yaw_v050_vy025_yaw100", "cycle_count": 1, "large_avoid_success_count": 0, "max_command_path_lateral_error": 0.5054970383644104, "max_command_path_progress_error": 0.49245208501815796, "max_foot_accel_max_to_mean": 14.54005185999976, "max_root_accel_max_to_mean": 6.761290976442368, "max_root_on_semantic_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_semantic_policy_violation": 0, "max_semantic_task_contact_violation": 0, "max_semantic_task_continuity_violation": 0, "max_stance_on_semantic_rate": 0.0, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 3.121075889812721, "max_worst_max_to_median_step": 17.109899489131504, "min_root_distance_to_obstacle": 0.12243160605430603, "min_z_quadratic_r2": 0.45851718192112256, "score_max": 221.23987708544462, "score_mean": 221.23987708544462, "semantic_class": "small", "semantic_task_violation_count": 0, "small_overpass_success_count": 1, "type": "semantic_obstacle_summary", "variant": "loss_low_small_cont_v2"}
+{"command": "forward_yaw_v050_vy025_yaw100", "cycle_count": 1, "large_avoid_success_count": 0, "max_command_path_lateral_error": 0.5570929646492004, "max_command_path_progress_error": 0.5175583362579346, "max_foot_accel_max_to_mean": 25.565652609813192, "max_root_accel_max_to_mean": 23.50194289118709, "max_root_on_semantic_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_semantic_policy_violation": 0, "max_semantic_task_contact_violation": 1, "max_semantic_task_continuity_violation": 0, "max_stance_on_semantic_rate": 0.017713365539452495, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 6.8315092204721335, "max_worst_max_to_median_step": 11.159018845850563, "min_root_distance_to_obstacle": 0.11250945180654526, "min_z_quadratic_r2": 0.9013263522088231, "score_max": 863.4442932366153, "score_mean": 863.4442932366153, "semantic_class": "small", "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "type": "semantic_obstacle_summary", "variant": "baseline"}
+{"command": "forward_yaw_v050_vy025_yaw100", "cycle_count": 1, "large_avoid_success_count": 0, "max_command_path_lateral_error": 0.4016246497631073, "max_command_path_progress_error": 0.3779945373535156, "max_foot_accel_max_to_mean": 66.173403997581, "max_root_accel_max_to_mean": 17.795598506298543, "max_root_on_semantic_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_semantic_policy_violation": 0, "max_semantic_task_contact_violation": 0, "max_semantic_task_continuity_violation": 1, "max_stance_on_semantic_rate": 0.0, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 4.591056632922953, "max_worst_max_to_median_step": 1.5515407014425582, "min_root_distance_to_obstacle": 0.11258570849895477, "min_z_quadratic_r2": 0.983879709821331, "score_max": 1155.9938252749478, "score_mean": 1155.9938252749478, "semantic_class": "small", "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "type": "semantic_obstacle_summary", "variant": "nominal_cmd_shape_a_low_accel_anchor_v5"}
+{"clearance_policy_violation_count": 0, "contact_violation_count": 0, "continuity_violation_count": 0, "cycle_count": 1, "large_avoid_success_count": 0, "max_command_path_lateral_error": 0.5054970383644104, "max_command_path_progress_error": 0.49245208501815796, "max_foot_accel_max_to_mean": 14.54005185999976, "max_root_accel_max_to_mean": 6.761290976442368, "max_root_on_semantic_rate": 0.0, "max_semantic_penetration_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_stance_on_semantic_rate": 0.0, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 3.121075889812721, "max_worst_max_to_median_step": 17.109899489131504, "min_root_distance_to_obstacle": 0.12243160605430603, "min_z_quadratic_r2": 0.45851718192112256, "policy_violation_count": 0, "score_max": 221.23987708544462, "score_mean": 221.23987708544462, "semantic_task_violation_count": 0, "small_overpass_success_count": 1, "type": "variant_summary", "variant": "loss_low_small_cont_v2"}
+{"clearance_policy_violation_count": 0, "contact_violation_count": 1, "continuity_violation_count": 0, "cycle_count": 1, "large_avoid_success_count": 0, "max_command_path_lateral_error": 0.5570929646492004, "max_command_path_progress_error": 0.5175583362579346, "max_foot_accel_max_to_mean": 25.565652609813192, "max_root_accel_max_to_mean": 23.50194289118709, "max_root_on_semantic_rate": 0.0, "max_semantic_penetration_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_stance_on_semantic_rate": 0.017713365539452495, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 6.8315092204721335, "max_worst_max_to_median_step": 11.159018845850563, "min_root_distance_to_obstacle": 0.11250945180654526, "min_z_quadratic_r2": 0.9013263522088231, "policy_violation_count": 0, "score_max": 863.4442932366153, "score_mean": 863.4442932366153, "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "type": "variant_summary", "variant": "baseline"}
+{"clearance_policy_violation_count": 0, "contact_violation_count": 0, "continuity_violation_count": 1, "cycle_count": 1, "large_avoid_success_count": 0, "max_command_path_lateral_error": 0.4016246497631073, "max_command_path_progress_error": 0.3779945373535156, "max_foot_accel_max_to_mean": 66.173403997581, "max_root_accel_max_to_mean": 17.795598506298543, "max_root_on_semantic_rate": 0.0, "max_semantic_penetration_rate": 0.0, "max_semantic_policy_margin_deficit": 0.0, "max_stance_on_semantic_rate": 0.0, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 4.591056632922953, "max_worst_max_to_median_step": 1.5515407014425582, "min_root_distance_to_obstacle": 0.11258570849895477, "min_z_quadratic_r2": 0.983879709821331, "policy_violation_count": 0, "score_max": 1155.9938252749478, "score_mean": 1155.9938252749478, "semantic_task_violation_count": 1, "small_overpass_success_count": 0, "type": "variant_summary", "variant": "nominal_cmd_shape_a_low_accel_anchor_v5"}
+{"best_variant": "loss_low_small_cont_v2", "best_variant_score_mean": 221.23987708544462, "cycle_count": 3, "large_avoid_success_count": 0, "max_foot_accel_max_to_mean": 66.173403997581, "max_root_accel_max_to_mean": 23.50194289118709, "max_root_on_semantic_rate": 0.0, "max_stance_on_semantic_rate": 0.017713365539452495, "max_touchdown_on_semantic_rate": 0.0, "semantic_task_violation_count": 2, "small_overpass_success_count": 1, "summary_count": 3, "type": "probe_footer", "worst_score": 1155.9938252749478}
+-|
+| 0   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 176751
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1903
+|---------------------------------------------------------------------------------------------|
+2026-05-24 11:02:13 [5,021ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-24 11:02:13 [5,021ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0 
+     0 937.88 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0 
+     0   1.48 
+
+   CPU     0 
+     0   3.49 
+2026-05-24 11:02:14 [5,567ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.

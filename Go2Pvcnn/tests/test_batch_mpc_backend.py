@@ -37,6 +37,10 @@ from extension.batch_mpc_planner.losses.terrain_clearance import (
     body_heightfield_collision_loss,
     high_obstacle_avoidance_loss,
     knee_shank_heightfield_collision_loss,
+    high_large_stepcap_continuity_loss,
+    low_small_foot_crossing_loss,
+    low_small_foot_over_loss,
+    low_small_stepcap_continuity_loss,
     low_small_crossing_progress_loss,
     obstacle_risk_scales,
     semantic_contact_avoidance_loss,
@@ -49,7 +53,12 @@ from extension.batch_mpc_planner.losses.terrain_clearance import (
 )
 from extension.batch_mpc_planner.losses.tracking import command_tracking_loss
 from extension.batch_mpc_planner.manager import MpcTrajectoryManager
-from extension.batch_mpc_planner.planner import plan_segment, sample_touchdown_positions
+from extension.batch_mpc_planner.planner import _command_farthest_touchdown_positions, plan_segment, sample_touchdown_positions
+from extension.batch_mpc_planner.semantic_policy import (
+    SemanticObstacleMode,
+    classify_semantic_obstacle_mode,
+    shape_nominal_command_for_semantic_obstacles,
+)
 from extension.batch_mpc_planner.terrain import (
     build_mpc_terrain_from_scanner,
     height_at,
@@ -60,10 +69,7 @@ from extension.batch_mpc_planner.terrain import (
 )
 from extension.batch_mpc_planner.losses.kinematics import ik_fk_residual_loss
 from extension.batch_mpc_planner.losses.kinematics import ik_fk_residual_loss_from_joint_angles
-from extension.batch_mpc_planner.losses.registry import compute_total_loss
-from extension.batch_mpc_planner.nominal import build_nominal_trajectory
 from extension.batch_mpc_planner.types import MpcPlannerTerrain, MpcRobotState
-from extension.batch_mpc_planner.variables import DecodedMpcTrajectory, decode_trajectory, init_optimization_variables
 from extension.mdp.observations import (
     _semantic_priority_pool2d,
     downsample_height_map,
@@ -72,6 +78,49 @@ from extension.mdp.observations import (
 from extension.mdp.rewards_reference import swing_leg_collision_reward
 from extension.trajectory_manager_factory import create_trajectory_manager, planner_backend_from_cfg
 from extension.viz.go2_foostep_planner import _adapt_mpc_result_for_viewer
+
+
+PARAMETRIC_LOSS_KEYS = {
+    "parametric_reachability",
+    "parametric_terrain_clearance",
+    "parametric_semantic_contact",
+    "parametric_semantic_avoidance",
+    "parametric_low_small_crossing",
+    "parametric_touchdown_endpoint",
+    "parametric_foot_height_guard",
+    "parametric_root_foot_center",
+    "parametric_gait_regularization",
+    "parametric_command_progress",
+    "parametric_curve_regularization",
+}
+
+
+class DecodedTrajectoryStub(SimpleNamespace):
+    def __init__(
+        self,
+        root_pos=None,
+        root_rpy=None,
+        foot_pos=None,
+        swing_center=None,
+        swing_width=None,
+        swing_start=None,
+        swing_end=None,
+        swing_prob=None,
+        contact_prob=None,
+        **kwargs,
+    ):
+        super().__init__(
+            root_pos=root_pos,
+            root_rpy=root_rpy,
+            foot_pos=foot_pos,
+            swing_center=swing_center,
+            swing_width=swing_width,
+            swing_start=swing_start,
+            swing_end=swing_end,
+            swing_prob=swing_prob,
+            contact_prob=contact_prob,
+            **kwargs,
+        )
 
 
 def _task_cfg(**overrides):
@@ -325,6 +374,197 @@ def _mpc_plan_inputs(*, batch: int = 2, horizon: int = 6):
     cfg.runtime.optimize_steps = 0
     cfg.diagnostics.enabled = True
     return terrain, state, command, cfg
+
+
+def _semantic_obstacle_inputs(*, obstacle_id: int = 1, obstacle_height: float = 0.12, command: torch.Tensor | None = None):
+    terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    # World ranges map x/y directly to columns/rows. This places the object
+    # ahead of the root along +x and inside the command corridor.
+    height[:, 4, 6] = float(obstacle_height)
+    semantic[:, 4, 6] = int(obstacle_id)
+    terrain = MpcPlannerTerrain(
+        height_map=height,
+        semantic_map=semantic,
+        world_x_range=(-0.8, 0.8),
+        world_y_range=(-0.8, 0.8),
+    )
+    command = command if command is not None else torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32)
+    state = MpcRobotState(
+        root_pos=state.root_pos[:1],
+        root_rpy=state.root_rpy[:1],
+        foot_pos=state.foot_pos[:1],
+        joint_angles=state.joint_angles[:1],
+        foot_vel=state.foot_vel[:1] if state.foot_vel is not None else None,
+    )
+    return terrain, state, command, cfg
+
+
+def test_parametric_plan_exports_fk_realized_feet() -> None:
+    terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    cfg.runtime.optimize_steps = 0
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+    fk = fk_feet_from_joint_angles(result.root_pos, result.root_rpy, result.joint_angles)
+
+    torch.testing.assert_close(result.foot_pos[:, 1:], fk[:, 1:], atol=1.0e-5, rtol=1.0e-5)
+
+
+def test_plan_segment_defaults_to_parametric_fk_realized_feet() -> None:
+    terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+    fk = fk_feet_from_joint_angles(result.root_pos, result.root_rpy, result.joint_angles)
+
+    torch.testing.assert_close(result.foot_pos[:, 1:], fk[:, 1:], atol=1.0e-5, rtol=1.0e-5)
+
+
+def test_parametric_plan_exposes_sampled_frame_losses() -> None:
+    terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    cfg.diagnostics.enabled = True
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    assert PARAMETRIC_LOSS_KEYS.issubset(result.cost_breakdown)
+    assert result.loss_breakdown is not None
+    assert PARAMETRIC_LOSS_KEYS.issubset(result.loss_breakdown)
+    for name in PARAMETRIC_LOSS_KEYS:
+        assert result.cost_breakdown[name].shape == (1,)
+        assert torch.isfinite(result.cost_breakdown[name]).all()
+
+
+def test_parametric_optimization_reduces_low_small_crossing_cost() -> None:
+    terrain, state, _command, base_cfg = _semantic_obstacle_inputs(
+        obstacle_id=1,
+        obstacle_height=0.12,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    no_opt_cfg = MpcPlannerCfg()
+    no_opt_cfg.runtime.horizon_steps = 25
+    no_opt_cfg.runtime.optimize_steps = 0
+    no_opt_cfg.diagnostics.enabled = True
+    opt_cfg = MpcPlannerCfg()
+    opt_cfg.runtime.horizon_steps = 25
+    opt_cfg.runtime.optimize_steps = 4
+    opt_cfg.runtime.lr = 5.0e-2
+    opt_cfg.diagnostics.enabled = True
+
+    no_opt = plan_segment(terrain, state, _command, cfg=no_opt_cfg)
+    optimized = plan_segment(terrain, state, _command, cfg=opt_cfg)
+
+    assert optimized.loss_breakdown is not None
+    assert "parametric_low_small_crossing" in optimized.loss_breakdown
+    assert optimized.cost_total.item() <= no_opt.cost_total.item()
+
+
+def test_parametric_optimization_reduces_high_large_semantic_avoidance_cost() -> None:
+    terrain, state, command, _cfg = _semantic_obstacle_inputs(
+        obstacle_id=2,
+        obstacle_height=0.45,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    no_opt_cfg = MpcPlannerCfg()
+    no_opt_cfg.runtime.horizon_steps = 25
+    no_opt_cfg.runtime.optimize_steps = 0
+    no_opt_cfg.diagnostics.enabled = True
+    opt_cfg = MpcPlannerCfg()
+    opt_cfg.runtime.horizon_steps = 25
+    opt_cfg.runtime.optimize_steps = 6
+    opt_cfg.runtime.lr = 5.0e-2
+    opt_cfg.diagnostics.enabled = True
+
+    no_opt = plan_segment(terrain, state, command, cfg=no_opt_cfg)
+    optimized = plan_segment(terrain, state, command, cfg=opt_cfg)
+
+    assert optimized.loss_breakdown is not None
+    assert "parametric_semantic_avoidance" in optimized.loss_breakdown
+    assert optimized.cost_total.item() <= no_opt.cost_total.item()
+
+
+def test_parametric_plan_shapes_root_laterally_around_high_large_obstacle() -> None:
+    terrain, state, command, _cfg = _semantic_obstacle_inputs(
+        obstacle_id=2,
+        obstacle_height=0.45,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    cfg = MpcPlannerCfg()
+    cfg.runtime.horizon_steps = 25
+    cfg.runtime.optimize_steps = 0
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    lateral = torch.abs(result.root_pos[0, :, 1]).amax().item()
+    assert lateral > 0.05
+
+
+def test_parametric_plan_keeps_high_large_touchdowns_off_semantic_cells() -> None:
+    terrain, state, command, _cfg = _semantic_obstacle_inputs(
+        obstacle_id=2,
+        obstacle_height=0.45,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    cfg = MpcPlannerCfg()
+    cfg.runtime.horizon_steps = 25
+    cfg.runtime.optimize_steps = 0
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+    touchdown_semantic = semantic_at(terrain, result.planned_touchdown_w[0, 0, :, :2].unsqueeze(0))
+
+    assert torch.count_nonzero(touchdown_semantic).item() == 0
+
+
+def test_parametric_plan_keeps_root_outside_large_obstacle_policy_margin() -> None:
+    terrain, state, command, _cfg = _semantic_obstacle_inputs(
+        obstacle_id=2,
+        obstacle_height=0.45,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    cfg = MpcPlannerCfg()
+    cfg.runtime.horizon_steps = 25
+    cfg.runtime.optimize_steps = 0
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+    obstacle_xy = torch.tensor([0.40, 0.0], dtype=torch.float32)
+    min_distance = torch.linalg.vector_norm(result.root_pos[0, :, :2] - obstacle_xy, dim=-1).amin().item()
+
+    assert min_distance >= 0.305
+
+
+def test_parametric_optimization_keeps_pure_yaw_root_outside_large_obstacle_policy_margin() -> None:
+    terrain, state, command, _cfg = _semantic_obstacle_inputs(
+        obstacle_id=2,
+        obstacle_height=0.45,
+        command=torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float32),
+    )
+    cfg = MpcPlannerCfg()
+    cfg.runtime.horizon_steps = 25
+    cfg.runtime.optimize_steps = 6
+    cfg.runtime.lr = 5.0e-2
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+    obstacle_xy = torch.tensor([0.40, 0.0], dtype=torch.float32)
+    min_distance = torch.linalg.vector_norm(result.root_pos[0, :, :2] - obstacle_xy, dim=-1).amin().item()
+
+    assert min_distance >= 0.305
+
+
+def test_parametric_losses_include_endpoint_and_foot_height_guards() -> None:
+    terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.50, 0.25, 1.0]], dtype=torch.float32)
+    cfg.runtime.optimize_steps = 0
+    cfg.diagnostics.enabled = True
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    assert result.loss_breakdown is not None
+    assert "parametric_touchdown_endpoint" in result.loss_breakdown
+    assert "parametric_foot_height_guard" in result.loss_breakdown
+    assert torch.isfinite(result.loss_breakdown["parametric_touchdown_endpoint"]).all()
+    assert torch.isfinite(result.loss_breakdown["parametric_foot_height_guard"]).all()
 
 
 def test_mpc_fk_leg_points_exposes_knee_and_shank_samples() -> None:
@@ -827,33 +1067,7 @@ def test_mpc_result_and_package_do_not_depend_on_old_mode_fields() -> None:
     assert result.hard_reason_mask is not None
     assert result.hard_reason_mask.shape[0] == 2
     assert result.loss_breakdown is not None
-    expected_loss_terms = {
-        "swing_window",
-        "diagonal_pair",
-        "swing_center_urgency",
-        "stance_ground",
-        "swing_clearance_terrain",
-        "touchdown_surface",
-        "touchdown_semantic",
-        "stance_semantic",
-        "semantic_contact_avoid",
-        "high_obstacle_avoidance",
-        "body_collision",
-        "leg_collision",
-        "obstacle_risk_linear_scale",
-        "obstacle_risk_yaw_scale",
-        "obstacle_risk_linear_trigger_count",
-        "obstacle_risk_yaw_trigger_count",
-        "obstacle_risk_trigger_horizon_index",
-        "obstacle_risk_trigger_semantic_class",
-        "low_small_crossing",
-        "swing_direction",
-        "ik_joint_limit",
-        "ik_fk_residual",
-        "root_foot_center",
-        "support_plane_rp",
-    }
-    assert expected_loss_terms.issubset(result.loss_breakdown)
+    assert PARAMETRIC_LOSS_KEYS.issubset(result.loss_breakdown)
     forbidden_result_fields = (
         "mode",
         "state_mode",
@@ -902,144 +1116,47 @@ def test_mpc_profile_prints_plan_optimizer_and_loss_stages(monkeypatch, capsys) 
     out = capsys.readouterr().out
     assert "[MPC profile]" in out
     assert "plan.normalize_ms=" in out
-    assert "optimizer.total_ms=" in out
+    assert "plan.parametric_ms=" in out
     assert "loss.total_ms=" in out
 
 
-def test_ik_fk_residual_reuses_precomputed_ik_without_changing_value() -> None:
-    _, state, _, cfg = _mpc_plan_inputs(batch=2, horizon=6)
-    terrain = MpcPlannerTerrain(
-        height_map=torch.zeros((2, 5, 5), dtype=torch.float32),
-        semantic_map=torch.zeros((2, 5, 5), dtype=torch.long),
-        world_x_range=(-1.0, 1.0),
-        world_y_range=(-1.0, 1.0),
+
+
+
+
+
+
+
+
+
+
+def test_mpc_debug_v12_touchdown_export_uses_command_farthest_swing_point() -> None:
+    terrain, _, command, _ = _mpc_plan_inputs(batch=1, horizon=5)
+    command = torch.tensor([[0.5, 0.0, 0.0]], dtype=torch.float32)
+    foot_pos = torch.tensor(
+        [
+            [
+                [[0.10, 0.05, 0.00], [0.19, -0.05, 0.00], [-0.19, 0.05, 0.00], [-0.19, -0.05, 0.00]],
+                [[0.20, 0.05, 0.04], [0.19, -0.05, 0.00], [-0.19, 0.05, 0.00], [-0.19, -0.05, 0.00]],
+                [[0.48, 0.05, 0.12], [0.19, -0.05, 0.00], [-0.19, 0.05, 0.00], [-0.19, -0.05, 0.00]],
+                [[0.30, 0.05, 0.03], [0.19, -0.05, 0.00], [-0.19, 0.05, 0.00], [-0.19, -0.05, 0.00]],
+                [[0.12, 0.05, 0.00], [0.19, -0.05, 0.00], [-0.19, 0.05, 0.00], [-0.19, -0.05, 0.00]],
+            ]
+        ],
+        dtype=torch.float32,
     )
-    nominal = build_nominal_trajectory(state, torch.tensor([[0.2, 0.0, 0.0], [0.1, 0.0, 0.0]]), terrain, cfg.runtime)
-    decoded = decode_trajectory(nominal, init_optimization_variables(nominal, cfg.runtime), cfg.runtime)
-    solved = solve_joint_angles_from_trajectory(decoded.root_pos, decoded.root_rpy, decoded.foot_pos, clamp_to_limits=True)
+    contact_state = torch.ones((1, 5, 4), dtype=torch.bool)
+    contact_state[:, :4, 0] = False
 
-    expected = ik_fk_residual_loss(
-        decoded.root_pos,
-        decoded.root_rpy,
-        decoded.foot_pos,
-        decoded.contact_prob,
-        contact_weight=cfg.losses.ik_fk_residual.contact_weight,
-    )
-    actual = ik_fk_residual_loss_from_joint_angles(
-        decoded.root_pos,
-        decoded.root_rpy,
-        decoded.foot_pos,
-        decoded.contact_prob,
-        solved,
-        contact_weight=cfg.losses.ik_fk_residual.contact_weight,
-    )
+    touchdown = _command_farthest_touchdown_positions(terrain, foot_pos, contact_state, command)
 
-    torch.testing.assert_close(actual, expected)
+    assert touchdown[0, 0, 0].item() == pytest.approx(0.48)
+    assert touchdown[0, 0, 1].item() == pytest.approx(0.05)
+    assert touchdown[0, 0, 2].item() == pytest.approx(0.0)
 
 
-def test_mpc_plan_segment_skips_optimizer_for_zero_command(monkeypatch) -> None:
-    terrain, state, _, cfg = _mpc_plan_inputs(batch=2, horizon=6)
-    cfg.runtime.optimize_steps = 24
-    command = torch.zeros((2, 3), dtype=torch.float32)
-
-    def _fail_optimizer(*args, **kwargs):
-        raise AssertionError("optimizer should not run for all-zero command batch")
-
-    monkeypatch.setattr("extension.batch_mpc_planner.planner.optimize_variables", _fail_optimizer)
-
-    result = plan_segment(terrain, state, command, cfg=cfg)
-
-    expected_foot = state.foot_pos[:, None, :, :].expand_as(result.foot_pos)
-    torch.testing.assert_close(result.foot_pos, expected_foot)
-    assert torch.all(result.contact_state)
-    assert torch.all(result.feasible)
 
 
-def test_mpc_plan_segment_optimizes_only_nonzero_command_rows(monkeypatch) -> None:
-    terrain, state, _, cfg = _mpc_plan_inputs(batch=2, horizon=6)
-    cfg.runtime.optimize_steps = 0
-    command = torch.tensor([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]], dtype=torch.float32)
-    seen_batches: list[int] = []
-    import extension.batch_mpc_planner.planner as planner_module
-
-    real_optimizer = planner_module.optimize_variables
-
-    def _record_optimizer(nominal, *args, **kwargs):
-        seen_batches.append(int(nominal["root_pos"].shape[0]))
-        return real_optimizer(nominal, *args, **kwargs)
-
-    monkeypatch.setattr("extension.batch_mpc_planner.planner.optimize_variables", _record_optimizer)
-
-    result = plan_segment(terrain, state, command, cfg=cfg)
-
-    assert seen_batches == [1]
-    torch.testing.assert_close(result.foot_pos[0], state.foot_pos[0].unsqueeze(0).expand_as(result.foot_pos[0]))
-    assert not torch.allclose(result.foot_pos[1], state.foot_pos[1].unsqueeze(0).expand_as(result.foot_pos[1]))
-
-
-def test_mpc_decode_uses_continuous_swing_window_variables() -> None:
-    _, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
-    terrain = MpcPlannerTerrain(
-        height_map=torch.zeros((2, 5, 5), dtype=torch.float32),
-        semantic_map=torch.zeros((2, 5, 5), dtype=torch.long),
-        world_x_range=(-1.0, 1.0),
-        world_y_range=(-1.0, 1.0),
-    )
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    decoded = decode_trajectory(nominal, variables, cfg.runtime)
-
-    assert decoded.swing_center.shape == (2, 4)
-    assert decoded.swing_width.shape == (2, 4)
-    assert decoded.swing_start.shape == (2, 4)
-    assert decoded.swing_end.shape == (2, 4)
-    assert decoded.swing_prob.shape == (2, 25, 4)
-    assert decoded.contact_prob.shape == (2, 25, 4)
-    assert torch.all(decoded.swing_width >= cfg.runtime.swing_window_min_width)
-    assert torch.all(decoded.swing_width <= cfg.runtime.swing_window_max_width)
-    torch.testing.assert_close(
-        decoded.swing_prob + decoded.contact_prob,
-        torch.ones_like(decoded.swing_prob),
-        atol=1e-5,
-        rtol=1e-5,
-    )
-
-
-def test_mpc_decode_grounded_touchdowns_lock_post_touchdown_stance() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
-    terrain = MpcPlannerTerrain(
-        height_map=torch.linspace(0.0, 0.08, 25, dtype=torch.float32).reshape(1, 5, 5).expand(2, -1, -1),
-        semantic_map=torch.zeros((2, 5, 5), dtype=torch.long),
-        world_x_range=(-0.5, 0.5),
-        world_y_range=(-0.5, 0.5),
-    )
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    with torch.no_grad():
-        variables.foot_pos_residual[..., 2].fill_(0.25)
-
-    decoded = decode_trajectory(nominal, variables, cfg.runtime, terrain=terrain)
-    touchdown = sample_touchdown_positions(decoded.foot_pos, decoded.swing_center, decoded.swing_width)
-    terrain_z = height_at(terrain, touchdown[..., :2])
-
-    torch.testing.assert_close(touchdown[..., 2], terrain_z, atol=1.0e-6, rtol=1.0e-6)
-    torch.testing.assert_close(decoded.foot_pos[:, -1], touchdown, atol=1.0e-6, rtol=1.0e-6)
-
-
-def test_mpc_decode_keeps_frame_zero_state_anchor() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    with torch.no_grad():
-        variables.root_pos_residual.fill_(0.20)
-        variables.root_rpy_residual.fill_(0.10)
-        variables.foot_pos_residual.fill_(0.15)
-
-    decoded = decode_trajectory(nominal, variables, cfg.runtime, terrain=terrain)
-
-    torch.testing.assert_close(decoded.root_pos[:, 0], nominal["root_pos"][:, 0])
-    torch.testing.assert_close(decoded.root_rpy[:, 0], nominal["root_rpy"][:, 0])
-    torch.testing.assert_close(decoded.foot_pos[:, 0], nominal["foot_pos"][:, 0])
 
 
 def test_mpc_plan_segment_keeps_frame_zero_joint_state_anchor() -> None:
@@ -1057,102 +1174,327 @@ def test_mpc_plan_segment_keeps_frame_zero_joint_state_anchor() -> None:
     torch.testing.assert_close(result.joint_angles[:, 0], state.joint_angles)
 
 
-def test_mpc_nominal_integrates_body_frame_command_with_yaw() -> None:
-    terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+def test_mpc_plan_segment_keeps_frame_zero_foot_state_anchor() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=2, horizon=25)
+    cfg.runtime.optimize_steps = 1
+    current_foot = state.foot_pos.clone()
+    current_foot[:, :, :2] += torch.tensor(
+        [[[0.03, 0.01], [-0.04, 0.02], [0.02, -0.03], [-0.01, -0.02]]],
+        dtype=torch.float32,
+    )
     state = MpcRobotState(
-        root_pos=torch.tensor([[0.0, 0.0, 0.3]], dtype=torch.float32),
-        root_rpy=torch.tensor([[0.0, 0.0, 0.5 * torch.pi]], dtype=torch.float32),
-        foot_pos=state.foot_pos[:1].to(torch.float32),
-        joint_angles=state.joint_angles[:1].to(torch.float32),
-    )
-    command = torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float32)
-
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-
-    assert nominal["root_pos"].shape == (1, 25, 3)
-    assert nominal["root_pos"][0, -1, 1] > nominal["root_pos"][0, -1, 0]
-    torch.testing.assert_close(nominal["root_pos"][0, :, 2], torch.full((25,), 0.3))
-
-
-def test_mpc_nominal_touchdown_target_uses_swing_time_root_frame() -> None:
-    terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    command = torch.tensor([[0.2, 0.0, 0.5]], dtype=torch.float32)
-
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-
-    assert "swing_center" in nominal
-    assert "swing_width" in nominal
-    assert "touchdown_target_w" in nominal
-    front_x = nominal["touchdown_target_w"][0, :2, 0]
-    rear_x = nominal["touchdown_target_w"][0, 2:, 0]
-    assert not torch.allclose(front_x.mean(), rear_x.mean())
-
-
-def test_mpc_nominal_first_frame_keeps_current_feet_and_diagonal_prior() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    cfg.runtime.randomize_replan_phase = False
-
-    nominal = build_nominal_trajectory(state, command[:1], terrain, cfg.runtime)
-
-    torch.testing.assert_close(nominal["foot_pos"][0, 0], state.foot_pos[0], atol=1e-6, rtol=1e-6)
-    assert nominal["contact_prior"][0, 0].tolist() == [1.0, 0.0, 0.0, 1.0]
-
-
-def test_mpc_nominal_holds_touchdown_target_after_swing() -> None:
-    terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    cfg.runtime.randomize_replan_phase = False
-    command = torch.tensor([[-0.45, 0.0, 0.0]], dtype=torch.float32)
-
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-
-    post_touchdown_frame = 14
-    for leg_idx in (1, 2):
-        torch.testing.assert_close(
-            nominal["foot_pos"][0, post_touchdown_frame, leg_idx],
-            nominal["touchdown_target_w"][0, leg_idx],
-            atol=1.0e-5,
-            rtol=1.0e-5,
-        )
-        assert not torch.allclose(
-            nominal["foot_pos"][0, post_touchdown_frame, leg_idx],
-            state.foot_pos[0, leg_idx],
-            atol=1.0e-4,
-            rtol=1.0e-4,
-        )
-
-
-def test_mpc_wraparound_touchdown_samples_horizon_end_target() -> None:
-    terrain, state, _, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    cfg.runtime.randomize_replan_phase = False
-    command = torch.tensor([[0.45, 0.0, 0.0]], dtype=torch.float32)
-
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-    touchdown_w = sample_touchdown_positions(
-        nominal["foot_pos"],
-        nominal["swing_center"],
-        nominal["swing_width"],
+        root_pos=state.root_pos,
+        root_rpy=state.root_rpy,
+        foot_pos=current_foot,
+        joint_angles=state.joint_angles,
     )
 
-    for leg_idx in (0, 3):
-        assert nominal["touchdown_phase"][0, leg_idx] >= 1.0 - 1.0e-6
-        torch.testing.assert_close(
-            nominal["foot_pos"][0, -1, leg_idx],
-            nominal["touchdown_target_w"][0, leg_idx],
-            atol=1.0e-5,
-            rtol=1.0e-5,
-        )
-        torch.testing.assert_close(
-            touchdown_w[0, leg_idx],
-            nominal["touchdown_target_w"][0, leg_idx],
-            atol=1.0e-5,
-            rtol=1.0e-5,
-        )
-        assert not torch.allclose(
-            touchdown_w[0, leg_idx],
-            state.foot_pos[0, leg_idx],
-            atol=1.0e-4,
-            rtol=1.0e-4,
-        )
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    torch.testing.assert_close(result.foot_pos[:, 0], state.foot_pos, atol=1.0e-6, rtol=1.0e-6)
+
+
+
+
+
+
+
+
+
+
+def test_mpc_runtime_defaults_to_deterministic_replan_phase_with_task_override() -> None:
+    cfg = MpcPlannerCfg()
+    assert cfg.runtime.randomize_replan_phase is False
+
+    overridden = planner_cfg_from_task_cfg(SimpleNamespace(mpc_randomize_replan_phase=True))
+    assert overridden.runtime.randomize_replan_phase is True
+
+
+def test_mpc_semantic_policy_routes_low_small_by_command_type_and_high_large_to_avoidance() -> None:
+    low_terrain, state, forward_cmd, cfg = _semantic_obstacle_inputs(
+        obstacle_id=1,
+        obstacle_height=0.12,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    mixed_cmd = torch.tensor([[0.50, 0.25, 1.0]], dtype=torch.float32)
+    high_terrain, _, _, _ = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.46, command=forward_cmd)
+    large_terrain, _, _, _ = _semantic_obstacle_inputs(obstacle_id=2, obstacle_height=0.28, command=forward_cmd)
+
+    low_forward = classify_semantic_obstacle_mode(low_terrain, state, forward_cmd, cfg)
+    low_mixed = classify_semantic_obstacle_mode(low_terrain, state, mixed_cmd, cfg)
+    high_small = classify_semantic_obstacle_mode(high_terrain, state, forward_cmd, cfg)
+    large = classify_semantic_obstacle_mode(large_terrain, state, forward_cmd, cfg)
+
+    assert low_forward.mode.tolist() == [int(SemanticObstacleMode.LOW_SMALL_FORWARD)]
+    assert low_mixed.mode.tolist() == [int(SemanticObstacleMode.LOW_SMALL_MIXED)]
+    assert high_small.mode.tolist() == [int(SemanticObstacleMode.HIGH_OR_LARGE_AVOID)]
+    assert large.mode.tolist() == [int(SemanticObstacleMode.HIGH_OR_LARGE_AVOID)]
+
+
+def test_mpc_nominal_command_shaping_reduces_forward_and_adds_lateral_only_for_high_large() -> None:
+    low_terrain, state, command, cfg = _semantic_obstacle_inputs(
+        obstacle_id=1,
+        obstacle_height=0.12,
+        command=torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32),
+    )
+    large_terrain, _, _, _ = _semantic_obstacle_inputs(obstacle_id=2, obstacle_height=0.28, command=command)
+
+    low_shaped, low_diag = shape_nominal_command_for_semantic_obstacles(low_terrain, state, command, cfg)
+    large_shaped, large_diag = shape_nominal_command_for_semantic_obstacles(large_terrain, state, command, cfg)
+
+    torch.testing.assert_close(low_shaped, command)
+    assert low_diag.command_shaped.tolist() == [False]
+    assert float(large_shaped[0, 0]) < float(command[0, 0])
+    assert abs(float(large_shaped[0, 1])) >= 0.20
+    torch.testing.assert_close(large_shaped[:, 2], command[:, 2], atol=0.0, rtol=0.0)
+    assert large_diag.command_shaped.tolist() == [True]
+
+
+def test_mpc_low_small_foot_crossing_loss_penalizes_stance_and_touchdown_on_low_small() -> None:
+    terrain, state, command, cfg = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.12)
+    horizon = 8
+    root = state.root_pos[:, None, :].expand(1, horizon, 3).clone()
+    rpy = state.root_rpy[:, None, :].expand(1, horizon, 3).clone()
+    foot_off = state.foot_pos[:, None, :, :].expand(1, horizon, 4, 3).clone()
+    foot_on = foot_off.clone()
+    foot_on[:, :, 0, :] = torch.tensor([0.40, 0.0, 0.0], dtype=torch.float32)
+    contact = torch.ones((1, horizon, 4), dtype=torch.float32)
+    swing = torch.zeros_like(contact)
+    decoded_off = DecodedTrajectoryStub(root, rpy, foot_off, torch.zeros((1, 4)), torch.ones((1, 4)) * 0.4, torch.zeros((1, 4)), torch.ones((1, 4)), swing, contact)
+    decoded_on = DecodedTrajectoryStub(root, rpy, foot_on, torch.zeros((1, 4)), torch.ones((1, 4)) * 0.4, torch.zeros((1, 4)), torch.ones((1, 4)), swing, contact)
+
+    off_loss = low_small_foot_crossing_loss(
+        terrain,
+        decoded_off,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+        high_small_relative_height_m=cfg.losses.low_small_crossing.high_small_relative_height_m,
+        contact_threshold=cfg.runtime.contact_threshold,
+    )
+    on_loss = low_small_foot_crossing_loss(
+        terrain,
+        decoded_on,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+        high_small_relative_height_m=cfg.losses.low_small_crossing.high_small_relative_height_m,
+        contact_threshold=cfg.runtime.contact_threshold,
+    )
+
+    assert float(on_loss[0]) > float(off_loss[0]) + 0.5
+
+
+def test_mpc_low_small_foot_over_loss_penalizes_side_detour_more_than_swing_over() -> None:
+    terrain, state, command, cfg = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.16)
+    horizon = 8
+    root = state.root_pos[:, None, :].expand(1, horizon, 3).clone()
+    root[:, :, 0] = torch.linspace(0.05, 0.75, horizon)
+    rpy = state.root_rpy[:, None, :].expand(1, horizon, 3).clone()
+    foot_over = state.foot_pos[:, None, :, :].expand(1, horizon, 4, 3).clone()
+    foot_over[:, :, 0, :] = torch.tensor([0.40, 0.0, 0.24], dtype=torch.float32)
+    foot_side = foot_over.clone()
+    foot_side[:, :, 0, 1] = 0.18
+    contact = torch.ones((1, horizon, 4), dtype=torch.float32)
+    contact[:, :, 0] = 0.0
+    swing = 1.0 - contact
+    decoded_over = DecodedTrajectoryStub(
+        root,
+        rpy,
+        foot_over,
+        torch.zeros((1, 4)),
+        torch.ones((1, 4)) * 0.4,
+        torch.zeros((1, 4)),
+        torch.ones((1, 4)),
+        swing,
+        contact,
+    )
+    decoded_side = DecodedTrajectoryStub(
+        root,
+        rpy,
+        foot_side,
+        torch.zeros((1, 4)),
+        torch.ones((1, 4)) * 0.4,
+        torch.zeros((1, 4)),
+        torch.ones((1, 4)),
+        swing,
+        contact,
+    )
+
+    over_loss = low_small_foot_over_loss(
+        terrain,
+        decoded_over,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+    )
+    side_loss = low_small_foot_over_loss(
+        terrain,
+        decoded_side,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+    )
+
+    assert float(side_loss[0]) > float(over_loss[0]) + 0.5
+
+
+def test_mpc_low_small_foot_over_path_curve_penalizes_jump_into_obstacle_window() -> None:
+    terrain, state, command, cfg = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.16)
+    horizon = 4
+    root = torch.tensor(
+        [[[0.05, 0.0, 0.34], [0.30, 0.0, 0.34], [0.50, 0.0, 0.34], [0.75, 0.0, 0.34]]],
+        dtype=torch.float32,
+    )
+    rpy = state.root_rpy[:, None, :].expand(1, horizon, 3).clone()
+    smooth_foot = state.foot_pos[:, None, :, :].expand(1, horizon, 4, 3).clone()
+    smooth_foot[:, :, 0, :] = torch.tensor(
+        [[[0.10, 0.0, 0.21], [0.30, 0.0, 0.27], [0.50, 0.0, 0.27], [0.70, 0.0, 0.21]]],
+        dtype=torch.float32,
+    )
+    jump_foot = smooth_foot.clone()
+    jump_foot[:, :, 0, :] = torch.tensor(
+        [[[0.00, 0.0, 0.21], [0.40, 0.0, 0.27], [0.40, 0.0, 0.27], [0.80, 0.0, 0.21]]],
+        dtype=torch.float32,
+    )
+    contact = torch.ones((1, horizon, 4), dtype=torch.float32)
+    contact[:, :, 0] = 0.0
+    swing = 1.0 - contact
+    common = dict(
+        root_pos=root,
+        root_rpy=rpy,
+        swing_center=torch.zeros((1, 4)),
+        swing_width=torch.ones((1, 4)) * 0.4,
+        swing_start=torch.zeros((1, 4)),
+        swing_end=torch.ones((1, 4)),
+        swing_prob=swing,
+        contact_prob=contact,
+    )
+    decoded_smooth = DecodedTrajectoryStub(foot_pos=smooth_foot, **common)
+    decoded_jump = DecodedTrajectoryStub(foot_pos=jump_foot, **common)
+
+    smooth_loss = low_small_foot_over_loss(
+        terrain,
+        decoded_smooth,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+        xy_weight=0.0,
+        direct_xy_weight=0.0,
+        z_weight=0.0,
+        ineligible_penalty=0.0,
+        time_gate_penalty=0.0,
+        path_curve_weight=100.0,
+        path_curve_z_weight=100.0,
+        path_curve_window_m=0.30,
+        path_curve_body_yaw=False,
+    )
+    jump_loss = low_small_foot_over_loss(
+        terrain,
+        decoded_jump,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+        xy_weight=0.0,
+        direct_xy_weight=0.0,
+        z_weight=0.0,
+        ineligible_penalty=0.0,
+        time_gate_penalty=0.0,
+        path_curve_weight=100.0,
+        path_curve_z_weight=100.0,
+        path_curve_window_m=0.30,
+        path_curve_body_yaw=False,
+    )
+
+    assert float(jump_loss[0]) > float(smooth_loss[0]) + 0.5
+
+
+def test_mpc_low_small_foot_over_loss_is_zero_for_high_small_and_large() -> None:
+    high_terrain, state, command, cfg = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.46)
+    large_terrain, _, _, _ = _semantic_obstacle_inputs(obstacle_id=2, obstacle_height=0.28)
+    horizon = 8
+    root = state.root_pos[:, None, :].expand(1, horizon, 3).clone()
+    rpy = state.root_rpy[:, None, :].expand(1, horizon, 3).clone()
+    foot = state.foot_pos[:, None, :, :].expand(1, horizon, 4, 3).clone()
+    foot[:, :, 0, :] = torch.tensor([0.40, 0.0, 0.24], dtype=torch.float32)
+    contact = torch.ones((1, horizon, 4), dtype=torch.float32)
+    contact[:, :, 0] = 0.0
+    swing = 1.0 - contact
+    decoded = DecodedTrajectoryStub(
+        root,
+        rpy,
+        foot,
+        torch.zeros((1, 4)),
+        torch.ones((1, 4)) * 0.4,
+        torch.zeros((1, 4)),
+        torch.ones((1, 4)),
+        swing,
+        contact,
+    )
+
+    high_loss = low_small_foot_over_loss(
+        high_terrain,
+        decoded,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+    )
+    large_loss = low_small_foot_over_loss(
+        large_terrain,
+        decoded,
+        command,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+    )
+
+    torch.testing.assert_close(high_loss, torch.zeros_like(high_loss))
+    torch.testing.assert_close(large_loss, torch.zeros_like(large_loss))
+
+
+def test_mpc_low_small_stepcap_continuity_loss_is_gated_to_mixed_low_small_and_penalizes_spikes() -> None:
+    terrain, state, _, cfg = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.12)
+    horizon = 10
+    root = state.root_pos[:, None, :].expand(1, horizon, 3).clone()
+    rpy = state.root_rpy[:, None, :].expand(1, horizon, 3).clone()
+    foot_smooth = state.foot_pos[:, None, :, :].expand(1, horizon, 4, 3).clone()
+    foot_spike = foot_smooth.clone()
+    foot_spike[:, 5, 0, 0] += 0.45
+    contact = torch.full((1, horizon, 4), 0.5, dtype=torch.float32)
+    swing = 1.0 - contact
+    decoded_smooth = DecodedTrajectoryStub(root, rpy, foot_smooth, torch.zeros((1, 4)), torch.ones((1, 4)) * 0.4, torch.zeros((1, 4)), torch.ones((1, 4)), swing, contact)
+    decoded_spike = DecodedTrajectoryStub(root, rpy, foot_spike, torch.zeros((1, 4)), torch.ones((1, 4)) * 0.4, torch.zeros((1, 4)), torch.ones((1, 4)), swing, contact)
+    mixed_cmd = torch.tensor([[0.50, 0.25, 1.0]], dtype=torch.float32)
+    forward_cmd = torch.tensor([[0.50, 0.0, 0.0]], dtype=torch.float32)
+
+    smooth_loss = low_small_stepcap_continuity_loss(terrain, decoded_smooth, state, mixed_cmd, cfg)
+    spike_loss = low_small_stepcap_continuity_loss(terrain, decoded_spike, state, mixed_cmd, cfg)
+    forward_loss = low_small_stepcap_continuity_loss(terrain, decoded_spike, state, forward_cmd, cfg)
+
+    assert float(spike_loss[0]) > float(smooth_loss[0]) + 10.0
+    torch.testing.assert_close(forward_loss, torch.zeros_like(forward_loss))
+
+
+def test_mpc_high_large_stepcap_continuity_loss_is_gated_to_high_large_obstacles() -> None:
+    large_terrain, state, command, cfg = _semantic_obstacle_inputs(obstacle_id=2, obstacle_height=0.28)
+    low_terrain, _, _, _ = _semantic_obstacle_inputs(obstacle_id=1, obstacle_height=0.12)
+    horizon = 10
+    root = state.root_pos[:, None, :].expand(1, horizon, 3).clone()
+    rpy = state.root_rpy[:, None, :].expand(1, horizon, 3).clone()
+    foot_smooth = state.foot_pos[:, None, :, :].expand(1, horizon, 4, 3).clone()
+    foot_spike = foot_smooth.clone()
+    foot_spike[:, 5, 0, 0] += 0.45
+    contact = torch.full((1, horizon, 4), 0.5, dtype=torch.float32)
+    swing = 1.0 - contact
+    decoded_smooth = DecodedTrajectoryStub(root, rpy, foot_smooth, torch.zeros((1, 4)), torch.ones((1, 4)) * 0.4, torch.zeros((1, 4)), torch.ones((1, 4)), swing, contact)
+    decoded_spike = DecodedTrajectoryStub(root, rpy, foot_spike, torch.zeros((1, 4)), torch.ones((1, 4)) * 0.4, torch.zeros((1, 4)), torch.ones((1, 4)), swing, contact)
+
+    smooth_loss = high_large_stepcap_continuity_loss(large_terrain, decoded_smooth, command, cfg)
+    spike_loss = high_large_stepcap_continuity_loss(large_terrain, decoded_spike, command, cfg)
+    low_loss = high_large_stepcap_continuity_loss(low_terrain, decoded_spike, command, cfg)
+    mixed_loss = high_large_stepcap_continuity_loss(
+        large_terrain,
+        decoded_spike,
+        torch.tensor([[0.50, 0.25, 1.0]], dtype=torch.float32),
+        cfg,
+    )
+
+    assert float(spike_loss[0]) > float(smooth_loss[0]) + 5.0
+    torch.testing.assert_close(low_loss, torch.zeros_like(low_loss))
+    torch.testing.assert_close(mixed_loss, torch.zeros_like(mixed_loss))
+
+
+
+
 
 
 def test_mpc_touchdown_semantic_loss_penalizes_small_and_large_obstacles() -> None:
@@ -1831,51 +2173,6 @@ def test_mpc_high_obstacle_avoidance_loss_pushes_root_laterally() -> None:
     assert float(root_center.grad[..., 1].abs().sum().item()) > 0.0
 
 
-def test_mpc_loss_registry_scales_tracking_when_high_obstacle_blocks_command() -> None:
-    _, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    command = torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float32)
-    nominal = build_nominal_trajectory(state, command, MpcPlannerTerrain(
-        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
-        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
-        world_x_range=(-1.0, 1.0),
-        world_y_range=(-1.0, 1.0),
-    ), cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    decoded = decode_trajectory(nominal, variables, cfg.runtime)
-    decoded = DecodedMpcTrajectory(
-        root_pos=torch.zeros_like(decoded.root_pos),
-        root_rpy=torch.zeros_like(decoded.root_rpy),
-        foot_pos=decoded.foot_pos,
-        swing_center=decoded.swing_center,
-        swing_width=decoded.swing_width,
-        swing_start=decoded.swing_start,
-        swing_end=decoded.swing_end,
-        swing_prob=decoded.swing_prob,
-        contact_prob=decoded.contact_prob,
-    )
-    clean = MpcPlannerTerrain(
-        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
-        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
-        world_x_range=(-1.0, 1.0),
-        world_y_range=(-1.0, 1.0),
-    )
-    blocked_height = torch.zeros((1, 5, 5), dtype=torch.float32)
-    blocked_sem = torch.zeros((1, 5, 5), dtype=torch.long)
-    blocked_height[:, 2, 4] = 0.45
-    blocked_sem[:, 2, 4] = 2
-    blocked = MpcPlannerTerrain(
-        height_map=blocked_height,
-        semantic_map=blocked_sem,
-        world_x_range=(-1.0, 1.0),
-        world_y_range=(-1.0, 1.0),
-    )
-
-    _, _, clean_breakdown = compute_total_loss(decoded, nominal, state, command, clean, cfg)
-    _, _, blocked_breakdown = compute_total_loss(decoded, nominal, state, command, blocked, cfg)
-
-    assert float(blocked_breakdown["obstacle_risk_linear_scale"][0]) == pytest.approx(0.5)
-    assert float(blocked_breakdown["tracking"][0]) < float(clean_breakdown["tracking"][0])
-    assert float(blocked_breakdown["obstacle_risk_linear_trigger_count"][0]) > 0.0
 
 
 def test_mpc_low_small_crossing_progress_loss_encourages_root_to_pass_low_small_obstacle() -> None:
@@ -2448,7 +2745,8 @@ def test_mpc_plan_segment_outputs_grounded_touchdowns_and_locked_stance() -> Non
     touchdown = result.planned_touchdown_w[1, 0]
     terrain_z = height_at(terrain, touchdown[None, :, :2])[1]
     torch.testing.assert_close(touchdown[:, 2], terrain_z, atol=1.0e-6, rtol=1.0e-6)
-    torch.testing.assert_close(result.foot_pos[1, -1], touchdown, atol=1.0e-6, rtol=1.0e-6)
+    fk = fk_feet_from_joint_angles(result.root_pos, result.root_rpy, result.joint_angles)
+    torch.testing.assert_close(result.foot_pos[1, 1:], fk[1, 1:], atol=1.0e-5, rtol=1.0e-5)
 
 
 def test_mpc_plan_segment_keeps_zero_command_standstill() -> None:
@@ -2476,16 +2774,7 @@ def test_mpc_plan_segment_keeps_zero_command_standstill() -> None:
 
 
 def test_mpc_loss_registry_no_longer_uses_deleted_terms() -> None:
-    source = (GO2PVCNN_ROOT / "extension" / "batch_mpc_planner" / "losses" / "registry.py").read_text(encoding="utf-8")
-    forbidden = [
-        "_command_adaptive_weights",
-        "contact_schedule_tracking_loss",
-        "touchdown_support",
-        "obstacle_margin_loss",
-        "swing_stride_loss",
-    ]
-    for token in forbidden:
-        assert token not in source, token
+    assert not (GO2PVCNN_ROOT / "extension" / "batch_mpc_planner" / "losses" / "registry.py").exists()
 
 
 def test_mpc_t302_losses_do_not_introduce_cpu_hot_path_patterns() -> None:
@@ -2495,7 +2784,6 @@ def test_mpc_t302_losses_do_not_introduce_cpu_hot_path_patterns() -> None:
         root / "losses" / "kinematics.py",
         root / "losses" / "terrain_clearance.py",
         root / "losses" / "tracking.py",
-        root / "losses" / "registry.py",
         root / "planner.py",
     ]
     source = "\n".join(path.read_text(encoding="utf-8") for path in files)
@@ -2519,32 +2807,7 @@ def test_mpc_loss_breakdown_exposes_continuous_window_terms() -> None:
     result = plan_segment(terrain, state, command, cfg=cfg)
 
     assert result.loss_breakdown is not None
-    expected = {
-        "swing_window",
-        "diagonal_pair",
-        "swing_center_urgency",
-        "stance_ground",
-        "swing_clearance_terrain",
-        "foot_trajectory_regularization",
-        "touchdown_surface",
-        "touchdown_semantic",
-        "stance_semantic",
-        "body_collision",
-        "leg_collision",
-        "obstacle_risk_linear_scale",
-        "obstacle_risk_yaw_scale",
-        "obstacle_risk_linear_trigger_count",
-        "obstacle_risk_yaw_trigger_count",
-        "obstacle_risk_trigger_horizon_index",
-        "obstacle_risk_trigger_semantic_class",
-        "swing_direction",
-        "ik_joint_limit",
-        "ik_fk_residual",
-        "root_foot_center",
-        "root_height",
-        "support_plane_rp",
-    }
-    assert expected.issubset(result.loss_breakdown)
+    assert PARAMETRIC_LOSS_KEYS.issubset(result.loss_breakdown)
 
 
 def test_mpc_cost_breakdown_exposes_t302_collision_and_risk_diagnostics() -> None:
@@ -2555,17 +2818,7 @@ def test_mpc_cost_breakdown_exposes_t302_collision_and_risk_diagnostics() -> Non
 
     result = plan_segment(terrain, state, command, cfg=cfg)
 
-    expected = {
-        "cost_total",
-        "stance_semantic",
-        "semantic_contact_avoid",
-        "low_small_crossing",
-        "body_collision",
-        "leg_collision",
-        "obstacle_risk_linear_scale",
-        "obstacle_risk_yaw_scale",
-    }
-    assert expected.issubset(result.cost_breakdown)
+    assert {"cost_total"}.union(PARAMETRIC_LOSS_KEYS).issubset(result.cost_breakdown)
 
 
 def test_mpc_viewer_adapter_exposes_cost_breakdown_when_diagnostics_disabled() -> None:
@@ -2579,32 +2832,9 @@ def test_mpc_viewer_adapter_exposes_cost_breakdown_when_diagnostics_disabled() -
 
     assert result.loss_breakdown is None
     assert viewer_result.loss_breakdown is not None
-    assert "obstacle_risk_linear_scale" in viewer_result.loss_breakdown
-    assert "obstacle_risk_yaw_scale" in viewer_result.loss_breakdown
-    assert "semantic_contact_avoid" in viewer_result.loss_breakdown
+    assert {"cost_total"}.union(PARAMETRIC_LOSS_KEYS).issubset(viewer_result.loss_breakdown)
 
 
-def test_mpc_root_height_loss_penalizes_z_drift_from_nominal() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    nominal = build_nominal_trajectory(state, command[:1], terrain, cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    decoded = decode_trajectory(nominal, variables, cfg.runtime)
-    drifted = DecodedMpcTrajectory(
-        root_pos=decoded.root_pos + torch.tensor([0.0, 0.0, 0.10], dtype=decoded.root_pos.dtype).view(1, 1, 3),
-        root_rpy=decoded.root_rpy,
-        foot_pos=decoded.foot_pos,
-        swing_center=decoded.swing_center,
-        swing_width=decoded.swing_width,
-        swing_start=decoded.swing_start,
-        swing_end=decoded.swing_end,
-        swing_prob=decoded.swing_prob,
-        contact_prob=decoded.contact_prob,
-    )
-
-    _, _, breakdown = compute_total_loss(drifted, nominal, state, command[:1], terrain, cfg)
-
-    assert "root_height" in breakdown
-    assert float(breakdown["root_height"][0]) > 0.05
 
 
 def test_mpc_foot_trajectory_regularization_penalizes_boundary_and_acceleration_spikes() -> None:
@@ -2622,29 +2852,6 @@ def test_mpc_foot_trajectory_regularization_penalizes_boundary_and_acceleration_
     assert float(accel[0]) == pytest.approx(7.0)
 
 
-def test_mpc_loss_breakdown_includes_foot_trajectory_regularization() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
-    nominal = build_nominal_trajectory(state, command[:1], terrain, cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    decoded = decode_trajectory(nominal, variables, cfg.runtime)
-    spiked_foot = decoded.foot_pos.clone()
-    spiked_foot[:, 10, :, 0] = spiked_foot[:, 10, :, 0] + 1.0
-    spiked = DecodedMpcTrajectory(
-        root_pos=decoded.root_pos,
-        root_rpy=decoded.root_rpy,
-        foot_pos=spiked_foot,
-        swing_center=decoded.swing_center,
-        swing_width=decoded.swing_width,
-        swing_start=decoded.swing_start,
-        swing_end=decoded.swing_end,
-        swing_prob=decoded.swing_prob,
-        contact_prob=decoded.contact_prob,
-    )
-
-    _, _, breakdown = compute_total_loss(spiked, nominal, state, command[:1], terrain, cfg)
-
-    assert "foot_trajectory_regularization" in breakdown
-    assert float(breakdown["foot_trajectory_regularization"][0].detach()) > 0.0
 
 
 def test_mpc_task_cfg_overrides_foot_trajectory_regularization() -> None:
@@ -2700,7 +2907,8 @@ def test_mpc_manager_global_sync_runtime_counters_report_sampled_count() -> None
 
 
 def test_touchdown_event_cap_is_configurable() -> None:
-    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=6)
+    terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=6)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
     cfg.runtime.touchdown_event_cap = 3
 
     result = plan_segment(terrain, state, command, cfg=cfg)
@@ -2855,6 +3063,8 @@ def test_mpc_plan_segment_runs_under_inference_mode_when_optimize_steps_positive
     assert torch.isfinite(result.joint_angles).all()
     assert result.contact_state.any()
     assert torch.logical_not(result.contact_state).any()
+
+
 
 
 def test_mpc_plan_segment_accepts_inputs_created_under_inference_mode() -> None:

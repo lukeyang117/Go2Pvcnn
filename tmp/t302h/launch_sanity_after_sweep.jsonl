@@ -1,0 +1,249 @@
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260524_115300.log
+2026-05-24 03:53:00 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-05-24 03:53:00 [5ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes' or '/mnt/mydisk/lhy/IsaacLab/apps/rendering_modes/config'
+2026-05-24 03:53:00 [195ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-05-24 03:53:00 [397ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-05-24 03:53:00 [765ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-05-24 03:53:01 [844ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+2026-05-24 03:53:04 [4,462ms] [Warning] [carb.cudainterop.plugin] CUDA_VISIBLE_DEVICES environment variable is set.
+2026-05-24 03:53:04 [4,462ms] [Warning] [carb.cudainterop.plugin] Note CUDA device enumeration and Omniverse device enumeration are different.
+2026-05-24 03:53:04 [4,462ms] [Warning] [carb.cudainterop.plugin] Setting CUDA_VISIBLE_DEVICES can lead to undesired behavior or crashes.
+2026-05-24 03:53:04 [4,466ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 03:53:04 [4,466ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 03:53:04 [4,468ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 03:53:04 [4,468ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Skipping NVIDIA GPU due CUDA being in bad state: NVIDIA GeForce RTX 4090
+2026-05-24 03:53:04 [4,470ms] [Warning] [gpu.foundation.plugin] Please restart your system if CUDA is known to work in your system.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 560.35.03     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|--------------------------------------------------------------------------------------------[WARN][AppLauncher]: There are no arguments attached to the ArgumentParser object. If you have your own arguments, please load your own arguments before calling the `AppLauncher.add_app_launcher_args` method. This allows the method to check the validity of the arguments and perform checks for argument names.
+[INFO][AppLauncher]: Input keyword argument `livestream=0` has overridden the environment variable `LIVESTREAM=0`.
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /mnt/mydisk/lhy/IsaacLab/apps/isaaclab.python.headless.kit
+[go2_pvcnn] Registered Go2 PVCNN environments:
+[go2_pvcnn]   - Go2PvcnnEnv (training)
+[go2_pvcnn]   - Go2PvcnnEnv-Play (evaluation)
+[go2_pvcnn]   - Go2PvcnnEnv-Test (collision testing)
+[go2_pvcnn]   - Go2HimlocoEnv-Test (HIMLoco testing)
+[go2_pvcnn]   - Go2AbsEnv-Test (ABS testing)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-v0 (teacher training)
+[go2_pvcnn]   - Isaac-Teacher-Semantic-Go2-Play-v0 (teacher evaluation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-v0 (state-only ablation)
+[go2_pvcnn]   - Isaac-Teacher-Without-Semantic-Go2-Play-v0 (state-only play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-v0 (elevation map CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Go2-Play-v0 (elevation map play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-v0 (elevation + semantic grid CNN)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Semantic-Map-Go2-Play-v0 (elevation + semantic play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-v0 (high-res elevation + trajectory reward)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0 (trajectory-guided play)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0 (MPC semantic trajectory)
+[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0 (MPC semantic play)
+[TeacherWithoutSemanticEnvCfg] Aligned with unitree_rl_lab velocity_env_cfg
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : None
+	Physics step-size     : 0.005
+	Rendering step-size   : 0.02
+	Environment step-size : 0.02
+[INFO] Generating terrains based on curriculum took : 0.004647 seconds
+[INFO]: Time taken for scene creation : 3.853371 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 1
+	Environment spacing   : 6.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : ['/World/ground']
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 0.788311 seconds
+[INFO] Command Manager:  <CommandManager> contains 1 active terms.
++------------------------------------------------+
+|              Active Command Terms              |
++-------+---------------+------------------------+
+| Index | Name          |          Type          |
++-------+---------------+------------------------+
+|   0   | base_velocity | UniformVelocityCommand |
++-------+---------------+------------------------+
+
+[INFO] Event Manager:  <EventManager> contains 2 active terms.
++--------------------------------------+
+| Active Event Terms in Mode: 'startup' |
++----------+---------------------------+
+|  Index   | Name                      |
++----------+---------------------------+
+|    0     | physics_material          |
+|    1     | add_base_mass             |
++----------+---------------------------+
++---------------------------------------+
+|  Active Event Terms in Mode: 'reset'  |
++--------+------------------------------+
+| Index  | Name                         |
++--------+------------------------------+
+|   0    | base_external_force_torque   |
+|   1    | reset_base                   |
+|   2    | reset_robot_joints           |
++--------+------------------------------+
+
+[INFO] Recorder Manager:  <RecorderManager> contains 0 active terms.
++---------------------+
+| Active Recorder Terms |
++-----------+---------+
+|   Index   | Name    |
++-----------+---------+
++-----------+---------+
+
+[INFO] Action Manager:  <ActionManager> contains 1 active terms.
++-----------------------------------------+
+|     Active Action Terms (shape: 12)     |
++-------+---------------------+-----------+
+| Index | Name                | Dimension |
++-------+---------------------+-----------+
+|   0   | JointPositionAction |        12 |
++-------+---------------------+-----------+
+
+[INFO] Observation Manager: <ObservationManager> contains 4 groups.
++------------------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_elevation_semantic_map' (shape: (2, 16, 16)) |
++------------+----------------------------------------------+------------------------+
+|   Index    | Name                                         |         Shape          |
++------------+----------------------------------------------+------------------------+
+|     0      | elevation_semantic_map                       |      (2, 16, 16)       |
++------------+----------------------------------------------+------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'policy_state' (shape: (45,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_ang_vel                       |    (3,)    |
+|     1      | projected_gravity                  |    (3,)    |
+|     2      | joint_pos                          |   (12,)    |
+|     3      | joint_vel                          |   (12,)    |
+|     4      | velocity_commands                  |    (3,)    |
+|     5      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
++------------------------------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_elevation_semantic_map' (shape: (2, 16, 16)) |
++------------+----------------------------------------------+------------------------+
+|   Index    | Name                                         |         Shape          |
++------------+----------------------------------------------+------------------------+
+|     0      | elevation_semantic_map                       |      (2, 16, 16)       |
++------------+----------------------------------------------+------------------------+
++--------------------------------------------------------------+
+| Active Observation Terms in Group: 'critic_state' (shape: (48,)) |
++------------+------------------------------------+------------+
+|   Index    | Name                               |   Shape    |
++------------+------------------------------------+------------+
+|     0      | base_lin_vel                       |    (3,)    |
+|     1      | base_ang_vel                       |    (3,)    |
+|     2      | projected_gravity                  |    (3,)    |
+|     3      | joint_pos                          |   (12,)    |
+|     4      | joint_vel                          |   (12,)    |
+|     5      | velocity_commands                  |    (3,)    |
+|     6      | actions                            |   (12,)    |
++------------+------------------------------------+------------+
+
+[INFO] Termination Manager:  <TerminationManager> contains 3 active terms.
++------------------------------------+
+|      Active Termination Terms      |
++-------+-----------------+----------+
+| Index | Name            | Time Out |
++-------+-----------------+----------+
+|   0   | time_out        |   True   |
+|   1   | base_contact    |  False   |
+|   2   | bad_orientation |  False   |
++-------+-----------------+----------+
+
+[INFO] Reward Manager:  <RewardManager> contains 18 active terms.
++------------------------------------------+
+|           Active Reward Terms            |
++-------+-----------------------+----------+
+| Index | Name                  |   Weight |
++-------+-----------------------+----------+
+|   0   | track_lin_vel_xy      |      1.5 |
+|   1   | track_ang_vel_z       |     0.75 |
+|   2   | base_linear_velocity  |     -2.0 |
+|   3   | base_angular_velocity |    -0.05 |
+|   4   | joint_vel             |   -0.001 |
+|   5   | joint_acc             | -2.5e-07 |
+|   6   | joint_torques         |  -0.0002 |
+|   7   | action_rate           |     -0.1 |
+|   8   | dof_pos_limits        |    -10.0 |
+|   9   | energy                |   -2e-05 |
+|   10  | flat_orientation_l2   |     -2.5 |
+|   11  | joint_pos             |     -0.7 |
+|   12  | feet_air_time         |      0.1 |
+|   13  | air_time_variance     |     -1.0 |
+|   14  | feet_slide            |     -0.1 |
+|   15  | undesired_contacts    |       -1 |
+|   16  | reference_foot_pos    |      0.3 |
+|   17  | swing_leg_collision   |      1.0 |
++-------+-----------------------+----------+
+
+[INFO] Curriculum Manager:  <CurriculumManager> contains 2 active terms.
++----------------------------+
+|  Active Curriculum Terms   |
++-------+--------------------+
+| Index | Name               |
++-------+--------------------+
+|   0   | terrain_levels     |
+|   1   | lin_vel_cmd_levels |
++-------+--------------------+
+
+[INFO]: Completed setting up the environment...
+[Viewer] Attached mpc trajectory manager
+[MPC profile] #1/5 profile=train_4096 batch=1 horizon=50 iters=24 optimizer.backward_ms=1003.977 optimizer.decode_ms=53.475 optimizer.final_decode_ms=1.839 optimizer.final_loss_ms=41.131 optimizer.grad_clip_ms=36.049 optimizer.loop_ms=2454.714 optimizer.loss_ms=1285.169 optimizer.step_ms=63.556 optimizer.total_ms=2497.765 optimizer.zero_grad_ms=4.279 plan.init_variables_ms=7.839 plan.nominal_ms=61.828 plan.normalize_ms=0.648 plan.postprocess_ms=2.856 plan.total_ms=2572.064 loss.total_ms=1302.090 loss.top_terms=semantic_contact_avoid_ms=229.820,semantic_obstacle_ms=142.411,touchdown_surface_ms=108.007,swing_center_urgency_ms=97.091,leg_kinematics_ms=97.041,obstacle_risk_ms=76.112,ik_fk_residual_ms=75.889,leg_collision_ms=49.305,swing_direction_ms=47.420,high_obstacle_avoidance_ms=44.759,ik_joint_limit_ms=39.292,support_stability_ms=36.971
+{"cases": ["small"], "commands": ["forward"], "cycles": 1, "device": "cuda:0", "lateral_offset_m": 0.0, "longitudinal_offset_m": -0.35, "playback_frame": 49, "requested_n_frames": 50, "semantic_small_height_m": null, "type": "probe_header", "variants": ["baseline"], "warmup_steps": 1}
+[MPC profile] #2/5 profile=train_4096 batch=1 horizon=50 iters=24 optimizer.backward_ms=949.370 optimizer.decode_ms=46.214 optimizer.final_decode_ms=1.361 optimizer.final_loss_ms=45.150 optimizer.grad_clip_ms=24.869 optimizer.loop_ms=2178.091 optimizer.loss_ms=1123.197 optimizer.step_ms=19.380 optimizer.total_ms=2224.637 optimizer.zero_grad_ms=3.409 plan.init_variables_ms=0.266 plan.nominal_ms=2.369 plan.normalize_ms=0.167 plan.postprocess_ms=3.080 plan.total_ms=2232.765 loss.total_ms=1143.415 loss.top_terms=semantic_obstacle_ms=142.245,touchdown_surface_ms=110.876,ik_fk_residual_ms=87.564,leg_kinematics_ms=86.743,swing_center_urgency_ms=81.711,semantic_contact_avoid_ms=81.409,obstacle_risk_ms=64.767,swing_direction_ms=50.554,high_obstacle_avoidance_ms=47.119,ik_joint_limit_ms=45.230,leg_collision_ms=32.880,low_small_crossing_ms=30.648
+{"command": "forward", "crossed_obstacle_along_command": 0, "cycle": 0, "end_along_obstacle": -0.14976119995117188, "foot_accel_max": 0.08110596071149315, "foot_accel_max_to_mean": 7.771801167046198, "foot_accel_max_to_median": 9.590513418853243, "foot_accel_mean": 0.010435928424854288, "foot_accel_median": 0.00845689455499361, "foot_max_to_median_step": 8.58482917652588, "foot_on_large_rate": 0.0, "foot_on_semantic_rate": 0.025, "foot_on_small_rate": 0.025, "foot_semantic_penetration_rate": 0.0, "foot_step_max": 0.09137793344585418, "foot_step_max_to_mean": 6.448874521366336, "foot_step_max_to_median": 8.58482917652588, "foot_step_mean": 0.014169593956759723, "foot_step_median": 0.010644117846365014, "large_penetration_rate": 0.0, "layer": "result", "min_abs_lateral_to_obstacle": 0.0, "min_root_distance_to_obstacle": 0.24690309166908264, "min_z_quadratic_r2": 0.9623325743414723, "root_accel_max": 0.29168917642971165, "root_accel_max_to_mean": 13.862010831779516, "root_accel_max_to_median": 22.758793485365576, "root_accel_mean": 0.021042342266895088, "root_accel_median": 0.012816548320862195, "root_dx": 0.20023822784423828, "root_dy": -0.1962975263595581, "root_max_to_median_step": 27.155908984100773, "root_on_large_rate": 0.0, "root_on_semantic_rate": 0.0, "root_on_small_rate": 0.0, "root_semantic_penetration_rate": 0.0, "root_step_max": 0.3130517244764282, "root_step_max_to_mean": 15.156756371264615, "root_step_max_to_median": 27.155908984100773, "root_step_mean": 0.020654269080285316, "root_step_median": 0.01152794129114638, "score": 203.70001397494724, "semantic_anchor_x": 15.122620839333498, "semantic_anchor_y": 1.4420323970560998, "semantic_class": "small", "semantic_target_diameter": 0.12, "semantic_target_height": 0.16, "small_penetration_rate": 0.0, "stance_on_large_rate": 0.0, "stance_on_semantic_rate": 0.01, "stance_on_small_rate": 0.01, "start_along_obstacle": -0.34999942779541016, "swing_over_large_rate": 0.0, "swing_over_semantic_rate": 0.04, "swing_over_small_rate": 0.04, "swing_run_count": 4, "terrain_case": "semantic_small", "touchdown_on_large_rate": 0.0, "touchdown_on_semantic_rate": 0.0, "touchdown_on_small_rate": 0.0, "type": "semantic_obstacle_cycle", "variant": "baseline", "worst_boundary_to_median_step": 0.8103560690687097, "worst_max_to_median_step": 5.258196994369432, "worst_z_unimodal_violation_ratio": 0.041666666666666664}
+{"command": "forward", "cycle_count": 1, "max_foot_accel_max_to_mean": 7.771801167046198, "max_root_accel_max_to_mean": 13.862010831779516, "max_root_on_semantic_rate": 0.0, "max_stance_on_semantic_rate": 0.01, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 0.8103560690687097, "max_worst_max_to_median_step": 5.258196994369432, "min_root_distance_to_obstacle": 0.24690309166908264, "min_z_quadratic_r2": 0.9623325743414723, "score_max": 203.70001397494724, "score_mean": 203.70001397494724, "semantic_class": "small", "type": "semantic_obstacle_summary", "variant": "baseline"}
+{"cycle_count": 1, "max_foot_accel_max_to_mean": 7.771801167046198, "max_root_accel_max_to_mean": 13.862010831779516, "max_root_on_semantic_rate": 0.0, "max_semantic_penetration_rate": 0.0, "max_stance_on_semantic_rate": 0.01, "max_touchdown_on_semantic_rate": 0.0, "max_worst_boundary_to_median_step": 0.8103560690687097, "max_worst_max_to_median_step": 5.258196994369432, "min_root_distance_to_obstacle": 0.24690309166908264, "min_z_quadratic_r2": 0.9623325743414723, "score_max": 203.70001397494724, "score_mean": 203.70001397494724, "type": "variant_summary", "variant": "baseline"}
+{"best_variant": "baseline", "best_variant_score_mean": 203.70001397494724, "cycle_count": 1, "max_foot_accel_max_to_mean": 7.771801167046198, "max_root_accel_max_to_mean": 13.862010831779516, "max_root_on_semantic_rate": 0.0, "max_stance_on_semantic_rate": 0.01, "max_touchdown_on_semantic_rate": 0.0, "summary_count": 1, "type": "probe_footer", "worst_score": 203.70001397494724}
+-|
+| 0   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | b7b79e46.. |
+|     |                                  |        |     |            | 27        |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 1d290889.. |
+|     |                                  |        |     |            | 38        |            |
+|---------------------------------------------------------------------------------------------|
+| 2   | NVIDIA GeForce RTX 4090          | Yes: 0 |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 6eb7f853.. |
+|     |                                  |        |     |            | 98        |            |
+|---------------------------------------------------------------------------------------------|
+| 3   | NVIDIA GeForce RTX 4090          |        |     | 24810   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2684      | 03eb5f13.. |
+|     |                                  |        |     |            | b8        |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-94-generic
+| Processor: Intel(R) Xeon(R) Gold 6430
+| Cores: 64 | Logical Cores: 128
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 257557 | Free Memory: 175060
+| Total Page/Swap (MB): 2047 | Free Page/Swap: 1903
+|---------------------------------------------------------------------------------------------|
+2026-05-24 03:53:05 [4,898ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-05-24 03:53:05 [4,898ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0 
+     0 932.84 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0 
+     0   1.43 
+
+   CPU     0 
+     0   3.77 
+2026-05-24 03:53:05 [5,553ms] [Warning] [isaaclab.envs.manager_based_env] Seed not set for the environment. The environment creation may not be deterministic.

@@ -87,6 +87,29 @@ graph LR
 6. manager 维护 per-env `phase_counter` 并在每次 refresh/step 时推进或重置
 7. reward 在每步通过当前 phase 从 cache 里取参考帧
 
+## MPC 语义障碍内部 command shaping（2026-05-24）
+
+`extension/batch_mpc_planner` 在 T302h 之后新增一层内部语义策略：
+
+- 外部 runtime / manager 仍把原始 command 传给 `plan_segment(...)`。
+- `plan_segment(...)` 会先检查语义高度图中命令走廊内的低小障碍物、高小障碍物和大障碍物。
+- 低小障碍物不改内部 command，而是通过 low-small crossing / foot / stepcap loss 约束“跨过去且连续”。
+- 高小障碍物和大障碍物会生成内部 `planning_command`：降低前向速度，并向较空的一侧加入横向速度。
+- 这个 `planning_command` 同时用于 nominal 构建和 MPC optimizer/loss。只改 nominal seed 会被 tracking 拉回原命令，已在 T302h large-forward 探针中验证会留下连续性失败。
+- 外部 command contract 不变；这只是本次 MPC 规划内部的避障速度整形。
+
+证据：[../log/2026-05-24-1948-t302h-production-v10-implementation.md](../log/2026-05-24-1948-t302h-production-v10-implementation.md)
+
+## MPC 重规划相位默认值（2026-05-24）
+
+`extension/batch_mpc_planner` 现在默认关闭 `MpcRuntimeCfg.randomize_replan_phase`。
+
+原因是 T302h 多周期真实 IsaacLab probe 发现，语义大障碍前进场景的剩余间歇性失败来自 replan 边界的 gait phase 随机切换：下一段 nominal 可能选择不同对角相位，导致 frame-0 足端跳变。默认改为 deterministic phase 后，large-forward 多周期从 `semantic_task=1/6`、continuity `1/6` 改为 `semantic_task=0/6`、continuity `0/6`。
+
+保留任务级 override：`mpc_randomize_replan_phase=True` 可显式恢复随机 replan phase，用于后续消融或训练随机化实验。
+
+证据：[../log/2026-05-24-2109-t302h-deterministic-replan-phase.md](../log/2026-05-24-2109-t302h-deterministic-replan-phase.md)
+
 ## 基于真实 Isaac Lab headless runtime 的执行证据（2026-04-19）
 
 上面是静态代码主链。为了确认“planner 本身、playback 写回、viewer 启动链路”到底哪一层有问题，当前仓库里已经补了一组真实 runtime diagnostics tests，它们不是 mock 一个假 planner，而是尽量沿着 `go2_foostep_planner.py` 的启动路径走：

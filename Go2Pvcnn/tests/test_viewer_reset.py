@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import signal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -129,6 +130,37 @@ def test_viewer_apply_reset_snapshot_restores_root_and_joint_state() -> None:
     assert sim.render_count == 1
 
 
+def test_viewer_main_builds_only_selected_backend_planner_cfgs(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(viewer, "_parse_args", lambda: SimpleNamespace(planner_backend="mpc", plan_dt=0.02, n_frames=25, livestream=-1))
+    monkeypatch.setattr(viewer, "_prepare_runtime_args", lambda args: args)
+    monkeypatch.setattr(viewer, "_launch_app", lambda _args: (None, SimpleNamespace(close=lambda: None)))
+    monkeypatch.setattr(viewer, "_build_env_cfg", lambda _args: SimpleNamespace())
+    monkeypatch.setattr(viewer, "_build_planner_cfg", lambda _env_cfg: calls.append("legacy") or SimpleNamespace())
+    monkeypatch.setattr(viewer, "_build_together_planner_cfg", lambda _env_cfg: calls.append("together") or SimpleNamespace())
+    monkeypatch.setattr(viewer, "_build_mpc_planner_cfg", lambda _env_cfg, args_cli=None: calls.append("mpc") or SimpleNamespace())
+
+    class _Stop(Exception):
+        pass
+
+    def _stop_make(*_args, **_kwargs):
+        raise _Stop()
+
+    monkeypatch.setitem(sys.modules, "gymnasium", SimpleNamespace(make=_stop_make))
+    monkeypatch.setitem(sys.modules, "go2_pvcnn.tasks.register_envs", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "isaaclab.envs",
+        SimpleNamespace(ManagerBasedRLEnv=object),
+    )
+
+    with pytest.raises(_Stop):
+        viewer.main()
+
+    assert calls == ["legacy", "mpc"]
+
+
 def test_viewer_ground_robot_from_scanner_shifts_root_z_to_match_ground(monkeypatch) -> None:
     base_env, robot, scene, sim = _fake_base_env()
     terrain = MpcPlannerTerrain(
@@ -178,6 +210,89 @@ def test_viewer_step_gate_requires_space_for_each_frame() -> None:
     assert not gate.consume_frame_permission(step_requested=False)
     assert gate.consume_frame_permission(step_requested=True)
     assert not gate.consume_frame_permission(step_requested=False)
+
+
+def test_viewer_step_gate_can_toggle_runtime_mode() -> None:
+    gate = viewer.ViewerStepGate(enabled=False)
+
+    assert gate.consume_frame_permission(step_requested=False)
+    assert gate.toggle_enabled()
+    assert not gate.consume_frame_permission(step_requested=False)
+    assert gate.consume_frame_permission(step_requested=True)
+    assert not gate.toggle_enabled()
+    assert gate.consume_frame_permission(step_requested=False)
+
+
+def test_viewer_teleop_signal_handler_removes_guards_before_interrupt(monkeypatch) -> None:
+    teleop = viewer.TerminalTeleop(
+        device=torch.device("cpu"),
+        vx_scale=1.0,
+        vy_scale=1.0,
+        yaw_scale=1.0,
+        timeout_s=0.1,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(teleop, "_remove_cleanup_guards", lambda: calls.append("remove"))
+    monkeypatch.setattr(teleop, "_restore_terminal_state", lambda: calls.append("restore"))
+
+    with pytest.raises(KeyboardInterrupt):
+        teleop._handle_signal(signal.SIGINT, None)
+
+    assert calls == ["remove", "restore"]
+
+
+def test_viewer_step_mode_defers_command_replan_only_while_enabled() -> None:
+    result = SimpleNamespace(num_frames=5)
+    previous = torch.tensor([[0.2, 0.0, 0.0]], dtype=torch.float64)
+    changed = torch.tensor([[0.0, 0.3, 0.0]], dtype=torch.float64)
+
+    assert viewer._viewer_loop_need_replan(
+        result=result,
+        playback_frame=3,
+        reset_requested=False,
+        teleop_values=changed,
+        last_cmd=previous,
+        defer_command_replan_until_trajectory_end=False,
+    )
+
+
+def test_viewer_selects_latched_command_while_step_mode_enabled() -> None:
+    live = torch.zeros((1, 3), dtype=torch.float64)
+    latched = torch.tensor([[0.5, 0.0, 0.0]], dtype=torch.float64)
+
+    selected = viewer._viewer_select_active_teleop_values(
+        live_values=live,
+        latched_values=latched,
+        step_mode_enabled=True,
+    )
+
+    torch.testing.assert_close(selected, latched)
+
+
+def test_viewer_rotates_mpc_body_frame_command_by_root_yaw() -> None:
+    command = torch.tensor([[0.4, 0.0, 0.2]], dtype=torch.float64)
+    state = SimpleNamespace(root_rpy=torch.tensor([[0.0, 0.0, torch.pi / 2.0]], dtype=torch.float64))
+
+    world_command = viewer._viewer_mpc_world_command_from_root_frame(command, state)
+
+    torch.testing.assert_close(
+        world_command,
+        torch.tensor([[0.0, 0.4, 0.2]], dtype=torch.float64),
+        atol=1.0e-6,
+        rtol=1.0e-6,
+    )
+
+
+def test_viewer_mpc_cfg_keeps_fixed_cycle_horizon_when_viewer_requests_long_playback() -> None:
+    env_cfg = SimpleNamespace(
+        plan_dt=0.02,
+        reference_trajectory_horizon=300,
+        reference_replan_interval_steps=300,
+    )
+
+    cfg = viewer._build_mpc_planner_cfg(env_cfg)
+
+    assert cfg.runtime.horizon_steps == 25
 
 
 def test_play_step_gate_disabled_does_not_block() -> None:

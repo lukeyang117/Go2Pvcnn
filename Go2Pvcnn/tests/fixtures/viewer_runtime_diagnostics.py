@@ -252,6 +252,39 @@ class ViewerStyleReplanReport:
 _APP_STATE: _RuntimeAppState | None = None
 
 
+def _apply_semantic_small_profile_override(
+    env_cfg,
+    *,
+    semantic_small_height_m: float | None,
+    semantic_small_diameter_m: float | None = None,
+) -> None:
+    try:
+        from extension.semantic_course import SMALL_OBSTACLE_DIAMETER
+    except ModuleNotFoundError:
+        SMALL_OBSTACLE_DIAMETER = 0.12
+
+    diameter = float(SMALL_OBSTACLE_DIAMETER) if semantic_small_diameter_m is None else float(semantic_small_diameter_m)
+    height = 0.16 if semantic_small_height_m is None else float(semantic_small_height_m)
+    override = {"small": (diameter, height)}
+    event = getattr(getattr(env_cfg, "events", None), "generate_semantic_course", None)
+    if event is not None:
+        event.params["scale_profile_overrides"] = override
+        return
+    terrain_cfg = getattr(getattr(env_cfg, "scene", None), "terrain", None)
+    if terrain_cfg is not None:
+        terrain_cfg.semantic_course_scale_profile_overrides = override
+        return
+    raise RuntimeError("semantic small profile override requires semantic-course event or terrain importer support")
+
+
+def _apply_semantic_small_height_override(env_cfg, semantic_small_height_m: float) -> None:
+    _apply_semantic_small_profile_override(
+        env_cfg,
+        semantic_small_height_m=float(semantic_small_height_m),
+        semantic_small_diameter_m=None,
+    )
+
+
 def _quat_wxyz_to_yaw(quat_wxyz: torch.Tensor) -> torch.Tensor:
     quat = torch.as_tensor(quat_wxyz, dtype=torch.float64)
     w = quat[..., 0]
@@ -788,6 +821,7 @@ class RealViewerRuntimeFixture:
         planner_backend: str = "legacy",
         heightmap_viz_stride: int = 10,
         semantic_small_height_m: float | None = None,
+        semantic_small_diameter_m: float | None = None,
         cobblestone_num_rows: int | None = None,
         cobblestone_num_cols: int | None = None,
         cobblestone_subterrain: str | None = None,
@@ -849,15 +883,12 @@ class RealViewerRuntimeFixture:
                 self.env_cfg.commands.base_velocity.ranges = self.env_cfg.commands.base_velocity.limit_ranges
                 self.env_cfg.planner_backend = self.planner_backend
                 self.env_cfg.reference_trajectory_horizon = self.requested_n_frames
-            if semantic_small_height_m is not None:
-                from extension.semantic_course import SMALL_OBSTACLE_DIAMETER
-
-                event = getattr(self.env_cfg.events, "generate_semantic_course", None)
-                if event is None:
-                    raise RuntimeError("semantic_small_height_m requires semantic-course event support")
-                event.params["scale_profile_overrides"] = {
-                    "small": (float(SMALL_OBSTACLE_DIAMETER), float(semantic_small_height_m)),
-                }
+            if semantic_small_height_m is not None or semantic_small_diameter_m is not None:
+                _apply_semantic_small_profile_override(
+                    self.env_cfg,
+                    semantic_small_height_m=semantic_small_height_m,
+                    semantic_small_diameter_m=semantic_small_diameter_m,
+                )
             self._configure_compact_semantic_runtime_grid()
             self._configure_compact_cobblestone_runtime_grid()
             self._configure_large_runtime_physx_buffers()
@@ -915,7 +946,11 @@ class RealViewerRuntimeFixture:
         terrain_generator = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
         if hasattr(terrain_origins, "tolist"):
             terrain_origins = terrain_origins.tolist()
-        return build_course_anchors(terrain_origins, terrain_generator=terrain_generator)
+        return build_course_anchors(
+            terrain_origins,
+            terrain_generator=terrain_generator,
+            scale_profile_overrides=getattr(terrain_cfg, "semantic_course_scale_profile_overrides", None),
+        )
 
     def s4_semantic_course_anchor(self, semantic_class: str):
         from extension.semantic_course import SemanticCourseStage

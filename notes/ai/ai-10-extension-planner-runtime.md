@@ -75,6 +75,29 @@ Reward/viewer consume `ReferenceTrajectoryCache`, not the raw planner result, an
 - even partial replans keep the cache layout `(num_envs, horizon, ...)`
 - manager writes replanned rows back into the full cache via masked writes
 
+## MPC Semantic Internal Planning Command
+
+Updated 2026-05-24 for `extension/batch_mpc_planner` T302h:
+
+- The external runtime command passed into `plan_segment(...)` remains unchanged.
+- Inside `plan_segment(...)`, semantic corridor policy can derive an internal `planning_command`.
+- Low-small obstacles keep the requested command and are handled by crossing / foot-contact / stepcap losses.
+- High-small and large obstacles reduce forward velocity and add lateral velocity toward the freer side.
+- The internal `planning_command` is used for both nominal construction and optimizer/loss terms. A nominal-only shaping pass failed large-forward continuity because tracking still pulled the plan toward the original command.
+
+Evidence: [../log/2026-05-24-1948-t302h-production-v10-implementation.md](../log/2026-05-24-1948-t302h-production-v10-implementation.md)
+
+## MPC Replan Phase Default
+
+Updated 2026-05-24 for `extension/batch_mpc_planner` T302h:
+
+- `MpcRuntimeCfg.randomize_replan_phase` now defaults to `False`.
+- Real IsaacLab multi-cycle probes showed that randomized replan phase can switch diagonal swing/stance timing between consecutive plan segments and create a frame-0 foot discontinuity.
+- The production config keeps an explicit task override: `mpc_randomize_replan_phase=True`.
+- In the large-forward semantic obstacle probe, deterministic phase improved multi-cycle task failures from `1/6` to `0/6` and continuity failures from `1/6` to `0/6`.
+
+Evidence: [../log/2026-05-24-2109-t302h-deterministic-replan-phase.md](../log/2026-05-24-2109-t302h-deterministic-replan-phase.md)
+
 ### Standstill Persistence
 
 If replanning fails for a subset and a cache already exists, the manager fills those rows with a standstill (time-constant) trajectory and keeps them until that env hits its next trigger. Interval bookkeeping is updated so failures do not retrigger every step.

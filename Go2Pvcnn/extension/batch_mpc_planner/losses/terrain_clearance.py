@@ -455,6 +455,499 @@ def low_small_crossing_progress_loss(
     return torch.where(required_progress > 0.0, torch.relu(required_progress - progress).square(), zero)
 
 
+def _semantic_height_class_masks(
+    terrain: MpcPlannerTerrain,
+    root_pos: Tensor,
+    *,
+    small_ids: tuple[int, ...],
+    high_small_relative_height_m: float,
+    query_cache: TerrainQueryCache | None = None,
+) -> tuple[Tensor, Tensor] | None:
+    if terrain.semantic_map is None:
+        return None
+    batch = int(root_pos.shape[0])
+    dtype = root_pos.dtype
+    device = root_pos.device
+    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    if int(height.shape[0]) == 1 and batch > 1:
+        height = height.expand(batch, -1, -1)
+    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    if int(semantic.shape[0]) == 1 and batch > 1:
+        semantic = semantic.expand(batch, -1, -1)
+    if int(height.shape[0]) != batch or int(semantic.shape[0]) != batch:
+        return None
+    nearby_height = _nearby_height_for_sparse_semantic(terrain, height, dtype=dtype, device=device).reshape(
+        batch,
+        int(height.shape[-2]),
+        int(height.shape[-1]),
+    )
+    root_ground = height_at(terrain, root_pos[:, :1, :2], cache=query_cache).reshape(batch, 1, 1).to(
+        dtype=dtype,
+        device=device,
+    )
+    small = _semantic_id_mask(semantic, small_ids)
+    high_small = torch.logical_and(small, (nearby_height - root_ground) > float(high_small_relative_height_m))
+    low_small = torch.logical_and(small, torch.logical_not(high_small))
+    return low_small, high_small
+
+
+def low_small_foot_crossing_loss(
+    terrain: MpcPlannerTerrain,
+    decoded,
+    *,
+    small_ids: tuple[int, ...],
+    high_small_relative_height_m: float,
+    contact_threshold: float,
+    soft_margin_m: float = 0.30,
+    foot_weight: float = 58.0,
+    foot_worst_weight: float = 22.0,
+    touchdown_weight: float = 30.0,
+    touchdown_worst_weight: float = 14.0,
+    query_cache: TerrainQueryCache | None = None,
+) -> Tensor:
+    """Reject stance and touchdown contact on low small obstacles."""
+    root_pos = torch.as_tensor(decoded.root_pos)
+    foot_pos = torch.as_tensor(decoded.foot_pos, dtype=root_pos.dtype, device=root_pos.device)
+    batch = int(root_pos.shape[0])
+    zero = torch.zeros((batch,), dtype=root_pos.dtype, device=root_pos.device)
+    masks = _semantic_height_class_masks(
+        terrain,
+        root_pos,
+        small_ids=small_ids,
+        high_small_relative_height_m=high_small_relative_height_m,
+        query_cache=query_cache,
+    )
+    if masks is None:
+        return zero
+    low_small, _ = masks
+    empty = torch.zeros_like(low_small)
+    field = _semantic_obstacle_field(
+        terrain,
+        dtype=root_pos.dtype,
+        device=root_pos.device,
+        small_ids=small_ids,
+        large_ids=(),
+        small_weight=1.0,
+        large_weight=0.0,
+        soft_margin_m=float(soft_margin_m),
+        small_mask_override=low_small,
+        large_mask_override=empty,
+    )
+    if field is None:
+        return zero
+    foot_soft = _sample_obstacle_field(terrain, field, foot_pos[..., :2]).to(dtype=root_pos.dtype, device=root_pos.device)
+    contact = torch.as_tensor(decoded.contact_prob, dtype=root_pos.dtype, device=root_pos.device)
+    contact = torch.where(contact >= float(contact_threshold), contact, torch.zeros_like(contact))
+    stance_cost = foot_soft * contact.square()
+    stance_loss = float(foot_weight) * stance_cost.mean(dim=(1, 2)) + float(foot_worst_weight) * stance_cost.amax(dim=(1, 2))
+
+    touchdown_phase = finite_horizon_touchdown_phase(decoded.swing_center, decoded.swing_width)
+    touchdown_w = sample_time(foot_pos, touchdown_phase, cyclic=False)
+    touchdown_soft = _sample_obstacle_field(terrain, field, touchdown_w[..., :2]).to(
+        dtype=root_pos.dtype,
+        device=root_pos.device,
+    )
+    touchdown_loss = (
+        float(touchdown_weight) * touchdown_soft.mean(dim=1)
+        + float(touchdown_worst_weight) * touchdown_soft.amax(dim=1)
+    )
+    return stance_loss + touchdown_loss
+
+
+def low_small_foot_over_loss(
+    terrain: MpcPlannerTerrain,
+    decoded,
+    command: Tensor,
+    *,
+    small_ids: tuple[int, ...],
+    high_small_relative_height_m: float = 0.30,
+    corridor_width_m: float = 0.30,
+    forward_distance_m: float = 1.0,
+    along_window_m: float = 0.26,
+    radius_m: float = 0.08,
+    clearance_m: float = 0.045,
+    xy_weight: float = 220.0,
+    direct_xy_weight: float = 260.0,
+    z_weight: float = 320.0,
+    ineligible_penalty: float = 1.5,
+    time_gate_penalty: float = 4.0,
+    path_curve_weight: float = 120.0,
+    path_curve_z_weight: float = 60.0,
+    path_curve_window_m: float = 0.30,
+    path_curve_body_yaw: bool = True,
+    window_weight: float = 0.0,
+    window_min_count: float = 3.0,
+    window_sigma_m: float = 0.08,
+    window_z_temp_m: float = 0.025,
+    window_step_weight: float = 0.0,
+    window_step_cap_m: float = 0.055,
+    window_accel_weight: float = 0.0,
+    window_accel_cap_m: float = 0.065,
+    window_coupled: bool = False,
+    linear_speed_eps: float = 1.0e-4,
+    query_cache: TerrainQueryCache | None = None,
+) -> Tensor:
+    """Encourage a swing foot to pass over a low small obstacle instead of detouring around it."""
+    foot_pos = torch.as_tensor(decoded.foot_pos)
+    root_pos = torch.as_tensor(decoded.root_pos, dtype=foot_pos.dtype, device=foot_pos.device)
+    batch = int(foot_pos.shape[0])
+    dtype = foot_pos.dtype
+    device = foot_pos.device
+    zero = torch.zeros((batch,), dtype=dtype, device=device)
+    if terrain.semantic_map is None or int(foot_pos.shape[1]) < 1:
+        return zero
+
+    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    if int(height.shape[0]) == 1 and batch > 1:
+        height = height.expand(batch, -1, -1)
+    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    if int(semantic.shape[0]) == 1 and batch > 1:
+        semantic = semantic.expand(batch, -1, -1)
+    if int(height.shape[0]) != batch or int(semantic.shape[0]) != batch:
+        return zero
+
+    cmd = torch.as_tensor(command, dtype=dtype, device=device)
+    if int(cmd.shape[-1]) < 3:
+        pad = torch.zeros((batch, 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
+        cmd = torch.cat((cmd, pad), dim=-1)
+    cmd_xy = cmd[:, :2]
+    speed = _safe_norm(cmd_xy, dim=-1)
+    heading_body = cmd_xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    yaw0 = torch.as_tensor(decoded.root_rpy, dtype=dtype, device=device)[:, 0, 2]
+    cy = torch.cos(yaw0)
+    sy = torch.sin(yaw0)
+    heading = torch.stack(
+        (
+            cy * heading_body[:, 0] - sy * heading_body[:, 1],
+            sy * heading_body[:, 0] + cy * heading_body[:, 1],
+        ),
+        dim=-1,
+    )
+    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+
+    grid_xy = _terrain_grid_world_xy(terrain, dtype=dtype, device=device)
+    if int(grid_xy.shape[0]) == 1 and batch > 1:
+        grid_xy = grid_xy.expand(batch, -1, -1)
+    grid_sem = semantic.reshape(batch, -1)
+    grid_z = height.reshape(batch, -1)
+    nearby_grid_z = _nearby_height_for_sparse_semantic(terrain, height, dtype=dtype, device=device)
+    root0 = root_pos[:, 0]
+    root_ground_z = height_at(terrain, root0[:, None, :2], cache=query_cache).reshape(batch).to(dtype=dtype, device=device)
+    small = _semantic_id_mask(grid_sem, small_ids)
+    low_small = torch.logical_and(small, (nearby_grid_z - root_ground_z[:, None]) <= float(high_small_relative_height_m))
+
+    delta = grid_xy - root0[:, None, :2]
+    obs_forward = (delta * heading[:, None, :]).sum(dim=-1)
+    obs_lateral = (delta * left[:, None, :]).sum(dim=-1)
+    candidate = torch.logical_and(
+        low_small,
+        torch.logical_and(
+            torch.logical_and(obs_forward >= 0.0, obs_forward <= float(forward_distance_m)),
+            torch.abs(obs_lateral) <= float(corridor_width_m),
+        ),
+    )
+    active = torch.logical_and(candidate.any(dim=-1), speed > float(linear_speed_eps))
+    candidate_f = candidate.to(dtype=dtype, device=device)
+    count = candidate_f.sum(dim=-1).clamp_min(1.0)
+    target_xy = (grid_xy * candidate_f[..., None]).sum(dim=1) / count[:, None]
+    target_forward = (obs_forward * candidate_f).sum(dim=-1) / count
+    target_z = (nearby_grid_z * candidate_f).sum(dim=-1) / count
+    target_z = torch.maximum(target_z, (grid_z * candidate_f).sum(dim=-1) / count)
+
+    swing_prob = torch.as_tensor(decoded.swing_prob, dtype=dtype, device=device)
+    contact_prob = torch.as_tensor(decoded.contact_prob, dtype=dtype, device=device)
+    swing_weight = swing_prob * (1.0 - contact_prob).clamp_min(0.0)
+    rel = foot_pos[..., :2] - target_xy[:, None, None, :]
+    dist = _safe_norm(rel, dim=-1)
+    root_rel = root_pos[..., :2] - root0[:, None, :2]
+    root_along = (root_rel * heading[:, None, :]).sum(dim=-1)
+    root_gate = torch.relu(float(along_window_m) - torch.abs(root_along - target_forward[:, None])) / max(
+        float(along_window_m),
+        1.0e-6,
+    )
+    clearance_target = target_z[:, None, None] + float(clearance_m)
+    z_deficit = torch.relu(clearance_target - foot_pos[..., 2])
+    xy_deficit = torch.relu(dist - float(radius_m))
+    candidate_cost = float(xy_weight) * xy_deficit.square() + float(z_weight) * z_deficit.square()
+    candidate_cost = candidate_cost + float(ineligible_penalty) * (1.0 - swing_weight).clamp_min(0.0)
+    best = torch.amin(candidate_cost.reshape(batch, -1), dim=-1)
+    gated = root_gate[..., None] * swing_weight
+    denom = gated.sum(dim=(1, 2)).clamp_min(1.0)
+    direct_xy = (gated * xy_deficit.square()).sum(dim=(1, 2)) / denom
+    direct_z = (gated * z_deficit.square()).sum(dim=(1, 2)) / denom
+    missing_gate = torch.relu(0.25 - gated.sum(dim=(1, 2))).square()
+    window_loss = zero
+    window_step_loss = zero
+    window_accel_loss = zero
+    if float(window_weight) > 0.0:
+        sigma = max(float(window_sigma_m), 1.0e-6)
+        z_temp = max(float(window_z_temp_m), 1.0e-6)
+        xy_score = torch.exp(-0.5 * (dist / sigma).square())
+        z_score = torch.sigmoid((foot_pos[..., 2] - clearance_target) / z_temp)
+        window_score = root_gate[..., None] * swing_weight * xy_score * z_score
+        per_leg_score = window_score.sum(dim=1)
+        window_loss = torch.relu(float(window_min_count) - per_leg_score).amin(dim=1).square()
+        if int(foot_pos.shape[1]) >= 2 and float(window_step_weight) > 0.0:
+            step = torch.linalg.vector_norm(foot_pos[:, 1:] - foot_pos[:, :-1], dim=-1)
+            step_gate = torch.maximum(window_score[:, 1:], window_score[:, :-1])
+            step_deficit = torch.relu(step - float(window_step_cap_m)).square()
+            per_leg_step = (step_gate * step_deficit).sum(dim=1) / step_gate.sum(dim=1).clamp_min(1.0)
+            per_leg_step = per_leg_step + torch.relu(0.25 - step_gate.sum(dim=1)).square()
+            if bool(window_coupled):
+                best_leg_idx = torch.argmin(torch.relu(float(window_min_count) - per_leg_score), dim=1)
+                window_step_loss = per_leg_step.gather(1, best_leg_idx[:, None]).squeeze(1)
+            else:
+                window_step_loss = per_leg_step.amin(dim=1)
+        if int(foot_pos.shape[1]) >= 3 and float(window_accel_weight) > 0.0:
+            accel = torch.linalg.vector_norm(foot_pos[:, 2:] - 2.0 * foot_pos[:, 1:-1] + foot_pos[:, :-2], dim=-1)
+            accel_gate = torch.maximum(torch.maximum(window_score[:, 2:], window_score[:, 1:-1]), window_score[:, :-2])
+            accel_deficit = torch.relu(accel - float(window_accel_cap_m)).square()
+            per_leg_accel = (accel_gate * accel_deficit).sum(dim=1) / accel_gate.sum(dim=1).clamp_min(1.0)
+            per_leg_accel = per_leg_accel + torch.relu(0.25 - accel_gate.sum(dim=1)).square()
+            if bool(window_coupled):
+                best_leg_idx = torch.argmin(torch.relu(float(window_min_count) - per_leg_score), dim=1)
+                window_accel_loss = per_leg_accel.gather(1, best_leg_idx[:, None]).squeeze(1)
+            else:
+                window_accel_loss = per_leg_accel.amin(dim=1)
+
+    curve_xy_loss = zero
+    curve_z_loss = zero
+    if float(path_curve_weight) > 0.0 or float(path_curve_z_weight) > 0.0:
+        curve_window = max(float(path_curve_window_m), 1.0e-6)
+        curve_phase = ((root_along - target_forward[:, None]) / curve_window).clamp(-1.0, 1.0)
+        if bool(path_curve_body_yaw):
+            root_rpy = torch.as_tensor(decoded.root_rpy, dtype=dtype, device=device)
+            local_heading = torch.stack((torch.cos(root_rpy[..., 2]), torch.sin(root_rpy[..., 2])), dim=-1)
+            local_left = torch.stack((-local_heading[..., 1], local_heading[..., 0]), dim=-1)
+        else:
+            local_heading = heading[:, None, :].expand(batch, int(foot_pos.shape[1]), 2)
+            local_left = left[:, None, :].expand(batch, int(foot_pos.shape[1]), 2)
+        curve_target_xy = target_xy[:, None, None, :] + curve_phase[:, :, None, None] * local_heading[:, :, None, :] * curve_window
+        curve_delta = foot_pos[..., :2] - curve_target_xy
+        curve_along = (curve_delta * local_heading[:, :, None, :]).sum(dim=-1)
+        curve_lateral = (curve_delta * local_left[:, :, None, :]).sum(dim=-1)
+        curve_gate = root_gate[..., None] * swing_weight
+        curve_xy_err = curve_along.square() + curve_lateral.square()
+        per_leg_curve = (curve_gate * curve_xy_err).sum(dim=1) / curve_gate.sum(dim=1).clamp_min(1.0)
+        per_leg_curve = per_leg_curve + torch.relu(0.25 - curve_gate.sum(dim=1)).square()
+        curve_xy_loss = per_leg_curve.amin(dim=1)
+        arch_phase = 0.5 * (curve_phase + 1.0)
+        arch = 4.0 * arch_phase * (1.0 - arch_phase)
+        curve_z_target = clearance_target[:, :, 0] + 0.04 * arch
+        curve_z_err = torch.relu(curve_z_target[:, :, None] - foot_pos[..., 2]).square()
+        per_leg_curve_z = (curve_gate * curve_z_err).sum(dim=1) / curve_gate.sum(dim=1).clamp_min(1.0)
+        per_leg_curve_z = per_leg_curve_z + torch.relu(0.25 - curve_gate.sum(dim=1)).square()
+        curve_z_loss = per_leg_curve_z.amin(dim=1)
+
+    total = (
+        best
+        + float(direct_xy_weight) * direct_xy
+        + float(z_weight) * direct_z
+        + float(time_gate_penalty) * missing_gate
+        + float(window_weight) * window_loss
+        + float(window_step_weight) * window_step_loss
+        + float(window_accel_weight) * window_accel_loss
+        + float(path_curve_weight) * curve_xy_loss
+        + float(path_curve_z_weight) * curve_z_loss
+    )
+    return torch.where(active, total, zero)
+
+
+def low_small_stepcap_continuity_loss(
+    terrain: MpcPlannerTerrain,
+    decoded,
+    state,
+    command: Tensor,
+    cfg,
+) -> Tensor:
+    """Bound root/foot spikes for low-small mixed or yaw crossing plans."""
+    foot = torch.as_tensor(decoded.foot_pos)
+    root = torch.as_tensor(decoded.root_pos, dtype=foot.dtype, device=foot.device)
+    batch = int(foot.shape[0])
+    zero = torch.zeros((batch,), dtype=foot.dtype, device=foot.device)
+    if int(foot.shape[1]) < 2:
+        return zero
+    losses = cfg.losses.low_small_stepcap
+    masks = _semantic_height_class_masks(
+        terrain,
+        root,
+        small_ids=cfg.losses.touchdown_semantic.small_ids,
+        high_small_relative_height_m=losses.high_small_relative_height_m,
+    )
+    if masks is None:
+        return zero
+    low_small, _ = masks
+    has_low_small = low_small.reshape(batch, -1).any(dim=-1)
+    cmd = torch.as_tensor(command, dtype=foot.dtype, device=foot.device)
+    if int(cmd.shape[-1]) < 3:
+        pad = torch.zeros((batch, 3 - int(cmd.shape[-1])), dtype=foot.dtype, device=foot.device)
+        cmd = torch.cat((cmd, pad), dim=-1)
+    mixed = torch.logical_or(torch.abs(cmd[:, 1]) > float(losses.lateral_or_yaw_eps), torch.abs(cmd[:, 2]) > float(losses.lateral_or_yaw_eps))
+    gate = torch.logical_and(has_low_small, mixed).to(dtype=foot.dtype, device=foot.device)
+    if not bool(torch.any(gate > 0.0)):
+        return zero
+
+    step = torch.linalg.vector_norm(foot[:, 1:] - foot[:, :-1], dim=-1)
+    contact = torch.as_tensor(decoded.contact_prob, dtype=foot.dtype, device=foot.device)
+    boundary_weight = 0.25 + 0.75 * contact[:, 1:]
+    foot_boundary = (step.square() * boundary_weight).mean(dim=(1, 2))
+    foot_step_worst = step.amax(dim=(1, 2)).square()
+    if int(foot.shape[1]) >= 3:
+        foot_accel_raw = torch.linalg.vector_norm(foot[:, 2:] - 2.0 * foot[:, 1:-1] + foot[:, :-2], dim=-1)
+        root_accel_raw = torch.linalg.vector_norm(root[:, 2:] - 2.0 * root[:, 1:-1] + root[:, :-2], dim=-1)
+        foot_accel = foot_accel_raw.square().mean(dim=(1, 2))
+        foot_accel_worst = foot_accel_raw.amax(dim=(1, 2)).square()
+        root_accel = root_accel_raw.square().mean(dim=1)
+        root_accel_worst = root_accel_raw.amax(dim=1).square()
+    else:
+        foot_accel = zero
+        foot_accel_worst = zero
+        root_accel = zero
+        root_accel_worst = zero
+    if int(foot.shape[1]) >= 4:
+        foot_jerk = torch.linalg.vector_norm(
+            foot[:, 3:] - 3.0 * foot[:, 2:-1] + 3.0 * foot[:, 1:-2] - foot[:, :-3],
+            dim=-1,
+        ).square().mean(dim=(1, 2))
+    else:
+        foot_jerk = zero
+    root_step = torch.linalg.vector_norm(root[:, 1:] - root[:, :-1], dim=-1)
+    root_step_worst = root_step.amax(dim=1).square()
+    state_foot = torch.as_tensor(state.foot_pos, dtype=foot.dtype, device=foot.device)
+    frames = min(max(int(losses.first_foot_anchor_frames), 1), int(foot.shape[1]))
+    frame_weight = torch.linspace(1.0, 0.25, frames, dtype=foot.dtype, device=foot.device).view(1, frames, 1, 1)
+    first_anchor = ((foot[:, :frames] - state_foot[:, None]) ** 2 * frame_weight).mean(dim=(1, 2, 3))
+    out = (
+        float(losses.foot_boundary_weight) * foot_boundary
+        + float(losses.foot_step_worst_weight) * foot_step_worst
+        + float(losses.foot_accel_weight) * foot_accel
+        + float(losses.foot_accel_worst_weight) * foot_accel_worst
+        + float(losses.foot_jerk_weight) * foot_jerk
+        + float(losses.root_step_worst_weight) * root_step_worst
+        + float(losses.root_accel_weight) * root_accel
+        + float(losses.root_accel_worst_weight) * root_accel_worst
+        + float(losses.first_foot_anchor_weight) * first_anchor
+    )
+    return gate * out
+
+
+def high_large_stepcap_continuity_loss(
+    terrain: MpcPlannerTerrain,
+    decoded,
+    command: Tensor,
+    cfg,
+) -> Tensor:
+    """Bound root/foot spikes only when a high-small or large obstacle is in the commanded corridor."""
+    foot = torch.as_tensor(decoded.foot_pos)
+    root = torch.as_tensor(decoded.root_pos, dtype=foot.dtype, device=foot.device)
+    batch = int(foot.shape[0])
+    zero = torch.zeros((batch,), dtype=foot.dtype, device=foot.device)
+    if int(foot.shape[1]) < 2 or terrain.semantic_map is None:
+        return zero
+    losses = cfg.losses.high_large_stepcap
+    height = torch.as_tensor(terrain.height_map, dtype=foot.dtype, device=foot.device)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    if int(height.shape[0]) == 1 and batch > 1:
+        height = height.expand(batch, -1, -1)
+    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=foot.device)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    if int(semantic.shape[0]) == 1 and batch > 1:
+        semantic = semantic.expand(batch, -1, -1)
+    if int(height.shape[0]) != batch or int(semantic.shape[0]) != batch:
+        return zero
+
+    cmd = torch.as_tensor(command, dtype=foot.dtype, device=foot.device)
+    if int(cmd.shape[-1]) < 3:
+        pad = torch.zeros((batch, 3 - int(cmd.shape[-1])), dtype=foot.dtype, device=foot.device)
+        cmd = torch.cat((cmd, pad), dim=-1)
+    cmd_xy = cmd[:, :2]
+    speed = _safe_norm(cmd_xy, dim=-1)
+    straight = torch.logical_and(
+        torch.abs(cmd[:, 1]) <= float(losses.lateral_or_yaw_eps),
+        torch.abs(cmd[:, 2]) <= float(losses.lateral_or_yaw_eps),
+    )
+    active = torch.logical_and(speed > float(cfg.losses.high_obstacle_avoidance.linear_speed_eps), straight)
+    heading_body = cmd_xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    yaw0 = torch.as_tensor(decoded.root_rpy, dtype=foot.dtype, device=foot.device)[:, 0, 2]
+    cy = torch.cos(yaw0)
+    sy = torch.sin(yaw0)
+    heading = torch.stack(
+        (
+            cy * heading_body[:, 0] - sy * heading_body[:, 1],
+            sy * heading_body[:, 0] + cy * heading_body[:, 1],
+        ),
+        dim=-1,
+    )
+    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+    grid_xy = _terrain_grid_world_xy(terrain, dtype=foot.dtype, device=foot.device)
+    grid_sem = semantic.reshape(batch, -1)
+    nearby_z = _nearby_height_for_sparse_semantic(terrain, height, dtype=foot.dtype, device=foot.device)
+    root0 = root[:, 0]
+    root_ground = height_at(terrain, root0[:, None, :2]).reshape(batch).to(dtype=foot.dtype, device=foot.device)
+    small = _semantic_id_mask(grid_sem, cfg.losses.touchdown_semantic.small_ids)
+    large = _semantic_id_mask(grid_sem, cfg.losses.touchdown_semantic.large_ids)
+    high_small = torch.logical_and(small, (nearby_z - root_ground[:, None]) > float(losses.high_small_relative_height_m))
+    risky = torch.logical_or(high_small, large)
+    delta = grid_xy - root0[:, None, :2]
+    forward = (delta * heading[:, None, :]).sum(dim=-1)
+    lateral = (delta * left[:, None, :]).sum(dim=-1)
+    corridor = torch.logical_and(
+        torch.logical_and(forward >= 0.0, forward <= float(cfg.losses.high_obstacle_avoidance.forward_distance_m)),
+        torch.abs(lateral) <= float(cfg.losses.high_obstacle_avoidance.corridor_width_m),
+    )
+    gate = torch.logical_and(torch.logical_and(risky, corridor).any(dim=-1), active).to(dtype=foot.dtype, device=foot.device)
+    if not bool(torch.any(gate > 0.0)):
+        return zero
+
+    step = torch.linalg.vector_norm(foot[:, 1:] - foot[:, :-1], dim=-1)
+    contact = torch.as_tensor(decoded.contact_prob, dtype=foot.dtype, device=foot.device)
+    boundary_weight = 0.25 + 0.75 * contact[:, 1:]
+    foot_boundary = (step.square() * boundary_weight).mean(dim=(1, 2))
+    foot_step_worst = step.amax(dim=(1, 2)).square()
+    if int(foot.shape[1]) >= 3:
+        foot_accel_raw = torch.linalg.vector_norm(foot[:, 2:] - 2.0 * foot[:, 1:-1] + foot[:, :-2], dim=-1)
+        root_accel_raw = torch.linalg.vector_norm(root[:, 2:] - 2.0 * root[:, 1:-1] + root[:, :-2], dim=-1)
+        foot_accel = foot_accel_raw.square().mean(dim=(1, 2))
+        foot_accel_worst = foot_accel_raw.amax(dim=(1, 2)).square()
+        root_accel = root_accel_raw.square().mean(dim=1)
+        root_accel_worst = root_accel_raw.amax(dim=1).square()
+    else:
+        foot_accel = zero
+        foot_accel_worst = zero
+        root_accel = zero
+        root_accel_worst = zero
+    if int(foot.shape[1]) >= 4:
+        foot_jerk = torch.linalg.vector_norm(
+            foot[:, 3:] - 3.0 * foot[:, 2:-1] + 3.0 * foot[:, 1:-2] - foot[:, :-3],
+            dim=-1,
+        ).square().mean(dim=(1, 2))
+    else:
+        foot_jerk = zero
+    root_step = torch.linalg.vector_norm(root[:, 1:] - root[:, :-1], dim=-1)
+    root_step_worst = root_step.amax(dim=1).square()
+    out = (
+        float(losses.foot_boundary_weight) * foot_boundary
+        + float(losses.foot_step_worst_weight) * foot_step_worst
+        + float(losses.foot_accel_weight) * foot_accel
+        + float(losses.foot_accel_worst_weight) * foot_accel_worst
+        + float(losses.foot_jerk_weight) * foot_jerk
+        + float(losses.root_step_worst_weight) * root_step_worst
+        + float(losses.root_accel_weight) * root_accel
+        + float(losses.root_accel_worst_weight) * root_accel_worst
+    )
+    return gate * out
+
+
 def high_obstacle_avoidance_loss(
     terrain: MpcPlannerTerrain,
     root_pos: Tensor,
@@ -851,6 +1344,8 @@ __all__ = [
     "high_obstacle_avoidance_loss",
     "knee_shank_heightfield_collision_loss",
     "low_small_crossing_progress_loss",
+    "low_small_foot_crossing_loss",
+    "low_small_stepcap_continuity_loss",
     "ObstacleRiskScales",
     "obstacle_risk_scales",
     "sample_time",

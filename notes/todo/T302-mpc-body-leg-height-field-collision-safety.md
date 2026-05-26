@@ -12,6 +12,7 @@
 - 2026-05-17 metric-driven tuning follow-up: stance losses now ignore frames below the exported `contact_threshold`, swing clearance now uses the exported swing threshold `1-contact_threshold`, and production defaults are `contact_threshold=0.40`, `min_clearance=0.12`, `swing_clearance weight=12`, `worst=12`, `optimize_steps=24`. Broad COBBLESTONE JSONL metrics keep root/knee/shank collision ratios at `0.0` and reduce the remaining swing-foot issue to one near-zero boundary sample (`min_swing_foot_clearance=-4.8e-05m`).
 - 2026-05-17 08:04 strict final follow-up: numeric strict testing then exposed residual high-small/large leg-collision risk, so production defaults were tightened to `leg_collision weight=16`, `knee_margin=0.06`, `shank_margin=0.06`, and `leg worst=16`. Fresh single-process real IsaacLab JSONL metrics now pass `17/17` strict rows with root-bottom/swing-foot/knee/shank collision ratios all `0.0`, low-small crossing in four directions, high-small non-crossing with `risk_linear_scale=0.5`, large forward/yaw deweighting, and stance semantic count `0`.
 - 2026-05-18 T302g child created: independent MPC semantic RL train/play config design and implementation plan are recorded without changing T302 loss defaults or together defaults. T302g acceptance requires 4096 collect-data under `10s` and no T302 strict metric regression.
+- 2026-05-24 T302h child created: user-reported semantic-object jitter/collision near small/large obstacles is reproduced under real IsaacLab with a 300-step near-anchor MPC probe. Follow-up test-only sweeps cover low-small, high-small, and large; `body_stance_crossing` is the best current hypothesis, but a temporary production-default attempt failed real baseline verification and was reverted.
 
 ## Open Children
 
@@ -24,6 +25,7 @@
 | T302e | done | P0 | Implement high-small/large command corridor and yaw-swept risk scaling for tracking losses | `tracking.py`, `registry.py`, `planner.py`, `config.py` |
 | T302f | done | P0 | Add headless `env_isaacsim` acceptance for COBBLESTONE and flat semantic obstacles while preserving T300e metrics | `Go2Pvcnn/tests/` |
 | T302g | todo | P0 | Add independent MPC semantic RL train/play config with high-res semantic scanner, foot-only imitation, swing collision reward, dirty-subset 4096 timing gate, and T302 non-regression gate | [T302g branch](T302g-mpc-semantic-rl-training-config.md) |
+| T302h | verify | P0 | Reproduce and quantify semantic small/large obstacle jitter, root/foot discontinuity, and semantic-object collision rates before production fixes | [T302h branch](T302h-semantic-obstacle-jitter-reproduction.md), `Go2Pvcnn/tests/mpc_semantic_obstacle_jitter_probe.py` |
 
 ## Closed Children Archive
 
@@ -44,6 +46,8 @@
 - [../log/2026-05-17-t302-mpc-metric-tuning.md](../log/2026-05-17-t302-mpc-metric-tuning.md)
 - [../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md](../log/2026-05-17-0804-t302-strict-collision-metric-tuning.md)
 - [../log/2026-05-18-1036-t302g-mpc-semantic-rl-training-design-and-plan.md](../log/2026-05-18-1036-t302g-mpc-semantic-rl-training-design-and-plan.md)
+- [../log/2026-05-24-1110-mpc-semantic-obstacle-jitter-reproduction.md](../log/2026-05-24-1110-mpc-semantic-obstacle-jitter-reproduction.md)
+- [../log/2026-05-24-1223-t302h-semantic-obstacle-variant-sweep.md](../log/2026-05-24-1223-t302h-semantic-obstacle-variant-sweep.md)
 - T300e baseline acceptance: [../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md](../log/2026-05-15-2001-mpc-contact-support-touchdown-anchor-acceptance.md)
 
 ## Git Refs
@@ -71,6 +75,7 @@
 ## Next Step
 
 - Broaden runtime confidence beyond the compact headless acceptance by adding longer command-switch/yaw sequences and 4096-scale counters if T300e/T302 become the active training rollout target.
+- Use [T302h](T302h-semantic-obstacle-jitter-reproduction.md) for robust multi-cycle semantic-object jitter acceptance before any production edit remains.
 - Treat the full-file T302 pytest fixture-reuse hang as an IsaacLab harness caveat; prefer the strict single-process JSONL probes for per-case numeric acceptance until fixture reuse is fixed.
 
 ## T302 Implementation Plan

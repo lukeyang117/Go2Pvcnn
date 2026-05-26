@@ -19,9 +19,6 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT, GO2PVCNN_ROOT / "tests"):
         sys.path.insert(0, path_str)
 
 from fixtures.viewer_runtime_diagnostics import RealViewerRuntimeFixture, refresh_targeted_scanner_pose  # noqa: E402
-from extension.batch_mpc_planner.nominal import build_nominal_trajectory  # noqa: E402
-from extension.batch_mpc_planner.optimizer import optimize_variables  # noqa: E402
-from extension.batch_mpc_planner.variables import decode_trajectory, init_optimization_variables  # noqa: E402
 
 
 COMMAND_ALIASES: dict[str, tuple[float, float, float]] = {
@@ -229,18 +226,22 @@ def _trajectory_summary(
                 )
             )
     if rows:
-        worst_jump = max(float(row["max_to_median_step"]) for row in rows if math.isfinite(float(row["max_to_median_step"])))
-        worst_boundary = max(
+        jumps = [float(row["max_to_median_step"]) for row in rows if math.isfinite(float(row["max_to_median_step"]))]
+        boundaries = [
             float(row["boundary_to_median_step"])
             for row in rows
             if math.isfinite(float(row["boundary_to_median_step"]))
-        )
-        worst_unimodal = max(
+        ]
+        unimodal = [
             float(row["z_unimodal_violation_ratio"])
             for row in rows
             if math.isfinite(float(row["z_unimodal_violation_ratio"]))
-        )
-        min_r2 = min(float(row["z_quadratic_r2"]) for row in rows if math.isfinite(float(row["z_quadratic_r2"])))
+        ]
+        r2_values = [float(row["z_quadratic_r2"]) for row in rows if math.isfinite(float(row["z_quadratic_r2"]))]
+        worst_jump = max(jumps) if jumps else float("nan")
+        worst_boundary = max(boundaries) if boundaries else float("nan")
+        worst_unimodal = max(unimodal) if unimodal else float("nan")
+        min_r2 = min(r2_values) if r2_values else float("nan")
     else:
         worst_jump = float("nan")
         worst_boundary = float("nan")
@@ -291,74 +292,8 @@ def _trace_decode_layers(
     variant: str,
     terrain_case: str,
 ) -> list[dict[str, float | int | str]]:
-    nominal = build_nominal_trajectory(state, command, terrain, cfg.runtime)
-    variables = init_optimization_variables(nominal, cfg.runtime)
-    initial_unlocked = decode_trajectory(nominal, variables, cfg.runtime, terrain=None)
-    initial_locked = decode_trajectory(nominal, variables, cfg.runtime, terrain=terrain)
-    optimized_locked, _cost_total, _loss_breakdown, _finite_ok = optimize_variables(
-        nominal,
-        variables,
-        state,
-        command,
-        terrain,
-        cfg,
-    )
-    optimized_unlocked = decode_trajectory(nominal, variables, cfg.runtime, terrain=None)
-    layers = (
-        (
-            "nominal",
-            _result_like(
-                root_pos=nominal["root_pos"],
-                foot_pos=nominal["foot_pos"],
-                contact_state=nominal["contact_prior"] >= float(cfg.runtime.contact_threshold),
-            ),
-        ),
-        (
-            "initial_decode_unlocked",
-            _result_like(
-                root_pos=initial_unlocked.root_pos,
-                foot_pos=initial_unlocked.foot_pos,
-                contact_state=initial_unlocked.contact_prob >= float(cfg.runtime.contact_threshold),
-            ),
-        ),
-        (
-            "initial_decode_locked",
-            _result_like(
-                root_pos=initial_locked.root_pos,
-                foot_pos=initial_locked.foot_pos,
-                contact_state=initial_locked.contact_prob >= float(cfg.runtime.contact_threshold),
-            ),
-        ),
-        (
-            "optimized_decode_unlocked",
-            _result_like(
-                root_pos=optimized_unlocked.root_pos,
-                foot_pos=optimized_unlocked.foot_pos,
-                contact_state=optimized_unlocked.contact_prob >= float(cfg.runtime.contact_threshold),
-            ),
-        ),
-        (
-            "optimized_decode_locked",
-            _result_like(
-                root_pos=optimized_locked.root_pos,
-                foot_pos=optimized_locked.foot_pos,
-                contact_state=optimized_locked.contact_prob >= float(cfg.runtime.contact_threshold),
-            ),
-        ),
-    )
-    rows: list[dict[str, float | int | str]] = []
-    for layer_name, layer_result in layers:
-        rows.extend(
-            _trajectory_summary(
-                command_name=command_name,
-                cycle=cycle,
-                result=layer_result,
-                layer=layer_name,
-                variant=variant,
-                terrain_case=terrain_case,
-            )
-        )
-    return rows
+    del command_name, cycle, state, command, terrain, cfg, variant, terrain_case
+    raise RuntimeError("--trace-decode-layers used the retired dense MPC decode path and is no longer available")
 
 
 def _variant_cfg(base_cfg, name: str):

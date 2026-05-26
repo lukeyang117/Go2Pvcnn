@@ -41,6 +41,17 @@ def cubic_bezier(p0: Tensor, p1: Tensor, p2: Tensor, p3: Tensor, phase: Tensor) 
     )
 
 
+def _cubic_bezier_with_leg_phase(p0: Tensor, p1: Tensor, p2: Tensor, p3: Tensor, leg_phase: Tensor) -> Tensor:
+    t = leg_phase.unsqueeze(-1).clamp(0.0, 1.0)
+    one = 1.0 - t
+    return (
+        one.pow(3) * p0[:, None, :, :]
+        + 3.0 * one.pow(2) * t * p1[:, None, :, :]
+        + 3.0 * one * t.pow(2) * p2[:, None, :, :]
+        + t.pow(3) * p3[:, None, :, :]
+    )
+
+
 @dataclass
 class MpcParametricVariables:
     touchdown_delta_raw: Tensor
@@ -120,6 +131,134 @@ def _padded_command(command: Tensor, *, batch: int, dtype: torch.dtype, device: 
     return cmd[:, :3]
 
 
+def _support_plane_roll_pitch(
+    root_pos: Tensor,
+    root_yaw: Tensor,
+    foot_pos: Tensor,
+    contact_prob: Tensor,
+    *,
+    swing_weight: float = 0.20,
+    limit_rad: float = 0.35,
+) -> Tensor:
+    weights = float(swing_weight) + (1.0 - float(swing_weight)) * contact_prob.to(dtype=foot_pos.dtype)
+    yaw = root_yaw.unsqueeze(-1)
+    cy = torch.cos(yaw)
+    sy = torch.sin(yaw)
+    rel_xy = foot_pos[..., :2] - root_pos[..., None, :2]
+    x_w = rel_xy[..., 0]
+    y_w = rel_xy[..., 1]
+    x = cy * x_w + sy * y_w
+    y = -sy * x_w + cy * y_w
+    z = foot_pos[..., 2]
+    ones = torch.ones_like(x)
+    a = torch.stack((x, y, ones), dim=-1)
+    w = weights.unsqueeze(-1)
+    ata = torch.einsum("btli,btlj->btij", a * w, a)
+    atz = torch.einsum("btli,btl->bti", a * w, z)
+    eye = torch.eye(3, dtype=foot_pos.dtype, device=foot_pos.device).view(1, 1, 3, 3)
+    coeff = torch.linalg.solve(ata + 1.0e-4 * eye, atz.unsqueeze(-1)).squeeze(-1)
+    slope_x = coeff[..., 0]
+    slope_y = coeff[..., 1]
+    roll = torch.atan(slope_y)
+    pitch = -torch.atan(slope_x)
+    return torch.stack((roll, pitch), dim=-1).clamp(-float(limit_rad), float(limit_rad))
+
+
+def _rotate_xy(vector_xy: Tensor, yaw: Tensor) -> Tensor:
+    c = torch.cos(yaw)
+    s = torch.sin(yaw)
+    x = vector_xy[..., 0]
+    y = vector_xy[..., 1]
+    return torch.stack((c * x - s * y, s * x + c * y), dim=-1)
+
+
+def _canonical_body_footprint(current_rel_body_xy: Tensor) -> Tensor:
+    leg_sign = torch.tensor(
+        ((1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)),
+        dtype=current_rel_body_xy.dtype,
+        device=current_rel_body_xy.device,
+    ).view(1, 4, 2)
+    half_span = current_rel_body_xy.abs().mean(dim=1, keepdim=True)
+    half_span = torch.stack(
+        (
+            half_span[..., 0].clamp(0.18, 0.34),
+            half_span[..., 1].clamp(0.08, 0.20),
+        ),
+        dim=-1,
+    )
+    return leg_sign * half_span
+
+
+def _terrain_grid_world_xy(terrain, *, dtype: torch.dtype, device: torch.device, batch: int) -> Tensor:
+    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    if int(height.shape[0]) == 1 and batch > 1:
+        height = height.expand(batch, -1, -1)
+    rows, cols = int(height.shape[-2]), int(height.shape[-1])
+    xs = torch.linspace(float(terrain.world_x_range[0]), float(terrain.world_x_range[1]), cols, dtype=dtype, device=device)
+    ys = torch.linspace(float(terrain.world_y_range[0]), float(terrain.world_y_range[1]), rows, dtype=dtype, device=device)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    return torch.stack((xx, yy), dim=-1).reshape(1, rows * cols, 2).expand(batch, -1, -1)
+
+
+def _high_large_root_bypass(
+    state,
+    terrain,
+    cmd: Tensor,
+    forward: Tensor,
+    left: Tensor,
+    *,
+    root0: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    from .terrain import height_at
+
+    batch = int(root0.shape[0])
+    dtype = root0.dtype
+    device = root0.device
+    zero = torch.zeros((batch,), dtype=dtype, device=device)
+    if terrain.semantic_map is None:
+        return zero.bool(), zero, zero
+    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
+    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    if int(height.shape[0]) == 1 and batch > 1:
+        height = height.expand(batch, -1, -1)
+    if int(semantic.shape[0]) == 1 and batch > 1:
+        semantic = semantic.expand(batch, -1, -1)
+    if int(height.shape[0]) != batch or int(semantic.shape[0]) != batch:
+        return zero.bool(), zero, zero
+
+    grid_xy = _terrain_grid_world_xy(terrain, dtype=dtype, device=device, batch=batch)
+    grid_z = height.reshape(batch, -1)
+    grid_sem = semantic.reshape(batch, -1)
+    root_ground = height_at(terrain, root0[:, None, :2]).reshape(batch).to(dtype=dtype, device=device)
+    high_small = torch.logical_and(grid_sem == 1, (grid_z - root_ground[:, None]) > 0.30)
+    risky = torch.logical_or(grid_sem >= 2, high_small)
+    delta = grid_xy - root0[:, None, :2]
+    along = (delta * forward[:, None, :]).sum(dim=-1)
+    lateral = (delta * left[:, None, :]).sum(dim=-1)
+    speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
+    yaw_active = torch.abs(cmd[:, 2]) > 1.0e-4
+    linear_candidate = torch.logical_and(
+        torch.logical_and(along >= -0.15, along <= 1.20),
+        torch.abs(lateral) <= 0.55,
+    )
+    yaw_candidate = torch.logical_and(yaw_active[:, None], torch.linalg.vector_norm(delta, dim=-1) <= 0.75)
+    candidate = torch.logical_and(risky, torch.logical_or(linear_candidate, yaw_candidate))
+    candidate = torch.logical_and(candidate, torch.logical_or(speed[:, None] > 1.0e-4, yaw_active[:, None]))
+    score = torch.where(candidate, along.abs() + 0.25 * lateral.abs(), torch.full_like(along, 1.0e6))
+    idx = score.argmin(dim=1)
+    active = score.gather(1, idx[:, None]).squeeze(1) < 1.0e5
+    obstacle_along = along.gather(1, idx[:, None]).squeeze(1)
+    obstacle_lateral = lateral.gather(1, idx[:, None]).squeeze(1)
+    side = torch.where(obstacle_lateral > 0.0, -torch.ones_like(obstacle_lateral), torch.ones_like(obstacle_lateral))
+    return active, obstacle_along, side
+
+
 def decode_parametric_trajectory(
     state,
     terrain,
@@ -141,10 +280,57 @@ def decode_parametric_trajectory(
     cmd = _padded_command(command, batch=batch, dtype=dtype, device=device)
     forward, left, _linear_active = command_frame_axes(cmd, rpy0[:, 2], linear_eps=1.0e-4)
 
-    touchdown_delta = 0.35 * torch.tanh(variables.touchdown_delta_raw)
-    touchdown_xy = foot0[..., :2] + forward[:, None, :] * touchdown_delta[..., 0:1] + left[:, None, :] * touchdown_delta[..., 1:2]
+    root_goal_delta = torch.stack(
+        (
+            0.15 + 0.2 * torch.sigmoid(variables.root_goal_delta_raw[:, 0]),
+            0.25 * torch.tanh(variables.root_goal_delta_raw[:, 1]),
+        ),
+        dim=-1,
+    )
+    avoid_active, obstacle_along, bypass_side = _high_large_root_bypass(
+        state,
+        terrain,
+        cmd,
+        forward,
+        left,
+        root0=root0,
+    )
+    avoid_lateral = bypass_side * 0.52
+    avoid_progress = torch.maximum(root_goal_delta[:, 0], obstacle_along + 0.20)
+    root_goal_delta = torch.stack(
+        (
+            torch.where(avoid_active, avoid_progress.clamp(0.45, 0.85), root_goal_delta[:, 0]),
+            torch.where(avoid_active, avoid_lateral, root_goal_delta[:, 1]),
+        ),
+        dim=-1,
+    )
+    root_goal_xy = root0[:, :2] + forward * root_goal_delta[:, 0:1] + left * root_goal_delta[:, 1:2]
+    terminal_yaw = rpy0[:, 2] + cmd[:, 2] * 0.5
+
+    current_rel_xy = foot0[..., :2] - root0[:, None, :2]
+    current_rel_body = _rotate_xy(current_rel_xy, -rpy0[:, None, 2])
+    terminal_body_footprint = _canonical_body_footprint(current_rel_body)
+    terminal_rel_xy = _rotate_xy(terminal_body_footprint, terminal_yaw[:, None])
+    touchdown_delta = 0.40 * torch.tanh(variables.touchdown_delta_raw)
+    touchdown_delta = touchdown_delta - touchdown_delta.mean(dim=1, keepdim=True)
+    touchdown_xy = (
+        root_goal_xy[:, None, :]
+        + terminal_rel_xy
+        + forward[:, None, :] * touchdown_delta[..., 0:1]
+        + left[:, None, :] * touchdown_delta[..., 1:2]
+    )
     touchdown_z = height_at(terrain, touchdown_xy).to(dtype=dtype, device=device)
     touchdown_w = torch.cat((touchdown_xy, touchdown_z.unsqueeze(-1)), dim=-1)
+
+    base_center = torch.tensor((0.75, 0.25, 0.25, 0.75), dtype=dtype, device=device).view(1, 4)
+    swing_center = torch.remainder(base_center + 0.20 * torch.tanh(variables.swing_center_raw), 1.0)
+    swing_width = bounded_unit_interval(variables.swing_width_raw, low=0.30, high=0.70)
+    frame_phase = phase.view(1, h, 1)
+    swing_start = (swing_center[:, None, :] - 0.5 * swing_width[:, None, :]).clamp(0.0, 1.0)
+    leg_phase = ((frame_phase - swing_start) / swing_width[:, None, :].clamp_min(1.0e-6)).clamp(0.0, 1.0)
+    dist = torch.abs(torch.remainder(frame_phase - swing_center[:, None, :] + 0.5, 1.0) - 0.5)
+    swing_prob = torch.sigmoid(40.0 * (0.5 * swing_width[:, None, :] - dist))
+    contact_prob = 1.0 - swing_prob
 
     ab = bounded_unit_interval(variables.bezier_ab_raw, low=0.15, high=0.85)
     a = ab[..., 0:1]
@@ -156,28 +342,25 @@ def decode_parametric_trajectory(
     p3 = touchdown_xy
     p1 = p0 + forward[:, None, :] * (a * length) + left[:, None, :] * lateral_bias[..., 0:1]
     p2 = p3 - forward[:, None, :] * (b * length) + left[:, None, :] * lateral_bias[..., 1:2]
-    foot_xy = cubic_bezier(p0, p1, p2, p3, phase)
+    foot_xy = _cubic_bezier_with_leg_phase(p0, p1, p2, p3, leg_phase)
     terrain_z = height_at(terrain, foot_xy.reshape(batch, h * 4, 2)).reshape(batch, h, 4).to(dtype=dtype, device=device)
     clearance = 0.04 + 0.16 * torch.sigmoid(variables.swing_clearance_raw)
-    base_z = torch.lerp(foot0[:, None, :, 2], touchdown_z[:, None, :], phase.view(1, h, 1))
-    arc = 4.0 * phase.view(1, h, 1) * (1.0 - phase.view(1, h, 1)) * clearance[:, None, :]
+    base_z = foot0[:, None, :, 2] + (touchdown_z[:, None, :] - foot0[:, None, :, 2]) * leg_phase
+    arc = 4.0 * leg_phase * (1.0 - leg_phase) * clearance[:, None, :]
     foot_z = torch.maximum(base_z + arc, terrain_z + 0.025)
     foot_z = foot_z.clone()
     foot_z[:, 0, :] = foot0[..., 2]
     target_foot_pos = torch.cat((foot_xy, foot_z.unsqueeze(-1)), dim=-1)
 
-    root_goal_delta = torch.stack(
-        (
-            0.30 + 0.50 * torch.sigmoid(variables.root_goal_delta_raw[:, 0]),
-            0.25 * torch.tanh(variables.root_goal_delta_raw[:, 1]),
-        ),
-        dim=-1,
-    )
-    root_goal_xy = root0[:, :2] + forward * root_goal_delta[:, 0:1] + left * root_goal_delta[:, 1:2]
     root_c = bounded_unit_interval(variables.root_bezier_raw, low=0.15, high=0.85)
     root_step = root_goal_xy - root0[:, :2]
     root_len = torch.linalg.vector_norm(root_step, dim=-1, keepdim=True).clamp_min(1.0e-6)
     root_lat = 0.20 * torch.tanh(variables.root_lateral_bias_raw)
+    root_lat = torch.where(
+        avoid_active[:, None],
+        torch.stack((0.78 * avoid_lateral, 0.18 * avoid_lateral), dim=-1),
+        root_lat,
+    )
     r0 = root0[:, :2]
     r3 = root_goal_xy
     r1 = r0 + forward * (root_c[:, 0:1] * root_len) + left * root_lat[:, 0:1]
@@ -190,14 +373,11 @@ def decode_parametric_trajectory(
     root_pos = torch.cat((root_xy, root_z.unsqueeze(-1)), dim=-1)
     root_rpy = rpy0[:, None, :].expand(batch, h, 3).clone()
     root_rpy[..., 2] = torch.lerp(rpy0[:, None, 2], rpy0[:, None, 2] + cmd[:, None, 2] * 0.5, phase.view(1, h))
+    support_roll_pitch = _support_plane_roll_pitch(root_pos, root_rpy[..., 2], target_foot_pos, contact_prob)
+    root_ramp = phase.pow(2) * (3.0 - 2.0 * phase)
+    root_rpy[..., :2] = torch.lerp(rpy0[:, None, :2], support_roll_pitch, root_ramp.view(1, h, 1))
+    root_rpy[:, 0, :2] = rpy0[:, :2]
 
-    base_center = torch.tensor((0.75, 0.25, 0.25, 0.75), dtype=dtype, device=device).view(1, 4)
-    swing_center = torch.remainder(base_center + 0.20 * torch.tanh(variables.swing_center_raw), 1.0)
-    swing_width = bounded_unit_interval(variables.swing_width_raw, low=0.30, high=0.70)
-    frame_phase = phase.view(1, h, 1)
-    dist = torch.abs(torch.remainder(frame_phase - swing_center[:, None, :] + 0.5, 1.0) - 0.5)
-    swing_prob = torch.sigmoid(40.0 * (0.5 * swing_width[:, None, :] - dist))
-    contact_prob = 1.0 - swing_prob
     return DecodedParametricTrajectory(
         root_pos=root_pos,
         root_rpy=root_rpy,

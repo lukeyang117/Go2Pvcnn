@@ -1,4 +1,4 @@
-"""Dense MPC backend scaffold for planner-owned reference cache runtime."""
+"""Parametric MPC backend for planner-owned reference cache runtime."""
 
 from .config import (
     MpcDiagnosticsCfg,

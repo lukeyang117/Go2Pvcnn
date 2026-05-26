@@ -23,7 +23,7 @@ class MpcRuntimeCfg:
     heavy_loss_stride: int = 2
     heavy_loss_enable_from_iter: int = 8
     parallel_plan_batch_size: int = 4096
-    randomize_replan_phase: bool = True
+    randomize_replan_phase: bool = False
     randomize_command_phase: bool = True
     command_hard_lin_delta: float = 0.25
     command_hard_yaw_delta: float = 0.35
@@ -205,6 +205,75 @@ class MpcHighObstacleAvoidanceLossCfg(MpcLossTermCfg):
 
 
 @dataclass
+class MpcLowSmallFootCrossingLossCfg(MpcLossTermCfg):
+    high_small_relative_height_m: float = 0.30
+    soft_margin_m: float = 0.30
+    foot_weight: float = 58.0
+    foot_worst_weight: float = 22.0
+    touchdown_weight: float = 30.0
+    touchdown_worst_weight: float = 14.0
+
+
+@dataclass
+class MpcLowSmallFootOverLossCfg(MpcLossTermCfg):
+    high_small_relative_height_m: float = 0.30
+    corridor_width_m: float = 0.30
+    forward_distance_m: float = 1.0
+    along_window_m: float = 0.26
+    radius_m: float = 0.08
+    clearance_m: float = 0.065
+    xy_weight: float = 220.0
+    direct_xy_weight: float = 260.0
+    z_weight: float = 420.0
+    ineligible_penalty: float = 1.5
+    time_gate_penalty: float = 4.0
+    path_curve_weight: float = 120.0
+    path_curve_z_weight: float = 90.0
+    path_curve_window_m: float = 0.30
+    path_curve_body_yaw: bool = True
+    window_weight: float = 0.0
+    window_min_count: float = 3.0
+    window_sigma_m: float = 0.08
+    window_z_temp_m: float = 0.025
+    window_step_weight: float = 0.0
+    window_step_cap_m: float = 0.055
+    window_accel_weight: float = 0.0
+    window_accel_cap_m: float = 0.065
+    window_coupled: bool = False
+    linear_speed_eps: float = 1.0e-4
+
+
+@dataclass
+class MpcLowSmallStepcapLossCfg(MpcLossTermCfg):
+    foot_boundary_weight: float = 16.0
+    foot_step_worst_weight: float = 260.0
+    foot_accel_weight: float = 46.0
+    foot_accel_worst_weight: float = 300.0
+    foot_jerk_weight: float = 36.0
+    root_step_worst_weight: float = 80.0
+    root_accel_weight: float = 20.0
+    root_accel_worst_weight: float = 90.0
+    first_foot_anchor_weight: float = 35.0
+    first_foot_anchor_frames: int = 4
+    high_small_relative_height_m: float = 0.30
+    lateral_or_yaw_eps: float = 1.0e-4
+
+
+@dataclass
+class MpcHighLargeStepcapLossCfg(MpcLossTermCfg):
+    foot_boundary_weight: float = 22.0
+    foot_step_worst_weight: float = 520.0
+    foot_accel_weight: float = 72.0
+    foot_accel_worst_weight: float = 700.0
+    foot_jerk_weight: float = 90.0
+    root_step_worst_weight: float = 140.0
+    root_accel_weight: float = 32.0
+    root_accel_worst_weight: float = 180.0
+    high_small_relative_height_m: float = 0.30
+    lateral_or_yaw_eps: float = 1.0e-4
+
+
+@dataclass
 class MpcBodyCollisionLossCfg(MpcLossTermCfg):
     bottom_offset_z_m: float = -0.18
     margin_m: float = 0.04
@@ -280,6 +349,18 @@ class MpcLossesCfg:
     semantic_obstacle: MpcSemanticObstacleLossCfg = field(default_factory=lambda: MpcSemanticObstacleLossCfg(enabled=True, weight=1.0))
     obstacle_risk: MpcObstacleRiskCfg = field(default_factory=lambda: MpcObstacleRiskCfg(enabled=True, weight=1.0))
     low_small_crossing: MpcLowSmallCrossingLossCfg = field(default_factory=lambda: MpcLowSmallCrossingLossCfg(enabled=True, weight=8.0))
+    low_small_foot_crossing: MpcLowSmallFootCrossingLossCfg = field(
+        default_factory=lambda: MpcLowSmallFootCrossingLossCfg(enabled=True, weight=1.0)
+    )
+    low_small_foot_over: MpcLowSmallFootOverLossCfg = field(
+        default_factory=lambda: MpcLowSmallFootOverLossCfg(enabled=True, weight=1.0)
+    )
+    low_small_stepcap: MpcLowSmallStepcapLossCfg = field(
+        default_factory=lambda: MpcLowSmallStepcapLossCfg(enabled=True, weight=1.0)
+    )
+    high_large_stepcap: MpcHighLargeStepcapLossCfg = field(
+        default_factory=lambda: MpcHighLargeStepcapLossCfg(enabled=True, weight=1.0)
+    )
     high_obstacle_avoidance: MpcHighObstacleAvoidanceLossCfg = field(
         default_factory=lambda: MpcHighObstacleAvoidanceLossCfg(enabled=True, weight=250.0)
     )
@@ -300,6 +381,8 @@ class MpcPlannerCfg:
     diagnostics: MpcDiagnosticsCfg = field(default_factory=MpcDiagnosticsCfg)
     losses: MpcLossesCfg = field(default_factory=MpcLossesCfg)
     profile_name: str = "train_4096"
+    debug_loss_variant: str | None = None
+    debug_loss_variant_cfg_applied: bool = False
 
 
 def _copy_if_has(cfg, attr: str, cast, default):
@@ -345,6 +428,12 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     runtime.optimize_steps = _copy_if_has(task_cfg, "mpc_optimize_steps", int, runtime.optimize_steps)
     runtime.lr = _copy_if_has(task_cfg, "mpc_lr", float, runtime.lr)
     runtime.contact_threshold = _copy_if_has(task_cfg, "mpc_contact_threshold", float, runtime.contact_threshold)
+    runtime.randomize_replan_phase = _copy_if_has(
+        task_cfg,
+        "mpc_randomize_replan_phase",
+        bool,
+        runtime.randomize_replan_phase,
+    )
     runtime.command_hard_lin_delta = _copy_if_has(task_cfg, "mpc_command_hard_lin_delta", float, runtime.command_hard_lin_delta)
     runtime.command_hard_yaw_delta = _copy_if_has(task_cfg, "mpc_command_hard_yaw_delta", float, runtime.command_hard_yaw_delta)
     runtime.command_soft_lin_delta = _copy_if_has(task_cfg, "mpc_command_soft_lin_delta", float, runtime.command_soft_lin_delta)
@@ -369,6 +458,8 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     if leg_phase is not None:
         runtime.leg_phase_offsets = tuple(float(v) for v in leg_phase)
     out.profile_name = str(getattr(task_cfg, "mpc_profile_name", out.profile_name))
+    debug_variant = getattr(task_cfg, "mpc_debug_loss_variant", out.debug_loss_variant)
+    out.debug_loss_variant = None if debug_variant in (None, "", "baseline") else str(debug_variant)
     out.diagnostics.enabled = bool(getattr(task_cfg, "mpc_diagnostics_enabled", out.diagnostics.enabled))
     _set_if_has(task_cfg, "mpc_diagnostics_strict_failure_mask", bool, out.diagnostics, "strict_failure_mask")
     _set_if_has(task_cfg, "mpc_diagnostics_emit_viewer_fields", bool, out.diagnostics, "emit_viewer_fields")
@@ -521,6 +612,62 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     _set_if_has(task_cfg, "mpc_loss_low_small_crossing_pass_margin_m", float, losses.low_small_crossing, "pass_margin_m")
     _set_if_has(task_cfg, "mpc_loss_low_small_crossing_obstacle_depth_m", float, losses.low_small_crossing, "obstacle_depth_m")
     _set_if_has(task_cfg, "mpc_loss_low_small_crossing_linear_speed_eps", float, losses.low_small_crossing, "linear_speed_eps")
+    _override_loss_term(task_cfg, prefix="mpc_loss_low_small_foot_crossing", loss_term=losses.low_small_foot_crossing)
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_low_small_foot_crossing_high_small_relative_height_m",
+        float,
+        losses.low_small_foot_crossing,
+        "high_small_relative_height_m",
+    )
+    _set_if_has(task_cfg, "mpc_loss_low_small_foot_crossing_soft_margin_m", float, losses.low_small_foot_crossing, "soft_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_low_small_foot_crossing_foot_weight", float, losses.low_small_foot_crossing, "foot_weight")
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_low_small_foot_crossing_foot_worst_weight",
+        float,
+        losses.low_small_foot_crossing,
+        "foot_worst_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_low_small_foot_crossing_touchdown_weight",
+        float,
+        losses.low_small_foot_crossing,
+        "touchdown_weight",
+    )
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_low_small_foot_crossing_touchdown_worst_weight",
+        float,
+        losses.low_small_foot_crossing,
+        "touchdown_worst_weight",
+    )
+    _override_loss_term(task_cfg, prefix="mpc_loss_low_small_stepcap", loss_term=losses.low_small_stepcap)
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_foot_boundary_weight", float, losses.low_small_stepcap, "foot_boundary_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_foot_step_worst_weight", float, losses.low_small_stepcap, "foot_step_worst_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_foot_accel_weight", float, losses.low_small_stepcap, "foot_accel_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_foot_accel_worst_weight", float, losses.low_small_stepcap, "foot_accel_worst_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_foot_jerk_weight", float, losses.low_small_stepcap, "foot_jerk_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_root_step_worst_weight", float, losses.low_small_stepcap, "root_step_worst_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_root_accel_weight", float, losses.low_small_stepcap, "root_accel_weight")
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_root_accel_worst_weight", float, losses.low_small_stepcap, "root_accel_worst_weight")
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_low_small_stepcap_first_foot_anchor_weight",
+        float,
+        losses.low_small_stepcap,
+        "first_foot_anchor_weight",
+    )
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_first_foot_anchor_frames", int, losses.low_small_stepcap, "first_foot_anchor_frames")
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_low_small_stepcap_high_small_relative_height_m",
+        float,
+        losses.low_small_stepcap,
+        "high_small_relative_height_m",
+    )
+    _set_if_has(task_cfg, "mpc_loss_low_small_stepcap_lateral_or_yaw_eps", float, losses.low_small_stepcap, "lateral_or_yaw_eps")
     _override_loss_term(task_cfg, prefix="mpc_loss_high_obstacle_avoidance", loss_term=losses.high_obstacle_avoidance)
     _set_if_has(
         task_cfg,
@@ -619,6 +766,8 @@ __all__ = [
     "MpcLegCollisionLossCfg",
     "MpcLossesCfg",
     "MpcLowSmallCrossingLossCfg",
+    "MpcLowSmallFootCrossingLossCfg",
+    "MpcLowSmallStepcapLossCfg",
     "MpcObstacleRiskCfg",
     "MpcPlannerCfg",
     "MpcRuntimeCfg",

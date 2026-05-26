@@ -1,5 +1,3 @@
-"""Loss entrypoints for batch MPC."""
+"""Loss helpers for the parametric batch MPC backend."""
 
-from .registry import compute_total_loss
-
-__all__ = ["compute_total_loss"]
+__all__: list[str] = []

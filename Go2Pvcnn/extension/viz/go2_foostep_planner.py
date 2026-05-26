@@ -94,6 +94,10 @@ class ViewerResetSnapshot:
 class ViewerStepGate:
     enabled: bool
 
+    def toggle_enabled(self) -> bool:
+        self.enabled = not self.enabled
+        return self.enabled
+
     def consume_frame_permission(self, *, step_requested: bool) -> bool:
         if not self.enabled:
             return True
@@ -121,16 +125,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["together", "legacy", "mpc"],
         help="Trajectory manager backend used by the task attachment path.",
     )
+    parser.add_argument(
+        "--mpc-debug-variant",
+        type=str,
+        default=None,
+        help="Optional MPC debug loss variant for reproducing probe behavior, e.g. reachable_fk_cross_v9.",
+    )
     parser.add_argument("--vx-scale", type=float, default=0.5, help="Teleop forward/backward speed.")
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
     parser.add_argument("--yaw-scale", type=float, default=1, help="Teleop yaw-rate command.")
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")
-    parser.add_argument(
-        "--step-mode",
-        action="store_true",
-        default=False,
-        help="Pause playback and advance exactly one frame for each Space key press.",
-    )
     parser.add_argument("--heightmap-viz-stride", type=int, default=10, help="Subsample stride for heightmap markers.")
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
@@ -404,6 +408,22 @@ def _parse_scripted_command(spec: str | None, *, device: torch.device) -> torch.
     except ValueError as exc:
         raise ValueError("--scripted-command must contain exactly three floats: vx vy yaw_rate") from exc
     return torch.tensor([values], dtype=torch.float64, device=device)
+
+
+def _viewer_mpc_world_command_from_root_frame(command: torch.Tensor, state) -> torch.Tensor:
+    body_command = torch.as_tensor(command)
+    if body_command.ndim != 2 or int(body_command.shape[-1]) < 3:
+        raise ValueError("viewer MPC command must have shape [B, 3]")
+    root_rpy = torch.as_tensor(state.root_rpy, dtype=body_command.dtype, device=body_command.device)
+    yaw = root_rpy[:, 2]
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    vx_body = body_command[:, 0]
+    vy_body = body_command[:, 1]
+    world_command = body_command.clone()
+    world_command[:, 0] = cos_yaw * vx_body - sin_yaw * vy_body
+    world_command[:, 1] = sin_yaw * vx_body + cos_yaw * vy_body
+    return world_command
 
 
 def _quat_wxyz_to_rpy(quat_wxyz: torch.Tensor) -> torch.Tensor:
@@ -773,6 +793,17 @@ def _viewer_update_visualizer_when_permitted(*, frame_permitted: bool, update_fn
         update_fn()
 
 
+def _viewer_select_active_teleop_values(
+    *,
+    live_values: torch.Tensor,
+    latched_values: torch.Tensor,
+    step_mode_enabled: bool,
+) -> torch.Tensor:
+    if step_mode_enabled:
+        return torch.as_tensor(latched_values).clone()
+    return torch.as_tensor(live_values).clone()
+
+
 def _launch_app(args_cli: argparse.Namespace):
     from isaaclab.app import AppLauncher
 
@@ -866,6 +897,7 @@ class TeleopCommand:
     values: torch.Tensor
     reset_requested: bool = False
     step_requested: bool = False
+    mode_toggle_requested: bool = False
 
 
 class TerminalTeleop:
@@ -888,12 +920,10 @@ class TerminalTeleop:
         vy_scale: float,
         yaw_scale: float,
         timeout_s: float,
-        latch_commands: bool = False,
     ):
         self._device = device
         self._scales = torch.tensor([vx_scale, vy_scale, yaw_scale], dtype=torch.float64, device=device)
         self._timeout_s = float(timeout_s)
-        self._latch_commands = bool(latch_commands)
         self._latched_values = torch.zeros((1, 3), dtype=torch.float64, device=device)
         self._last_seen: dict[str, float] = {}
         self._old_termios = None
@@ -957,6 +987,7 @@ class TerminalTeleop:
         self._old_signal_handlers.clear()
 
     def _handle_signal(self, signum, frame) -> None:
+        self._remove_cleanup_guards()
         self._restore_terminal_state()
         if signum == signal.SIGINT:
             raise KeyboardInterrupt
@@ -965,6 +996,7 @@ class TerminalTeleop:
     def poll(self) -> TeleopCommand:
         reset_requested = False
         step_requested = False
+        mode_toggle_requested = False
         if self._enabled:
             while True:
                 readable, _, _ = select.select([sys.stdin], [], [], 0.0)
@@ -989,25 +1021,31 @@ class TerminalTeleop:
                 if key == " ":
                     step_requested = True
                     continue
+                if key == "m":
+                    mode_toggle_requested = True
+                    continue
                 if key in self._KEY_AXIS:
                     axis, sign = self._KEY_AXIS[key]
-                    if self._latch_commands:
-                        self._latched_values[0, axis] = sign * self._scales[axis]
-                    else:
-                        self._last_seen[key] = now
-        if self._latch_commands:
-            return TeleopCommand(
-                values=self._latched_values.clone(),
-                reset_requested=reset_requested,
-                step_requested=step_requested,
-            )
+                    self._latched_values[0, axis] = sign * self._scales[axis]
+                    self._last_seen[key] = now
         now = time.monotonic()
         values = torch.zeros((1, 3), dtype=torch.float64, device=self._device)
         for key, (axis, sign) in self._KEY_AXIS.items():
             last_seen = self._last_seen.get(key)
             if last_seen is not None and now - last_seen <= self._timeout_s:
                 values[0, axis] += sign * self._scales[axis]
-        return TeleopCommand(values=values, reset_requested=reset_requested, step_requested=step_requested)
+        if mode_toggle_requested:
+            self._last_seen.clear()
+            values = self._latched_values.clone()
+        return TeleopCommand(
+            values=values,
+            reset_requested=reset_requested,
+            step_requested=step_requested,
+            mode_toggle_requested=mode_toggle_requested,
+        )
+
+    def latched_command(self) -> torch.Tensor:
+        return self._latched_values.clone()
 
 
 def _make_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]):
@@ -1241,12 +1279,16 @@ def _build_together_planner_cfg(env_cfg):
     )
 
 
-def _build_mpc_planner_cfg(env_cfg):
-    from extension.batch_mpc_planner.config import planner_cfg_from_task_cfg
+def _build_mpc_planner_cfg(env_cfg, args_cli: argparse.Namespace | None = None):
+    from extension.batch_mpc_planner.config import MpcRuntimeCfg, planner_cfg_from_task_cfg
+    from extension.batch_mpc_planner.debug_variants import apply_mpc_debug_variant_cfg
 
     cfg = planner_cfg_from_task_cfg(env_cfg)
     cfg.runtime.dt = float(getattr(env_cfg, "plan_dt", cfg.runtime.dt))
-    cfg.runtime.horizon_steps = int(getattr(env_cfg, "reference_trajectory_horizon", cfg.runtime.horizon_steps))
+    cfg.runtime.horizon_steps = int(getattr(getattr(env_cfg, "mpc_runtime_cfg", None), "horizon_steps", MpcRuntimeCfg().horizon_steps))
+    variant = None if args_cli is None else getattr(args_cli, "mpc_debug_variant", None)
+    if variant not in (None, "", "baseline"):
+        cfg.debug_loss_variant = str(variant)
     return cfg
 
 
@@ -2010,6 +2052,7 @@ def _plan_viewer_trajectory(
     if backend_name == "mpc":
         from extension.batch_mpc_planner.planner import plan_segment
 
+        command = _viewer_mpc_world_command_from_root_frame(command, state)
         return _adapt_mpc_result_for_viewer(
             plan_segment(
                 terrain,
@@ -2028,7 +2071,8 @@ def _print_help() -> None:
     print("  Q/E : yaw left/right", flush=True)
     print("  X   : clear command", flush=True)
     print("  R   : reset environment", flush=True)
-    print("  Space : step one frame when --step-mode is enabled", flush=True)
+    print("  M   : toggle step mode", flush=True)
+    print("  Space : step one frame when step mode is enabled", flush=True)
     print("  Ctrl-C : quit\n", flush=True)
 
 
@@ -2046,8 +2090,9 @@ def main() -> int:
     planner_cfg = _build_planner_cfg(env_cfg)
     planner_cfg.dt = float(args_cli.plan_dt)
     planner_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
-    together_planner_cfg = _build_together_planner_cfg(env_cfg)
-    mpc_planner_cfg = _build_mpc_planner_cfg(env_cfg)
+    backend_name = str(args_cli.planner_backend).lower()
+    together_planner_cfg = _build_together_planner_cfg(env_cfg) if backend_name == "together" else None
+    mpc_planner_cfg = _build_mpc_planner_cfg(env_cfg, args_cli=args_cli) if backend_name == "mpc" else None
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Go2-Play-v0",
@@ -2065,8 +2110,7 @@ def main() -> int:
     print("[Viewer] Terrain source: teacher_elevation_trajectory env config", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
     print("[Viewer] Playback mode: kinematic (no physics)", flush=True)
-    if args_cli.step_mode:
-        print("[Viewer] Step mode: enabled; press Space to advance one frame.", flush=True)
+    print("[Viewer] Step mode: disabled; press M to toggle, Space advances one frame while enabled.", flush=True)
     _print_help()
 
     selected_origin = _reset_viewer_env(
@@ -2094,7 +2138,7 @@ def main() -> int:
     plan_cycle = 0
     scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
     scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
-    step_gate = ViewerStepGate(enabled=bool(args_cli.step_mode))
+    step_gate = ViewerStepGate(enabled=False)
 
     with TerminalTeleop(
         device=base_env.device,
@@ -2102,7 +2146,6 @@ def main() -> int:
         vy_scale=float(args_cli.vy_scale),
         yaw_scale=float(args_cli.yaw_scale),
         timeout_s=float(args_cli.key_hold_timeout),
-        latch_commands=bool(args_cli.step_mode),
     ) as teleop:
         last_status = None
         last_loop_diag = None
@@ -2118,7 +2161,21 @@ def main() -> int:
                         values=scripted_command.clone(),
                         reset_requested=teleop_cmd.reset_requested,
                         step_requested=teleop_cmd.step_requested,
+                        mode_toggle_requested=teleop_cmd.mode_toggle_requested,
                     )
+
+                if active_cmd.mode_toggle_requested:
+                    enabled = step_gate.toggle_enabled()
+                    print(f"[Viewer][StepMode] {'enabled' if enabled else 'disabled'}", flush=True)
+
+                active_cmd = replace(
+                    active_cmd,
+                    values=_viewer_select_active_teleop_values(
+                        live_values=active_cmd.values,
+                        latched_values=teleop.latched_command(),
+                        step_mode_enabled=step_gate.enabled,
+                    ),
+                )
 
                 if active_cmd.reset_requested:
                     selected_origin = _reset_viewer_env(
@@ -2150,7 +2207,7 @@ def main() -> int:
                     reset_requested=active_cmd.reset_requested,
                     teleop_values=active_cmd.values,
                     last_cmd=last_cmd,
-                    defer_command_replan_until_trajectory_end=bool(args_cli.step_mode),
+                    defer_command_replan_until_trajectory_end=step_gate.enabled,
                 )
                 drain_zero_replan = False
                 if need_replan and _viewer_should_drain_before_zero_replan(
@@ -2188,7 +2245,7 @@ def main() -> int:
                     last_loop_diag = loop_diag
 
                 frame_permitted = step_gate.consume_frame_permission(step_requested=active_cmd.step_requested)
-                if bool(args_cli.step_mode) and not frame_permitted and not active_cmd.reset_requested:
+                if step_gate.enabled and not frame_permitted and not active_cmd.reset_requested:
                     _viewer_pump_paused_window(base_env)
                     continue
 
@@ -2260,7 +2317,7 @@ def main() -> int:
                         )
 
                     _viewer_update_visualizer_when_permitted(
-                        frame_permitted=(frame_permitted or not bool(args_cli.step_mode)),
+                        frame_permitted=(frame_permitted or not step_gate.enabled),
                         update_fn=_update_step_visualizer,
                     )
                     plan_cycle += 1
@@ -2326,7 +2383,7 @@ def main() -> int:
                         continue
                     if drain_zero_replan:
                         continue
-                elif result is not None and playback_frame < result.num_frames and args_cli.step_mode:
+                elif result is not None and playback_frame < result.num_frames and step_gate.enabled:
                     time.sleep(0.01)
 
                 last_cmd = active_cmd.values.clone()
