@@ -943,7 +943,7 @@ Expected:
 - at least one plane env row;
 - rows include all required metric names.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Go2Pvcnn/tests/mpc_low_small_reachable_crossing_probe.py Go2Pvcnn/tests/test_batch_mpc_backend.py
@@ -963,7 +963,7 @@ git commit -m "test: add plane low-small fk semantic collision probe"
 - Create: `notes/log/YYYY-MM-DD-t302k-low-small-loss-redesign-isaaclab.md`
 - Modify: `notes/log/index.md`
 
-- [ ] **Step 1: Run local focused tests**
+- [x] **Step 1: Run local focused tests**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_parametric.py -q
@@ -977,7 +977,7 @@ python -m py_compile \
   Go2Pvcnn/extension/batch_mpc_planner/kinematics.py
 ```
 
-- [ ] **Step 2: Run IsaacLab plane command matrix**
+- [x] **Step 2: Run IsaacLab plane command matrix**
 
 Use one or more of four GPUs:
 
@@ -991,7 +991,7 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
   > tmp/t302k-low-small-redesign/plane_fk_collision_full_gpu0.jsonl 2>&1
 ```
 
-- [ ] **Step 3: Acceptance checks**
+- [x] **Step 3: Acceptance checks**
 
 For every command that has `crossing_leg_count > 0`:
 
@@ -1004,7 +1004,7 @@ planned_vs_fk_foot_error_crossing_leg_max_m <= 0.05m preferred, <= 0.08m accepta
 
 If a command has `crossing_leg_count == 0`, mark it as not-covered instead of pass.
 
-- [ ] **Step 4: Write logs**
+- [x] **Step 4: Write logs**
 
 Each log must include:
 
@@ -1019,7 +1019,7 @@ Each log must include:
 - follow-up;
 - git refs.
 
-- [ ] **Step 5: Update todo pages**
+- [x] **Step 5: Update todo pages**
 
 Update:
 
@@ -1033,7 +1033,7 @@ Open leaves should show:
 - T302k.12 as the parent reachability/collision issue being addressed.
 - T302k.17 as prerequisite if nominal extraction is not yet committed.
 
-- [ ] **Step 6: Commit notes**
+- [x] **Step 6: Commit notes**
 
 ```bash
 git add notes/todo.md notes/todo/T302k-parametric-mpc-trajectory-contract.md notes/todo/T302k-low-small-loss-redesign-plan.md notes/log/index.md notes/log/YYYY-MM-DD-t302k-low-small-loss-redesign-*.md
@@ -1044,7 +1044,7 @@ git commit -m "docs: track t302k low-small loss redesign execution"
 
 ## Plan Self-Review
 
-- [ ] Spec coverage: tasks cover nominal extraction, plane metadata, GPU circles, touchdown keepout, swing target clearance, FK geometry collision, trajectory consistency, plane root z target, IsaacLab plane-only test metrics, and notes/log alignment.
-- [ ] Placeholder scan: this plan intentionally contains no `TBD` placeholders. Any implementation uncertainty is expressed as a decision point that must either be solved or escalated to the user.
-- [ ] Scope guard: no task permits hard projection, snapping, hard touchdown separation, or adding unapproved losses.
-- [ ] Type consistency: planned helper names are stable: `low_small_component_circles`, `parametric_touchdown_keepout_loss`, `parametric_swing_foot_clearance_loss`, `parametric_fk_body_leg_collision_loss`, `parametric_trajectory_fk_consistency_loss`, and `parametric_plane_root_z_target_loss`.
+- [x] Spec coverage: tasks cover nominal extraction, plane metadata, GPU circles, touchdown keepout, swing target clearance, FK geometry collision, trajectory consistency, plane root z target, IsaacLab plane-only test metrics, and notes/log alignment.
+- [x] Placeholder scan: this plan intentionally contains no `TBD` placeholders. Any implementation uncertainty is expressed as a decision point that must either be solved or escalated to the user.
+- [x] Scope guard: no task permits hard projection, snapping, hard touchdown separation, or adding unapproved losses.
+- [x] Type consistency: planned helper names are stable: `low_small_component_circles`, `parametric_touchdown_keepout_loss`, `parametric_swing_foot_clearance_loss`, `parametric_fk_body_leg_collision_loss`, `parametric_trajectory_fk_consistency_loss`, and `parametric_plane_root_z_target_loss`.

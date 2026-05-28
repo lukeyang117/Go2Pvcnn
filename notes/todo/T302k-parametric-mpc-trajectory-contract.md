@@ -27,11 +27,11 @@
 - Task 6 added final FK realized collision:
   - `MpcLegPoints` exposes `shank_pos_world`;
   - `parametric_losses.py` provides `parametric_fk_body_leg_collision_loss()`;
-  - final `loss_breakdown/cost_breakdown` includes `parametric_fk_body_leg_collision`;
-  - limitation: this key is computed after optimization and FK solve, not inside Adam yet.
-- Task 7 added final FK consistency:
+  - `_parametric_sampled_frame_losses()` includes `parametric_fk_body_leg_collision`, so it participates in the Adam sampled loss path;
+  - semantic MPC task config raises this weight to `120.0`.
+- Task 7 added FK consistency:
   - `parametric_losses.py` provides `parametric_trajectory_fk_consistency_loss()`;
-  - final `loss_breakdown/cost_breakdown` includes `parametric_trajectory_fk_consistency`.
+  - `_parametric_sampled_frame_losses()` includes `parametric_trajectory_fk_consistency`, so it participates in the Adam sampled loss path.
 - Task 8 added plane-only root z target:
   - `parametric_losses.py` provides `parametric_plane_root_z_target_loss()`;
   - sampled `loss_breakdown/cost_breakdown` includes `parametric_plane_root_z_target`, gated by `terrain.is_plane_terrain`.
@@ -39,7 +39,10 @@
   - `mpc_low_small_reachable_crossing_probe.py` now exports `compute_plane_low_small_fk_metrics()`;
   - the helper marks test-only crossing legs from target foot XY semantic probes on plane terrain;
   - it reports FK foot/knee/shank semantic collision, first collision frame, per-part/per-leg counts, semantic clearance, and optimized-vs-FK foot error;
-  - JSONL rows include `CUDA_VISIBLE_DEVICES`, command velocity, requested frames, horizon, replan count, and `terrain_is_plane`.
+  - rolling replan diagnostics snapshot and reuse each segment's terrain rather than evaluating all frames against stale scanner state;
+  - FK semantic collision is counted only for legs whose target foot XY probes triggered crossing, matching the approved 第 0 条 test scope;
+  - JSONL rows include `CUDA_VISIBLE_DEVICES`, command velocity, requested frames, horizon, replan count, and `terrain_is_plane`;
+  - full GPU0 matrix passed hard acceptance on `12/20` crossing-covered rows, with `0` FK semantic collisions and max crossing FK error `0.0634m`.
 - Current trajectory contract:
   - optimize touchdown `xy`; derive touchdown `z` from `height_at(terrain, touchdown_xy)`;
   - build root and foot cubic curves over the configured horizon;
@@ -60,8 +63,8 @@
 
 | Child | Status | Priority | Purpose | Primary Files |
 | --- | --- | --- | --- | --- |
-| T302k.18 | active | P0 | Execute the approved low-small loss redesign plan as the current mainline. | [T302k-low-small-loss-redesign-plan.md](T302k-low-small-loss-redesign-plan.md) |
-| T302k.12 | active | P0 | Parent reachability/collision problem addressed by T302k.18: FK mismatch, small-obstacle collision, root/foot relative drift. | `planner.py`, `parametric.py`, `kinematics.py`, `mpc_low_small_reachable_crossing_probe.py` |
+| T302k.18 | verify | P0 | Approved low-small loss redesign implementation is verified on crossing-covered full-matrix rows; only parameter tuning remains unless a new loss is approved. | [T302k-low-small-loss-redesign-plan.md](T302k-low-small-loss-redesign-plan.md) |
+| T302k.12 | active | P0 | Parent reachability/collision problem addressed by T302k.18: FK mismatch, small-obstacle collision, root/foot relative drift. Remaining work is parameter tuning unless a new loss is approved. | `planner.py`, `parametric.py`, `kinematics.py`, `mpc_low_small_reachable_crossing_probe.py` |
 
 ## Closed Children Archive
 
@@ -83,6 +86,7 @@
 ## Related Logs
 
 - Design commit `97c5b60`: [../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html)
+- [../log/2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md](../log/2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md)
 - [../log/2026-05-28-2125-t302k-plane-root-z-target.md](../log/2026-05-28-2125-t302k-plane-root-z-target.md)
 - [../log/2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md](../log/2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md)
 - [../log/2026-05-28-2117-t302k-fk-trajectory-consistency.md](../log/2026-05-28-2117-t302k-fk-trajectory-consistency.md)
@@ -106,9 +110,9 @@
 
 ## Git Refs
 
-- Last Feature Commit: `eed5d18` (plane root-z target)
-- Last Verified Commit: `eed5d18` plus Task 9 uncommitted probe smoke
-- Current Work Ref: Task 9 plane low-small FK semantic collision probe pending commit
+- Last Feature Commit: `305fefe` (FK inner-loop loss and segmented crossing-only diagnostics)
+- Last Verified Commit: `305fefe`
+- Current Work Ref: `305fefe` plus notes/log alignment
 - Key Files:
   - [../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -119,8 +123,7 @@
 
 ## Next Step
 
-- Commit Task 9 plane low-small FK semantic collision probe, then continue with Task 10 full verification and notes alignment.
-- Use IsaacLab `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` and `CUDA_VISIBLE_DEVICES` for full command-matrix verification.
+- Continue with parameter inspection/tuning only if the user wants to reduce the four soft FK error rows above preferred `0.05m`. Do not add new losses or hard repairs without user approval.
 
 ## Node Details
 

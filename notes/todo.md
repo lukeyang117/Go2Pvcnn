@@ -21,10 +21,11 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - Task 3 added GPU low-small component circle approximation in `semantic_geometry.py`.
   - Task 4 replaced sampled `parametric_low_small_crossing` with `parametric_touchdown_keepout`.
   - Task 5 added sampled `parametric_swing_foot_clearance`.
-  - Task 6 added final FK realized `parametric_fk_body_leg_collision`; it is post-optimization, not Adam-inner-loop.
-  - Task 7 added final `parametric_trajectory_fk_consistency`.
+  - Task 6 added FK realized `parametric_fk_body_leg_collision` and it now participates in the sampled Adam loss path.
+  - Task 7 added `parametric_trajectory_fk_consistency` and it now participates in the sampled Adam loss path.
   - Task 8 added sampled `parametric_plane_root_z_target` gated by `is_plane_terrain`.
-  - Task 9 added plane-only low-small FK semantic collision probe metrics and JSONL GPU/run metadata. The first IsaacLab smoke verified metric logging on plane terrain but did not cover crossing legs (`crossing_leg_count=0` for all smoke commands).
+  - Task 9 added plane-only low-small FK semantic collision probe metrics and JSONL GPU/run metadata. The diagnostic now runs after optimization, uses rolling segment terrain snapshots, and counts FK semantic collision only on crossing-triggered legs.
+  - Full matrix on GPU0 passed hard acceptance for covered crossing rows: `20` cycle rows, `12` covered rows, `0` FK semantic collisions, max crossing FK error `0.0634m`; four rows exceed preferred `0.05m` but stay within accepted `0.08m`.
   - New low-small direction: no hard projection, no touchdown snapping, no hard foot separation; debug by tuning confirmed loss weights/parameters only.
 - Old dense residual MPC (`nominal.py`, `optimizer.py`, `variables.py`, `losses/registry.py`) is retired. Do not reopen V9/V10/V11/V12 scalar-loss branches unless explicitly requested.
 
@@ -40,7 +41,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
-| T302k | active | Current parametric MPC path; low-small loss redesign plan is the only active implementation route. | Execute [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md). |
+| T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
 
 ## Root Map
 
@@ -64,8 +65,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
 | T302k.12 | T302k | active | P0 | Replan touchdown/current-foot and touchdown IK/FK mismatch remain the main trajectory/reachability issue. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
-| T302k.18 | T302k | active | P0 | Detailed implementation plan for the approved low-small loss redesign, including GPU circle keepout and plane-only IsaacLab FK semantic collision tests. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
-| T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented and verified locally; commit step remains before moving to Task 2. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
+| T302k.18 | T302k | verify | P0 | Low-small loss redesign is implemented and hard acceptance passes on covered full-matrix rows; remaining work is parameter tuning only unless user approves new loss. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
+| T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented, committed, and covered by local regression tests. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 
 ## Branch Pages
 
@@ -86,6 +87,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-28 22:59 | T302k low-small full matrix and FK inner-loop losses | pass for hard acceptance on crossing-covered rows; max FK semantic collision `0`, max crossing FK error `0.0634m`; four rows remain soft tuning risk over `0.05m` | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md](log/2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md) |
 | 2026-05-28 21:06 | T302k plane low-small FK semantic collision probe | pass for metric/logging smoke; plane rows and required FK semantic keys present; crossing legs not covered in smoke | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md](log/2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md) |
 | 2026-05-28 21:25 | T302k plane root-z target | pass locally; plane-only root-z target sampled key added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2125-t302k-plane-root-z-target.md](log/2026-05-28-2125-t302k-plane-root-z-target.md) |
 | 2026-05-28 21:17 | T302k FK trajectory consistency | pass locally; final optimized-target vs FK-realized consistency key added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2117-t302k-fk-trajectory-consistency.md](log/2026-05-28-2117-t302k-fk-trajectory-consistency.md) |
