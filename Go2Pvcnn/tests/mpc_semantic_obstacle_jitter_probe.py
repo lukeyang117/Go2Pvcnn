@@ -4579,6 +4579,23 @@ def _concat_viewer_results(parts: list[object]) -> object:
     return SimpleNamespace(**data)
 
 
+def _clone_mpc_terrain(terrain):
+    if terrain is None:
+        return None
+    values = {
+        "height_map": torch.as_tensor(terrain.height_map).clone(),
+        "world_x_range": tuple(terrain.world_x_range),
+        "world_y_range": tuple(terrain.world_y_range),
+        "semantic_map": None if getattr(terrain, "semantic_map", None) is None else torch.as_tensor(terrain.semantic_map).clone(),
+        "sensor_pos_w": None if getattr(terrain, "sensor_pos_w", None) is None else torch.as_tensor(terrain.sensor_pos_w).clone(),
+        "sensor_yaw": None if getattr(terrain, "sensor_yaw", None) is None else torch.as_tensor(terrain.sensor_yaw).clone(),
+        "is_plane_terrain": None
+        if getattr(terrain, "is_plane_terrain", None) is None
+        else torch.as_tensor(terrain.is_plane_terrain).clone(),
+    }
+    return type(terrain)(**values)
+
+
 def _plan_rolling_viewer_trajectory(
     runtime: RealViewerRuntimeFixture,
     *,
@@ -4603,6 +4620,9 @@ def _plan_rolling_viewer_trajectory(
     terminal_foot_errors: list[torch.Tensor] = []
     terminal_root_errors: list[torch.Tensor] = []
     terminal_traces: list[dict[str, object]] = []
+    segment_terrains: list[object] = []
+    segment_lengths: list[int] = []
+    segment_loss_breakdowns: list[object] = []
     while frames_left > 0:
         segment_index = len(parts)
         with _patched_structural_loss_for_variant(effective_candidate_variant):
@@ -4638,6 +4658,9 @@ def _plan_rolling_viewer_trajectory(
         play_count = min(frames_left, int(segment.num_frames))
         if play_count <= 0:
             break
+        segment_terrains.append(_clone_mpc_terrain(segment_terrain))
+        segment_lengths.append(int(play_count))
+        segment_loss_breakdowns.append(getattr(segment, "loss_breakdown", None))
         segment_initial_foot = torch.as_tensor(
             segment.foot_pos_w[:, 0],
             dtype=torch.float64,
@@ -4821,6 +4844,9 @@ def _plan_rolling_viewer_trajectory(
         torch.cat(terminal_root_errors, dim=0) if terminal_root_errors else torch.empty((0,), dtype=torch.float64)
     )
     result.rolling_segment_terminal_traces = tuple(terminal_traces)
+    result.rolling_segment_terrains = tuple(segment_terrains)
+    result.rolling_segment_lengths = tuple(segment_lengths)
+    result.rolling_segment_loss_breakdowns = tuple(segment_loss_breakdowns)
     return result
 
 

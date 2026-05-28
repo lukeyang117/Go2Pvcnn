@@ -175,6 +175,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(TeacherElevationTrajectoryEnvC
     def __post_init__(self):
         super().__post_init__()
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
+        self.mpc_planner_cfg.losses.fk_body_leg_collision.weight = 120.0
         
         
 
@@ -204,6 +205,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY(TeacherElevationTrajector
     def __post_init__(self):
         super().__post_init__()
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
+        self.mpc_planner_cfg.losses.fk_body_leg_collision.weight = 120.0
         tg = self.scene.terrain.terrain_generator
         if tg is not None:
             tg.num_rows = SEMANTIC_TERRAIN_CFG.num_rows

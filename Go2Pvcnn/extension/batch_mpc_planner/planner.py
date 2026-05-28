@@ -447,39 +447,10 @@ def _parametric_result_from_state(
         state_foot = torch.as_tensor(state.foot_pos, dtype=foot_pos.dtype, device=foot_pos.device)
         foot_pos = foot_pos.clone()
         foot_pos[:, 0, :, :] = state_foot
-    if bool(cfg.losses.fk_body_leg_collision.enabled):
-        leg_points = fk_leg_points_from_joint_angles(
-            root_pos,
-            root_rpy,
-            joint_seq,
-            shank_sample_count=int(cfg.losses.fk_body_leg_collision.shank_sample_count),
-        )
-        fk_collision = float(cfg.losses.fk_body_leg_collision.weight) * parametric_fk_body_leg_collision_loss(
-            terrain,
-            root_pos,
-            leg_points,
-            margins=FkCollisionMargins(
-                foot=float(cfg.losses.fk_body_leg_collision.foot_margin_m),
-                knee=float(cfg.losses.fk_body_leg_collision.knee_margin_m),
-                shank=float(cfg.losses.fk_body_leg_collision.shank_margin_m),
-                root=float(cfg.losses.fk_body_leg_collision.root_margin_m),
-                underbody=float(cfg.losses.fk_body_leg_collision.underbody_margin_m),
-            ),
-            underbody_sample_count=int(cfg.losses.fk_body_leg_collision.underbody_sample_count),
-        )
-    else:
-        fk_collision = torch.zeros((batch,), dtype=root_pos.dtype, device=root_pos.device)
     contact_state = decoded.contact_prob >= float(cfg.runtime.contact_threshold)
     touchdown_seq = decoded.touchdown_w.unsqueeze(2).expand(batch, 4, int(cfg.runtime.touchdown_event_cap), 3).contiguous()
     planned_touchdown_w = decoded.touchdown_w.unsqueeze(1).expand(batch, horizon, 4, 3).contiguous()
     loss_breakdown = {name: value.detach() for name, value in loss_breakdown.items()}
-    loss_breakdown["parametric_fk_body_leg_collision"] = fk_collision.detach()
-    loss_breakdown["parametric_trajectory_fk_consistency"] = parametric_trajectory_fk_consistency_loss(
-        root_pos,
-        root_rpy,
-        target_foot_pos,
-        foot_pos,
-    ).detach()
     cost_total = sum(loss_breakdown.values(), torch.zeros((batch,), dtype=root_pos.dtype, device=root_pos.device))
     cost_breakdown = {"cost_total": cost_total}
     cost_breakdown.update(loss_breakdown)
@@ -712,6 +683,16 @@ def _parametric_sampled_frame_losses(
     batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
     dtype = root_pos.dtype
     device = root_pos.device
+    fk_joint = solve_joint_angles_from_trajectory(root_pos, decoded.root_rpy, target_foot_pos)
+    if horizon > 0:
+        state_joints = torch.as_tensor(state.joint_angles, dtype=dtype, device=device)
+        fk_joint = fk_joint.clone()
+        fk_joint[:, 0, :] = state_joints
+    fk_foot = fk_feet_from_joint_angles(root_pos, decoded.root_rpy, fk_joint)
+    if horizon > 0:
+        state_foot = torch.as_tensor(state.foot_pos, dtype=dtype, device=device)
+        fk_foot = fk_foot.clone()
+        fk_foot[:, 0, :, :] = state_foot
     target_fk_error = torch.linalg.vector_norm(target_foot_pos - foot_pos, dim=-1).mean(dim=(1, 2))
     terrain_z = height_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(dtype=dtype, device=device)
     clearance_deficit = torch.relu(terrain_z + 0.015 - foot_pos[..., 2])
@@ -752,6 +733,34 @@ def _parametric_sampled_frame_losses(
         )
     else:
         plane_root_z_target = torch.zeros((batch,), dtype=dtype, device=device)
+    if bool(cfg.losses.fk_body_leg_collision.enabled):
+        fk_points = fk_leg_points_from_joint_angles(
+            root_pos,
+            decoded.root_rpy,
+            fk_joint,
+            shank_sample_count=int(cfg.losses.fk_body_leg_collision.shank_sample_count),
+        )
+        fk_body_leg_collision = float(cfg.losses.fk_body_leg_collision.weight) * parametric_fk_body_leg_collision_loss(
+            terrain,
+            root_pos,
+            fk_points,
+            margins=FkCollisionMargins(
+                foot=float(cfg.losses.fk_body_leg_collision.foot_margin_m),
+                knee=float(cfg.losses.fk_body_leg_collision.knee_margin_m),
+                shank=float(cfg.losses.fk_body_leg_collision.shank_margin_m),
+                root=float(cfg.losses.fk_body_leg_collision.root_margin_m),
+                underbody=float(cfg.losses.fk_body_leg_collision.underbody_margin_m),
+            ),
+            underbody_sample_count=int(cfg.losses.fk_body_leg_collision.underbody_sample_count),
+        )
+    else:
+        fk_body_leg_collision = torch.zeros((batch,), dtype=dtype, device=device)
+    trajectory_fk_consistency = parametric_trajectory_fk_consistency_loss(
+        root_pos,
+        decoded.root_rpy,
+        target_foot_pos,
+        fk_foot,
+    )
     pair_same = _cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 3])
     pair_same = pair_same + _cyclic_phase_distance(decoded.swing_center[:, 1], decoded.swing_center[:, 2])
     pair_half = torch.abs(_cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 1]) - 0.5)
@@ -784,6 +793,8 @@ def _parametric_sampled_frame_losses(
         "parametric_foot_height_guard": foot_height_guard,
         "parametric_root_foot_center": root_foot_center,
         "parametric_plane_root_z_target": plane_root_z_target,
+        "parametric_fk_body_leg_collision": fk_body_leg_collision,
+        "parametric_trajectory_fk_consistency": trajectory_fk_consistency,
         "parametric_gait_regularization": gait_regularization,
         "parametric_command_progress": command_progress,
         "parametric_curve_regularization": curve_regularization,

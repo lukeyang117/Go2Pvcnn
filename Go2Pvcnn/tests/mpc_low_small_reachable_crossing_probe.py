@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import torch
 
@@ -1076,15 +1077,21 @@ def compute_plane_low_small_fk_metrics(
     min_clearance: torch.Tensor | None = None
     first_frame = horizon
     for name, points in parts.items():
-        point_count = int(points.numel() // 3)
         pts = points.reshape(batch, -1, 3)
         sem = semantic_at(terrain, pts[..., :2]).reshape(batch, -1).to(device=device)
         height = height_at(terrain, pts[..., :2]).reshape(batch, -1).to(dtype=target.dtype, device=device)
         clearance = pts[..., 2] - height
         hit = torch.logical_and(torch.logical_and(sem == 1, clearance < 0.0), plane[:, None])
+        semantic_region = torch.logical_and(sem == 1, plane[:, None])
+        if name == "shank":
+            crossing_flat = crossing_leg_mask[:, None, :, None].expand(batch, horizon, legs, int(points.shape[-2])).reshape(batch, -1)
+        else:
+            crossing_flat = crossing_leg_mask[:, None, :].expand(batch, horizon, legs).reshape(batch, -1)
+        hit = torch.logical_and(hit, crossing_flat)
+        semantic_region = torch.logical_and(semantic_region, crossing_flat)
         collision_by_part[name] = int(hit.sum().item())
         total_collision += collision_by_part[name]
-        semantic_clearance = torch.where(torch.logical_and(sem == 1, plane[:, None]), clearance, torch.full_like(clearance, float("inf")))
+        semantic_clearance = torch.where(semantic_region, clearance, torch.full_like(clearance, float("inf")))
         part_min = semantic_clearance.amin()
         min_clearance = part_min if min_clearance is None else torch.minimum(min_clearance, part_min)
         if bool(hit.any().item()):
@@ -1116,6 +1123,99 @@ def compute_plane_low_small_fk_metrics(
         "fk_semantic_first_collision_frame": int(first_frame if first_frame < horizon else -1),
         "planned_vs_fk_foot_error_crossing_leg_max_m": float(crossing_error.max().item()),
         "planned_vs_fk_foot_error_all_max_m": float(target_fk_error.max().item()),
+    }
+
+
+def compute_segmented_plane_low_small_fk_metrics(
+    *,
+    target_foot_pos: torch.Tensor,
+    fk_points,
+    terrains: tuple[object, ...],
+    segment_lengths: tuple[int, ...],
+    probe_half_width_m: float,
+    probe_count: int,
+) -> dict[str, float | int | list[int] | dict[str, int]]:
+    target = torch.as_tensor(target_foot_pos, dtype=torch.float32)
+    if not terrains or not segment_lengths:
+        raise ValueError("terrains and segment_lengths must be non-empty")
+    if len(terrains) != len(segment_lengths):
+        raise ValueError("terrains and segment_lengths must have the same length")
+
+    batch, horizon, legs = int(target.shape[0]), int(target.shape[1]), int(target.shape[2])
+    foot = torch.as_tensor(fk_points.foot_pos_world, dtype=target.dtype, device=target.device)
+    knee = torch.as_tensor(fk_points.knee_pos_world, dtype=target.dtype, device=target.device)
+    shank = torch.as_tensor(fk_points.shank_sample_world, dtype=target.dtype, device=target.device)
+    aggregate_collision_by_part = {"foot": 0, "knee": 0, "shank": 0}
+    aggregate_collision_by_leg = torch.zeros((legs,), dtype=torch.long)
+    crossing_leg_any = torch.zeros((batch, legs), dtype=torch.bool, device=target.device)
+    total_collision = 0
+    checked_point_count = 0
+    min_clearance = float("inf")
+    first_collision_frame = -1
+    crossing_errors: list[torch.Tensor] = []
+    all_error_max = 0.0
+    plane_env_count = 0
+
+    start = 0
+    for terrain, length in zip(terrains, segment_lengths):
+        seg_len = max(0, min(int(length), horizon - start))
+        if seg_len <= 0:
+            continue
+        stop = start + seg_len
+        seg_fk_points = SimpleNamespace(
+            foot_pos_world=foot[:, start:stop],
+            knee_pos_world=knee[:, start:stop],
+            shank_sample_world=shank[:, start:stop],
+        )
+        metrics = compute_plane_low_small_fk_metrics(
+            target_foot_pos=target[:, start:stop],
+            fk_points=seg_fk_points,
+            terrain=terrain,
+            plane_mask=getattr(terrain, "is_plane_terrain", None),
+            probe_half_width_m=probe_half_width_m,
+            probe_count=probe_count,
+        )
+        plane_env_count = max(plane_env_count, int(metrics["plane_env_count"]))
+        crossing_mask = torch.as_tensor(metrics["crossing_leg_mask"], dtype=torch.bool, device=target.device).reshape(batch, legs)
+        crossing_leg_any |= crossing_mask
+        for name in aggregate_collision_by_part:
+            aggregate_collision_by_part[name] += int(metrics["fk_semantic_collision_by_part"][name])
+        aggregate_collision_by_leg += torch.as_tensor(metrics["fk_semantic_collision_by_leg"], dtype=torch.long)
+        total_collision += int(metrics["fk_semantic_collision_count"])
+        checked_point_count += batch * seg_len * legs
+        seg_min = float(metrics["fk_semantic_min_clearance_over_semantic_m"])
+        if int(metrics["crossing_leg_count"]) > 0 or int(metrics["fk_semantic_collision_count"]) > 0:
+            min_clearance = min(min_clearance, seg_min)
+        seg_first = int(metrics["fk_semantic_first_collision_frame"])
+        if seg_first >= 0 and (first_collision_frame < 0 or start + seg_first < first_collision_frame):
+            first_collision_frame = start + seg_first
+        seg_error = torch.linalg.vector_norm(target[:, start:stop] - foot[:, start:stop], dim=-1)
+        all_error_max = max(all_error_max, float(seg_error.max().item()))
+        if bool(crossing_mask.any().item()):
+            crossing_errors.append(seg_error[crossing_mask[:, None, :].expand(batch, seg_len, legs)])
+        start = stop
+        if start >= horizon:
+            break
+
+    if crossing_errors:
+        crossing_error = torch.cat(crossing_errors)
+        crossing_error_max = float(crossing_error.max().item())
+    else:
+        crossing_error_max = 0.0
+    min_clearance_value = 0.0 if min_clearance == float("inf") else float(min_clearance)
+    denom = max(1, checked_point_count)
+    return {
+        "plane_env_count": int(plane_env_count),
+        "crossing_leg_count": int(crossing_leg_any.sum().item()),
+        "crossing_leg_mask": crossing_leg_any.to(dtype=torch.long).cpu().reshape(-1).tolist(),
+        "fk_semantic_collision_count": int(total_collision),
+        "fk_semantic_collision_rate": float(total_collision) / float(denom),
+        "fk_semantic_collision_by_part": aggregate_collision_by_part,
+        "fk_semantic_collision_by_leg": aggregate_collision_by_leg.cpu().tolist(),
+        "fk_semantic_min_clearance_over_semantic_m": min_clearance_value,
+        "fk_semantic_first_collision_frame": int(first_collision_frame),
+        "planned_vs_fk_foot_error_crossing_leg_max_m": crossing_error_max,
+        "planned_vs_fk_foot_error_all_max_m": all_error_max,
     }
 
 
@@ -1178,16 +1278,30 @@ def _result_metrics(result, terrain, obstacle_xy: torch.Tensor, command: tuple[f
     )
     metrics.update(reachable_ik_fk_consistency_metrics(planned_foot, fk_foot, planned_touchdown, fk_touchdown, raw_joint, clamped_joint))
     metrics.update(_semantic_small_contact_metrics(fk_foot, planned_touchdown, contact, terrain))
-    metrics.update(
-        compute_plane_low_small_fk_metrics(
-            target_foot_pos=planned_foot,
-            fk_points=fk_points,
-            terrain=terrain,
-            plane_mask=getattr(terrain, "is_plane_terrain", None),
-            probe_half_width_m=0.06,
-            probe_count=3,
+    segment_terrains = getattr(result, "rolling_segment_terrains", None)
+    segment_lengths = getattr(result, "rolling_segment_lengths", None)
+    if segment_terrains is not None and segment_lengths is not None:
+        metrics.update(
+            compute_segmented_plane_low_small_fk_metrics(
+                target_foot_pos=planned_foot,
+                fk_points=fk_points,
+                terrains=tuple(segment_terrains),
+                segment_lengths=tuple(int(length) for length in segment_lengths),
+                probe_half_width_m=0.06,
+                probe_count=3,
+            )
         )
-    )
+    else:
+        metrics.update(
+            compute_plane_low_small_fk_metrics(
+                target_foot_pos=planned_foot,
+                fk_points=fk_points,
+                terrain=terrain,
+                plane_mask=getattr(terrain, "is_plane_terrain", None),
+                probe_half_width_m=0.06,
+                probe_count=3,
+            )
+        )
     metrics.update(_stability_metrics(root, rpy, fk_foot))
     initial_foot_error = getattr(result, "rolling_segment_initial_foot_error", None)
     if initial_foot_error is not None:

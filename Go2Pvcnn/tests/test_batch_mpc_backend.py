@@ -61,9 +61,16 @@ from extension.batch_mpc_planner.parametric_losses import (
     parametric_touchdown_keepout_loss,
     parametric_trajectory_fk_consistency_loss,
 )
-from extension.batch_mpc_planner.planner import _command_farthest_touchdown_positions, plan_segment, sample_touchdown_positions
+from extension.batch_mpc_planner.parametric import decode_parametric_trajectory, init_parametric_variables
+from extension.batch_mpc_planner.planner import (
+    _command_farthest_touchdown_positions,
+    _parametric_sampled_frame_losses,
+    plan_segment,
+    sample_touchdown_positions,
+)
 from extension.batch_mpc_planner.semantic_policy import (
     SemanticObstacleMode,
+    build_parametric_nominal,
     classify_semantic_obstacle_mode,
     shape_nominal_command_for_semantic_obstacles,
 )
@@ -85,7 +92,7 @@ from extension.mdp.observations import (
     downsampled_elevation_semantic_scan,
 )
 from extension.mdp.rewards_reference import swing_leg_collision_reward
-from mpc_low_small_reachable_crossing_probe import compute_plane_low_small_fk_metrics
+from mpc_low_small_reachable_crossing_probe import compute_plane_low_small_fk_metrics, compute_segmented_plane_low_small_fk_metrics
 from extension.trajectory_manager_factory import create_trajectory_manager, planner_backend_from_cfg
 from extension.viz.go2_foostep_planner import _adapt_mpc_result_for_viewer
 
@@ -601,6 +608,81 @@ def test_plane_low_small_metrics_count_semantic_collision_and_fk_error() -> None
     assert float(metrics["planned_vs_fk_foot_error_crossing_leg_max_m"]) > 0.0
 
 
+def test_plane_low_small_metrics_ignore_non_crossing_leg_collision() -> None:
+    terrain = _terrain_with_low_small_square()
+    target = torch.zeros((1, 25, 4, 3), dtype=torch.float32)
+    target[..., 0] = -0.35
+    target[..., 1] = -0.35
+    low_foot = target.clone()
+    low_knee = torch.zeros_like(target)
+    low_knee[:, :, 1, 0] = torch.linspace(-0.2, 0.2, 25).view(1, 25)
+    low_knee[:, :, 1, 1] = 0.0
+    low_knee[:, :, 1, 2] = -0.01
+    fk_points = SimpleNamespace(
+        foot_pos_world=low_foot,
+        knee_pos_world=low_knee,
+        shank_sample_world=torch.zeros((1, 25, 4, 2, 3), dtype=torch.float32),
+    )
+
+    metrics = compute_plane_low_small_fk_metrics(
+        target_foot_pos=target,
+        fk_points=fk_points,
+        terrain=terrain,
+        plane_mask=torch.tensor([True]),
+        probe_half_width_m=0.06,
+        probe_count=3,
+    )
+
+    assert int(metrics["crossing_leg_count"]) == 0
+    assert int(metrics["fk_semantic_collision_count"]) == 0
+
+
+def test_segmented_plane_low_small_metrics_uses_matching_segment_terrain() -> None:
+    terrain_hit = _terrain_with_low_small_square()
+    empty_semantic = torch.zeros_like(terrain_hit.semantic_map)
+    terrain_clear = MpcPlannerTerrain(
+        height_map=terrain_hit.height_map.clone(),
+        semantic_map=empty_semantic,
+        world_x_range=terrain_hit.world_x_range,
+        world_y_range=terrain_hit.world_y_range,
+        is_plane_terrain=torch.tensor([True]),
+    )
+    target = torch.zeros((1, 50, 4, 3), dtype=torch.float32)
+    target[:, :25, :, 0] = -0.35
+    target[:, :25, :, 1] = -0.35
+    target[:, 25:, 0, 0] = torch.linspace(-0.2, 0.2, 25).view(1, 25)
+    target[:, 25:, 0, 1] = 0.0
+    target[:, :, 0, 2] = 0.20
+    foot = target.clone()
+    foot[:, 25:, 0, 2] = -0.01
+    fk_points = SimpleNamespace(
+        foot_pos_world=foot,
+        knee_pos_world=torch.zeros_like(foot),
+        shank_sample_world=torch.zeros((1, 50, 4, 2, 3), dtype=torch.float32),
+    )
+
+    stale = compute_plane_low_small_fk_metrics(
+        target_foot_pos=target,
+        fk_points=fk_points,
+        terrain=terrain_hit,
+        plane_mask=torch.tensor([True]),
+        probe_half_width_m=0.06,
+        probe_count=3,
+    )
+    segmented = compute_segmented_plane_low_small_fk_metrics(
+        target_foot_pos=target,
+        fk_points=fk_points,
+        terrains=(terrain_hit, terrain_clear),
+        segment_lengths=(25, 25),
+        probe_half_width_m=0.06,
+        probe_count=3,
+    )
+
+    assert int(stale["fk_semantic_collision_count"]) > 0
+    assert int(segmented["fk_semantic_collision_count"]) == 0
+    assert int(segmented["crossing_leg_count"]) == 0
+
+
 def test_parametric_plan_exports_fk_realized_feet() -> None:
     terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
@@ -635,6 +717,29 @@ def test_parametric_plan_exposes_sampled_frame_losses() -> None:
     for name in PARAMETRIC_LOSS_KEYS:
         assert result.cost_breakdown[name].shape == (1,)
         assert torch.isfinite(result.cost_breakdown[name]).all()
+
+
+def test_parametric_sampled_losses_include_fk_optimization_terms() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=decoded.target_foot_pos,
+        target_foot_pos=decoded.target_foot_pos,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    assert "parametric_fk_body_leg_collision" in losses
+    assert "parametric_trajectory_fk_consistency" in losses
+    assert losses["parametric_fk_body_leg_collision"].shape == (1,)
+    assert losses["parametric_trajectory_fk_consistency"].shape == (1,)
 
 
 def test_parametric_optimization_exposes_touchdown_keepout_cost() -> None:
@@ -1941,6 +2046,35 @@ def test_mpc_default_swing_clearance_is_stronger_for_rough_terrain_collisions() 
     assert cfg.losses.leg_collision.knee_margin_m == pytest.approx(0.06)
     assert cfg.losses.leg_collision.shank_margin_m == pytest.approx(0.06)
     assert cfg.losses.leg_collision.worst_deficit_weight == pytest.approx(16.0)
+
+
+def test_teacher_mpc_semantic_env_raises_fk_body_leg_collision_weight() -> None:
+    import ast
+
+    path = REPO_ROOT / "Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assignments: dict[str, list[float]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if node.name not in {"TeacherElevationTrajectoryMpcSemanticEnvCfg", "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"}:
+            continue
+        values: list[float] = []
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Assign):
+                continue
+            for target in child.targets:
+                if not isinstance(target, ast.Attribute):
+                    continue
+                if ast.unparse(target) == "self.mpc_planner_cfg.losses.fk_body_leg_collision.weight":
+                    value = ast.literal_eval(child.value)
+                    values.append(float(value))
+        assignments[node.name] = values
+
+    assert assignments["TeacherElevationTrajectoryMpcSemanticEnvCfg"] == [120.0]
+    assert assignments["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"] == [120.0]
 
 
 def test_mpc_swing_clearance_loss_amplifies_sparse_heightfield_collisions() -> None:
