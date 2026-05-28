@@ -54,6 +54,8 @@ from extension.batch_mpc_planner.losses.terrain_clearance import (
 from extension.batch_mpc_planner.losses.tracking import command_tracking_loss
 from extension.batch_mpc_planner.manager import MpcTrajectoryManager
 from extension.batch_mpc_planner.parametric_losses import (
+    FkCollisionMargins,
+    parametric_fk_body_leg_collision_loss,
     parametric_swing_foot_clearance_loss,
     parametric_touchdown_keepout_loss,
 )
@@ -92,6 +94,7 @@ PARAMETRIC_LOSS_KEYS = {
     "parametric_semantic_avoidance",
     "parametric_touchdown_keepout",
     "parametric_swing_foot_clearance",
+    "parametric_fk_body_leg_collision",
     "parametric_touchdown_endpoint",
     "parametric_foot_height_guard",
     "parametric_root_foot_center",
@@ -469,6 +472,58 @@ def test_swing_target_clearance_penalizes_target_below_height_map() -> None:
         foot,
         swing_prob,
         margin_m=0.02,
+    )
+
+    assert loss.item() > 0.0
+
+
+def test_fk_leg_points_exposes_shank_pos_world_alias() -> None:
+    root = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root[..., 2] = 0.30
+    rpy = torch.zeros_like(root)
+    joint = torch.zeros((1, 25, 12), dtype=torch.float32)
+
+    points = fk_leg_points_from_joint_angles(root, rpy, joint, shank_sample_count=3)
+
+    assert points.foot_pos_world.shape == (1, 25, 4, 3)
+    assert points.knee_pos_world.shape == (1, 25, 4, 3)
+    assert points.shank_pos_world.shape == (1, 25, 4, 3, 3)
+
+
+def test_fk_body_leg_collision_penalizes_shank_below_terrain() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.full((1, 5, 5), 0.10, dtype=torch.float32),
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+    )
+    root_pos = torch.zeros((1, 25, 3), dtype=torch.float32)
+    root_pos[..., 2] = 0.30
+    points = fk_leg_points_from_joint_angles(
+        root_pos,
+        torch.zeros_like(root_pos),
+        torch.zeros((1, 25, 12), dtype=torch.float32),
+        shank_sample_count=3,
+    )
+    low_shank = points.shank_sample_world.clone()
+    low_shank[..., 2] = 0.05
+    points = type(points)(
+        foot_pos_world=points.foot_pos_world,
+        knee_pos_world=points.knee_pos_world,
+        shank_sample_world=low_shank,
+    )
+
+    loss = parametric_fk_body_leg_collision_loss(
+        terrain,
+        root_pos,
+        points,
+        margins=FkCollisionMargins(
+            foot=0.015,
+            knee=0.01,
+            shank=0.01,
+            root=0.02,
+            underbody=0.015,
+        ),
+        underbody_sample_count=5,
     )
 
     assert loss.item() > 0.0

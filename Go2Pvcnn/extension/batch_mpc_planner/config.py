@@ -341,6 +341,17 @@ class MpcIkFkResidualLossCfg(MpcLossTermCfg):
 
 
 @dataclass
+class MpcFkBodyLegCollisionLossCfg(MpcLossTermCfg):
+    foot_margin_m: float = 0.015
+    knee_margin_m: float = 0.01
+    shank_margin_m: float = 0.01
+    root_margin_m: float = 0.02
+    underbody_margin_m: float = 0.015
+    shank_sample_count: int = 2
+    underbody_sample_count: int = 5
+
+
+@dataclass
 class MpcLossesCfg:
     tracking: MpcTrackingLossCfg = field(default_factory=MpcTrackingLossCfg)
     smoothness: MpcSmoothnessLossCfg = field(default_factory=MpcSmoothnessLossCfg)
@@ -385,6 +396,7 @@ class MpcLossesCfg:
     support_plane_rp: MpcSupportPlaneLossCfg = field(default_factory=lambda: MpcSupportPlaneLossCfg(enabled=True, weight=1.0))
     kinematics: MpcKinematicsLossCfg = field(default_factory=MpcKinematicsLossCfg)
     ik_fk_residual: MpcIkFkResidualLossCfg = field(default_factory=lambda: MpcIkFkResidualLossCfg(enabled=True, weight=8.0))
+    fk_body_leg_collision: MpcFkBodyLegCollisionLossCfg = field(default_factory=lambda: MpcFkBodyLegCollisionLossCfg(enabled=True, weight=12.0))
     progress: MpcProgressLossCfg = field(default_factory=MpcProgressLossCfg)
 
 
@@ -764,6 +776,14 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     _set_if_has(task_cfg, "mpc_loss_kinematics_joint_limit_margin_rad", float, losses.kinematics, "joint_limit_margin_rad")
     _override_loss_term(task_cfg, prefix="mpc_loss_ik_fk_residual", loss_term=losses.ik_fk_residual)
     _set_if_has(task_cfg, "mpc_loss_ik_fk_residual_contact_weight", float, losses.ik_fk_residual, "contact_weight")
+    _override_loss_term(task_cfg, prefix="mpc_loss_fk_body_leg_collision", loss_term=losses.fk_body_leg_collision)
+    _set_if_has(task_cfg, "mpc_loss_fk_foot_clearance_margin_m", float, losses.fk_body_leg_collision, "foot_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_fk_knee_clearance_margin_m", float, losses.fk_body_leg_collision, "knee_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_fk_shank_clearance_margin_m", float, losses.fk_body_leg_collision, "shank_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_fk_root_clearance_margin_m", float, losses.fk_body_leg_collision, "root_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_fk_underbody_clearance_margin_m", float, losses.fk_body_leg_collision, "underbody_margin_m")
+    _set_if_has(task_cfg, "mpc_loss_fk_shank_sample_count", int, losses.fk_body_leg_collision, "shank_sample_count")
+    _set_if_has(task_cfg, "mpc_loss_fk_underbody_sample_count", int, losses.fk_body_leg_collision, "underbody_sample_count")
     _override_loss_term(task_cfg, prefix="mpc_loss_progress", loss_term=losses.progress)
     _set_if_has(task_cfg, "mpc_loss_progress_min_progress_m", float, losses.progress, "min_progress_m")
     return out
@@ -800,6 +820,7 @@ __all__ = [
     "MpcBodyCollisionLossCfg",
     "MpcDiagnosticsCfg",
     "MpcLegCollisionLossCfg",
+    "MpcFkBodyLegCollisionLossCfg",
     "MpcLossesCfg",
     "MpcLowSmallCrossingLossCfg",
     "MpcLowSmallFootCrossingLossCfg",

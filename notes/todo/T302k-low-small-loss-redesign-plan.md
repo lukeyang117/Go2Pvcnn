@@ -601,7 +601,7 @@ git commit -m "feat: add swing target terrain clearance loss"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/planner.py`
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing FK geometry tests**
+- [x] **Step 1: Write failing FK geometry tests**
 
 ```python
 def test_fk_leg_points_exposes_knee_and_shank_samples():
@@ -614,7 +614,7 @@ def test_fk_leg_points_exposes_knee_and_shank_samples():
     assert points.shank_pos_world.shape == (1, 25, 4, 3, 3)
 ```
 
-- [ ] **Step 2: Write failing collision loss tests**
+- [x] **Step 2: Write failing collision loss tests**
 
 ```python
 def test_fk_body_leg_collision_penalizes_shank_below_terrain():
@@ -637,11 +637,11 @@ def test_fk_body_leg_collision_penalizes_shank_below_terrain():
     assert loss.item() > 0.0
 ```
 
-- [ ] **Step 3: Extend FK geometry**
+- [x] **Step 3: Extend FK geometry**
 
 Ensure `fk_leg_points_from_joint_angles()` returns foot, knee, and shank sample points. If current dataclass lacks fields, add them without breaking `fk_feet_from_joint_angles()`.
 
-- [ ] **Step 4: Implement underbody samples**
+- [x] **Step 4: Implement underbody samples**
 
 Use root pose to generate fixed body-frame sample offsets under root:
 
@@ -657,7 +657,7 @@ offsets = [
 
 Keep sample count configurable by selecting the first `fk_underbody_sample_count` deterministic offsets.
 
-- [ ] **Step 5: Add loss**
+- [x] **Step 5: Add loss**
 
 For every part:
 
@@ -669,18 +669,18 @@ def _terrain_collision_cost(points: Tensor, margin_m: float) -> Tensor:
 
 Aggregate foot, knee, shank, root, and underbody costs per batch.
 
-- [ ] **Step 6: Wire planner**
+- [x] **Step 6: Wire planner**
 
 Inside `_parametric_result_from_state()` after solving joint sequence, compute FK leg points and feed them into loss evaluation. If losses need FK during Adam, compute IK/FK inside `_parametric_sampled_frame_losses()` or add a second loss pass that remains differentiable through joint solution if current solver supports it. If not differentiable, record the limitation and keep this as post-optimization diagnostic only until user approves a differentiable substitute.
 
-- [ ] **Step 7: Verify**
+- [x] **Step 7: Verify**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'fk_body_leg_collision or shank'
 python -m py_compile Go2Pvcnn/extension/batch_mpc_planner/kinematics.py Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/kinematics.py Go2Pvcnn/extension/batch_mpc_planner/config.py Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py Go2Pvcnn/tests/test_batch_mpc_backend.py

@@ -2,12 +2,72 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import Tensor
 
+from .kinematics import MpcLegPoints
 from .semantic_geometry import low_small_component_circles
 from .terrain import height_at, semantic_at
 from .types import MpcPlannerTerrain
+
+
+@dataclass(frozen=True)
+class FkCollisionMargins:
+    foot: float
+    knee: float
+    shank: float
+    root: float
+    underbody: float
+
+
+def _terrain_collision_cost(terrain: MpcPlannerTerrain, points: Tensor, *, margin_m: float) -> Tensor:
+    pts = torch.as_tensor(points)
+    batch = int(pts.shape[0])
+    terrain_z = height_at(terrain, pts[..., :2].reshape(batch, -1, 2)).reshape(pts.shape[:-1])
+    terrain_z = terrain_z.to(dtype=pts.dtype, device=pts.device)
+    return torch.relu(terrain_z + float(margin_m) - pts[..., 2]).square()
+
+
+def _underbody_points(root_pos: Tensor, *, sample_count: int) -> Tensor:
+    batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
+    dtype = root_pos.dtype
+    device = root_pos.device
+    offsets = torch.tensor(
+        (
+            (0.0, 0.0, -0.16),
+            (0.18, 0.10, -0.16),
+            (0.18, -0.10, -0.16),
+            (-0.18, 0.10, -0.16),
+            (-0.18, -0.10, -0.16),
+        ),
+        dtype=dtype,
+        device=device,
+    )
+    count = max(1, min(int(sample_count), int(offsets.shape[0])))
+    return root_pos[:, :, None, :] + offsets[:count].view(1, 1, count, 3).expand(batch, horizon, -1, -1)
+
+
+def parametric_fk_body_leg_collision_loss(
+    terrain: MpcPlannerTerrain,
+    root_pos: Tensor,
+    leg_points: MpcLegPoints,
+    *,
+    margins: FkCollisionMargins,
+    underbody_sample_count: int,
+) -> Tensor:
+    root = torch.as_tensor(root_pos)
+    foot = _terrain_collision_cost(terrain, leg_points.foot_pos_world, margin_m=float(margins.foot)).mean(dim=(1, 2))
+    knee = _terrain_collision_cost(terrain, leg_points.knee_pos_world, margin_m=float(margins.knee)).mean(dim=(1, 2))
+    shank = _terrain_collision_cost(terrain, leg_points.shank_sample_world, margin_m=float(margins.shank)).mean(dim=(1, 2, 3))
+    root_cost = _terrain_collision_cost(terrain, root, margin_m=float(margins.root)).mean(dim=1)
+    underbody = _terrain_collision_cost(
+        terrain,
+        _underbody_points(root, sample_count=int(underbody_sample_count)),
+        margin_m=float(margins.underbody),
+    ).mean(dim=(1, 2))
+    return foot + knee + shank + root_cost + underbody
 
 
 def parametric_swing_foot_clearance_loss(
@@ -59,4 +119,9 @@ def parametric_touchdown_keepout_loss(
     return (per_leg * trigger.to(dtype=dtype)).mean(dim=1)
 
 
-__all__ = ["parametric_swing_foot_clearance_loss", "parametric_touchdown_keepout_loss"]
+__all__ = [
+    "FkCollisionMargins",
+    "parametric_fk_body_leg_collision_loss",
+    "parametric_swing_foot_clearance_loss",
+    "parametric_touchdown_keepout_loss",
+]

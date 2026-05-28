@@ -24,6 +24,11 @@
 - Task 5 added sampled swing target terrain clearance:
   - `parametric_losses.py` provides `parametric_swing_foot_clearance_loss()`;
   - `_parametric_sampled_frame_losses()` emits `parametric_swing_foot_clearance`.
+- Task 6 added final FK realized collision:
+  - `MpcLegPoints` exposes `shank_pos_world`;
+  - `parametric_losses.py` provides `parametric_fk_body_leg_collision_loss()`;
+  - final `loss_breakdown/cost_breakdown` includes `parametric_fk_body_leg_collision`;
+  - limitation: this key is computed after optimization and FK solve, not inside Adam yet.
 - Current trajectory contract:
   - optimize touchdown `xy`; derive touchdown `z` from `height_at(terrain, touchdown_xy)`;
   - build root and foot cubic curves over the configured horizon;
@@ -68,6 +73,7 @@
 ## Related Logs
 
 - Design commit `97c5b60`: [../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html)
+- [../log/2026-05-28-2110-t302k-fk-body-leg-collision.md](../log/2026-05-28-2110-t302k-fk-body-leg-collision.md)
 - [../log/2026-05-28-2057-t302k-swing-target-clearance.md](../log/2026-05-28-2057-t302k-swing-target-clearance.md)
 - [../log/2026-05-28-2048-t302k-touchdown-circle-keepout.md](../log/2026-05-28-2048-t302k-touchdown-circle-keepout.md)
 - [../log/2026-05-28-2034-t302k-low-small-gpu-circles.md](../log/2026-05-28-2034-t302k-low-small-gpu-circles.md)
@@ -89,7 +95,7 @@
 
 - Last Feature Commit: `1b799cd` (parametric helper module)
 - Last Verified Commit: `2ac52e2` plus design-only commit `97c5b60`
-- Current Work Ref: Task 5 swing target clearance pending commit
+- Current Work Ref: Task 6 FK collision pending commit
 - Key Files:
   - [../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -100,7 +106,7 @@
 
 ## Next Step
 
-- Commit Task 5 swing target clearance, then continue with Task 6: FK body/leg terrain collision loss.
+- Commit Task 6 FK collision, then continue with Task 7: optimized-vs-FK trajectory consistency.
 - Use IsaacLab `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` and `CUDA_VISIBLE_DEVICES` for plane low-small FK semantic collision verification.
 
 ## Node Details

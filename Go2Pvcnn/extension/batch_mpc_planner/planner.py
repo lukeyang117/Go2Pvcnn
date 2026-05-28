@@ -8,10 +8,15 @@ from torch import Tensor
 from .config import MpcPlannerCfg, validate_mpc_config
 from .debug_variants import apply_mpc_debug_variant_cfg
 from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
-from .kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_trajectory
+from .kinematics import fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
 from .parametric import decode_parametric_trajectory, init_parametric_variables
-from .parametric_losses import parametric_swing_foot_clearance_loss, parametric_touchdown_keepout_loss
+from .parametric_losses import (
+    FkCollisionMargins,
+    parametric_fk_body_leg_collision_loss,
+    parametric_swing_foot_clearance_loss,
+    parametric_touchdown_keepout_loss,
+)
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
 from .semantic_policy import build_parametric_nominal
 from .terrain import height_at, semantic_at
@@ -440,10 +445,33 @@ def _parametric_result_from_state(
         state_foot = torch.as_tensor(state.foot_pos, dtype=foot_pos.dtype, device=foot_pos.device)
         foot_pos = foot_pos.clone()
         foot_pos[:, 0, :, :] = state_foot
+    if bool(cfg.losses.fk_body_leg_collision.enabled):
+        leg_points = fk_leg_points_from_joint_angles(
+            root_pos,
+            root_rpy,
+            joint_seq,
+            shank_sample_count=int(cfg.losses.fk_body_leg_collision.shank_sample_count),
+        )
+        fk_collision = float(cfg.losses.fk_body_leg_collision.weight) * parametric_fk_body_leg_collision_loss(
+            terrain,
+            root_pos,
+            leg_points,
+            margins=FkCollisionMargins(
+                foot=float(cfg.losses.fk_body_leg_collision.foot_margin_m),
+                knee=float(cfg.losses.fk_body_leg_collision.knee_margin_m),
+                shank=float(cfg.losses.fk_body_leg_collision.shank_margin_m),
+                root=float(cfg.losses.fk_body_leg_collision.root_margin_m),
+                underbody=float(cfg.losses.fk_body_leg_collision.underbody_margin_m),
+            ),
+            underbody_sample_count=int(cfg.losses.fk_body_leg_collision.underbody_sample_count),
+        )
+    else:
+        fk_collision = torch.zeros((batch,), dtype=root_pos.dtype, device=root_pos.device)
     contact_state = decoded.contact_prob >= float(cfg.runtime.contact_threshold)
     touchdown_seq = decoded.touchdown_w.unsqueeze(2).expand(batch, 4, int(cfg.runtime.touchdown_event_cap), 3).contiguous()
     planned_touchdown_w = decoded.touchdown_w.unsqueeze(1).expand(batch, horizon, 4, 3).contiguous()
     loss_breakdown = {name: value.detach() for name, value in loss_breakdown.items()}
+    loss_breakdown["parametric_fk_body_leg_collision"] = fk_collision.detach()
     cost_total = sum(loss_breakdown.values(), torch.zeros((batch,), dtype=root_pos.dtype, device=root_pos.device))
     cost_breakdown = {"cost_total": cost_total}
     cost_breakdown.update(loss_breakdown)

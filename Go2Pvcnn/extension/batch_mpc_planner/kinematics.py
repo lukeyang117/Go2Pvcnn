@@ -35,6 +35,10 @@ class MpcLegPoints:
     knee_pos_world: Tensor
     shank_sample_world: Tensor
 
+    @property
+    def shank_pos_world(self) -> Tensor:
+        return self.shank_sample_world
+
 
 def _rpy_to_rot_matrix(root_rpy: Tensor) -> Tensor:
     roll = root_rpy[..., 0]
