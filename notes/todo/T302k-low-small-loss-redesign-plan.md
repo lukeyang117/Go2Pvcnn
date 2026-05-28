@@ -760,7 +760,7 @@ git commit -m "feat: add parametric fk trajectory consistency loss"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/planner.py`
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```python
 def test_plane_root_z_target_only_applies_to_plane_rows():
@@ -780,7 +780,7 @@ def test_plane_root_z_target_only_applies_to_plane_rows():
     assert loss[1].item() == pytest.approx(0.0)
 ```
 
-- [ ] **Step 2: Implement loss**
+- [x] **Step 2: Implement loss**
 
 ```python
 def parametric_plane_root_z_target_loss(
@@ -798,7 +798,7 @@ def parametric_plane_root_z_target_loss(
     return torch.where(is_plane_terrain.to(device=root_pos.device), err, torch.zeros_like(err))
 ```
 
-- [ ] **Step 3: Add config parameter**
+- [x] **Step 3: Add config parameter**
 
 ```python
 root_z_target_height_m: float | None = None
@@ -806,7 +806,7 @@ root_z_target_height_m: float | None = None
 
 `None` means initialize target from current state root z.
 
-- [ ] **Step 4: Wire loss key**
+- [x] **Step 4: Wire loss key**
 
 Use key:
 
@@ -814,13 +814,13 @@ Use key:
 "parametric_plane_root_z_target"
 ```
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'plane_root_z_target'
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/config.py Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py Go2Pvcnn/tests/test_batch_mpc_backend.py

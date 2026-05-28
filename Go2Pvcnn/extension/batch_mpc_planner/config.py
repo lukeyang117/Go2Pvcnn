@@ -352,6 +352,11 @@ class MpcFkBodyLegCollisionLossCfg(MpcLossTermCfg):
 
 
 @dataclass
+class MpcPlaneRootZTargetLossCfg(MpcLossTermCfg):
+    root_z_target_height_m: float | None = None
+
+
+@dataclass
 class MpcLossesCfg:
     tracking: MpcTrackingLossCfg = field(default_factory=MpcTrackingLossCfg)
     smoothness: MpcSmoothnessLossCfg = field(default_factory=MpcSmoothnessLossCfg)
@@ -397,6 +402,7 @@ class MpcLossesCfg:
     kinematics: MpcKinematicsLossCfg = field(default_factory=MpcKinematicsLossCfg)
     ik_fk_residual: MpcIkFkResidualLossCfg = field(default_factory=lambda: MpcIkFkResidualLossCfg(enabled=True, weight=8.0))
     fk_body_leg_collision: MpcFkBodyLegCollisionLossCfg = field(default_factory=lambda: MpcFkBodyLegCollisionLossCfg(enabled=True, weight=12.0))
+    plane_root_z_target: MpcPlaneRootZTargetLossCfg = field(default_factory=lambda: MpcPlaneRootZTargetLossCfg(enabled=True, weight=6.0))
     progress: MpcProgressLossCfg = field(default_factory=MpcProgressLossCfg)
 
 
@@ -784,6 +790,8 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     _set_if_has(task_cfg, "mpc_loss_fk_underbody_clearance_margin_m", float, losses.fk_body_leg_collision, "underbody_margin_m")
     _set_if_has(task_cfg, "mpc_loss_fk_shank_sample_count", int, losses.fk_body_leg_collision, "shank_sample_count")
     _set_if_has(task_cfg, "mpc_loss_fk_underbody_sample_count", int, losses.fk_body_leg_collision, "underbody_sample_count")
+    _override_loss_term(task_cfg, prefix="mpc_loss_plane_root_z_target", loss_term=losses.plane_root_z_target)
+    _set_if_has(task_cfg, "mpc_loss_root_z_target_height_m", float, losses.plane_root_z_target, "root_z_target_height_m")
     _override_loss_term(task_cfg, prefix="mpc_loss_progress", loss_term=losses.progress)
     _set_if_has(task_cfg, "mpc_loss_progress_min_progress_m", float, losses.progress, "min_progress_m")
     return out
@@ -827,6 +835,7 @@ __all__ = [
     "MpcLowSmallStepcapLossCfg",
     "MpcObstacleRiskCfg",
     "MpcPlannerCfg",
+    "MpcPlaneRootZTargetLossCfg",
     "MpcRuntimeCfg",
     "MpcSemanticContactAvoidLossCfg",
     "MpcStanceSemanticLossCfg",

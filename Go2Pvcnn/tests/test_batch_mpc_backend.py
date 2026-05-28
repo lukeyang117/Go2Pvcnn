@@ -56,6 +56,7 @@ from extension.batch_mpc_planner.manager import MpcTrajectoryManager
 from extension.batch_mpc_planner.parametric_losses import (
     FkCollisionMargins,
     parametric_fk_body_leg_collision_loss,
+    parametric_plane_root_z_target_loss,
     parametric_swing_foot_clearance_loss,
     parametric_touchdown_keepout_loss,
     parametric_trajectory_fk_consistency_loss,
@@ -97,6 +98,7 @@ PARAMETRIC_LOSS_KEYS = {
     "parametric_swing_foot_clearance",
     "parametric_fk_body_leg_collision",
     "parametric_trajectory_fk_consistency",
+    "parametric_plane_root_z_target",
     "parametric_touchdown_endpoint",
     "parametric_foot_height_guard",
     "parametric_root_foot_center",
@@ -541,6 +543,24 @@ def test_trajectory_consistency_penalizes_absolute_and_root_relative_error() -> 
     loss = parametric_trajectory_fk_consistency_loss(root, rpy, target, fk)
 
     assert loss.item() > 0.0
+
+
+def test_plane_root_z_target_only_applies_to_plane_rows() -> None:
+    root = torch.zeros((2, 25, 3), dtype=torch.float32)
+    root[:, :, 2] = 0.40
+    state_root = torch.zeros((2, 3), dtype=torch.float32)
+    state_root[:, 2] = 0.32
+    plane = torch.tensor([True, False])
+
+    loss = parametric_plane_root_z_target_loss(
+        root,
+        state_root,
+        plane,
+        target_height_m=None,
+    )
+
+    assert loss[0].item() > 0.0
+    assert loss[1].item() == pytest.approx(0.0)
 
 
 def test_parametric_plan_exports_fk_realized_feet() -> None:

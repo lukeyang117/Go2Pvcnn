@@ -23,6 +23,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - Task 5 added sampled `parametric_swing_foot_clearance`.
   - Task 6 added final FK realized `parametric_fk_body_leg_collision`; it is post-optimization, not Adam-inner-loop.
   - Task 7 added final `parametric_trajectory_fk_consistency`.
+  - Task 8 added sampled `parametric_plane_root_z_target` gated by `is_plane_terrain`.
   - New low-small direction: no hard projection, no touchdown snapping, no hard foot separation; debug by tuning confirmed loss weights/parameters only.
 - Old dense residual MPC (`nominal.py`, `optimizer.py`, `variables.py`, `losses/registry.py`) is retired. Do not reopen V9/V10/V11/V12 scalar-loss branches unless explicitly requested.
 
@@ -84,6 +85,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-28 21:25 | T302k plane root-z target | pass locally; plane-only root-z target sampled key added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2125-t302k-plane-root-z-target.md](log/2026-05-28-2125-t302k-plane-root-z-target.md) |
 | 2026-05-28 21:17 | T302k FK trajectory consistency | pass locally; final optimized-target vs FK-realized consistency key added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2117-t302k-fk-trajectory-consistency.md](log/2026-05-28-2117-t302k-fk-trajectory-consistency.md) |
 | 2026-05-28 21:10 | T302k FK body leg collision | pass locally; final loss key added for realized FK body/leg terrain collision, with post-optimization limitation recorded | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2110-t302k-fk-body-leg-collision.md](log/2026-05-28-2110-t302k-fk-body-leg-collision.md) |
 | 2026-05-28 20:57 | T302k swing target clearance | pass locally; sampled loss key `parametric_swing_foot_clearance` added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2057-t302k-swing-target-clearance.md](log/2026-05-28-2057-t302k-swing-target-clearance.md) |

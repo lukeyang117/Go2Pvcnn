@@ -14,6 +14,7 @@ from .parametric import decode_parametric_trajectory, init_parametric_variables
 from .parametric_losses import (
     FkCollisionMargins,
     parametric_fk_body_leg_collision_loss,
+    parametric_plane_root_z_target_loss,
     parametric_swing_foot_clearance_loss,
     parametric_touchdown_keepout_loss,
     parametric_trajectory_fk_consistency_loss,
@@ -742,6 +743,15 @@ def _parametric_sampled_frame_losses(
     stance_mass = contact_weight.sum(dim=-1, keepdim=True).clamp_min(1.0e-4)
     stance_center_xy = (contact_weight.unsqueeze(-1) * foot_pos[..., :2]).sum(dim=2) / stance_mass
     root_foot_center = 2.0 * (root_pos[..., :2] - stance_center_xy).square().sum(dim=-1).mean(dim=1)
+    if bool(cfg.losses.plane_root_z_target.enabled):
+        plane_root_z_target = float(cfg.losses.plane_root_z_target.weight) * parametric_plane_root_z_target_loss(
+            root_pos,
+            torch.as_tensor(state.root_pos, dtype=dtype, device=device),
+            terrain.is_plane_terrain,
+            target_height_m=cfg.losses.plane_root_z_target.root_z_target_height_m,
+        )
+    else:
+        plane_root_z_target = torch.zeros((batch,), dtype=dtype, device=device)
     pair_same = _cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 3])
     pair_same = pair_same + _cyclic_phase_distance(decoded.swing_center[:, 1], decoded.swing_center[:, 2])
     pair_half = torch.abs(_cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 1]) - 0.5)
@@ -773,6 +783,7 @@ def _parametric_sampled_frame_losses(
         "parametric_touchdown_endpoint": touchdown_endpoint,
         "parametric_foot_height_guard": foot_height_guard,
         "parametric_root_foot_center": root_foot_center,
+        "parametric_plane_root_z_target": plane_root_z_target,
         "parametric_gait_regularization": gait_regularization,
         "parametric_command_progress": command_progress,
         "parametric_curve_regularization": curve_regularization,

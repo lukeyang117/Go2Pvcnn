@@ -114,6 +114,28 @@ def parametric_trajectory_fk_consistency_loss(
     return abs_cost + rel_cost
 
 
+def parametric_plane_root_z_target_loss(
+    root_pos: Tensor,
+    root0: Tensor,
+    is_plane_terrain: Tensor | None,
+    *,
+    target_height_m: float | None,
+) -> Tensor:
+    root = torch.as_tensor(root_pos)
+    batch = int(root.shape[0])
+    dtype = root.dtype
+    device = root.device
+    if is_plane_terrain is None:
+        return torch.zeros((batch,), dtype=dtype, device=device)
+    state_root = torch.as_tensor(root0, dtype=dtype, device=device)
+    if target_height_m is None:
+        target = state_root[:, 2]
+    else:
+        target = torch.full((batch,), float(target_height_m), dtype=dtype, device=device)
+    err = (root[..., 2] - target[:, None]).square().mean(dim=1)
+    return torch.where(torch.as_tensor(is_plane_terrain, dtype=torch.bool, device=device), err, torch.zeros_like(err))
+
+
 def parametric_touchdown_keepout_loss(
     terrain: MpcPlannerTerrain,
     touchdown_w: Tensor,
@@ -149,6 +171,7 @@ def parametric_touchdown_keepout_loss(
 __all__ = [
     "FkCollisionMargins",
     "parametric_fk_body_leg_collision_loss",
+    "parametric_plane_root_z_target_loss",
     "parametric_swing_foot_clearance_loss",
     "parametric_touchdown_keepout_loss",
     "parametric_trajectory_fk_consistency_loss",
