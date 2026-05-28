@@ -10,6 +10,10 @@
   - `semantic_policy.py` owns `ParametricTrajectoryNominal` and `build_parametric_nominal()`;
   - `planner.py` builds nominal once before the Adam loop and passes `nominal.command` as the planning command;
   - `decode_parametric_trajectory()` now consumes `nominal + variables` and no longer performs high/large semantic search inside decode.
+- Task 2 added optional plane-terrain metadata:
+  - `MpcPlannerTerrain.is_plane_terrain` is optional and remains `None` if unavailable;
+  - scanner terrain construction, subset helpers, planner normalization, and MPC manager preserve it;
+  - MPC manager infers plane terrain from IsaacLab `terrain_types` and `terrain_generator.sub_terrains` names, where only `flat` and `plane` are treated as plane.
 - Current trajectory contract:
   - optimize touchdown `xy`; derive touchdown `z` from `height_at(terrain, touchdown_xy)`;
   - build root and foot cubic curves over the configured horizon;
@@ -54,6 +58,7 @@
 ## Related Logs
 
 - Design commit `97c5b60`: [../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html)
+- [../log/2026-05-28-2025-t302k-plane-terrain-metadata.md](../log/2026-05-28-2025-t302k-plane-terrain-metadata.md)
 - [../log/2026-05-28-2014-t302k-nominal-extraction-contract.md](../log/2026-05-28-2014-t302k-nominal-extraction-contract.md)
 - [../log/2026-05-26-2133-t302k-body-relative-foot-anchor-fix.md](../log/2026-05-26-2133-t302k-body-relative-foot-anchor-fix.md)
 - [../log/2026-05-26-2040-t302k-long-step-root-relative-foot-drift-repro.md](../log/2026-05-26-2040-t302k-long-step-root-relative-foot-drift-repro.md)
@@ -71,7 +76,7 @@
 
 - Last Feature Commit: `1b799cd` (parametric helper module)
 - Last Verified Commit: `2ac52e2` plus design-only commit `97c5b60`
-- Current Work Ref: uncommitted Task 1 nominal extraction implementation verified locally
+- Current Work Ref: Task 2 plane metadata implementation pending commit
 - Key Files:
   - [../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -82,7 +87,7 @@
 
 ## Next Step
 
-- Finish Task 1 Step 7 commit, then continue with Task 2: terrain metadata for plane-only root-z.
+- Commit Task 2 plane metadata, then continue with Task 3: GPU low-small circle approximation.
 - Use IsaacLab `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` and `CUDA_VISIBLE_DEVICES` for plane low-small FK semantic collision verification.
 
 ## Node Details

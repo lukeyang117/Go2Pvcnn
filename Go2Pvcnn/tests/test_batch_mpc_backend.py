@@ -292,7 +292,7 @@ def test_downsampled_semantic_scan_preserves_priority_and_shape() -> None:
     assert int(_semantic_priority_pool2d(semantic, target_size=1).item()) == 2
 
 
-def _fake_env(*, num_envs: int = 3, device: torch.device | None = None, flatten_ray_hits: bool = False):
+def _fake_env(*, num_envs: int = 3, device: torch.device | None = None, flatten_ray_hits: bool = False, terrain=None):
     device = device or torch.device("cpu")
     ray_hits_grid = torch.zeros((num_envs, 5, 5, 3), dtype=torch.float32, device=device)
     ray_hits_w = ray_hits_grid.reshape(num_envs, -1, 3) if flatten_ray_hits else ray_hits_grid
@@ -315,6 +315,7 @@ def _fake_env(*, num_envs: int = 3, device: torch.device | None = None, flatten_
         scene=SimpleNamespace(
             robot=_FakeRobot(num_envs=num_envs, device=device),
             sensors=SimpleNamespace(height_scanner=scanner),
+            terrain=terrain,
         ),
         command_manager=_FakeCommandManager(commands),
         episode_length_buf=torch.zeros(num_envs, dtype=torch.long, device=device),
@@ -606,6 +607,37 @@ def test_build_mpc_terrain_accepts_flattened_ray_hits_and_subset_batch_dimension
     assert sub.height_map.shape == (2, 5, 5)
     assert sub.semantic_map is not None
     assert sub.semantic_map.shape == (2, 5, 5)
+
+
+def test_mpc_terrain_preserves_is_plane_terrain_metadata() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((2, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((2, 5, 5), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+        is_plane_terrain=torch.tensor([True, False]),
+    )
+
+    sub = subset_mpc_terrain(terrain, torch.tensor([1], dtype=torch.long))
+
+    assert sub.is_plane_terrain is not None
+    assert sub.is_plane_terrain.tolist() == [False]
+
+
+def test_build_mpc_terrain_from_scanner_carries_is_plane_terrain_metadata() -> None:
+    ray_hits = torch.zeros((2, 25, 3), dtype=torch.float32)
+    is_plane = torch.tensor([True, False])
+
+    terrain = build_mpc_terrain_from_scanner(
+        ray_hits,
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+        is_plane_terrain=is_plane,
+    )
+
+    assert terrain.is_plane_terrain is not None
+    assert terrain.is_plane_terrain.dtype == torch.bool
+    assert terrain.is_plane_terrain.tolist() == [True, False]
 
 
 def test_mpc_terrain_height_semantic_slope_and_support_queries() -> None:
@@ -1053,6 +1085,31 @@ def test_mpc_manager_supports_flattened_scanner_ray_hits_shape() -> None:
 
     assert cache.is_ready()
     assert cache.root_pos_w.shape == (3, 6, 3)
+
+
+def test_mpc_manager_carries_plane_terrain_metadata_from_terrain_types() -> None:
+    cfg = _task_cfg()
+    manager = create_trajectory_manager(cfg, device="cpu")
+    terrain_importer = SimpleNamespace(
+        terrain_types=torch.tensor([0, 1, 0], dtype=torch.long),
+        cfg=SimpleNamespace(
+            terrain_generator=SimpleNamespace(
+                sub_terrains={
+                    "flat": SimpleNamespace(),
+                    "stairs": SimpleNamespace(),
+                }
+            )
+        ),
+    )
+    env = _fake_env(num_envs=3, terrain=terrain_importer)
+
+    terrain = manager._terrain_from_env(env)
+    sub = manager._terrain_subset_from_env(env, torch.tensor([1, 2], dtype=torch.long))
+
+    assert terrain.is_plane_terrain is not None
+    assert terrain.is_plane_terrain.tolist() == [True, False, True]
+    assert sub.is_plane_terrain is not None
+    assert sub.is_plane_terrain.tolist() == [False, True]
 
 
 def test_mpc_result_and_package_do_not_depend_on_old_mode_fields() -> None:

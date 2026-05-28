@@ -115,6 +115,7 @@ def build_mpc_terrain_from_scanner(
     semantic_map: Tensor | None = None,
     sensor_pos_w: Tensor | None = None,
     sensor_yaw: Tensor | None = None,
+    is_plane_terrain: Tensor | None = None,
 ) -> MpcPlannerTerrain:
     hits = torch.nan_to_num(_reshape_ray_hits(ray_hits_w), nan=0.0, posinf=0.0, neginf=0.0)
     height_map = hits[..., 2].to(dtype=torch.float32).contiguous()
@@ -132,6 +133,7 @@ def build_mpc_terrain_from_scanner(
         world_y_range=world_y_range,
         sensor_pos_w=None if sensor_pos_w is None else torch.as_tensor(sensor_pos_w, dtype=torch.float32, device=height_map.device).contiguous(),
         sensor_yaw=None if sensor_yaw is None else torch.as_tensor(sensor_yaw, dtype=torch.float32, device=height_map.device).contiguous(),
+        is_plane_terrain=None if is_plane_terrain is None else torch.as_tensor(is_plane_terrain, dtype=torch.bool, device=height_map.device).reshape(-1).contiguous(),
     )
 
 
@@ -157,6 +159,7 @@ def subset_mpc_terrain(terrain: MpcPlannerTerrain, env_ids: Tensor) -> MpcPlanne
         world_y_range=terrain.world_y_range,
         sensor_pos_w=terrain.sensor_pos_w.index_select(0, ids) if terrain.sensor_pos_w is not None else None,
         sensor_yaw=terrain.sensor_yaw.index_select(0, ids) if terrain.sensor_yaw is not None else None,
+        is_plane_terrain=terrain.is_plane_terrain.index_select(0, ids) if terrain.is_plane_terrain is not None else None,
     )
 
 

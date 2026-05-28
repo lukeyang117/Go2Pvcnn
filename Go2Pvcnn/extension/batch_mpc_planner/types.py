@@ -42,6 +42,7 @@ class MpcPlannerTerrain:
     semantic_map: Tensor | None = None
     sensor_pos_w: Tensor | None = None
     sensor_yaw: Tensor | None = None
+    is_plane_terrain: Tensor | None = None
 
 
 @dataclass(frozen=True)

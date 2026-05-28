@@ -41,6 +41,7 @@ def _normal_terrain(terrain: MpcPlannerTerrain) -> MpcPlannerTerrain:
         world_y_range=terrain.world_y_range,
         sensor_pos_w=_normal_tensor(terrain.sensor_pos_w),
         sensor_yaw=_normal_tensor(terrain.sensor_yaw),
+        is_plane_terrain=_normal_tensor(terrain.is_plane_terrain),
     )
 
 
@@ -344,6 +345,7 @@ def _subset_terrain(terrain: MpcPlannerTerrain, ids: Tensor) -> MpcPlannerTerrai
         world_y_range=terrain.world_y_range,
         sensor_pos_w=terrain.sensor_pos_w.index_select(0, ids) if terrain.sensor_pos_w is not None else None,
         sensor_yaw=terrain.sensor_yaw.index_select(0, ids) if terrain.sensor_yaw is not None else None,
+        is_plane_terrain=terrain.is_plane_terrain.index_select(0, ids) if terrain.is_plane_terrain is not None else None,
     )
 
 

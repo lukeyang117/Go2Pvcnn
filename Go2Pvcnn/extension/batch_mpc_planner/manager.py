@@ -129,6 +129,27 @@ class MpcTrajectoryManager:
         half_y = 0.5 * float(size[1])
         return (-half_x, half_x), (-half_y, half_y)
 
+    def _plane_terrain_mask_from_env(self, root, *, env_ids: Tensor | None = None) -> Tensor | None:
+        terrain = getattr(root.scene, "terrain", None)
+        terrain_types = getattr(terrain, "terrain_types", None)
+        if terrain is None or terrain_types is None:
+            return None
+        terrain_cfg = getattr(terrain, "cfg", None)
+        terrain_generator = getattr(terrain_cfg, "terrain_generator", None)
+        sub_terrains = getattr(terrain_generator, "sub_terrains", None)
+        if not isinstance(sub_terrains, dict):
+            return None
+        names = list(sub_terrains.keys())
+        type_tensor = torch.as_tensor(terrain_types, dtype=torch.long, device=self._device).reshape(-1)
+        if env_ids is not None:
+            ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device).reshape(-1)
+            type_tensor = type_tensor.index_select(0, ids)
+        mask = torch.zeros_like(type_tensor, dtype=torch.bool)
+        for col, name in enumerate(names):
+            if str(name).lower() in ("flat", "plane"):
+                mask = torch.logical_or(mask, type_tensor == int(col))
+        return mask
+
     def _terrain_from_env(self, env):
         root = self._env_root(env)
         scanner = self._named_get(root.scene.sensors, self._scanner_name())
@@ -147,6 +168,7 @@ class MpcTrajectoryManager:
             semantic_map=semantic_map,
             sensor_pos_w=sensor_pos,
             sensor_yaw=extract_yaw_batch(sensor_quat),
+            is_plane_terrain=self._plane_terrain_mask_from_env(root),
         )
 
     def _terrain_subset_from_env(self, env, env_ids: Tensor):
@@ -172,6 +194,7 @@ class MpcTrajectoryManager:
             semantic_map=semantic_map,
             sensor_pos_w=sensor_pos,
             sensor_yaw=extract_yaw_batch(sensor_quat),
+            is_plane_terrain=self._plane_terrain_mask_from_env(root, env_ids=ids),
         )
 
     def _commands_from_env(self, env) -> Tensor:

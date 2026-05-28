@@ -251,7 +251,7 @@ git commit -m "refactor: move parametric nominal construction out of decode"
 - Modify: caller that builds `MpcPlannerTerrain` from IsaacLab scanner data
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing metadata tests**
+- [x] **Step 1: Write failing metadata tests**
 
 Add:
 
@@ -268,7 +268,7 @@ def test_mpc_terrain_preserves_is_plane_terrain_metadata():
     assert sub.is_plane_terrain.tolist() == [False]
 ```
 
-- [ ] **Step 2: Run the test and confirm failure**
+- [x] **Step 2: Run the test and confirm failure**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'is_plane_terrain'
@@ -276,7 +276,7 @@ PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py
 
 Expected before implementation: constructor or attribute failure.
 
-- [ ] **Step 3: Add metadata field**
+- [x] **Step 3: Add metadata field**
 
 In `MpcPlannerTerrain`:
 
@@ -290,7 +290,7 @@ In terrain construction/subset helpers:
 - Preserve it in `_normal_terrain()` and `_subset_terrain()`.
 - If unavailable, leave it `None` and root z plane loss returns zero.
 
-- [ ] **Step 4: Wire IsaacLab plane mask**
+- [x] **Step 4: Wire IsaacLab plane mask**
 
 Find the MPC manager terrain builder that has access to IsaacLab terrain type/origin metadata. Add an automatic boolean mask:
 
@@ -300,14 +300,14 @@ is_plane_terrain = current_subterrain_name == "flat" or current_subterrain_name 
 
 Do not expose `terrain_col` or manual row/col config. Row remains difficulty and must not gate this loss.
 
-- [ ] **Step 5: Verify metadata**
+- [x] **Step 5: Verify metadata**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'is_plane_terrain or build_mpc_terrain'
 python -m py_compile Go2Pvcnn/extension/batch_mpc_planner/types.py Go2Pvcnn/extension/batch_mpc_planner/terrain.py
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/types.py Go2Pvcnn/extension/batch_mpc_planner/terrain.py Go2Pvcnn/tests/test_batch_mpc_backend.py
