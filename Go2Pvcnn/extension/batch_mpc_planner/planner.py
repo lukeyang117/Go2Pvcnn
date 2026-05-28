@@ -11,6 +11,7 @@ from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
 from .kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_trajectory
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
 from .parametric import decode_parametric_trajectory, init_parametric_variables
+from .parametric_losses import parametric_touchdown_keepout_loss
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
 from .semantic_policy import build_parametric_nominal
 from .terrain import height_at, semantic_at
@@ -625,6 +626,7 @@ def _optimize_parametric_variables(
         foot_pos=decoded.target_foot_pos,
         target_foot_pos=decoded.target_foot_pos,
         decoded=decoded,
+        cfg=cfg,
     )
     if steps <= 0:
         return decoded, losses
@@ -640,6 +642,7 @@ def _optimize_parametric_variables(
             foot_pos=decoded.target_foot_pos,
             target_foot_pos=decoded.target_foot_pos,
             decoded=decoded,
+            cfg=cfg,
         )
         total = sum(losses.values(), torch.zeros_like(next(iter(losses.values())))).mean()
         total.backward()
@@ -654,6 +657,7 @@ def _optimize_parametric_variables(
         foot_pos=decoded.target_foot_pos,
         target_foot_pos=decoded.target_foot_pos,
         decoded=decoded,
+        cfg=cfg,
     )
     return decoded, losses
 
@@ -667,6 +671,7 @@ def _parametric_sampled_frame_losses(
     foot_pos: Tensor,
     target_foot_pos: Tensor,
     decoded,
+    cfg: MpcPlannerCfg,
 ) -> dict[str, Tensor]:
     batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
     dtype = root_pos.dtype
@@ -678,7 +683,15 @@ def _parametric_sampled_frame_losses(
     semantic = semantic_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(device=device)
     semantic_contact = (semantic != 0).to(dtype=dtype).mul(decoded.contact_prob.to(dtype=dtype)).mean(dim=(1, 2))
     semantic_avoidance = _parametric_semantic_avoidance_loss(terrain, root_pos, foot_pos, decoded.touchdown_w, command)
-    low_small_crossing = _parametric_low_small_crossing_loss(terrain, root_pos, foot_pos, decoded.touchdown_w, command)
+    if bool(cfg.losses.touchdown_keepout.enabled):
+        touchdown_keepout = float(cfg.losses.touchdown_keepout.weight) * parametric_touchdown_keepout_loss(
+            terrain,
+            decoded.touchdown_w,
+            radius_extra_m=float(cfg.losses.touchdown_keepout.touchdown_keepout_radius_extra_m),
+            max_components=int(cfg.losses.touchdown_keepout.low_small_circle_max_components),
+        )
+    else:
+        touchdown_keepout = torch.zeros((batch,), dtype=dtype, device=device)
     touchdown_endpoint = _parametric_touchdown_endpoint_loss(terrain, foot_pos, decoded.touchdown_w, decoded.swing_center, decoded.swing_width, command)
     foot_height_guard = _parametric_foot_height_guard_loss(root_pos, foot_pos, decoded.swing_prob)
     contact_weight = decoded.contact_prob.to(dtype=dtype, device=device).clamp_min(0.0)
@@ -711,7 +724,7 @@ def _parametric_sampled_frame_losses(
         "parametric_terrain_clearance": terrain_clearance,
         "parametric_semantic_contact": semantic_contact,
         "parametric_semantic_avoidance": semantic_avoidance,
-        "parametric_low_small_crossing": low_small_crossing,
+        "parametric_touchdown_keepout": touchdown_keepout,
         "parametric_touchdown_endpoint": touchdown_endpoint,
         "parametric_foot_height_guard": foot_height_guard,
         "parametric_root_foot_center": root_foot_center,
@@ -823,49 +836,6 @@ def _parametric_foot_height_guard_loss(root_pos: Tensor, foot_pos: Tensor, swing
     root_limit = root_pos[..., 2, None] - 0.02
     over = torch.relu(foot_pos[..., 2] - root_limit)
     return 12.0 * (over.square() * swing_prob.to(dtype=foot_pos.dtype, device=foot_pos.device)).mean(dim=(1, 2))
-
-
-def _parametric_low_small_crossing_loss(
-    terrain: MpcPlannerTerrain,
-    root_pos: Tensor,
-    foot_pos: Tensor,
-    touchdown_w: Tensor,
-    command: Tensor,
-) -> Tensor:
-    batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
-    dtype = root_pos.dtype
-    device = root_pos.device
-    cmd = torch.as_tensor(command, dtype=dtype, device=device)
-    if int(cmd.shape[-1]) < 3:
-        pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
-        cmd = torch.cat((cmd, pad), dim=-1)
-    speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading = cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1)
-    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
-    obstacle_xy, active = _nearest_low_small_obstacle(
-        terrain,
-        root_pos[:, 0],
-        heading,
-        left,
-        speed,
-        corridor_width_m=0.32,
-        forward_distance_m=1.5,
-    )
-    delta = foot_pos[..., :2] - obstacle_xy[:, None, None, :]
-    along = (delta * heading[:, None, None, :]).sum(dim=-1)
-    lateral = (delta * left[:, None, None, :]).sum(dim=-1)
-    near = torch.exp(-along.square() / 0.045).amax(dim=1)
-    lateral_near = (near * torch.relu(torch.abs(lateral).amin(dim=1) - 0.09).square()).mean(dim=1)
-    terrain_z = height_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(dtype=dtype, device=device)
-    clearance = torch.relu(0.07 - (foot_pos[..., 2] - terrain_z)).amin(dim=1)
-    missing_over = torch.relu(0.45 - near.amax(dim=1)).square()
-    touchdown_delta = touchdown_w[..., :2] - obstacle_xy[:, None, :]
-    touchdown_along = (touchdown_delta * heading[:, None, :]).sum(dim=-1)
-    touchdown_lateral = (touchdown_delta * left[:, None, :]).sum(dim=-1)
-    touchdown_after = torch.relu(0.12 - touchdown_along).square().mean(dim=1)
-    touchdown_lane = torch.relu(torch.abs(touchdown_lateral) - 0.16).square().mean(dim=1)
-    loss = 18.0 * missing_over + 40.0 * clearance.mean(dim=1) + 12.0 * lateral_near + 8.0 * touchdown_after + 4.0 * touchdown_lane
-    return torch.where(active, loss, torch.zeros_like(loss))
 
 
 def plan_segment(

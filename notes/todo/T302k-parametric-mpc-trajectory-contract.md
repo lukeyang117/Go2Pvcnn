@@ -17,6 +17,10 @@
 - Task 3 added GPU low-small component circle approximation:
   - `semantic_geometry.py` provides `LowSmallCircles` and `low_small_component_circles()`;
   - helper returns fixed-shape centers/radii/valid/truncated tensors on the input device.
+- Task 4 replaced the sampled low-small crossing loss key:
+  - `parametric_losses.py` provides `parametric_touchdown_keepout_loss()`;
+  - `_parametric_sampled_frame_losses()` now emits `parametric_touchdown_keepout` instead of `parametric_low_small_crossing`;
+  - `low_small_crossing` config remains only for shared height-threshold/classification context and standalone legacy progress-loss tests.
 - Current trajectory contract:
   - optimize touchdown `xy`; derive touchdown `z` from `height_at(terrain, touchdown_xy)`;
   - build root and foot cubic curves over the configured horizon;
@@ -61,6 +65,7 @@
 ## Related Logs
 
 - Design commit `97c5b60`: [../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html)
+- [../log/2026-05-28-2048-t302k-touchdown-circle-keepout.md](../log/2026-05-28-2048-t302k-touchdown-circle-keepout.md)
 - [../log/2026-05-28-2034-t302k-low-small-gpu-circles.md](../log/2026-05-28-2034-t302k-low-small-gpu-circles.md)
 - [../log/2026-05-28-2025-t302k-plane-terrain-metadata.md](../log/2026-05-28-2025-t302k-plane-terrain-metadata.md)
 - [../log/2026-05-28-2014-t302k-nominal-extraction-contract.md](../log/2026-05-28-2014-t302k-nominal-extraction-contract.md)
@@ -80,7 +85,7 @@
 
 - Last Feature Commit: `1b799cd` (parametric helper module)
 - Last Verified Commit: `2ac52e2` plus design-only commit `97c5b60`
-- Current Work Ref: Task 3 GPU circle helper pending commit
+- Current Work Ref: Task 4 touchdown keepout pending commit
 - Key Files:
   - [../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -91,7 +96,7 @@
 
 ## Next Step
 
-- Commit Task 3 GPU circle helper, then continue with Task 4: touchdown circle keepout loss.
+- Commit Task 4 touchdown keepout, then continue with Task 5: swing target terrain clearance loss.
 - Use IsaacLab `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` and `CUDA_VISIBLE_DEVICES` for plane low-small FK semantic collision verification.
 
 ## Node Details

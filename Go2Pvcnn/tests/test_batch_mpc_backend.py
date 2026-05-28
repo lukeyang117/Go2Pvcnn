@@ -53,6 +53,7 @@ from extension.batch_mpc_planner.losses.terrain_clearance import (
 )
 from extension.batch_mpc_planner.losses.tracking import command_tracking_loss
 from extension.batch_mpc_planner.manager import MpcTrajectoryManager
+from extension.batch_mpc_planner.parametric_losses import parametric_touchdown_keepout_loss
 from extension.batch_mpc_planner.planner import _command_farthest_touchdown_positions, plan_segment, sample_touchdown_positions
 from extension.batch_mpc_planner.semantic_policy import (
     SemanticObstacleMode,
@@ -86,7 +87,7 @@ PARAMETRIC_LOSS_KEYS = {
     "parametric_terrain_clearance",
     "parametric_semantic_contact",
     "parametric_semantic_avoidance",
-    "parametric_low_small_crossing",
+    "parametric_touchdown_keepout",
     "parametric_touchdown_endpoint",
     "parametric_foot_height_guard",
     "parametric_root_foot_center",
@@ -403,6 +404,52 @@ def _semantic_obstacle_inputs(*, obstacle_id: int = 1, obstacle_height: float = 
     return terrain, state, command, cfg
 
 
+def _terrain_with_low_small_square() -> MpcPlannerTerrain:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    semantic[0, 4:6, 4:6] = 1
+    return MpcPlannerTerrain(
+        height_map=height,
+        semantic_map=semantic,
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+
+
+def test_touchdown_keepout_only_triggers_when_touchdown_on_semantic() -> None:
+    terrain = _terrain_with_low_small_square()
+    touchdown = torch.tensor(
+        [[[0.0, 0.0, 0.1], [0.5, 0.5, 0.0], [0.6, 0.5, 0.0], [0.7, 0.5, 0.0]]],
+        dtype=torch.float32,
+    )
+
+    loss = parametric_touchdown_keepout_loss(
+        terrain,
+        touchdown,
+        radius_extra_m=0.05,
+        max_components=8,
+    )
+
+    assert loss.item() > 0.0
+
+
+def test_touchdown_keepout_is_zero_for_nonsemantic_touchdowns() -> None:
+    terrain = _terrain_with_low_small_square()
+    touchdown = torch.tensor(
+        [[[0.5, 0.5, 0.0], [0.6, 0.5, 0.0], [0.7, 0.5, 0.0], [0.8, 0.5, 0.0]]],
+        dtype=torch.float32,
+    )
+
+    loss = parametric_touchdown_keepout_loss(
+        terrain,
+        touchdown,
+        radius_extra_m=0.05,
+        max_components=8,
+    )
+
+    assert loss.item() == pytest.approx(0.0)
+
+
 def test_parametric_plan_exports_fk_realized_feet() -> None:
     terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
@@ -439,7 +486,7 @@ def test_parametric_plan_exposes_sampled_frame_losses() -> None:
         assert torch.isfinite(result.cost_breakdown[name]).all()
 
 
-def test_parametric_optimization_reduces_low_small_crossing_cost() -> None:
+def test_parametric_optimization_exposes_touchdown_keepout_cost() -> None:
     terrain, state, _command, base_cfg = _semantic_obstacle_inputs(
         obstacle_id=1,
         obstacle_height=0.12,
@@ -459,7 +506,7 @@ def test_parametric_optimization_reduces_low_small_crossing_cost() -> None:
     optimized = plan_segment(terrain, state, _command, cfg=opt_cfg)
 
     assert optimized.loss_breakdown is not None
-    assert "parametric_low_small_crossing" in optimized.loss_breakdown
+    assert "parametric_touchdown_keepout" in optimized.loss_breakdown
     assert optimized.cost_total.item() <= no_opt.cost_total.item()
 
 

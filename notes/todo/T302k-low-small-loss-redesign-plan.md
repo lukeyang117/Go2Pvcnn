@@ -426,7 +426,7 @@ git commit -m "feat: add gpu low-small semantic circle helper"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/planner.py`
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing touchdown keepout tests**
+- [x] **Step 1: Write failing touchdown keepout tests**
 
 Add:
 
@@ -456,13 +456,13 @@ def test_touchdown_keepout_is_zero_for_nonsemantic_touchdowns():
     assert loss.item() == pytest.approx(0.0)
 ```
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'touchdown_keepout'
 ```
 
-- [ ] **Step 3: Add config fields**
+- [x] **Step 3: Add config fields**
 
 Add a parametric low-small group or reuse existing loss cfg without resurrecting old semantics. Required fields:
 
@@ -473,7 +473,7 @@ low_small_circle_max_components: int = 8
 
 Keep old task-cfg override names only if needed for backward compatibility, but do not keep old `parametric_touchdown_semantic_ground` behavior.
 
-- [ ] **Step 4: Implement loss**
+- [x] **Step 4: Implement loss**
 
 In `parametric_losses.py`:
 
@@ -495,7 +495,7 @@ def parametric_touchdown_keepout_loss(
     return (per_leg * trigger.to(per_leg.dtype)).mean(dim=1)
 ```
 
-- [ ] **Step 5: Replace old loss keys**
+- [x] **Step 5: Replace old loss keys**
 
 In `_parametric_sampled_frame_losses()`:
 
@@ -504,14 +504,14 @@ In `_parametric_sampled_frame_losses()`:
 - remove `parametric_touchdown_spacing` if present;
 - add `parametric_touchdown_keepout`.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'touchdown_keepout or exposes_sampled_frame_losses'
 python -m py_compile Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/config.py Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py Go2Pvcnn/tests/test_batch_mpc_backend.py
