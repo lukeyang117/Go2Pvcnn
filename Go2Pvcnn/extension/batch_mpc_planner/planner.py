@@ -16,6 +16,7 @@ from .parametric_losses import (
     parametric_fk_body_leg_collision_loss,
     parametric_swing_foot_clearance_loss,
     parametric_touchdown_keepout_loss,
+    parametric_trajectory_fk_consistency_loss,
 )
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
 from .semantic_policy import build_parametric_nominal
@@ -472,6 +473,12 @@ def _parametric_result_from_state(
     planned_touchdown_w = decoded.touchdown_w.unsqueeze(1).expand(batch, horizon, 4, 3).contiguous()
     loss_breakdown = {name: value.detach() for name, value in loss_breakdown.items()}
     loss_breakdown["parametric_fk_body_leg_collision"] = fk_collision.detach()
+    loss_breakdown["parametric_trajectory_fk_consistency"] = parametric_trajectory_fk_consistency_loss(
+        root_pos,
+        root_rpy,
+        target_foot_pos,
+        foot_pos,
+    ).detach()
     cost_total = sum(loss_breakdown.values(), torch.zeros((batch,), dtype=root_pos.dtype, device=root_pos.device))
     cost_breakdown = {"cost_total": cost_total}
     cost_breakdown.update(loss_breakdown)

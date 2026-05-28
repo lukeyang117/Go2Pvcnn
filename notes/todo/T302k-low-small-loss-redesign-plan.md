@@ -697,7 +697,7 @@ git commit -m "feat: add fk body leg terrain collision loss"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/planner.py`
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```python
 def test_trajectory_consistency_penalizes_absolute_and_root_relative_error():
@@ -710,7 +710,7 @@ def test_trajectory_consistency_penalizes_absolute_and_root_relative_error():
     assert loss.item() > 0.0
 ```
 
-- [ ] **Step 2: Implement loss**
+- [x] **Step 2: Implement loss**
 
 ```python
 def parametric_trajectory_fk_consistency_loss(
@@ -728,7 +728,7 @@ def parametric_trajectory_fk_consistency_loss(
 
 No extra parameters.
 
-- [ ] **Step 3: Wire loss key**
+- [x] **Step 3: Wire loss key**
 
 Use key:
 
@@ -736,13 +736,13 @@ Use key:
 "parametric_trajectory_fk_consistency"
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'trajectory_consistency'
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py Go2Pvcnn/tests/test_batch_mpc_backend.py

@@ -58,6 +58,7 @@ from extension.batch_mpc_planner.parametric_losses import (
     parametric_fk_body_leg_collision_loss,
     parametric_swing_foot_clearance_loss,
     parametric_touchdown_keepout_loss,
+    parametric_trajectory_fk_consistency_loss,
 )
 from extension.batch_mpc_planner.planner import _command_farthest_touchdown_positions, plan_segment, sample_touchdown_positions
 from extension.batch_mpc_planner.semantic_policy import (
@@ -95,6 +96,7 @@ PARAMETRIC_LOSS_KEYS = {
     "parametric_touchdown_keepout",
     "parametric_swing_foot_clearance",
     "parametric_fk_body_leg_collision",
+    "parametric_trajectory_fk_consistency",
     "parametric_touchdown_endpoint",
     "parametric_foot_height_guard",
     "parametric_root_foot_center",
@@ -525,6 +527,18 @@ def test_fk_body_leg_collision_penalizes_shank_below_terrain() -> None:
         ),
         underbody_sample_count=5,
     )
+
+    assert loss.item() > 0.0
+
+
+def test_trajectory_consistency_penalizes_absolute_and_root_relative_error() -> None:
+    root = torch.zeros((1, 25, 3), dtype=torch.float32)
+    rpy = torch.zeros((1, 25, 3), dtype=torch.float32)
+    target = torch.zeros((1, 25, 4, 3), dtype=torch.float32)
+    fk = target.clone()
+    fk[..., 0] += 0.10
+
+    loss = parametric_trajectory_fk_consistency_loss(root, rpy, target, fk)
 
     assert loss.item() > 0.0
 

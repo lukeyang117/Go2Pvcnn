@@ -87,6 +87,33 @@ def parametric_swing_foot_clearance_loss(
     return (deficit.square() * torch.as_tensor(swing_prob, dtype=dtype, device=device)).mean(dim=(1, 2))
 
 
+def _world_to_root_frame(root_pos: Tensor, root_rpy: Tensor, points_w: Tensor) -> Tensor:
+    yaw = torch.as_tensor(root_rpy, dtype=points_w.dtype, device=points_w.device)[..., 2]
+    cy = torch.cos(yaw)
+    sy = torch.sin(yaw)
+    delta = points_w - root_pos[:, :, None, :]
+    x = cy[:, :, None] * delta[..., 0] + sy[:, :, None] * delta[..., 1]
+    y = -sy[:, :, None] * delta[..., 0] + cy[:, :, None] * delta[..., 1]
+    return torch.stack((x, y, delta[..., 2]), dim=-1)
+
+
+def parametric_trajectory_fk_consistency_loss(
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    target_foot_pos: Tensor,
+    fk_foot_pos: Tensor,
+) -> Tensor:
+    target = torch.as_tensor(target_foot_pos)
+    fk = torch.as_tensor(fk_foot_pos, dtype=target.dtype, device=target.device)
+    root = torch.as_tensor(root_pos, dtype=target.dtype, device=target.device)
+    rpy = torch.as_tensor(root_rpy, dtype=target.dtype, device=target.device)
+    abs_cost = (target - fk).square().sum(dim=-1).mean(dim=(1, 2))
+    opt_rel = _world_to_root_frame(root, rpy, target)
+    fk_rel = _world_to_root_frame(root, rpy, fk)
+    rel_cost = (opt_rel - fk_rel).square().sum(dim=-1).mean(dim=(1, 2))
+    return abs_cost + rel_cost
+
+
 def parametric_touchdown_keepout_loss(
     terrain: MpcPlannerTerrain,
     touchdown_w: Tensor,
@@ -124,4 +151,5 @@ __all__ = [
     "parametric_fk_body_leg_collision_loss",
     "parametric_swing_foot_clearance_loss",
     "parametric_touchdown_keepout_loss",
+    "parametric_trajectory_fk_consistency_loss",
 ]
