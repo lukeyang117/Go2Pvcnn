@@ -6,8 +6,25 @@ import torch
 from torch import Tensor
 
 from .semantic_geometry import low_small_component_circles
-from .terrain import semantic_at
+from .terrain import height_at, semantic_at
 from .types import MpcPlannerTerrain
+
+
+def parametric_swing_foot_clearance_loss(
+    terrain: MpcPlannerTerrain,
+    target_foot_pos: Tensor,
+    swing_prob: Tensor,
+    *,
+    margin_m: float,
+) -> Tensor:
+    foot = torch.as_tensor(target_foot_pos)
+    batch, horizon = int(foot.shape[0]), int(foot.shape[1])
+    dtype = foot.dtype
+    device = foot.device
+    terrain_z = height_at(terrain, foot[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4)
+    terrain_z = terrain_z.to(dtype=dtype, device=device)
+    deficit = torch.relu(terrain_z + float(margin_m) - foot[..., 2])
+    return (deficit.square() * torch.as_tensor(swing_prob, dtype=dtype, device=device)).mean(dim=(1, 2))
 
 
 def parametric_touchdown_keepout_loss(
@@ -42,4 +59,4 @@ def parametric_touchdown_keepout_loss(
     return (per_leg * trigger.to(dtype=dtype)).mean(dim=1)
 
 
-__all__ = ["parametric_touchdown_keepout_loss"]
+__all__ = ["parametric_swing_foot_clearance_loss", "parametric_touchdown_keepout_loss"]

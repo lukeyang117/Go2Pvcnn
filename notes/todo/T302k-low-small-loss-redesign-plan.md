@@ -529,7 +529,7 @@ git commit -m "feat: replace touchdown semantic loss with circle keepout"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/planner.py`
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```python
 def test_swing_target_clearance_penalizes_target_below_height_map():
@@ -546,7 +546,7 @@ def test_swing_target_clearance_penalizes_target_below_height_map():
     assert loss.item() > 0.0
 ```
 
-- [ ] **Step 2: Implement loss**
+- [x] **Step 2: Implement loss**
 
 ```python
 def parametric_swing_foot_clearance_loss(
@@ -562,7 +562,7 @@ def parametric_swing_foot_clearance_loss(
     return (deficit.square() * swing_prob.to(deficit.dtype)).mean(dim=(1, 2))
 ```
 
-- [ ] **Step 3: Wire config and loss key**
+- [x] **Step 3: Wire config and loss key**
 
 Add/confirm parameter:
 
@@ -576,13 +576,13 @@ Add loss key:
 "parametric_swing_foot_clearance": swing_clearance
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'swing_target_clearance or sampled_frame_losses'
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/config.py Go2Pvcnn/extension/batch_mpc_planner/parametric_losses.py Go2Pvcnn/extension/batch_mpc_planner/planner.py Go2Pvcnn/tests/test_batch_mpc_backend.py

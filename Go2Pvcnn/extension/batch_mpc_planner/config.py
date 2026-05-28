@@ -201,6 +201,11 @@ class MpcTouchdownKeepoutLossCfg(MpcLossTermCfg):
 
 
 @dataclass
+class MpcSwingFootClearanceLossCfg(MpcLossTermCfg):
+    swing_foot_clearance_margin_m: float = 0.02
+
+
+@dataclass
 class MpcHighObstacleAvoidanceLossCfg(MpcLossTermCfg):
     high_small_relative_height_m: float = 0.30
     corridor_width_m: float = 0.40
@@ -356,6 +361,7 @@ class MpcLossesCfg:
     obstacle_risk: MpcObstacleRiskCfg = field(default_factory=lambda: MpcObstacleRiskCfg(enabled=True, weight=1.0))
     low_small_crossing: MpcLowSmallCrossingLossCfg = field(default_factory=lambda: MpcLowSmallCrossingLossCfg(enabled=True, weight=8.0))
     touchdown_keepout: MpcTouchdownKeepoutLossCfg = field(default_factory=lambda: MpcTouchdownKeepoutLossCfg(enabled=True, weight=8.0))
+    swing_foot_clearance: MpcSwingFootClearanceLossCfg = field(default_factory=lambda: MpcSwingFootClearanceLossCfg(enabled=True, weight=12.0))
     low_small_foot_crossing: MpcLowSmallFootCrossingLossCfg = field(
         default_factory=lambda: MpcLowSmallFootCrossingLossCfg(enabled=True, weight=1.0)
     )
@@ -634,6 +640,14 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
         losses.touchdown_keepout,
         "low_small_circle_max_components",
     )
+    _override_loss_term(task_cfg, prefix="mpc_loss_swing_foot_clearance", loss_term=losses.swing_foot_clearance)
+    _set_if_has(
+        task_cfg,
+        "mpc_loss_swing_foot_clearance_margin_m",
+        float,
+        losses.swing_foot_clearance,
+        "swing_foot_clearance_margin_m",
+    )
     _override_loss_term(task_cfg, prefix="mpc_loss_low_small_foot_crossing", loss_term=losses.low_small_foot_crossing)
     _set_if_has(
         task_cfg,
@@ -795,6 +809,7 @@ __all__ = [
     "MpcRuntimeCfg",
     "MpcSemanticContactAvoidLossCfg",
     "MpcStanceSemanticLossCfg",
+    "MpcSwingFootClearanceLossCfg",
     "MpcTouchdownKeepoutLossCfg",
     "planner_cfg_from_task_cfg",
     "validate_mpc_config",

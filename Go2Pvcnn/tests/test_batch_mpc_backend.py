@@ -53,7 +53,10 @@ from extension.batch_mpc_planner.losses.terrain_clearance import (
 )
 from extension.batch_mpc_planner.losses.tracking import command_tracking_loss
 from extension.batch_mpc_planner.manager import MpcTrajectoryManager
-from extension.batch_mpc_planner.parametric_losses import parametric_touchdown_keepout_loss
+from extension.batch_mpc_planner.parametric_losses import (
+    parametric_swing_foot_clearance_loss,
+    parametric_touchdown_keepout_loss,
+)
 from extension.batch_mpc_planner.planner import _command_farthest_touchdown_positions, plan_segment, sample_touchdown_positions
 from extension.batch_mpc_planner.semantic_policy import (
     SemanticObstacleMode,
@@ -88,6 +91,7 @@ PARAMETRIC_LOSS_KEYS = {
     "parametric_semantic_contact",
     "parametric_semantic_avoidance",
     "parametric_touchdown_keepout",
+    "parametric_swing_foot_clearance",
     "parametric_touchdown_endpoint",
     "parametric_foot_height_guard",
     "parametric_root_foot_center",
@@ -448,6 +452,26 @@ def test_touchdown_keepout_is_zero_for_nonsemantic_touchdowns() -> None:
     )
 
     assert loss.item() == pytest.approx(0.0)
+
+
+def test_swing_target_clearance_penalizes_target_below_height_map() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.full((1, 5, 5), 0.10, dtype=torch.float32),
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+    )
+    foot = torch.zeros((1, 25, 4, 3), dtype=torch.float32)
+    foot[..., 2] = 0.105
+    swing_prob = torch.ones((1, 25, 4), dtype=torch.float32)
+
+    loss = parametric_swing_foot_clearance_loss(
+        terrain,
+        foot,
+        swing_prob,
+        margin_m=0.02,
+    )
+
+    assert loss.item() > 0.0
 
 
 def test_parametric_plan_exports_fk_realized_feet() -> None:

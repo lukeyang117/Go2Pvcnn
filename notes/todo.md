@@ -20,6 +20,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - Task 2 added optional `is_plane_terrain` metadata through scanner terrain construction, subset, planner normalization, and MPC manager IsaacLab terrain type inference.
   - Task 3 added GPU low-small component circle approximation in `semantic_geometry.py`.
   - Task 4 replaced sampled `parametric_low_small_crossing` with `parametric_touchdown_keepout`.
+  - Task 5 added sampled `parametric_swing_foot_clearance`.
   - New low-small direction: no hard projection, no touchdown snapping, no hard foot separation; debug by tuning confirmed loss weights/parameters only.
 - Old dense residual MPC (`nominal.py`, `optimizer.py`, `variables.py`, `losses/registry.py`) is retired. Do not reopen V9/V10/V11/V12 scalar-loss branches unless explicitly requested.
 
@@ -81,6 +82,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-28 20:57 | T302k swing target clearance | pass locally; sampled loss key `parametric_swing_foot_clearance` added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2057-t302k-swing-target-clearance.md](log/2026-05-28-2057-t302k-swing-target-clearance.md) |
 | 2026-05-28 20:48 | T302k touchdown circle keepout | pass locally; sampled loss key is now `parametric_touchdown_keepout` | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2048-t302k-touchdown-circle-keepout.md](log/2026-05-28-2048-t302k-touchdown-circle-keepout.md) |
 | 2026-05-28 20:34 | T302k low-small GPU circles | pass locally; fixed-shape component circles stay on input device | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2034-t302k-low-small-gpu-circles.md](log/2026-05-28-2034-t302k-low-small-gpu-circles.md) |
 | 2026-05-28 20:25 | T302k plane terrain metadata | pass locally; `is_plane_terrain` flows through MPC terrain and manager infers `flat/plane` from IsaacLab terrain names | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2025-t302k-plane-terrain-metadata.md](log/2026-05-28-2025-t302k-plane-terrain-metadata.md) |

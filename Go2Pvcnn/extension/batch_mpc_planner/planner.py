@@ -11,7 +11,7 @@ from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
 from .kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_trajectory
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
 from .parametric import decode_parametric_trajectory, init_parametric_variables
-from .parametric_losses import parametric_touchdown_keepout_loss
+from .parametric_losses import parametric_swing_foot_clearance_loss, parametric_touchdown_keepout_loss
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
 from .semantic_policy import build_parametric_nominal
 from .terrain import height_at, semantic_at
@@ -692,6 +692,15 @@ def _parametric_sampled_frame_losses(
         )
     else:
         touchdown_keepout = torch.zeros((batch,), dtype=dtype, device=device)
+    if bool(cfg.losses.swing_foot_clearance.enabled):
+        swing_foot_clearance = float(cfg.losses.swing_foot_clearance.weight) * parametric_swing_foot_clearance_loss(
+            terrain,
+            target_foot_pos,
+            decoded.swing_prob,
+            margin_m=float(cfg.losses.swing_foot_clearance.swing_foot_clearance_margin_m),
+        )
+    else:
+        swing_foot_clearance = torch.zeros((batch,), dtype=dtype, device=device)
     touchdown_endpoint = _parametric_touchdown_endpoint_loss(terrain, foot_pos, decoded.touchdown_w, decoded.swing_center, decoded.swing_width, command)
     foot_height_guard = _parametric_foot_height_guard_loss(root_pos, foot_pos, decoded.swing_prob)
     contact_weight = decoded.contact_prob.to(dtype=dtype, device=device).clamp_min(0.0)
@@ -725,6 +734,7 @@ def _parametric_sampled_frame_losses(
         "parametric_semantic_contact": semantic_contact,
         "parametric_semantic_avoidance": semantic_avoidance,
         "parametric_touchdown_keepout": touchdown_keepout,
+        "parametric_swing_foot_clearance": swing_foot_clearance,
         "parametric_touchdown_endpoint": touchdown_endpoint,
         "parametric_foot_height_guard": foot_height_guard,
         "parametric_root_foot_center": root_foot_center,
