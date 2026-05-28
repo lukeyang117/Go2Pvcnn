@@ -85,6 +85,7 @@ from extension.mdp.observations import (
     downsampled_elevation_semantic_scan,
 )
 from extension.mdp.rewards_reference import swing_leg_collision_reward
+from mpc_low_small_reachable_crossing_probe import compute_plane_low_small_fk_metrics
 from extension.trajectory_manager_factory import create_trajectory_manager, planner_backend_from_cfg
 from extension.viz.go2_foostep_planner import _adapt_mpc_result_for_viewer
 
@@ -561,6 +562,43 @@ def test_plane_root_z_target_only_applies_to_plane_rows() -> None:
 
     assert loss[0].item() > 0.0
     assert loss[1].item() == pytest.approx(0.0)
+
+
+def test_plane_low_small_metrics_count_semantic_collision_and_fk_error() -> None:
+    terrain = _terrain_with_low_small_square()
+    target = torch.zeros((1, 25, 4, 3), dtype=torch.float32)
+    target[:, :, 0, 0] = torch.linspace(-0.2, 0.2, 25).view(1, 25)
+    target[:, :, 0, 1] = 0.0
+    target[:, :, 0, 2] = 0.20
+    fk_points = fk_leg_points_from_joint_angles(
+        torch.zeros((1, 25, 3), dtype=torch.float32),
+        torch.zeros((1, 25, 3), dtype=torch.float32),
+        torch.zeros((1, 25, 12), dtype=torch.float32),
+        shank_sample_count=2,
+    )
+    low_foot = fk_points.foot_pos_world.clone()
+    low_foot[:, :, 0, :2] = target[:, :, 0, :2]
+    low_foot[:, :, 0, 2] = -0.01
+    fk_points = type(fk_points)(
+        foot_pos_world=low_foot,
+        knee_pos_world=fk_points.knee_pos_world,
+        shank_sample_world=fk_points.shank_sample_world,
+    )
+
+    metrics = compute_plane_low_small_fk_metrics(
+        target_foot_pos=target,
+        fk_points=fk_points,
+        terrain=terrain,
+        plane_mask=torch.tensor([True]),
+        probe_half_width_m=0.06,
+        probe_count=3,
+    )
+
+    assert "fk_semantic_collision_count" in metrics
+    assert "planned_vs_fk_foot_error_crossing_leg_max_m" in metrics
+    assert int(metrics["crossing_leg_count"]) >= 1
+    assert int(metrics["fk_semantic_collision_count"]) > 0
+    assert float(metrics["planned_vs_fk_foot_error_crossing_leg_max_m"]) > 0.0
 
 
 def test_parametric_plan_exports_fk_realized_feet() -> None:

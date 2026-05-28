@@ -837,7 +837,7 @@ git commit -m "feat: add plane root z target loss"
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 - Log: `notes/log/YYYY-MM-DD-t302k-plane-low-small-fk-collision-probe.md`
 
-- [ ] **Step 1: Add metric helper tests**
+- [x] **Step 1: Add metric helper tests**
 
 Add pure helper tests for metric computation:
 
@@ -855,7 +855,7 @@ def test_plane_low_small_metrics_count_semantic_collision_and_fk_error():
     assert "planned_vs_fk_foot_error_crossing_leg_max_m" in metrics
 ```
 
-- [ ] **Step 2: Implement test-only target trigger**
+- [x] **Step 2: Implement test-only target trigger**
 
 Use `target_foot_pos` 25 frames:
 
@@ -866,7 +866,7 @@ crossing_leg_mask = (semantic_at(terrain, p_probe) == 1).any(dim=(time_dim, prob
 
 This remains diagnostic only.
 
-- [ ] **Step 3: Implement FK semantic collision metrics**
+- [x] **Step 3: Implement FK semantic collision metrics**
 
 Collision condition:
 
@@ -887,7 +887,7 @@ Compute all documented metrics:
 - `fk_semantic_first_collision_frame`
 - `planned_vs_fk_foot_error_*`
 
-- [ ] **Step 4: Add IsaacLab command matrix**
+- [x] **Step 4: Add IsaacLab command matrix**
 
 Commands must cover:
 
@@ -906,7 +906,7 @@ mixed_turn_r
 
 Each command must run single plan and repeated replan with horizon 25.
 
-- [ ] **Step 5: Enforce env and GPU logging**
+- [x] **Step 5: Enforce env and GPU logging**
 
 Probe invocation must use:
 
@@ -923,7 +923,7 @@ Each JSONL/log row must record:
 - replan count/cycle
 - whether the row is plane/flat
 
-- [ ] **Step 6: Run a smoke on one GPU**
+- [x] **Step 6: Run a smoke on one GPU**
 
 Example:
 

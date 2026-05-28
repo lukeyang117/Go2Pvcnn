@@ -35,6 +35,11 @@
 - Task 8 added plane-only root z target:
   - `parametric_losses.py` provides `parametric_plane_root_z_target_loss()`;
   - sampled `loss_breakdown/cost_breakdown` includes `parametric_plane_root_z_target`, gated by `terrain.is_plane_terrain`.
+- Task 9 added plane low-small FK semantic collision probe metrics:
+  - `mpc_low_small_reachable_crossing_probe.py` now exports `compute_plane_low_small_fk_metrics()`;
+  - the helper marks test-only crossing legs from target foot XY semantic probes on plane terrain;
+  - it reports FK foot/knee/shank semantic collision, first collision frame, per-part/per-leg counts, semantic clearance, and optimized-vs-FK foot error;
+  - JSONL rows include `CUDA_VISIBLE_DEVICES`, command velocity, requested frames, horizon, replan count, and `terrain_is_plane`.
 - Current trajectory contract:
   - optimize touchdown `xy`; derive touchdown `z` from `height_at(terrain, touchdown_xy)`;
   - build root and foot cubic curves over the configured horizon;
@@ -57,7 +62,6 @@
 | --- | --- | --- | --- | --- |
 | T302k.18 | active | P0 | Execute the approved low-small loss redesign plan as the current mainline. | [T302k-low-small-loss-redesign-plan.md](T302k-low-small-loss-redesign-plan.md) |
 | T302k.12 | active | P0 | Parent reachability/collision problem addressed by T302k.18: FK mismatch, small-obstacle collision, root/foot relative drift. | `planner.py`, `parametric.py`, `kinematics.py`, `mpc_low_small_reachable_crossing_probe.py` |
-| T302k.17 | verify | P0 | Prerequisite in T302k.18 restored locally: decode consumes `nominal + variables`; commit pending in Task 1 Step 7. | `semantic_policy.py`, `parametric.py`, `planner.py`, `test_batch_mpc_parametric.py`, `test_batch_mpc_backend.py` |
 
 ## Closed Children Archive
 
@@ -80,6 +84,7 @@
 
 - Design commit `97c5b60`: [../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html)
 - [../log/2026-05-28-2125-t302k-plane-root-z-target.md](../log/2026-05-28-2125-t302k-plane-root-z-target.md)
+- [../log/2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md](../log/2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md)
 - [../log/2026-05-28-2117-t302k-fk-trajectory-consistency.md](../log/2026-05-28-2117-t302k-fk-trajectory-consistency.md)
 - [../log/2026-05-28-2110-t302k-fk-body-leg-collision.md](../log/2026-05-28-2110-t302k-fk-body-leg-collision.md)
 - [../log/2026-05-28-2057-t302k-swing-target-clearance.md](../log/2026-05-28-2057-t302k-swing-target-clearance.md)
@@ -101,9 +106,9 @@
 
 ## Git Refs
 
-- Last Feature Commit: `1b799cd` (parametric helper module)
-- Last Verified Commit: `2ac52e2` plus design-only commit `97c5b60`
-- Current Work Ref: Task 8 plane root-z target pending commit
+- Last Feature Commit: `eed5d18` (plane root-z target)
+- Last Verified Commit: `eed5d18` plus Task 9 uncommitted probe smoke
+- Current Work Ref: Task 9 plane low-small FK semantic collision probe pending commit
 - Key Files:
   - [../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -114,8 +119,8 @@
 
 ## Next Step
 
-- Commit Task 8 plane root-z target, then continue with Task 9: plane low-small FK semantic collision probe.
-- Use IsaacLab `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` and `CUDA_VISIBLE_DEVICES` for plane low-small FK semantic collision verification.
+- Commit Task 9 plane low-small FK semantic collision probe, then continue with Task 10 full verification and notes alignment.
+- Use IsaacLab `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python` and `CUDA_VISIBLE_DEVICES` for full command-matrix verification.
 
 ## Node Details
 

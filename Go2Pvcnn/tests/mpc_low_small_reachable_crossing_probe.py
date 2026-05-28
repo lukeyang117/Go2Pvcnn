@@ -5,6 +5,7 @@ import copy
 from contextlib import contextmanager
 import json
 import math
+import os
 from pathlib import Path
 import sys
 
@@ -18,7 +19,7 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT, GO2PVCNN_ROOT / "tests"):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
-from extension.batch_mpc_planner.kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_trajectory  # noqa: E402
+from extension.batch_mpc_planner.kinematics import fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory  # noqa: E402
 from extension.batch_mpc_planner.debug_variants import (  # noqa: E402
     apply_mpc_debug_variant_cfg,
     mpc_debug_extra_loss,
@@ -1039,6 +1040,85 @@ def _semantic_small_contact_metrics(fk_foot: torch.Tensor, touchdown: torch.Tens
     }
 
 
+def compute_plane_low_small_fk_metrics(
+    *,
+    target_foot_pos: torch.Tensor,
+    fk_points,
+    terrain,
+    plane_mask: torch.Tensor | None,
+    probe_half_width_m: float,
+    probe_count: int,
+) -> dict[str, float | int | list[int] | dict[str, int]]:
+    from extension.batch_mpc_planner.terrain import height_at, semantic_at
+
+    target = torch.as_tensor(target_foot_pos, dtype=torch.float32)
+    device = target.device
+    batch, horizon, legs = int(target.shape[0]), int(target.shape[1]), int(target.shape[2])
+    plane = torch.ones((batch,), dtype=torch.bool, device=device) if plane_mask is None else torch.as_tensor(plane_mask, dtype=torch.bool, device=device).reshape(-1)
+    if int(plane.numel()) == 1 and batch > 1:
+        plane = plane.expand(batch)
+    count = max(1, int(probe_count))
+    offsets = torch.linspace(-float(probe_half_width_m), float(probe_half_width_m), count, dtype=target.dtype, device=device)
+    probe = target[..., None, :2].clone().expand(batch, horizon, legs, count, 2).clone()
+    probe[..., 1] = probe[..., 1] + offsets.view(1, 1, 1, count)
+    probe_sem = semantic_at(terrain, probe.reshape(batch, horizon * legs * count, 2)).reshape(batch, horizon, legs, count).to(device=device)
+    crossing_leg_mask = torch.logical_and((probe_sem == 1).any(dim=(1, 3)), plane[:, None])
+    crossing_leg_count = int(crossing_leg_mask.sum().item())
+
+    parts = {
+        "foot": torch.as_tensor(fk_points.foot_pos_world, dtype=target.dtype, device=device),
+        "knee": torch.as_tensor(fk_points.knee_pos_world, dtype=target.dtype, device=device),
+        "shank": torch.as_tensor(fk_points.shank_sample_world, dtype=target.dtype, device=device),
+    }
+    collision_by_part: dict[str, int] = {}
+    collision_by_leg_tensor = torch.zeros((batch, legs), dtype=torch.long, device=device)
+    total_collision = 0
+    min_clearance: torch.Tensor | None = None
+    first_frame = horizon
+    for name, points in parts.items():
+        point_count = int(points.numel() // 3)
+        pts = points.reshape(batch, -1, 3)
+        sem = semantic_at(terrain, pts[..., :2]).reshape(batch, -1).to(device=device)
+        height = height_at(terrain, pts[..., :2]).reshape(batch, -1).to(dtype=target.dtype, device=device)
+        clearance = pts[..., 2] - height
+        hit = torch.logical_and(torch.logical_and(sem == 1, clearance < 0.0), plane[:, None])
+        collision_by_part[name] = int(hit.sum().item())
+        total_collision += collision_by_part[name]
+        semantic_clearance = torch.where(torch.logical_and(sem == 1, plane[:, None]), clearance, torch.full_like(clearance, float("inf")))
+        part_min = semantic_clearance.amin()
+        min_clearance = part_min if min_clearance is None else torch.minimum(min_clearance, part_min)
+        if bool(hit.any().item()):
+            if name == "shank":
+                hit_leg = hit.reshape(batch, horizon, legs, -1).any(dim=(1, 3))
+                hit_frame = hit.reshape(batch, horizon, legs, -1).any(dim=(2, 3))
+            else:
+                hit_leg = hit.reshape(batch, horizon, legs).any(dim=1)
+                hit_frame = hit.reshape(batch, horizon, legs).any(dim=2)
+            collision_by_leg_tensor += hit_leg.to(dtype=torch.long)
+            frame_ids = torch.nonzero(hit_frame, as_tuple=False)
+            if int(frame_ids.numel()) > 0:
+                first_frame = min(first_frame, int(frame_ids[:, 1].min().item()))
+    target_fk_error = torch.linalg.vector_norm(target - parts["foot"], dim=-1)
+    crossing_error = target_fk_error[crossing_leg_mask[:, None, :].expand(batch, horizon, legs)]
+    if int(crossing_error.numel()) == 0:
+        crossing_error = torch.zeros((1,), dtype=target.dtype, device=device)
+    denom = max(1, batch * horizon * legs)
+    min_clearance_value = 0.0 if min_clearance is None or not torch.isfinite(min_clearance) else float(min_clearance.item())
+    return {
+        "plane_env_count": int(plane.sum().item()),
+        "crossing_leg_count": crossing_leg_count,
+        "crossing_leg_mask": crossing_leg_mask.to(dtype=torch.long).cpu().reshape(-1).tolist(),
+        "fk_semantic_collision_count": int(total_collision),
+        "fk_semantic_collision_rate": float(total_collision) / float(denom),
+        "fk_semantic_collision_by_part": collision_by_part,
+        "fk_semantic_collision_by_leg": collision_by_leg_tensor.sum(dim=0).cpu().tolist(),
+        "fk_semantic_min_clearance_over_semantic_m": min_clearance_value,
+        "fk_semantic_first_collision_frame": int(first_frame if first_frame < horizon else -1),
+        "planned_vs_fk_foot_error_crossing_leg_max_m": float(crossing_error.max().item()),
+        "planned_vs_fk_foot_error_all_max_m": float(target_fk_error.max().item()),
+    }
+
+
 def _stability_metrics(root_pos: torch.Tensor, root_rpy: torch.Tensor, fk_foot: torch.Tensor) -> dict[str, float]:
     root = torch.as_tensor(root_pos, dtype=torch.float32)
     rpy = torch.as_tensor(root_rpy, dtype=torch.float32, device=root.device)
@@ -1062,6 +1142,7 @@ def _result_metrics(result, terrain, obstacle_xy: torch.Tensor, command: tuple[f
     planned_foot = torch.as_tensor(result.foot_pos_w, dtype=root.dtype, device=root.device)
     joint = torch.as_tensor(result.joint_angles, dtype=root.dtype, device=root.device)
     fk_foot = fk_feet_from_joint_angles(root, rpy, joint)
+    fk_points = fk_leg_points_from_joint_angles(root, rpy, joint, shank_sample_count=2)
     raw_joint = solve_joint_angles_from_trajectory(root, rpy, planned_foot, clamp_to_limits=False)
     clamped_joint = solve_joint_angles_from_trajectory(root, rpy, planned_foot, clamp_to_limits=True)
     planned_touchdown = torch.as_tensor(getattr(result, "planned_touchdown_w", planned_foot), dtype=root.dtype, device=root.device)
@@ -1097,6 +1178,16 @@ def _result_metrics(result, terrain, obstacle_xy: torch.Tensor, command: tuple[f
     )
     metrics.update(reachable_ik_fk_consistency_metrics(planned_foot, fk_foot, planned_touchdown, fk_touchdown, raw_joint, clamped_joint))
     metrics.update(_semantic_small_contact_metrics(fk_foot, planned_touchdown, contact, terrain))
+    metrics.update(
+        compute_plane_low_small_fk_metrics(
+            target_foot_pos=planned_foot,
+            fk_points=fk_points,
+            terrain=terrain,
+            plane_mask=getattr(terrain, "is_plane_terrain", None),
+            probe_half_width_m=0.06,
+            probe_count=3,
+        )
+    )
     metrics.update(_stability_metrics(root, rpy, fk_foot))
     initial_foot_error = getattr(result, "rolling_segment_initial_foot_error", None)
     if initial_foot_error is not None:
@@ -1145,10 +1236,12 @@ def run_probe(
     )
     rows: list[dict[str, float | int | str]] = []
     try:
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         print(
             json.dumps(
                 {
                     "type": "reachable_probe_header",
+                    "cuda_visible_devices": cuda_visible_devices,
                     "device": device,
                     "commands": list(commands),
                     "variants": list(variants),
@@ -1228,9 +1321,17 @@ def run_probe(
                         )
                     row = {
                         "type": "reachable_crossing_cycle",
+                        "cuda_visible_devices": cuda_visible_devices,
+                        "device": device,
                         "command": command_name,
+                        "command_vx": float(command_tuple[0]),
+                        "command_vy": float(command_tuple[1]),
+                        "command_wz": float(command_tuple[2]),
                         "variant": variant,
                         "cycle": int(cycle),
+                        "replan_count": int(cycle + 1),
+                        "requested_n_frames": int(runtime.requested_n_frames),
+                        "horizon": int(getattr(result, "root_pos_w").shape[1]),
                         "semantic_anchor_x": float(anchor.world_xy[0]),
                         "semantic_anchor_y": float(anchor.world_xy[1]),
                         "semantic_target_diameter": float(anchor.target_diameter),
@@ -1238,6 +1339,7 @@ def run_probe(
                         "semantic_probe_seed": int(probe_seed),
                     }
                     row.update(_result_metrics(result, terrain, obstacle_xy, command_tuple, obstacle_height=float(anchor.target_height)))
+                    row["terrain_is_plane"] = int(row.get("plane_env_count", 0) > 0)
                     rows.append(row)
                     print(json.dumps(row, sort_keys=True), flush=True)
                     refresh_targeted_scanner_pose(runtime.base_env, runtime.scanner, minimum_steps=1, extra_steps=2)
@@ -1247,6 +1349,8 @@ def run_probe(
                 json.dumps(
                     {
                         "type": "reachable_probe_summary",
+                        "cuda_visible_devices": cuda_visible_devices,
+                        "device": device,
                         "cycle_count": len(rows),
                         "max_terminal_planned_vs_fk_foot_error": max(
                             float(row["terminal_planned_vs_fk_foot_error_max"]) for row in rows
