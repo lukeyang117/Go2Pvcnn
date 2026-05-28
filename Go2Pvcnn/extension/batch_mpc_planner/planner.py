@@ -12,6 +12,7 @@ from .kinematics import fk_feet_from_joint_angles, solve_joint_angles_from_traje
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
 from .parametric import decode_parametric_trajectory, init_parametric_variables
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
+from .semantic_policy import build_parametric_nominal
 from .terrain import height_at, semantic_at
 from .types import MPC_HARD_REASON_COUNT, MpcPlannerResult, MpcPlannerStatus, MpcPlannerTerrain, MpcRobotState
 
@@ -408,7 +409,9 @@ def _parametric_result_from_state(
     cfg: MpcPlannerCfg,
 ) -> MpcPlannerResult:
     horizon = int(cfg.runtime.horizon_steps)
-    planning_command = torch.as_tensor(command, dtype=torch.as_tensor(state.root_pos).dtype, device=torch.as_tensor(state.root_pos).device)
+    command_tensor = torch.as_tensor(command, dtype=torch.as_tensor(state.root_pos).dtype, device=torch.as_tensor(state.root_pos).device)
+    nominal = build_parametric_nominal(state, terrain, command_tensor, cfg, horizon=horizon)
+    planning_command = nominal.command
     variables = init_parametric_variables(state, planning_command, horizon=horizon)
     decoded, loss_breakdown = _optimize_parametric_variables(
         terrain,
@@ -416,6 +419,7 @@ def _parametric_result_from_state(
         planning_command,
         loss_command=command,
         variables=variables,
+        nominal=nominal,
         horizon=horizon,
         cfg=cfg,
     )
@@ -604,12 +608,13 @@ def _optimize_parametric_variables(
     *,
     loss_command: Tensor | None = None,
     variables,
+    nominal,
     horizon: int,
     cfg: MpcPlannerCfg,
 ):
     command = planning_command if loss_command is None else loss_command
     steps = int(cfg.runtime.optimize_steps)
-    decoded = decode_parametric_trajectory(state, terrain, planning_command, variables, horizon=horizon)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=horizon)
     losses = _parametric_sampled_frame_losses(
         terrain,
         state,
@@ -624,7 +629,7 @@ def _optimize_parametric_variables(
     optimizer = torch.optim.Adam(variables.parameters(), lr=float(cfg.runtime.lr))
     for _ in range(steps):
         optimizer.zero_grad(set_to_none=True)
-        decoded = decode_parametric_trajectory(state, terrain, planning_command, variables, horizon=horizon)
+        decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=horizon)
         losses = _parametric_sampled_frame_losses(
             terrain,
             state,
@@ -638,7 +643,7 @@ def _optimize_parametric_variables(
         total.backward()
         torch.nn.utils.clip_grad_norm_(variables.parameters(), float(cfg.runtime.grad_clip_norm))
         optimizer.step()
-    decoded = decode_parametric_trajectory(state, terrain, planning_command, variables, horizon=horizon)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=horizon)
     losses = _parametric_sampled_frame_losses(
         terrain,
         state,

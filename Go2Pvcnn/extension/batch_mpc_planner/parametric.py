@@ -164,105 +164,10 @@ def _support_plane_roll_pitch(
     return torch.stack((roll, pitch), dim=-1).clamp(-float(limit_rad), float(limit_rad))
 
 
-def _rotate_xy(vector_xy: Tensor, yaw: Tensor) -> Tensor:
-    c = torch.cos(yaw)
-    s = torch.sin(yaw)
-    x = vector_xy[..., 0]
-    y = vector_xy[..., 1]
-    return torch.stack((c * x - s * y, s * x + c * y), dim=-1)
-
-
-def _canonical_body_footprint(current_rel_body_xy: Tensor) -> Tensor:
-    leg_sign = torch.tensor(
-        ((1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)),
-        dtype=current_rel_body_xy.dtype,
-        device=current_rel_body_xy.device,
-    ).view(1, 4, 2)
-    half_span = current_rel_body_xy.abs().mean(dim=1, keepdim=True)
-    half_span = torch.stack(
-        (
-            half_span[..., 0].clamp(0.18, 0.34),
-            half_span[..., 1].clamp(0.08, 0.20),
-        ),
-        dim=-1,
-    )
-    return leg_sign * half_span
-
-
-def _terrain_grid_world_xy(terrain, *, dtype: torch.dtype, device: torch.device, batch: int) -> Tensor:
-    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
-    if height.ndim == 2:
-        height = height.unsqueeze(0)
-    if int(height.shape[0]) == 1 and batch > 1:
-        height = height.expand(batch, -1, -1)
-    rows, cols = int(height.shape[-2]), int(height.shape[-1])
-    xs = torch.linspace(float(terrain.world_x_range[0]), float(terrain.world_x_range[1]), cols, dtype=dtype, device=device)
-    ys = torch.linspace(float(terrain.world_y_range[0]), float(terrain.world_y_range[1]), rows, dtype=dtype, device=device)
-    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    return torch.stack((xx, yy), dim=-1).reshape(1, rows * cols, 2).expand(batch, -1, -1)
-
-
-def _high_large_root_bypass(
-    state,
-    terrain,
-    cmd: Tensor,
-    forward: Tensor,
-    left: Tensor,
-    *,
-    root0: Tensor,
-) -> tuple[Tensor, Tensor, Tensor]:
-    from .terrain import height_at
-
-    batch = int(root0.shape[0])
-    dtype = root0.dtype
-    device = root0.device
-    zero = torch.zeros((batch,), dtype=dtype, device=device)
-    if terrain.semantic_map is None:
-        return zero.bool(), zero, zero
-    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
-    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
-    if height.ndim == 2:
-        height = height.unsqueeze(0)
-    if semantic.ndim == 2:
-        semantic = semantic.unsqueeze(0)
-    if int(height.shape[0]) == 1 and batch > 1:
-        height = height.expand(batch, -1, -1)
-    if int(semantic.shape[0]) == 1 and batch > 1:
-        semantic = semantic.expand(batch, -1, -1)
-    if int(height.shape[0]) != batch or int(semantic.shape[0]) != batch:
-        return zero.bool(), zero, zero
-
-    grid_xy = _terrain_grid_world_xy(terrain, dtype=dtype, device=device, batch=batch)
-    grid_z = height.reshape(batch, -1)
-    grid_sem = semantic.reshape(batch, -1)
-    root_ground = height_at(terrain, root0[:, None, :2]).reshape(batch).to(dtype=dtype, device=device)
-    high_small = torch.logical_and(grid_sem == 1, (grid_z - root_ground[:, None]) > 0.30)
-    risky = torch.logical_or(grid_sem >= 2, high_small)
-    delta = grid_xy - root0[:, None, :2]
-    along = (delta * forward[:, None, :]).sum(dim=-1)
-    lateral = (delta * left[:, None, :]).sum(dim=-1)
-    speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    yaw_active = torch.abs(cmd[:, 2]) > 1.0e-4
-    linear_candidate = torch.logical_and(
-        torch.logical_and(along >= -0.15, along <= 1.20),
-        torch.abs(lateral) <= 0.55,
-    )
-    yaw_candidate = torch.logical_and(yaw_active[:, None], torch.linalg.vector_norm(delta, dim=-1) <= 0.75)
-    candidate = torch.logical_and(risky, torch.logical_or(linear_candidate, yaw_candidate))
-    candidate = torch.logical_and(candidate, torch.logical_or(speed[:, None] > 1.0e-4, yaw_active[:, None]))
-    score = torch.where(candidate, along.abs() + 0.25 * lateral.abs(), torch.full_like(along, 1.0e6))
-    idx = score.argmin(dim=1)
-    active = score.gather(1, idx[:, None]).squeeze(1) < 1.0e5
-    obstacle_along = along.gather(1, idx[:, None]).squeeze(1)
-    obstacle_lateral = lateral.gather(1, idx[:, None]).squeeze(1)
-    side = torch.where(obstacle_lateral > 0.0, -torch.ones_like(obstacle_lateral), torch.ones_like(obstacle_lateral))
-    return active, obstacle_along, side
-
-
 def decode_parametric_trajectory(
     state,
     terrain,
-    command: Tensor,
+    nominal,
     variables: MpcParametricVariables,
     *,
     horizon: int,
@@ -277,40 +182,22 @@ def decode_parametric_trajectory(
     device = root0.device
     h = int(horizon)
     phase = _phase(h, dtype=dtype, device=device)
-    cmd = _padded_command(command, batch=batch, dtype=dtype, device=device)
-    forward, left, _linear_active = command_frame_axes(cmd, rpy0[:, 2], linear_eps=1.0e-4)
+    cmd = _padded_command(nominal.command, batch=batch, dtype=dtype, device=device)
+    forward = torch.as_tensor(nominal.forward, dtype=dtype, device=device)
+    left = torch.as_tensor(nominal.left, dtype=dtype, device=device)
 
-    root_goal_delta = torch.stack(
+    root_goal_delta_offset = torch.stack(
         (
-            0.15 + 0.2 * torch.sigmoid(variables.root_goal_delta_raw[:, 0]),
+            0.20 * torch.tanh(variables.root_goal_delta_raw[:, 0]),
             0.25 * torch.tanh(variables.root_goal_delta_raw[:, 1]),
         ),
         dim=-1,
     )
-    avoid_active, obstacle_along, bypass_side = _high_large_root_bypass(
-        state,
-        terrain,
-        cmd,
-        forward,
-        left,
-        root0=root0,
-    )
-    avoid_lateral = bypass_side * 0.52
-    avoid_progress = torch.maximum(root_goal_delta[:, 0], obstacle_along + 0.20)
-    root_goal_delta = torch.stack(
-        (
-            torch.where(avoid_active, avoid_progress.clamp(0.45, 0.85), root_goal_delta[:, 0]),
-            torch.where(avoid_active, avoid_lateral, root_goal_delta[:, 1]),
-        ),
-        dim=-1,
-    )
+    root_goal_delta = torch.as_tensor(nominal.root_goal_delta, dtype=dtype, device=device) + root_goal_delta_offset
     root_goal_xy = root0[:, :2] + forward * root_goal_delta[:, 0:1] + left * root_goal_delta[:, 1:2]
-    terminal_yaw = rpy0[:, 2] + cmd[:, 2] * 0.5
+    terminal_yaw = torch.as_tensor(nominal.terminal_yaw, dtype=dtype, device=device)
 
-    current_rel_xy = foot0[..., :2] - root0[:, None, :2]
-    current_rel_body = _rotate_xy(current_rel_xy, -rpy0[:, None, 2])
-    terminal_body_footprint = _canonical_body_footprint(current_rel_body)
-    terminal_rel_xy = _rotate_xy(terminal_body_footprint, terminal_yaw[:, None])
+    terminal_rel_xy = torch.as_tensor(nominal.terminal_rel_xy, dtype=dtype, device=device)
     touchdown_delta = 0.40 * torch.tanh(variables.touchdown_delta_raw)
     touchdown_delta = touchdown_delta - touchdown_delta.mean(dim=1, keepdim=True)
     touchdown_xy = (
@@ -356,11 +243,7 @@ def decode_parametric_trajectory(
     root_step = root_goal_xy - root0[:, :2]
     root_len = torch.linalg.vector_norm(root_step, dim=-1, keepdim=True).clamp_min(1.0e-6)
     root_lat = 0.20 * torch.tanh(variables.root_lateral_bias_raw)
-    root_lat = torch.where(
-        avoid_active[:, None],
-        torch.stack((0.78 * avoid_lateral, 0.18 * avoid_lateral), dim=-1),
-        root_lat,
-    )
+    root_lat = root_lat + torch.as_tensor(nominal.root_lateral_bias, dtype=dtype, device=device)
     r0 = root0[:, :2]
     r3 = root_goal_xy
     r1 = r0 + forward * (root_c[:, 0:1] * root_len) + left * root_lat[:, 0:1]

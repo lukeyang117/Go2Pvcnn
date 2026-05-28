@@ -10,6 +10,7 @@ from torch import Tensor
 
 from .config import MpcPlannerCfg
 from .losses.terrain_clearance import _nearby_height_for_sparse_semantic, _safe_norm, _semantic_id_mask, _terrain_grid_world_xy
+from .parametric import command_frame_axes
 from .terrain import height_at, semantic_at
 from .types import MpcPlannerTerrain, MpcRobotState
 
@@ -38,12 +39,49 @@ class NominalCommandShapeDiagnostics:
     right_score: Tensor
 
 
+@dataclass(frozen=True)
+class ParametricTrajectoryNominal:
+    command: Tensor
+    forward: Tensor
+    left: Tensor
+    root_goal_delta: Tensor
+    root_lateral_bias: Tensor
+    terminal_yaw: Tensor
+    terminal_rel_xy: Tensor
+    shape_diagnostics: NominalCommandShapeDiagnostics
+
+
 def _padded_command(command: Tensor, *, batch: int, dtype: torch.dtype, device: torch.device) -> Tensor:
     cmd = torch.as_tensor(command, dtype=dtype, device=device)
     if int(cmd.shape[-1]) < 3:
         pad = torch.zeros((batch, 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
         cmd = torch.cat((cmd, pad), dim=-1)
     return cmd[:, :3]
+
+
+def _rotate_xy(vector_xy: Tensor, yaw: Tensor) -> Tensor:
+    c = torch.cos(yaw)
+    s = torch.sin(yaw)
+    x = vector_xy[..., 0]
+    y = vector_xy[..., 1]
+    return torch.stack((c * x - s * y, s * x + c * y), dim=-1)
+
+
+def _canonical_body_footprint(current_rel_body_xy: Tensor) -> Tensor:
+    leg_sign = torch.tensor(
+        ((1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)),
+        dtype=current_rel_body_xy.dtype,
+        device=current_rel_body_xy.device,
+    ).view(1, 4, 2)
+    half_span = current_rel_body_xy.abs().mean(dim=1, keepdim=True)
+    half_span = torch.stack(
+        (
+            half_span[..., 0].clamp(0.18, 0.34),
+            half_span[..., 1].clamp(0.08, 0.20),
+        ),
+        dim=-1,
+    )
+    return leg_sign * half_span
 
 
 def classify_semantic_obstacle_mode(
@@ -95,27 +133,34 @@ def classify_semantic_obstacle_mode(
     cmd_xy = cmd[:, :2]
     speed = _safe_norm(cmd_xy, dim=-1)
     linear_active = speed > float(losses.low_small_crossing.linear_speed_eps)
-    heading_body = cmd_xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
     yaw = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)[:, 2]
     cy = torch.cos(yaw)
     sy = torch.sin(yaw)
-    heading = torch.stack(
+    heading_body = cmd_xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    linear_heading = torch.stack(
         (
             cy * heading_body[:, 0] - sy * heading_body[:, 1],
             sy * heading_body[:, 0] + cy * heading_body[:, 1],
         ),
         dim=-1,
     )
+    yaw_heading = torch.stack((cy, sy), dim=-1)
+    heading = torch.where(linear_active[:, None], linear_heading, yaw_heading)
     left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
     delta = grid_xy - root0[:, None, :2]
     forward = (delta * heading[:, None, :]).sum(dim=-1)
     lateral = (delta * left[:, None, :]).sum(dim=-1)
+    yaw_active = torch.abs(cmd[:, 2]) > 1.0e-4
     corridor = torch.logical_and(
         torch.logical_and(forward >= 0.0, forward <= float(losses.high_obstacle_avoidance.forward_distance_m)),
         torch.abs(lateral) <= float(losses.high_obstacle_avoidance.corridor_width_m),
     )
-    candidates = torch.logical_and(torch.logical_or(low_small, torch.logical_or(high_small, large)), corridor)
-    candidates = torch.logical_and(candidates, linear_active[:, None])
+    yaw_candidate = torch.logical_and(yaw_active[:, None], torch.linalg.vector_norm(delta, dim=-1) <= 0.75)
+    candidates = torch.logical_and(
+        torch.logical_or(low_small, torch.logical_or(high_small, large)),
+        torch.logical_or(corridor, yaw_candidate),
+    )
+    candidates = torch.logical_and(candidates, torch.logical_or(linear_active, yaw_active)[:, None])
     score = torch.where(candidates, forward, torch.full_like(forward, 1.0e6))
     index = score.argmin(dim=-1)
     has_obstacle = score.gather(1, index[:, None]).squeeze(-1) < 1.0e5
@@ -204,10 +249,78 @@ def shape_nominal_command_for_semantic_obstacles(
     )
 
 
+def build_parametric_nominal(
+    state: MpcRobotState,
+    terrain: MpcPlannerTerrain,
+    command: Tensor,
+    cfg: MpcPlannerCfg,
+    *,
+    horizon: int,
+) -> ParametricTrajectoryNominal:
+    """Build the semantic-aware nominal trajectory seed consumed by parametric decode."""
+    del horizon
+    root0 = torch.as_tensor(state.root_pos)
+    rpy0 = torch.as_tensor(state.root_rpy, dtype=root0.dtype, device=root0.device)
+    foot0 = torch.as_tensor(state.foot_pos, dtype=root0.dtype, device=root0.device)
+    batch = int(root0.shape[0])
+    dtype = root0.dtype
+    device = root0.device
+    shaped_cmd, diagnostics = shape_nominal_command_for_semantic_obstacles(terrain, state, command, cfg)
+    shaped_cmd = _padded_command(shaped_cmd, batch=batch, dtype=dtype, device=device)
+    forward, left, _linear_active = command_frame_axes(shaped_cmd, rpy0[:, 2], linear_eps=1.0e-4)
+
+    root_goal_delta = torch.zeros((batch, 2), dtype=dtype, device=device)
+    root_goal_delta[:, 0] = 0.25
+    root_lateral_bias = torch.zeros((batch, 2), dtype=dtype, device=device)
+
+    policy = classify_semantic_obstacle_mode(terrain, state, shaped_cmd, cfg)
+    avoid = torch.logical_or(
+        diagnostics.command_shaped.to(device=device),
+        policy.mode == int(SemanticObstacleMode.HIGH_OR_LARGE_AVOID),
+    )
+    side = diagnostics.shape_side.to(dtype=dtype, device=device)
+    side = torch.where(side == 0.0, torch.ones_like(side), side)
+    obstacle_progress = torch.maximum(root_goal_delta[:, 0], policy.obstacle_forward.to(dtype=dtype, device=device) + 0.20)
+    avoid_forward = obstacle_progress.clamp(0.45, 0.85)
+    avoid_lateral = side * 0.52
+    root_goal_delta = torch.stack(
+        (
+            torch.where(avoid, avoid_forward, root_goal_delta[:, 0]),
+            torch.where(avoid, avoid_lateral, root_goal_delta[:, 1]),
+        ),
+        dim=-1,
+    )
+    root_lateral_bias = torch.stack(
+        (
+            torch.where(avoid, 0.78 * avoid_lateral, root_lateral_bias[:, 0]),
+            torch.where(avoid, 0.18 * avoid_lateral, root_lateral_bias[:, 1]),
+        ),
+        dim=-1,
+    )
+
+    terminal_yaw = rpy0[:, 2] + shaped_cmd[:, 2] * 0.5
+    current_rel_xy = foot0[..., :2] - root0[:, None, :2]
+    current_rel_body = _rotate_xy(current_rel_xy, -rpy0[:, None, 2])
+    terminal_body_footprint = _canonical_body_footprint(current_rel_body)
+    terminal_rel_xy = _rotate_xy(terminal_body_footprint, terminal_yaw[:, None])
+    return ParametricTrajectoryNominal(
+        command=shaped_cmd,
+        forward=forward,
+        left=left,
+        root_goal_delta=root_goal_delta,
+        root_lateral_bias=root_lateral_bias,
+        terminal_yaw=terminal_yaw,
+        terminal_rel_xy=terminal_rel_xy,
+        shape_diagnostics=diagnostics,
+    )
+
+
 __all__ = [
     "NominalCommandShapeDiagnostics",
+    "ParametricTrajectoryNominal",
     "SemanticObstacleMode",
     "SemanticObstaclePolicy",
+    "build_parametric_nominal",
     "classify_semantic_obstacle_mode",
     "shape_nominal_command_for_semantic_obstacles",
 ]
