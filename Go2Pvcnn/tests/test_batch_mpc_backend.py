@@ -59,6 +59,7 @@ from extension.batch_mpc_planner.semantic_policy import (
     classify_semantic_obstacle_mode,
     shape_nominal_command_for_semantic_obstacles,
 )
+from extension.batch_mpc_planner.semantic_geometry import low_small_component_circles
 from extension.batch_mpc_planner.terrain import (
     build_mpc_terrain_from_scanner,
     height_at,
@@ -638,6 +639,43 @@ def test_build_mpc_terrain_from_scanner_carries_is_plane_terrain_metadata() -> N
     assert terrain.is_plane_terrain is not None
     assert terrain.is_plane_terrain.dtype == torch.bool
     assert terrain.is_plane_terrain.tolist() == [True, False]
+
+
+def test_low_small_gpu_circles_split_disconnected_components() -> None:
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    semantic[0, 2:4, 2:4] = 1
+    semantic[0, 6:8, 6:8] = 1
+
+    circles = low_small_component_circles(
+        semantic,
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+        max_components=4,
+    )
+
+    assert circles.center_xy.shape == (1, 4, 2)
+    assert circles.radius.shape == (1, 4)
+    assert circles.valid.shape == (1, 4)
+    assert int(circles.valid[0].sum()) == 2
+    assert circles.truncated.tolist() == [False]
+    assert torch.all(circles.radius[circles.valid] > 0.0)
+
+
+def test_low_small_gpu_circles_stay_on_input_device() -> None:
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long, device=device)
+    semantic[0, 3:6, 3:6] = 1
+
+    circles = low_small_component_circles(
+        semantic,
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+        max_components=4,
+    )
+
+    assert circles.center_xy.device == semantic.device
+    assert circles.radius.device == semantic.device
+    assert circles.valid.device == semantic.device
 
 
 def test_mpc_terrain_height_semantic_slope_and_support_queries() -> None:

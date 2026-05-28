@@ -323,7 +323,7 @@ git commit -m "feat: carry plane terrain metadata into mpc terrain"
 - Create: `Go2Pvcnn/extension/batch_mpc_planner/semantic_geometry.py`
 - Modify: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing GPU circle tests**
+- [x] **Step 1: Write failing GPU circle tests**
 
 Add tests:
 
@@ -357,7 +357,7 @@ def test_low_small_gpu_circles_stay_on_input_device():
     assert circles.radius.device == semantic.device
 ```
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'low_small_gpu_circles'
@@ -365,7 +365,7 @@ PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py
 
 Expected before implementation: import failure for `semantic_geometry`.
 
-- [ ] **Step 3: Implement GPU circle dataclass**
+- [x] **Step 3: Implement GPU circle dataclass**
 
 Create:
 
@@ -378,7 +378,7 @@ class LowSmallCircles:
     truncated: Tensor
 ```
 
-- [ ] **Step 4: Implement fast component approximation**
+- [x] **Step 4: Implement fast component approximation**
 
 Implement `low_small_component_circles(...)` with these constraints:
 
@@ -401,14 +401,14 @@ def low_small_component_circles(
     ...
 ```
 
-- [ ] **Step 5: Verify GPU circle helper**
+- [x] **Step 5: Verify GPU circle helper**
 
 ```bash
 PYTHONPATH=Go2Pvcnn pytest --noconftest Go2Pvcnn/tests/test_batch_mpc_backend.py -q -k 'low_small_gpu_circles'
 python -m py_compile Go2Pvcnn/extension/batch_mpc_planner/semantic_geometry.py
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/semantic_geometry.py Go2Pvcnn/tests/test_batch_mpc_backend.py
