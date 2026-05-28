@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parametric MPC low-small loss 重构设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #59636e;
+      --line: #d7dde3;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --warn: #9a5b00;
+      --bad: #9f2f24;
+      --ok: #247047;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 8px 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: var(--panel);
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note {
+      background: var(--panel);
+      border-left: 4px solid var(--accent);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .guard {
+      background: #fff8eb;
+      border-left: 4px solid var(--warn);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .danger {
+      background: #fff0ee;
+      border-left: 4px solid var(--bad);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .ok {
+      background: #eef8f1;
+      border-left: 4px solid var(--ok);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+    ul {
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Parametric MPC low-small loss 重构设计</h1>
+  <div class="meta">
+    日期：2026-05-28 ｜ 主线：T302k parametric MPC trajectory contract ｜ 文件范围：
+    <code>Go2Pvcnn/extension/batch_mpc_planner</code>
+  </div>
+
+  <section>
+    <h2>1. 设计目标</h2>
+    <p>当前目标是重构 MPC 跨 low-small 小障碍物相关 loss，使优化逻辑更清楚，并避免 touchdown 落在 small obstacle 上、swing/FK 轨迹扫到障碍、IK/FK 实际轨迹和规划轨迹偏差过大、以及平面小障碍场景里 root z 被障碍高度抬起来。</p>
+    <p>这次设计只针对 parametric MPC 主线。<code>decode_parametric_trajectory()</code> 继续只消费 nominal 和 variables，并输出轨迹；它不做语义硬修正、不做 touchdown hard projection、不做足端硬分离。</p>
+    <div class="guard">
+      <strong>调试边界：</strong>后续调试只能调本设计确认的 loss 权重和参数。不得新增硬约束。若需要新增任何 loss，必须先和用户确认。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 删除和替换范围</h2>
+    <p>旧的 low-small / touchdown 相关 loss 职责混杂，需要删除或替换：</p>
+    <ul>
+      <li><code>_parametric_low_small_crossing_loss</code></li>
+      <li><code>_parametric_touchdown_semantic_ground_loss</code></li>
+      <li><code>_parametric_touchdown_spacing_loss</code></li>
+    </ul>
+    <p>保留已有 parametric contract：</p>
+    <ul>
+      <li>touchdown 的 <code>z</code> 继续由 <code>height_at(terrain, touchdown_xy)</code> hard ground。</li>
+      <li>nominal 构建仍在 <code>semantic_policy.py</code>，decode 不负责语义 command shaping。</li>
+      <li>优化循环里只通过 loss 改变 variables。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. 新 loss 集合</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>编号</th>
+          <th>名称</th>
+          <th>作用</th>
+          <th>是否参与优化</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>0</td>
+          <td>plane low-small FK 语义碰撞测试</td>
+          <td>只做测试/诊断，检测 target 触发腿和 IK/FK 后几何碰撞</td>
+          <td>否</td>
+        </tr>
+        <tr>
+          <td>1</td>
+          <td>touchdown keepout loss</td>
+          <td>touchdown 当前落在语义物体上时，基于 small obstacle 连通域拟合圆，把 touchdown 推到圆外</td>
+          <td>是</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>swing foot terrain clearance loss</td>
+          <td>所有 swing target foot 点必须高过 height map</td>
+          <td>是</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>FK body/leg terrain collision loss</td>
+          <td>IK 后 FK 的 foot/knee/shank/root/underbody 几何点不能和 height map 碰撞</td>
+          <td>是</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>optimized vs IK/FK trajectory consistency loss</td>
+          <td>规划足端轨迹和 IK/FK 实际足端轨迹保持一致，包括 world 和 root-relative</td>
+          <td>是</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>plane terrain root z target loss</td>
+          <td>只在 IsaacLab plane/flat terrain 上启用，root z 跟目标高度</td>
+          <td>是</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 第 0 条：plane low-small FK 语义碰撞测试</h2>
+    <p>第 0 条不进入 loss，只作为后续调试和验收测试。它只在 IsaacLab 创建出来的 plane/flat terrain 上执行。</p>
+
+    <h3>4.0 测试运行环境</h3>
+    <p>第 0 条测试必须使用真实 IsaacLab 环境执行，不能只用本地纯单元测试代替。指定环境为：</p>
+    <pre><code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code></pre>
+    <p>机器有四张 GPU，测试时用 <code>CUDA_VISIBLE_DEVICES</code> 选择要占用的卡。例如：</p>
+    <pre><code>CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python ...</code></pre>
+    <p>不同方向/速度的大批量测试可以分配到不同卡上跑，但每条测试日志必须记录使用的 <code>CUDA_VISIBLE_DEVICES</code>、命令速度、terrain 类型、horizon 和 replan 次数。</p>
+
+    <h3>4.1 target 触发腿检测</h3>
+    <p>使用当前 <code>target_foot_pos</code> 的 25 帧轨迹，不额外插值。对每条腿每帧 foot XY 做横向 probe，查询 <code>semantic == 1</code>。</p>
+    <div class="math">p_probe(t,l,i) = target_foot_xy(t,l) + delta_i * lateral_axis
+delta_i ∈ [-probe_half_width, ..., +probe_half_width]
+
+如果任意 sem(p_probe) == 1，则该腿 crossing_leg_mask[l] = 1</div>
+    <p>测试参数：</p>
+    <ul>
+      <li><code>low_small_semantic_probe_half_width_m</code></li>
+      <li><code>low_small_semantic_probe_count</code></li>
+    </ul>
+
+    <h3>4.2 触发腿 FK 语义碰撞检测</h3>
+    <p>只对 <code>crossing_leg_mask == 1</code> 的腿，检查 IK 后 FK 的实际几何轨迹。检查对象包括：</p>
+    <ul>
+      <li><code>fk_foot_pos</code></li>
+      <li><code>fk_knee_pos</code></li>
+      <li><code>fk_shank_samples</code>，即 foot 到 knee 之间采样点</li>
+      <li><code>fk_root_pos</code></li>
+      <li><code>fk_root_underbody_samples</code></li>
+    </ul>
+    <p>碰撞定义：</p>
+    <div class="math">sem(point_xy) == 1 且 point_z &lt; height(point_xy)</div>
+
+    <h3>4.3 每个速度和方向都要测试</h3>
+    <p>至少覆盖：</p>
+    <ul>
+      <li>forward / backward</li>
+      <li>left / right 横移</li>
+      <li>turn_left / turn_right</li>
+      <li>diag_fl / diag_fr</li>
+      <li>mixed_turn_l / mixed_turn_r</li>
+    </ul>
+    <p>每个方向都要覆盖单次 plan 和多次 replan，horizon 为 25。</p>
+
+    <h3>4.4 输出指标</h3>
+    <ul>
+      <li><code>plane_env_count</code></li>
+      <li><code>crossing_leg_mask</code></li>
+      <li><code>crossing_leg_count</code></li>
+      <li><code>fk_semantic_collision_count</code></li>
+      <li><code>fk_semantic_collision_rate</code></li>
+      <li><code>fk_semantic_collision_by_part</code>：foot/knee/shank/root/underbody</li>
+      <li><code>fk_semantic_collision_by_leg</code></li>
+      <li><code>fk_semantic_min_clearance_over_semantic_m</code></li>
+      <li><code>fk_semantic_first_collision_frame</code></li>
+      <li><code>planned_vs_fk_foot_error_mean_m</code></li>
+      <li><code>planned_vs_fk_foot_error_max_m</code></li>
+      <li><code>planned_vs_fk_foot_error_by_leg_mean_m</code></li>
+      <li><code>planned_vs_fk_foot_error_by_leg_max_m</code></li>
+      <li><code>planned_vs_fk_foot_error_crossing_leg_mean_m</code></li>
+      <li><code>planned_vs_fk_foot_error_crossing_leg_max_m</code></li>
+    </ul>
+
+    <h3>4.4.1 指标计算方法</h3>
+    <table>
+      <thead>
+        <tr><th>指标</th><th>中文含义</th><th>计算方法</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>plane_env_count</code></td>
+          <td>本次测试中属于 IsaacLab plane/flat terrain 的 env 数量。</td>
+          <td>对自动得到的 <code>plane_mask</code> 求和：<code>sum(plane_mask)</code>。</td>
+        </tr>
+        <tr>
+          <td><code>crossing_leg_mask</code></td>
+          <td>每条腿是否被 target 足端轨迹触发 low-small crossing。</td>
+          <td>对每条腿 25 帧 target foot XY 加横向 probe 后查 <code>semantic == 1</code>；任意帧任意 probe 命中则该腿为 1。</td>
+        </tr>
+        <tr>
+          <td><code>crossing_leg_count</code></td>
+          <td>触发 crossing 的腿数量。</td>
+          <td><code>sum(crossing_leg_mask)</code>。如果为 0，本条命令不能证明跨越成功，只能记为未覆盖。</td>
+        </tr>
+        <tr>
+          <td><code>fk_semantic_collision_count</code></td>
+          <td>触发腿关联的 FK 几何点发生语义碰撞的次数。</td>
+          <td>在触发腿上统计所有 foot/knee/shank/root/underbody 点；同时满足 <code>sem(point_xy)==1</code> 且 <code>point_z &lt; height(point_xy)</code> 的点数。</td>
+        </tr>
+        <tr>
+          <td><code>fk_semantic_collision_rate</code></td>
+          <td>FK 语义碰撞比例。</td>
+          <td><code>fk_semantic_collision_count / checked_point_count</code>，其中 <code>checked_point_count</code> 是触发腿相关的全部被检查几何点数量。</td>
+        </tr>
+        <tr>
+          <td><code>fk_semantic_collision_by_part</code></td>
+          <td>按几何部位统计碰撞次数。</td>
+          <td>分别对 <code>foot</code>、<code>knee</code>、<code>shank</code>、<code>root</code>、<code>underbody</code> 应用同一个碰撞定义并求和。</td>
+        </tr>
+        <tr>
+          <td><code>fk_semantic_collision_by_leg</code></td>
+          <td>按腿统计碰撞次数。</td>
+          <td>只统计 <code>crossing_leg_mask == 1</code> 的腿；root/underbody 属于 body，可单独记录或复制到触发腿关联统计中，但日志要说明采用方式。</td>
+        </tr>
+        <tr>
+          <td><code>fk_semantic_min_clearance_over_semantic_m</code></td>
+          <td>FK 几何点在 small obstacle 语义区域上的最小净空。</td>
+          <td>只在 <code>sem(point_xy)==1</code> 的检查点上计算 <code>point_z - height(point_xy)</code>，取最小值。小于 0 表示穿入地形/障碍。</td>
+        </tr>
+        <tr>
+          <td><code>fk_semantic_first_collision_frame</code></td>
+          <td>第一次 FK 语义碰撞发生的帧号。</td>
+          <td>在 25 帧中找最早满足碰撞定义的帧；如果没有碰撞，记录为 <code>-1</code> 或 <code>null</code>。</td>
+        </tr>
+        <tr>
+          <td><code>planned_vs_fk_foot_error_mean_m</code></td>
+          <td>规划足端和 IK/FK 实际足端的平均偏差。</td>
+          <td>对所有 env、25 帧、4 条腿计算 <code>||target_foot_pos - fk_foot_pos||</code> 后求平均。</td>
+        </tr>
+        <tr>
+          <td><code>planned_vs_fk_foot_error_max_m</code></td>
+          <td>规划足端和 IK/FK 实际足端的最大偏差。</td>
+          <td>对所有 env、25 帧、4 条腿的 <code>||target_foot_pos - fk_foot_pos||</code> 取最大值。</td>
+        </tr>
+        <tr>
+          <td><code>planned_vs_fk_foot_error_by_leg_mean_m</code></td>
+          <td>每条腿的规划/FK 平均偏差。</td>
+          <td>固定腿编号，对 env 和 25 帧上的 <code>||target_foot_pos - fk_foot_pos||</code> 求平均。</td>
+        </tr>
+        <tr>
+          <td><code>planned_vs_fk_foot_error_by_leg_max_m</code></td>
+          <td>每条腿的规划/FK 最大偏差。</td>
+          <td>固定腿编号，对 env 和 25 帧上的 <code>||target_foot_pos - fk_foot_pos||</code> 取最大值。</td>
+        </tr>
+        <tr>
+          <td><code>planned_vs_fk_foot_error_crossing_leg_mean_m</code></td>
+          <td>触发 crossing 的腿上的规划/FK 平均偏差。</td>
+          <td>只保留 <code>crossing_leg_mask == 1</code> 的腿，对其 25 帧误差求平均。</td>
+        </tr>
+        <tr>
+          <td><code>planned_vs_fk_foot_error_crossing_leg_max_m</code></td>
+          <td>触发 crossing 的腿上的规划/FK 最大偏差。</td>
+          <td>只保留 <code>crossing_leg_mask == 1</code> 的腿，对其 25 帧误差取最大值。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>4.5 通过条件</h3>
+    <div class="math">plane_env_count &gt; 0
+crossing_leg_count &gt; 0
+fk_semantic_collision_count == 0
+fk_semantic_collision_rate == 0
+fk_semantic_min_clearance_over_semantic_m &gt;= 0
+planned_vs_fk_foot_error_crossing_leg_max_m &lt;= 测试阈值</div>
+    <p>规划足端和 FK 足端偏差阈值先作为测试阈值，不作为 loss 参数。建议第一版用 0.05m；如果太严，调到 0.08m。</p>
+  </section>
+
+  <section>
+    <h2>5. 第 1 条：touchdown keepout loss</h2>
+    <h3>5.1 触发逻辑</h3>
+    <p>先直接查询每条腿 touchdown 的语义：</p>
+    <div class="math">s_l = sem(touchdown_xy_l)</div>
+    <p>只有当 <code>s_l != 0</code> 时，该腿才进入后续 keepout 计算。如果 touchdown 当前不在语义物体上，这条腿该 loss 为 0。</p>
+
+    <h3>5.2 low-small 圆形近似</h3>
+    <p>对 height/semantic map 中 <code>semantic == 1</code> 的点按栅格连通性分连通域。连续区域拟合一个圆，不连续区域拟合多个圆。连通性尺度跟雷达/height map 分辨率一致，不做人为跨格桥接。</p>
+    <p>圆形近似必须尽量快，并且应优先使用 GPU tensor 计算。不得把每个 env 的 semantic map 搬到 CPU 后用 Python 循环做连通域和拟合。实现时应使用 <code>torch</code> / CUDA 上的批量张量操作，必要时只对小批量候选区域做有限循环，但数据仍保持在 GPU。</p>
+    <p>每个连通域得到：</p>
+    <ul>
+      <li>圆心 <code>c_k</code></li>
+      <li>半径 <code>r_k</code></li>
+    </ul>
+    <p>圆心可用连通域点的均值或 bbox 中心；半径用连通域点到圆心的最大距离。</p>
+    <p>快速 GPU 实现建议：</p>
+    <ul>
+      <li>先在 GPU 上得到 <code>small_mask = semantic_map == 1</code>。</li>
+      <li>利用栅格邻域传播、形态学膨胀/腐蚀或固定上限的 connected-component 近似，把不连续区域拆成多个 component。</li>
+      <li>对每个 component 在 GPU 上计算 bbox 或均值圆心。</li>
+      <li>半径用 component 内点到圆心的最大 XY 距离，仍在 GPU 上用 reduction 得到。</li>
+      <li>如果实现上需要 component 数量上限，应记录上限并在测试日志输出是否发生截断。</li>
+    </ul>
+
+    <h3>5.3 loss 公式</h3>
+    <p>对触发的 touchdown，找到对应或最侵犯的 low-small 圆：</p>
+    <div class="math">L_td,l = ReLU(r_k + touchdown_keepout_radius_extra_m - ||td_l - c_k||)^2</div>
+    <p>最终对四条腿平均，未触发腿贡献 0。</p>
+
+    <h3>5.4 参数</h3>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>touchdown_keepout_radius_extra_m</code></td>
+          <td>拟合圆半径之外再额外扩多少。它同时补偿语义图/雷达分辨率误差和 touchdown 安全边界。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. 第 2 条：swing foot terrain clearance loss</h2>
+    <p>这条不区分语义和地形。只要是 swing 点，就检查 target foot 是否高过当前位置 height map。</p>
+    <div class="math">L_swing =
+mean_{t,l}( swing_prob(t,l) * ReLU(height(foot_xy(t,l)) + swing_foot_clearance_margin_m - foot_z(t,l))^2 )</div>
+    <p>这条统一覆盖普通地形、low-small 障碍、台阶等，只依赖 height map。</p>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>swing_foot_clearance_margin_m</code></td>
+          <td>swing target foot 高过当前位置地形的最小余量。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>7. 第 3 条：FK body/leg terrain collision loss</h2>
+    <p>这条检查 IK 后再 FK 出来的实际几何点，不只看 FK foot。所有检查点统一和 height map 比较。</p>
+    <p>检查对象：</p>
+    <ul>
+      <li><code>fk_foot_pos</code></li>
+      <li><code>fk_knee_pos</code></li>
+      <li><code>fk_shank_samples</code>：foot 到 knee 之间采样点</li>
+      <li><code>fk_root_pos</code></li>
+      <li><code>fk_root_underbody_samples</code></li>
+    </ul>
+    <div class="math">L_point = ReLU(height(point_xy) + margin_part - point_z)^2</div>
+    <p>各 part 的 loss 按权重汇总。语义障碍如果体现在 height map 中，会自然被这条抓到。</p>
+
+    <table>
+      <thead>
+        <tr><th>参数</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fk_foot_clearance_margin_m</code></td><td>FK foot 离 height map 的最小余量。</td></tr>
+        <tr><td><code>fk_knee_clearance_margin_m</code></td><td>FK knee 离 height map 的最小余量。</td></tr>
+        <tr><td><code>fk_shank_clearance_margin_m</code></td><td>foot-knee 连杆采样点离 height map 的最小余量。</td></tr>
+        <tr><td><code>fk_root_clearance_margin_m</code></td><td>root 几何点离 height map 的最小余量。</td></tr>
+        <tr><td><code>fk_underbody_clearance_margin_m</code></td><td>root 下方 underbody 采样点离 height map 的最小余量。</td></tr>
+        <tr><td><code>fk_shank_sample_count</code></td><td>foot 到 knee 之间采样点数量。</td></tr>
+        <tr><td><code>fk_underbody_sample_count</code></td><td>root underbody 采样点数量。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>8. 第 4 条：optimized vs IK/FK trajectory consistency loss</h2>
+    <p>这条不只比 touchdown，而是比较全部 25 帧规划足端轨迹和 IK/FK 后实际足端轨迹。</p>
+    <h3>8.1 world-frame foot consistency</h3>
+    <div class="math">L_abs = mean_{t,l}( || foot_opt(t,l) - foot_fk(t,l) ||^2 )</div>
+    <h3>8.2 root-relative foot consistency</h3>
+    <div class="math">foot_opt_rel = R(root_rpy(t))^T * (foot_opt(t,l) - root_pos(t))
+foot_fk_rel  = R(root_rpy(t))^T * (foot_fk(t,l)  - root_pos(t))
+
+L_rel = mean_{t,l}( || foot_opt_rel - foot_fk_rel ||^2 )</div>
+    <h3>8.3 总项</h3>
+    <div class="math">L_traj_consistency = L_abs + L_rel</div>
+    <p>这条除了整体权重，不新增参数。</p>
+  </section>
+
+  <section>
+    <h2>9. 第 5 条：plane terrain root z target loss</h2>
+    <p>这条只在 IsaacLab 创建出来的 plane/flat terrain 上启用。row 是难度，不参与判断；不手动传 terrain col。</p>
+    <p>实现上应从 IsaacLab terrain type 自动得到 <code>plane_mask</code>。如果当前 <code>MpcPlannerTerrain</code> 没有这个信息，需要在构建 terrain 时补一个内部字段，例如 <code>is_plane_terrain</code>。这个字段不是用户调参。</p>
+    <div class="math">L_root_z_plane =
+plane_mask * mean_t( (root_z(t) - root_z_target_height_m)^2 )</div>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>root_z_target_height_m</code></td>
+          <td>root z 目标高度，默认初始化为当前初始状态 root 高度。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>10. 参数总表</h2>
+    <table>
+      <thead>
+        <tr><th>分类</th><th>参数</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>第 0 条测试</td>
+          <td><code>low_small_semantic_probe_half_width_m</code><br><code>low_small_semantic_probe_count</code></td>
+        </tr>
+        <tr>
+          <td>touchdown keepout</td>
+          <td><code>touchdown_keepout_radius_extra_m</code></td>
+        </tr>
+        <tr>
+          <td>swing target clearance</td>
+          <td><code>swing_foot_clearance_margin_m</code></td>
+        </tr>
+        <tr>
+          <td>FK collision</td>
+          <td><code>fk_foot_clearance_margin_m</code><br><code>fk_knee_clearance_margin_m</code><br><code>fk_shank_clearance_margin_m</code><br><code>fk_root_clearance_margin_m</code><br><code>fk_underbody_clearance_margin_m</code><br><code>fk_shank_sample_count</code><br><code>fk_underbody_sample_count</code></td>
+        </tr>
+        <tr>
+          <td>trajectory consistency</td>
+          <td>无额外参数，只保留整体权重</td>
+        </tr>
+        <tr>
+          <td>plane root z</td>
+          <td><code>root_z_target_height_m</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>11. 实现流程约束</h2>
+    <ol>
+      <li><code>semantic_policy.py</code> 继续负责 nominal 和 high/large command shaping。</li>
+      <li><code>decode_parametric_trajectory()</code> 只根据 nominal 和 variables 生成轨迹，不做语义 hard projection。</li>
+      <li>loss 阶段计算 target trajectory、IK、FK、碰撞和一致性项。</li>
+      <li>touchdown <code>z</code> 仍由 height map hard ground。</li>
+      <li>新增 plane/flat terrain mask 信息时，应从 IsaacLab terrain 创建结果自动推导，不作为用户手动传入的 terrain col 参数。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>12. 禁止项</h2>
+    <div class="danger">
+      <ul>
+        <li>禁止新增 decode-time touchdown hard projection。</li>
+        <li>禁止直接修正 touchdown 到合法点。</li>
+        <li>禁止 hard separation 四足落点。</li>
+        <li>禁止优化后把 foot/root snap 到合法区域。</li>
+        <li>禁止在未和用户确认前新增本设计以外的 loss。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>13. 验收重点</h2>
+    <ul>
+      <li>plane/flat terrain 上，每个速度和方向的 low-small crossing 测试都要覆盖。</li>
+      <li>触发 crossing 的腿，IK/FK 后 foot/knee/shank/root/underbody 不应和 <code>semantic == 1</code> 且 height map 发生碰撞。</li>
+      <li>输出规划足端和 FK 足端偏差，避免“没有碰撞只是因为 FK 偏离规划”的假成功。</li>
+      <li>横移、转弯、多次 replan 是重点，因为之前这些方向更容易出现足端乱飞和累计误差。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>14. 自查结论</h2>
+    <div class="ok">
+      本设计没有引入未确认的硬约束；第 0 条只作为测试，不参与 loss；第 4 条不加额外参数；第 5 条不使用手动 terrain col 参数，而是要求从 IsaacLab plane/flat terrain 信息自动得到 mask。
+    </div>
+  </section>
+</main>
+</body>
+</html>
