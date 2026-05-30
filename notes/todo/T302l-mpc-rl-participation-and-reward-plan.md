@@ -553,7 +553,7 @@ git commit -m "feat: add mpc reference participation selector"
 - Modify: `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py`
 - Test: `Go2Pvcnn/tests/test_mpc_rl_participation.py`
 
-- [ ] **Step 1: Write failing manager selection test**
+- [x] **Step 1: Write failing manager selection test**
 
 Add a focused unit test with a fake manager subclass or monkeypatch `plan_segment`:
 
@@ -582,7 +582,7 @@ def test_mpc_manager_selects_only_participating_envs(monkeypatch):
 
 If fake env helpers do not exist, implement the minimal fake env in the test file. It must expose `unwrapped`, `scene`, `scene.sensors`, `scene.terrain.terrain_types`, `scene.terrain.terrain_levels`, `scene.terrain.cfg.terrain_generator.sub_terrains`, `command_manager.get_command`, `episode_length_buf`, and robot data buffers.
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_mpc_manager_selects_only_participating_envs -q
@@ -590,7 +590,7 @@ pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_mpc_manager_selects_onl
 
 Expected: FAIL because manager still samples globally.
 
-- [ ] **Step 3: Add manager cursor and terrain metadata extraction**
+- [x] **Step 3: Add manager cursor and terrain metadata extraction**
 
 In `MpcTrajectoryManager.__init__`:
 
@@ -615,7 +615,7 @@ def _terrain_selection_metadata_from_env(self, env):
     return terrain_types, terrain_levels, names
 ```
 
-- [ ] **Step 4: Replace global sampling with selector**
+- [x] **Step 4: Replace global sampling with selector**
 
 In `refresh_from_env()`:
 
@@ -636,7 +636,7 @@ else:
     selected = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
 ```
 
-- [ ] **Step 5: Align env cfg horizon/replan and diagnostics**
+- [x] **Step 5: Align env cfg horizon/replan and diagnostics**
 
 In `TeacherElevationTrajectoryMpcSemanticEnvCfg`:
 
@@ -650,7 +650,7 @@ mpc_diagnostics_profile_cuda_sync: bool = False
 
 In PLAY cfg keep debug counters if useful, but set horizon/replan to 25.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_mpc_manager_selects_only_participating_envs -q
@@ -658,7 +658,7 @@ pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_mpc_manager_selects_onl
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/manager.py Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py Go2Pvcnn/tests/test_mpc_rl_participation.py

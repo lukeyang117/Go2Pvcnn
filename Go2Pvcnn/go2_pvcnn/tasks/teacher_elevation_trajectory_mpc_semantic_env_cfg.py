@@ -167,9 +167,11 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(TeacherElevationTrajectoryEnvC
     use_batched_reference_trajectory: bool = True
     planner_backend: str = "mpc"
     reference_height_scanner_name: str = "semantic_height_scanner"
-    mpc_parallel_plan_batch_size: int = 128
-    mpc_diagnostics_emit_runtime_counters: bool = True
-    mpc_diagnostics_profile_cuda_sync: bool = True
+    reference_trajectory_horizon: int = 25
+    reference_replan_interval_steps: int = 25
+    mpc_parallel_plan_batch_size: int = 64
+    mpc_diagnostics_emit_runtime_counters: bool = False
+    mpc_diagnostics_profile_cuda_sync: bool = False
     
 
     def __post_init__(self):
@@ -197,6 +199,8 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY(TeacherElevationTrajector
     use_batched_reference_trajectory: bool = True
     planner_backend: str = "mpc"
     reference_height_scanner_name: str = "semantic_height_scanner"
+    reference_trajectory_horizon: int = 25
+    reference_replan_interval_steps: int = 25
     mpc_parallel_plan_batch_size: int = 4096
     mpc_diagnostics_emit_runtime_counters: bool = True
     mpc_diagnostics_profile_cuda_sync: bool = True

@@ -20,6 +20,7 @@ from .adapter import (
     standstill_cache_from_state,
 )
 from .config import MpcPlannerCfg, planner_cfg_from_task_cfg
+from .participation import select_mpc_reference_envs
 from .planner import plan_segment
 from .terrain import build_mpc_terrain_from_scanner
 from .types import MpcRobotState
@@ -48,6 +49,7 @@ class MpcTrajectoryManager:
         self._runtime_counters: dict[str, float | int] = {}
         self._max_stale_observed = 0
         self._reference_reward_mask: Tensor | None = None
+        self._selection_cursor = 0
 
     @staticmethod
     def _named_get(container, name: str):
@@ -206,6 +208,19 @@ class MpcTrajectoryManager:
         root = self._env_root(env)
         return torch.as_tensor(root.episode_length_buf, dtype=torch.long, device=self._device)
 
+    def _terrain_selection_metadata_from_env(self, env):
+        root = self._env_root(env)
+        terrain = getattr(root.scene, "terrain", None)
+        if terrain is None:
+            return None, None, None
+        terrain_types = getattr(terrain, "terrain_types", None)
+        terrain_levels = getattr(terrain, "terrain_levels", None)
+        terrain_cfg = getattr(terrain, "cfg", None)
+        terrain_generator = getattr(terrain_cfg, "terrain_generator", None)
+        sub_terrains = getattr(terrain_generator, "sub_terrains", None)
+        terrain_names = list(sub_terrains.keys()) if isinstance(sub_terrains, dict) else None
+        return terrain_types, terrain_levels, terrain_names
+
     def _cache_shape_valid(self, *, num_envs: int, horizon: int) -> bool:
         if self._cache is None or self._cache.root_pos_w is None:
             return False
@@ -350,8 +365,16 @@ class MpcTrajectoryManager:
         global_age = self._manager_step - int(self._last_global_replan_step)
         global_due = bool(not cache_valid) or global_age >= int(cfg.runtime.replan_interval_steps)
         if global_due:
-            _, selected = self._sample_global_rows(
-                num_envs, int(cfg.runtime.parallel_plan_batch_size), device=self._device
+            terrain_types, terrain_levels, terrain_names = self._terrain_selection_metadata_from_env(env)
+            selected, self._selection_cursor = select_mpc_reference_envs(
+                num_envs=num_envs,
+                device=self._device,
+                terrain_types=terrain_types,
+                terrain_levels=terrain_levels,
+                terrain_names=terrain_names,
+                cfg=cfg.reference_participation,
+                sample_count=int(cfg.runtime.parallel_plan_batch_size),
+                cursor=self._selection_cursor,
             )
         else:
             selected = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
@@ -432,6 +455,9 @@ class MpcTrajectoryManager:
         self._phase_counter = torch.where(reset_phase, torch.zeros_like(advanced), advanced)
         if int(selected_ids.numel()) > 0:
             self._reference_reward_mask = replace_mask
+            self._last_global_replan_step = self._manager_step
+        elif global_due:
+            self._reference_reward_mask = torch.zeros_like(self._reference_reward_mask)
             self._last_global_replan_step = self._manager_step
         else:
             self._reference_reward_mask = self._reference_reward_mask
