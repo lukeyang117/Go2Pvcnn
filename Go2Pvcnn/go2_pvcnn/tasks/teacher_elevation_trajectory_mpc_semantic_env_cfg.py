@@ -13,12 +13,13 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from extension.mdp.rewards_reference import reference_foot_pos_reward
-from extension.mdp.semantic_contact_rewards import semantic_filtered_contact_collision_reward
+from extension.mdp.semantic_contact_rewards import semantic_global_contact_collision_reward
 from extension.semantic_course import (
     SEMANTIC_COURSE_LARGE_ROOT,
     SEMANTIC_COURSE_SMALL_ROOT,
     SemanticCourseTerrainImporter,
 )
+from go2_pvcnn.sensor.semantic_contacter import SemanticGlobalContactSensor
 from go2_pvcnn.sensor.semantic_raycaster import SemanticGridRayCasterCfg
 from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import (
     SEMANTIC_TERRAIN_CFG,
@@ -62,9 +63,10 @@ SEMANTIC_CONTACT_BODY_WEIGHTS = (
 )
 
 
-def _semantic_contact_sensor(body_name: str, semantic_root: str) -> ContactSensorCfg:
+def _semantic_global_contact_sensor(semantic_root: str) -> ContactSensorCfg:
     return ContactSensorCfg(
-        prim_path=f"{{ENV_REGEX_NS}}/Robot/{body_name}",
+        class_type=SemanticGlobalContactSensor,
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
         update_period=0.0,
         history_length=0,
         track_air_time=False,
@@ -94,32 +96,8 @@ class TeacherElevationTrajectoryMpcSemanticSceneCfg(TeacherElevationTrajectorySc
         height_scan_offset=0.5,
         max_update_envs_per_call=512,
     )
-    semantic_contact_FL_foot_small = _semantic_contact_sensor("FL_foot", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_FL_foot_large = _semantic_contact_sensor("FL_foot", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_FR_foot_small = _semantic_contact_sensor("FR_foot", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_FR_foot_large = _semantic_contact_sensor("FR_foot", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_RL_foot_small = _semantic_contact_sensor("RL_foot", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_RL_foot_large = _semantic_contact_sensor("RL_foot", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_RR_foot_small = _semantic_contact_sensor("RR_foot", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_RR_foot_large = _semantic_contact_sensor("RR_foot", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_FL_calf_small = _semantic_contact_sensor("FL_calf", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_FL_calf_large = _semantic_contact_sensor("FL_calf", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_FR_calf_small = _semantic_contact_sensor("FR_calf", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_FR_calf_large = _semantic_contact_sensor("FR_calf", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_RL_calf_small = _semantic_contact_sensor("RL_calf", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_RL_calf_large = _semantic_contact_sensor("RL_calf", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_RR_calf_small = _semantic_contact_sensor("RR_calf", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_RR_calf_large = _semantic_contact_sensor("RR_calf", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_FL_thigh_small = _semantic_contact_sensor("FL_thigh", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_FL_thigh_large = _semantic_contact_sensor("FL_thigh", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_FR_thigh_small = _semantic_contact_sensor("FR_thigh", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_FR_thigh_large = _semantic_contact_sensor("FR_thigh", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_RL_thigh_small = _semantic_contact_sensor("RL_thigh", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_RL_thigh_large = _semantic_contact_sensor("RL_thigh", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_RR_thigh_small = _semantic_contact_sensor("RR_thigh", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_RR_thigh_large = _semantic_contact_sensor("RR_thigh", SEMANTIC_COURSE_LARGE_ROOT)
-    semantic_contact_base_small = _semantic_contact_sensor("base", SEMANTIC_COURSE_SMALL_ROOT)
-    semantic_contact_base_large = _semantic_contact_sensor("base", SEMANTIC_COURSE_LARGE_ROOT)
+    semantic_contact_small = _semantic_global_contact_sensor(SEMANTIC_COURSE_SMALL_ROOT)
+    semantic_contact_large = _semantic_global_contact_sensor(SEMANTIC_COURSE_LARGE_ROOT)
 
 
 @configclass
@@ -197,11 +175,12 @@ class TeacherElevationTrajectoryMpcSemanticRewardsCfg(TeacherElevationTrajectory
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot")},
     )
     semantic_contact_collision = RewTerm(
-        func=semantic_filtered_contact_collision_reward,
+        func=semantic_global_contact_collision_reward,
         weight=1.0,
         params={
-            "small_sensor_names": tuple(f"semantic_contact_{body}_small" for body in SEMANTIC_CONTACT_BODY_NAMES),
-            "large_sensor_names": tuple(f"semantic_contact_{body}_large" for body in SEMANTIC_CONTACT_BODY_NAMES),
+            "small_sensor_cfg": SceneEntityCfg("semantic_contact_small"),
+            "large_sensor_cfg": SceneEntityCfg("semantic_contact_large"),
+            "body_names": SEMANTIC_CONTACT_BODY_NAMES,
             "body_weights": SEMANTIC_CONTACT_BODY_WEIGHTS,
             "force_threshold": 1.0,
             "force_scale": 50.0,

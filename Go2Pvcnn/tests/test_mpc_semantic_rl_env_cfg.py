@@ -60,7 +60,7 @@ def test_semantic_global_contact_leaf_filter_keeps_only_slots(monkeypatch) -> No
     ]
 
 
-def test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors() -> None:
+def test_mpc_semantic_cfg_uses_two_global_semantic_contact_sensors() -> None:
     source = CFG_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     body_names = (
@@ -81,7 +81,8 @@ def test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors() -> None:
 
     assert "SEMANTIC_CONTACT_BODY_NAMES" in source
     assert "SEMANTIC_CONTACT_BODY_WEIGHTS" in source
-    assert "semantic_filtered_contact_collision_reward" in source
+    assert "SemanticGlobalContactSensor" in source
+    assert "semantic_global_contact_collision_reward" in source
     scene_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TeacherElevationTrajectoryMpcSemanticSceneCfg")
     assignments = {
         target.id
@@ -90,11 +91,14 @@ def test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors() -> None:
         for target in node.targets
         if isinstance(target, ast.Name)
     }
+    assert "semantic_contact_small" in assignments
+    assert "semantic_contact_large" in assignments
     for body in body_names:
-        assert f"semantic_contact_{body}_small" in assignments
-        assert f"semantic_contact_{body}_large" in assignments
-        assert f'_semantic_contact_sensor("{body}", SEMANTIC_COURSE_SMALL_ROOT)' in source
-        assert f'_semantic_contact_sensor("{body}", SEMANTIC_COURSE_LARGE_ROOT)' in source
-    assert 'prim_path=f"{{ENV_REGEX_NS}}/Robot/{body_name}"' in source
+        assert f"semantic_contact_{body}_small" not in assignments
+        assert f"semantic_contact_{body}_large" not in assignments
+    assert "class_type=SemanticGlobalContactSensor" in source
+    assert 'prim_path="{ENV_REGEX_NS}/Robot/.*"' in source
     assert 'filter_prim_paths_expr=[f"{semantic_root}/.*"]' in source
+    assert '"small_sensor_cfg": SceneEntityCfg("semantic_contact_small")' in source
+    assert '"large_sensor_cfg": SceneEntityCfg("semantic_contact_large")' in source
     assert "swing_leg_collision = None" in source
