@@ -15,7 +15,13 @@ if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 
-def test_semantic_global_contact_sensor_importable(monkeypatch) -> None:
+def _install_fake_isaaclab_contact_sensor(monkeypatch):
+    for name in (
+        "go2_pvcnn.sensor.semantic_contacter",
+        "go2_pvcnn.sensor.semantic_contacter.semantic_global_contact_sensor",
+    ):
+        sys.modules.pop(name, None)
+
     class ContactSensor:
         pass
 
@@ -25,10 +31,33 @@ def test_semantic_global_contact_sensor_importable(monkeypatch) -> None:
     isaaclab_module.sensors = sensors_module
     monkeypatch.setitem(sys.modules, "isaaclab", isaaclab_module)
     monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors_module)
+    return ContactSensor
+
+
+def test_semantic_global_contact_sensor_importable(monkeypatch) -> None:
+    ContactSensor = _install_fake_isaaclab_contact_sensor(monkeypatch)
 
     from go2_pvcnn.sensor.semantic_contacter import SemanticGlobalContactSensor
 
     assert issubclass(SemanticGlobalContactSensor, ContactSensor)
+
+
+def test_semantic_global_contact_leaf_filter_keeps_only_slots(monkeypatch) -> None:
+    _install_fake_isaaclab_contact_sensor(monkeypatch)
+    from go2_pvcnn.sensor.semantic_contacter.semantic_global_contact_sensor import filter_semantic_leaf_obstacle_paths
+
+    paths = [
+        "/World/semantic_course/small/row_00",
+        "/World/semantic_course/small/row_00/col_00",
+        "/World/semantic_course/small/row_00/col_00/slot_00",
+        "/World/semantic_course/small/row_00/col_01/slot_01",
+        "/World/semantic_course/large/row_00/col_00/slot_00",
+    ]
+
+    assert filter_semantic_leaf_obstacle_paths(paths, "/World/semantic_course/small") == [
+        "/World/semantic_course/small/row_00/col_00/slot_00",
+        "/World/semantic_course/small/row_00/col_01/slot_01",
+    ]
 
 
 def test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors() -> None:
