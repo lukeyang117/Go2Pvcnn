@@ -29,7 +29,7 @@ from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import (
     TeacherElevationTrajectorySceneCfg,
 )
 from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import EventCfg as BaseEventCfg
-
+ 
 
 SEMANTIC_CONTACT_BODY_NAMES = (
     "FL_foot",
