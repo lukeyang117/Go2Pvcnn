@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MPC 接入 RL 的参与环境选择与运行时优化设计</title>
+  <title>MPC 接入 RL 的参与环境选择、运行时优化与语义真实碰撞设计</title>
   <style>
     :root {
       color-scheme: light;
@@ -99,7 +99,7 @@
 </head>
 <body>
 <main>
-  <h1>MPC 接入 RL 的参与环境选择与运行时优化设计</h1>
+  <h1>MPC 接入 RL 的参与环境选择、运行时优化与语义真实碰撞设计</h1>
   <div class="meta">
     日期：2026-05-30 ｜ 主线：MPC semantic trajectory reward ｜ 文件范围：
     <code>Go2Pvcnn/extension/batch_mpc_planner</code>、
@@ -114,6 +114,22 @@
     <div class="guard">
       <strong>不变约束：</strong>本设计不修改 low-small loss 公式，不新增 optimizer loss，不新增硬约束，不改变 <code>decode_parametric_trajectory()</code> 的职责。2026-05-28 low-small 设计效果不能回退。
     </div>
+  </section>
+
+  <section>
+    <h2>1.1 当前状态</h2>
+    <table>
+      <thead>
+        <tr><th>模块</th><th>状态</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>MPC 参与环境选择</td><td>已完成</td><td>只对选中 env 规划，未选中 env 的 MPC reference reward 返回 0；支持 include、exclude pair 的 AND 逻辑和 round-robin 抽样。</td></tr>
+        <tr><td>25 step 对齐</td><td>已完成</td><td>MPC horizon、reference cache horizon、replan interval 已按 25 step 对齐。</td></tr>
+        <tr><td>世界坐标足端 tracking</td><td>已完成</td><td>MPC reference 足端和 IsaacLab 当前足端均使用 world frame；reward 使用 manager frame id，避免 episode modulo 错位。</td></tr>
+        <tr><td>旧 per-body filtered ContactSensor 方案</td><td>待替换</td><td>当前实现会把 <code>/World/semantic_course/small/.*</code> 转成一级 glob，导致 PhysX 报 <code>expected 1024, found 7/5</code>；该方案不再作为目标设计。</td></tr>
+        <tr><td>新语义真实碰撞方案</td><td>待实现</td><td>采用 2 个继承自 IsaacLab <code>ContactSensor</code> 的全局语义 contact sensor：small 一个、large 一个；sensor 内部覆盖所有指定 robot body 和该语义类别下全部真实 <code>slot_*</code> 物体。</td></tr>
+      </tbody>
+    </table>
   </section>
 
   <section>
@@ -294,55 +310,125 @@ R_foot(e) = exp( - err_e / sigma^2 ) * reference_reward_mask(e)</div>
   <section>
     <h2>11. 基于 IsaacLab 真实 contact 的语义碰撞 reward</h2>
     <p>当前 <code>swing_leg_collision_reward()</code> 基于 <code>semantic_height_scanner</code> 查询 height/semantic，这会受 scanner 更新周期和栅格分辨率影响。新的 RL 语义碰撞 reward 改为使用 IsaacLab / PhysX 的真实接触力。</p>
-    <p>IsaacLab <code>ContactSensor</code> 的关键限制是：filtered contact 只能可靠支持 one-to-many。也就是说，每个 sensor 在每个 env 中只能对应一个 robot body，然后 filter 到多个目标物体。不能用一个 sensor 写成 <code>Robot/.*_foot</code> 再 filter 到 semantic objects。</p>
-    <div class="guard">
-      <strong>并行环境约束：</strong>每个 robot body 需要单独建 filtered contact sensor；语义物体是全局 prim，不在 <code>{ENV_REGEX_NS}</code> 下面。
+    <p>旧实现尝试为每个 body、每个语义类别创建一个 filtered <code>ContactSensorCfg</code>，并直接使用 <code>/World/semantic_course/small/.*</code> 作为 filter。该路径在 IsaacLab 内部会被转成一级 glob <code>/World/semantic_course/small/*</code>，只匹配到 <code>row_*</code> 一级目录，不会覆盖真正的 <code>row_*/col_*/slot_*</code> leaf obstacle，并且会触发 PhysX 数量对齐错误。</p>
+    <div class="danger">
+      <strong>废弃方案：</strong>不再使用 26 个 per-body scene sensor，不再让默认 IsaacLab <code>ContactSensor</code> 直接消费 <code>/World/semantic_course/*/.*</code>。该方案会出现 <code>expected 1024, found 7/5</code>，不能作为训练 reward 的真实碰撞来源。
     </div>
-    <p>语义物体 filter 使用全局路径：</p>
-    <pre><code>/World/semantic_course/small/.*
-/World/semantic_course/large/.*</code></pre>
-    <p>单个 body 的 sensor 示例：</p>
-    <pre><code>prim_path = "{ENV_REGEX_NS}/Robot/FL_foot"
-filter_prim_paths_expr = ["/World/semantic_course/small/.*"]</code></pre>
-    <p>filtered contact 数据读取：</p>
-    <pre><code>sensor.data.force_matrix_w</code></pre>
-    <p>shape：</p>
-    <pre><code>[num_envs, 1, num_filter_shapes, 3]</code></pre>
-    <p>对 env <code>e</code>、body <code>b</code>、语义类别 <code>k</code>，真实接触力聚合为：</p>
-    <div class="math">F(e,b,k) = Σ_j || force_matrix_w(e,0,j,:) ||</div>
-    <p>其中 <code>j</code> 是该语义类别下的全局 obstacle shape。</p>
-    <p>碰撞激活：</p>
-    <div class="math">c(e,b,k) = clamp( ReLU(F(e,b,k) - F_threshold) / F_scale, 0, c_max )</div>
-    <p>最终 penalty：</p>
-    <div class="math">P(e) = Σ_b w_body(b) * [ w_small * c(e,b,small) + w_large * c(e,b,large) ]
-R_collision(e) = -P(e)</div>
-    <p>body 列表和权重需要可配置。第一版建议覆盖：</p>
+    <p>新方案采用 2 个自定义 sensor，均继承 IsaacLab <code>ContactSensor</code>，但覆盖 contact view 初始化逻辑：</p>
+    <pre><code>semantic_contact_small  # 所有指定 robot body 对所有 small slot_* 物体
+semantic_contact_large  # 所有指定 robot body 对所有 large slot_* 物体</code></pre>
+    <p>外层仍通过 IsaacLab scene cfg 注册，reward manager 仍按标准 IsaacLab <code>RewTerm</code> 调用。底层 PhysX view 的路径展开和数量对齐封装在自定义 sensor 内部。</p>
+
+    <h3>11.1 自定义 sensor 位置和职责</h3>
+    <p>新增目录：</p>
+    <pre><code>Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/</code></pre>
+    <p>建议文件：</p>
+    <pre><code>__init__.py
+semantic_global_contact_sensor.py</code></pre>
+    <p>核心类：</p>
+    <pre><code>class SemanticGlobalContactSensor(ContactSensor): ...</code></pre>
+    <p>职责：</p>
+    <ul>
+      <li>继承 IsaacLab <code>ContactSensor</code> 的 lazy update、data、reset、debug_vis 外部接口。</li>
+      <li>在初始化时解析 <code>prim_path</code> 对应的所有指定 robot body leaf prim。</li>
+      <li>在初始化时递归解析 <code>filter_prim_paths_expr</code> 对应的全部真实 semantic leaf obstacle，不允许只匹配 <code>row_*</code>。</li>
+      <li>创建 PhysX <code>RigidContactView</code> 时使用 exact sensor path list 和 per-sensor filter path list，保证数量对齐。</li>
+      <li>输出 <code>data.force_matrix_w</code>，shape 固定为 <code>[num_envs, num_bodies, num_semantic_objects, 3]</code>。</li>
+    </ul>
+
+    <h3>11.2 Scene 配置</h3>
+    <p>scene 中只保留两个 semantic contact sensor：</p>
+    <pre><code>semantic_contact_small = ContactSensorCfg(
+    class_type=SemanticGlobalContactSensor,
+    prim_path="{ENV_REGEX_NS}/Robot/.*",
+    filter_prim_paths_expr=["/World/semantic_course/small/.*"],
+    ...
+)
+
+semantic_contact_large = ContactSensorCfg(
+    class_type=SemanticGlobalContactSensor,
+    prim_path="{ENV_REGEX_NS}/Robot/.*",
+    filter_prim_paths_expr=["/World/semantic_course/large/.*"],
+    ...
+)</code></pre>
+    <p><code>prim_path="{ENV_REGEX_NS}/Robot/.*"</code> 只表示从 robot 下收集候选 body。实际参与 contact reward 的 body 必须由 sensor 参数或常量限制为：</p>
     <pre><code>FL_foot, FR_foot, RL_foot, RR_foot
 FL_calf, FR_calf, RL_calf, RR_calf
 FL_thigh, FR_thigh, RL_thigh, RR_thigh
 base</code></pre>
-    <p>如果性能压力大，可以先缩小到 <code>foot + calf + base</code>。但无论覆盖哪些 body，都必须保持 one-body filtered sensor 的 IsaacLab 约束。</p>
+    <p>body 顺序必须稳定，并与 <code>SEMANTIC_CONTACT_BODY_WEIGHTS</code> 一一对应。</p>
+
+    <h3>11.3 数量对齐</h3>
+    <p>以 <code>num_envs=1024</code>、<code>num_bodies=13</code> 为例，sensor 初始化后应满足：</p>
+    <div class="math">small_sensor.contact_physx_view.sensor_count = 1024 * 13
+large_sensor.contact_physx_view.sensor_count = 1024 * 13
+
+small_sensor.contact_physx_view.filter_count = N_small_slot
+large_sensor.contact_physx_view.filter_count = N_large_slot</div>
+    <p>其中：</p>
+    <div class="math">N_small_slot = count(/World/semantic_course/small/row_*/col_*/slot_*)
+N_large_slot = count(/World/semantic_course/large/row_*/col_*/slot_*)</div>
+    <p>读取数据后必须 reshape 为：</p>
+    <div class="math">small_force_matrix.shape = [1024, 13, N_small_slot, 3]
+large_force_matrix.shape = [1024, 13, N_large_slot, 3]</div>
+
+    <h3>11.4 Reward 公式和 IsaacLab 接口</h3>
+    <p>reward 仍封装成 IsaacLab <code>RewTerm</code> 可消费的函数：</p>
+    <pre><code>semantic_global_contact_collision_reward(
+    env,
+    small_sensor_cfg: SceneEntityCfg,
+    large_sensor_cfg: SceneEntityCfg,
+    body_names: tuple[str, ...],
+    body_weights: tuple[float, ...],
+    force_threshold: float,
+    force_scale: float,
+    force_clip: float,
+    small_weight: float,
+    large_weight: float,
+) -&gt; Tensor</code></pre>
+    <p>scene cfg 示例：</p>
+    <pre><code>semantic_contact_collision = RewTerm(
+    func=semantic_global_contact_collision_reward,
+    weight=1.0,
+    params={
+        "small_sensor_cfg": SceneEntityCfg("semantic_contact_small"),
+        "large_sensor_cfg": SceneEntityCfg("semantic_contact_large"),
+        "body_names": SEMANTIC_CONTACT_BODY_NAMES,
+        "body_weights": SEMANTIC_CONTACT_BODY_WEIGHTS,
+        "force_threshold": 1.0,
+        "force_scale": 50.0,
+        "force_clip": 1.0,
+        "small_weight": 1.0,
+        "large_weight": 2.0,
+    },
+)</code></pre>
+    <p>reward 不创建 PhysX view，不遍历 USD stage，只从 scene 读取两个 sensor：</p>
+    <pre><code>small = env.scene["semantic_contact_small"].data.force_matrix_w
+large = env.scene["semantic_contact_large"].data.force_matrix_w</code></pre>
+    <p>公式：</p>
+    <div class="math">P_small(e,b) = Σ_o ReLU(||F_small(e,b,o,:)|| - F_threshold)
+P_large(e,b) = Σ_o ReLU(||F_large(e,b,o,:)|| - F_threshold)
+
+P(e) = Σ_b w_body(b) * [w_small * P_small(e,b) + w_large * P_large(e,b)]
+R_collision(e) = -clamp(P(e) / F_scale, 0, F_clip)</div>
+    <p>reward 输出必须是 <code>[num_envs]</code>，device 与 env device 一致，不允许 NaN/Inf。</p>
   </section>
 
   <section>
     <h2>12. 新增文件边界</h2>
-    <p>建议新增一个独立 reward 文件：</p>
-    <pre><code>Go2Pvcnn/extension/mdp/semantic_contact_rewards.py</code></pre>
-    <p>该文件只负责真实接触语义碰撞 reward，不放 MPC reference tracking 逻辑。</p>
-    <p>建议函数：</p>
-    <pre><code>semantic_filtered_contact_collision_reward(
-    env,
-    small_sensor_names,
-    large_sensor_names,
-    body_weights,
-    force_threshold,
-    force_scale,
-    force_clip,
-    small_weight,
-    large_weight,
-)</code></pre>
-    <p><code>rewards_reference.py</code> 继续负责 reference tracking，例如 <code>reference_foot_pos_reward()</code>。这样可以避免把 MPC reference reward 和 IsaacLab 真实 contact reward 混在一个文件里。</p>
-    <p>不需要修改 IsaacLab 源码；需要在 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code> 中增加 per-body filtered contact sensors，并把旧的高程图碰撞 reward 替换成新的真实 contact reward。</p>
+    <p>不修改 IsaacLab 源码。新增代码放在 Go2Pvcnn 内部，边界如下：</p>
+    <table>
+      <thead>
+        <tr><th>文件</th><th>职责</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/semantic_global_contact_sensor.py</code></td><td>定义 <code>SemanticGlobalContactSensor</code>，负责递归解析 semantic leaf obstacle、创建数量对齐的 PhysX contact view、输出 IsaacLab 风格 <code>ContactSensorData</code>。</td></tr>
+        <tr><td><code>Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/__init__.py</code></td><td>导出 sensor 类，供 task cfg import。</td></tr>
+        <tr><td><code>Go2Pvcnn/extension/mdp/semantic_contact_rewards.py</code></td><td>保留为真实 contact reward 文件，但旧函数 <code>semantic_filtered_contact_collision_reward</code> 需要替换或兼容迁移到 <code>semantic_global_contact_collision_reward</code>。</td></tr>
+        <tr><td><code>Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code></td><td>删除 26 个旧 per-body semantic contact sensor 配置；新增 <code>semantic_contact_small</code> 和 <code>semantic_contact_large</code>；reward params 改为两个 <code>SceneEntityCfg</code>。</td></tr>
+      </tbody>
+    </table>
+    <p><code>rewards_reference.py</code> 继续只负责 reference tracking，例如 <code>reference_foot_pos_reward()</code>。真实 contact reward 不放入 reference reward 文件，避免 MPC reference 和 IsaacLab contact 语义混在一起。</p>
   </section>
 
   <section>
@@ -374,10 +460,13 @@ base</code></pre>
         <tr><td>selector 单元测试</td><td>include 生效；exclude pair 的 AND 逻辑生效；只命中地形或只命中难度不排除；round-robin wrap 生效。</td></tr>
         <tr><td>manager 单元测试</td><td>只对 selected env 调 <code>plan_segment</code>；未选中 env 的 <code>reference_reward_mask</code> 为 False；cache shape 仍是 full-shaped <code>[num_envs, 25, ...]</code>。</td></tr>
         <tr><td>world foot tracking 单元测试</td><td><code>ReferenceTrajectoryCache.foot_pos_w</code> 存在；MPC adapter 写入 world foot；<code>reference_foot_pos_reward</code> 比较 IsaacLab <code>body_pos_w</code> 与 cache <code>foot_pos_w</code>；MPC backend 使用 <code>manager.current_frame_ids()</code>。</td></tr>
-        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0；真实 contact reward 使用 <code>force_matrix_w</code> 聚合 filtered contacts。</td></tr>
-        <tr><td>不同语义物体碰撞区分</td><td>small obstacle 和 large obstacle 必须由不同 filtered contact sensor 或不同明确分组分别统计；日志/测试输出至少包含 <code>small_contact_penalty</code>、<code>large_contact_penalty</code>、<code>small_contact_count</code>、<code>large_contact_count</code>；测试中只碰 small 时 large 指标为 0，只碰 large 时 small 指标为 0。</td></tr>
-        <tr><td>真实 contact 数值实现</td><td>实现必须使用 <code>force_matrix_w</code>，按 <code>F(e,b,k)=Σ_j ||f(e,b,k,j)||</code> 聚合；惩罚使用 <code>clamp(ReLU(F-F_threshold)/F_scale, 0, c_max)</code>；单元测试覆盖 threshold 下为 0、超过 threshold 后单调增加、超过 clip 后饱和、输出无 NaN/Inf。</td></tr>
-        <tr><td>IsaacLab smoke</td><td>使用 <code>env_isaacsim</code> 环境：<code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC；per-body filtered contact sensors 在并行 env 下 shape 正确且能读到全局 semantic course contact。</td></tr>
+        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0；真实 contact reward 只通过 <code>SceneEntityCfg("semantic_contact_small")</code> 和 <code>SceneEntityCfg("semantic_contact_large")</code> 读取 sensor，不直接管理 PhysX view。</td></tr>
+        <tr><td>不同语义物体碰撞区分</td><td>small obstacle 和 large obstacle 必须由两个独立 sensor 分别统计；日志/测试输出至少包含 <code>small_contact_penalty</code>、<code>large_contact_penalty</code>、<code>small_contact_count</code>、<code>large_contact_count</code>；测试中只碰 small 时 large 指标为 0，只碰 large 时 small 指标为 0。</td></tr>
+        <tr><td>真实 contact 数值实现</td><td>实现必须使用 <code>force_matrix_w</code>，按 <code>P_small(e,b)=Σ_o ReLU(||F_small(e,b,o)||-F_threshold)</code> 和 large 同式聚合；惩罚使用 <code>-clamp(P/F_scale, 0, F_clip)</code>；单元测试覆盖 threshold 下为 0、超过 threshold 后单调增加、超过 clip 后饱和、输出无 NaN/Inf。</td></tr>
+        <tr><td>1024 环境数量对齐</td><td>必须使用 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code> 真实配置启动 <code>1024</code> 个环境；统计 USD stage 中全部 <code>/World/semantic_course/small/row_*/col_*/slot_*</code> 和 <code>/World/semantic_course/large/row_*/col_*/slot_*</code> 数量；断言 <code>semantic_contact_small.data.force_matrix_w.shape == [1024, 13, N_small_slot, 3]</code>，<code>semantic_contact_large.data.force_matrix_w.shape == [1024, 13, N_large_slot, 3]</code>。</td></tr>
+        <tr><td>body 顺序对齐</td><td><code>semantic_contact_small.body_names</code> 和 <code>semantic_contact_large.body_names</code> 必须等于 <code>SEMANTIC_CONTACT_BODY_NAMES</code>；<code>body_weights</code> 长度必须一致，避免 reward 权重错位。</td></tr>
+        <tr><td>IsaacLab smoke</td><td>使用 <code>env_isaacsim</code> 环境：<code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC；两个全局语义 contact sensor 在并行 env 下 shape 正确且覆盖全部 semantic course leaf obstacle。</td></tr>
+        <tr><td>错误日志回归</td><td>真实配置启动后日志中不得再出现 <code>Filter pattern '/World/semantic_course/small/*' did not match the correct number of entries</code> 或 large 同类错误。</td></tr>
         <tr><td>RL 训练性能验收</td><td>使用 <code>env_isaacsim</code> 环境和真实 IsaacLab 训练入口验证 <code>1024</code> 个并行环境、其中 <code>64</code> 个环境参与 MPC；关闭训练期 CUDA sync profiling；单个 RL epoch 耗时必须 <code>&lt;= 10s</code>；日志记录 <code>num_envs=1024</code>、<code>selected_mpc_envs=64</code>、epoch time、planner time、reward time、GPU id。</td></tr>
         <tr><td>low-small 回归</td><td>继续跑 2026-05-28 设计中的 full matrix / FK semantic collision probe；crossing-covered rows 不允许出现 FK semantic collision 回归。</td></tr>
       </tbody>
