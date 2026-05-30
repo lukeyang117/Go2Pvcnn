@@ -819,7 +819,7 @@ git commit -m "feat: add semantic filtered contact reward"
 - Modify: `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py`
 - Test: `Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py`
 
-- [ ] **Step 1: Write cfg tests**
+- [x] **Step 1: Write cfg tests**
 
 Create `Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py`:
 
@@ -844,7 +844,7 @@ def test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors():
         assert large.update_period == 0.0
 ```
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors -q
@@ -852,7 +852,7 @@ pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_mpc_semantic_cfg_has
 
 Expected: FAIL because sensors do not exist.
 
-- [ ] **Step 3: Add sensor constants and imports**
+- [x] **Step 3: Add sensor constants and imports**
 
 In env cfg:
 
@@ -874,7 +874,7 @@ SEMANTIC_CONTACT_BODY_WEIGHTS = (
 )
 ```
 
-- [ ] **Step 4: Add one-body filtered sensors**
+- [x] **Step 4: Add one-body filtered sensors**
 
 Inside `TeacherElevationTrajectoryMpcSemanticSceneCfg`, add one attribute per body/class. Use explicit attributes rather than a dict because IsaacLab configclass discovers class attributes.
 
@@ -901,7 +901,7 @@ semantic_contact_FL_foot_large = ContactSensorCfg(
 
 Repeat for every body in `SEMANTIC_CONTACT_BODY_NAMES`.
 
-- [ ] **Step 5: Replace reward term**
+- [x] **Step 5: Replace reward term**
 
 In `TeacherElevationTrajectoryMpcSemanticRewardsCfg`, replace `swing_leg_collision` with:
 
@@ -923,7 +923,7 @@ semantic_contact_collision = RewTerm(
 swing_leg_collision = None
 ```
 
-- [ ] **Step 6: Run cfg tests**
+- [x] **Step 6: Run cfg tests**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q
@@ -931,7 +931,7 @@ pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py
