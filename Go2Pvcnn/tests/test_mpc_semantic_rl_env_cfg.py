@@ -60,6 +60,24 @@ def test_semantic_global_contact_leaf_filter_keeps_only_slots(monkeypatch) -> No
     ]
 
 
+def test_semantic_global_contact_body_resolution_uses_exact_paths(monkeypatch) -> None:
+    _install_fake_isaaclab_contact_sensor(monkeypatch)
+    from go2_pvcnn.sensor.semantic_contacter.semantic_global_contact_sensor import resolve_contact_body_paths
+
+    visited: list[str] = []
+
+    def has_contact_report(path: str) -> bool:
+        visited.append(path)
+        return path.endswith("/base") or path.endswith("/FL_foot")
+
+    assert resolve_contact_body_paths(
+        parent_paths=["/World/envs/env_0/Robot"],
+        body_names=["base", "FL_foot"],
+        has_contact_report=has_contact_report,
+    ) == ["/World/envs/env_0/Robot/base", "/World/envs/env_0/Robot/FL_foot"]
+    assert visited == ["/World/envs/env_0/Robot/base", "/World/envs/env_0/Robot/FL_foot"]
+
+
 def test_mpc_semantic_cfg_uses_two_global_semantic_contact_sensors() -> None:
     source = CFG_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)

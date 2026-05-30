@@ -35,16 +35,23 @@
   - Commit: `7338cfc docs: update mpc planner human commands`
 - [x] 新 semantic contact 设计 HTML 已更新。
   - Commit: `e4d9a25 docs: update mpc rl semantic contact design`
+- [x] 两个全局语义 contact sensor 已实现，并替换旧 per-body sensor 路线。
+  - Commit: `9398545 feat: implement semantic global contact sensor`
+- [x] 1024 env 数量对齐已通过。
+  - Commit: `0f78099 test: validate semantic contact quantity alignment`
+- [x] card1 上 1024 env / 64 MPC env / 25 step 性能 probe 已通过。
+  - Worktree fix: `SemanticGlobalContactSensor` body path resolution changed from whole-stage regex traversal to exact `stage.GetPrimAtPath(...)`.
+  - Log: [../log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md](../log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md)
 
 ### Superseded And To Replace
 
-- [ ] 旧的 26 个 per-body semantic contact sensor 配置需要替换。
+- [x] 旧的 26 个 per-body semantic contact sensor 配置需要替换。
   - 旧提交：`509192b feat: add semantic contact sensors to mpc rl cfg`
   - 问题：`filter_prim_paths_expr=["/World/semantic_course/small/.*"]` 会在 IsaacLab 内部变成一级 glob `/World/semantic_course/small/*`，只匹配 `row_*`，并触发 PhysX `expected 1024, found 7/5`。
-- [ ] 旧 reward `semantic_filtered_contact_collision_reward(...)` 需要替换或兼容迁移。
+- [x] 旧 reward `semantic_filtered_contact_collision_reward(...)` 需要替换或兼容迁移。
   - 旧提交：`dde022c feat: add semantic filtered contact reward`
   - 问题：reward 依赖 26 个旧 sensor name 列表，不符合新设计的 2 个全局语义 sensor 接口。
-- [ ] 旧 IsaacLab smoke `test_mpc_semantic_contact_isaaclab.py` 需要改成 2-sensor 数量对齐测试。
+- [x] 旧 IsaacLab smoke `test_mpc_semantic_contact_isaaclab.py` 需要改成 2-sensor 数量对齐测试。
   - 旧提交：`21e1479 test: validate semantic contact sensors in isaaclab`
   - 问题：原 smoke 只检查旧 per-body sensor shape，没有检查全部 `slot_*` semantic object 覆盖，也没有阻止 `expected 1024, found 7/5` 日志。
 
@@ -708,7 +715,7 @@ git commit -m "test: validate semantic contact quantity alignment"
 - Modify: `notes/log/index.md`
 - Create: `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-final.md`
 
-- [ ] **Step 1: Run focused unit tests**
+- [x] **Step 1: Run focused unit tests**
 
 Run:
 
@@ -716,7 +723,13 @@ Run:
 pytest Go2Pvcnn/tests/test_mpc_rl_participation.py Go2Pvcnn/tests/test_semantic_contact_rewards.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q
 ```
 
-Expected: PASS.
+Result: PASS on 2026-05-30 card1 follow-up for the currently touched subset:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
+```
+
+`8 passed`.
 
 - [ ] **Step 2: Run MPC backend regression subset**
 
@@ -728,7 +741,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py Go2Pvcnn/tests/test_batch_mpc_pa
 
 Expected: PASS.
 
-- [ ] **Step 3: Run 1024 performance probe again**
+- [x] **Step 3: Run 1024 performance probe again**
 
 Run:
 
@@ -744,6 +757,14 @@ selected_mpc_envs = 64
 epoch_seconds <= 10
 ```
 
+Result on 2026-05-30 using card1:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 timeout 300s /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/tests/mpc_rl_epoch_perf_probe.py
+```
+
+`{"num_envs": 1024, "selected_mpc_envs": 64, "epoch_seconds": 5.64891067519784}`
+
 - [ ] **Step 4: Run real train one iteration**
 
 Run:
@@ -754,11 +775,11 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 
 Expected: exit code 0 and no semantic contact filter-count errors.
 
-- [ ] **Step 5: Write final verification log**
+- [x] **Step 5: Write final verification log**
 
-Create `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-final.md` with commands, pass/fail results, performance metrics, and remaining risk.
+Created [../log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md](../log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md) with commands, pass/fail results, performance metrics, and remaining risk.
 
-- [ ] **Step 6: Update todo dashboard and log index**
+- [x] **Step 6: Update todo dashboard and log index**
 
 Update:
 

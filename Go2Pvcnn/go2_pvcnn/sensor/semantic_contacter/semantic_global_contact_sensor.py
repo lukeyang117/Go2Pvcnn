@@ -48,6 +48,25 @@ def _semantic_root_from_filter_expr(expr: str) -> str:
     return expr.rstrip("/")
 
 
+def resolve_contact_body_paths(
+    *,
+    parent_paths: Sequence[str],
+    body_names: Sequence[str],
+    has_contact_report,
+) -> list[str]:
+    sensor_paths: list[str] = []
+    for parent_path in parent_paths:
+        robot_path = str(parent_path).rstrip("/")
+        for body_name in body_names:
+            body_path = f"{robot_path}/{body_name}"
+            if not has_contact_report(body_path):
+                raise RuntimeError(
+                    f"SemanticGlobalContactSensor could not find contact-reporting body '{body_path}'."
+                )
+            sensor_paths.append(body_path)
+    return sensor_paths
+
+
 class SemanticGlobalContactSensor(ContactSensor):
     """ContactSensor variant for global static semantic-course objects."""
 
@@ -80,17 +99,17 @@ class SemanticGlobalContactSensor(ContactSensor):
         self._physics_sim_view = SimulationManager.get_physics_sim_view()
         self._body_names = list(DEFAULT_SEMANTIC_CONTACT_BODY_NAMES)
 
-        sensor_paths: list[str] = []
-        for parent_prim in self._parent_prims:
-            robot_path = parent_prim.GetPath().pathString
-            for body_name in self._body_names:
-                body_path = f"{robot_path}/{body_name}"
-                prim = sim_utils.find_first_matching_prim(body_path)
-                if prim is None or not prim.IsValid() or not prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
-                    raise RuntimeError(
-                        f"SemanticGlobalContactSensor could not find contact-reporting body '{body_path}'."
-                    )
-                sensor_paths.append(body_path)
+        stage = sim_utils.stage_utils.get_current_stage()
+
+        def _has_contact_report(body_path: str) -> bool:
+            prim = stage.GetPrimAtPath(body_path)
+            return prim is not None and prim.IsValid() and prim.HasAPI(PhysxSchema.PhysxContactReportAPI)
+
+        sensor_paths = resolve_contact_body_paths(
+            parent_paths=[parent_prim.GetPath().pathString for parent_prim in self._parent_prims],
+            body_names=self._body_names,
+            has_contact_report=_has_contact_report,
+        )
         if not sensor_paths:
             raise RuntimeError(f"Sensor at path '{self.cfg.prim_path}' could not resolve robot body paths.")
 
