@@ -57,6 +57,7 @@ class ReferenceGenerator:
 
         contact_state = torch.ones((horizon, len(LEG_ORDER)), dtype=torch.bool)
         planned_touchdown_w = root_pos_w[:, None, :] + foot_pos_root
+        foot_pos_w = planned_touchdown_w.clone()
         phase_index = torch.arange(horizon, dtype=torch.long)
         valid_mask = torch.ones(horizon, dtype=torch.bool)
 
@@ -64,6 +65,7 @@ class ReferenceGenerator:
             root_pos_w=root_pos_w,
             root_quat_w=root_quat_w,
             joint_angles=joint_angles,
+            foot_pos_w=foot_pos_w,
             foot_pos_root=foot_pos_root,
             contact_state=contact_state,
             planned_touchdown_w=planned_touchdown_w,

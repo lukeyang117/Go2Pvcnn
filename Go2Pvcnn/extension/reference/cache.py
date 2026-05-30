@@ -90,6 +90,7 @@ def expand_reference_cache_to_num_envs(cache: "ReferenceTrajectoryCache", num_en
         root_pos_w=exp2(cache.root_pos_w),
         root_quat_w=exp2(cache.root_quat_w),
         joint_angles=exp2(cache.joint_angles),
+        foot_pos_w=exp2(cache.foot_pos_w),
         foot_pos_root=exp2(cache.foot_pos_root),
         contact_state=exp2(cache.contact_state),
         planned_touchdown_w=exp2(cache.planned_touchdown_w),
@@ -130,6 +131,7 @@ def masked_write_reference_cache_rows(
         "root_pos_w",
         "root_quat_w",
         "joint_angles",
+        "foot_pos_w",
         "foot_pos_root",
         "contact_state",
         "planned_touchdown_w",
@@ -176,6 +178,7 @@ def fill_reference_cache_standstill_rows(cache: "ReferenceTrajectoryCache", env_
         "root_pos_w",
         "root_quat_w",
         "joint_angles",
+        "foot_pos_w",
         "foot_pos_root",
         "contact_state",
         "planned_touchdown_w",
@@ -196,6 +199,7 @@ class ReferenceTrajectoryCache:
     root_pos_w: torch.Tensor | None = None
     root_quat_w: torch.Tensor | None = None
     joint_angles: torch.Tensor | None = None
+    foot_pos_w: torch.Tensor | None = None
     foot_pos_root: torch.Tensor | None = None
     contact_state: torch.Tensor | None = None
     planned_touchdown_w: torch.Tensor | None = None
@@ -214,6 +218,7 @@ class ReferenceTrajectoryCache:
             root_pos_w=_move(self.root_pos_w),
             root_quat_w=_move(self.root_quat_w),
             joint_angles=_move(self.joint_angles),
+            foot_pos_w=_move(self.foot_pos_w),
             foot_pos_root=_move(self.foot_pos_root),
             contact_state=_move(self.contact_state),
             planned_touchdown_w=_move(self.planned_touchdown_w),
@@ -244,6 +249,7 @@ class ReferenceTrajectoryCache:
             "root_pos_w": self.root_pos_w,
             "root_quat_w": self.root_quat_w,
             "joint_angles": self.joint_angles,
+            "foot_pos_w": self.foot_pos_w,
             "foot_pos_root": self.foot_pos_root,
             "contact_state": self.contact_state,
             "planned_touchdown_w": self.planned_touchdown_w,
@@ -257,6 +263,7 @@ class ReferenceTrajectoryCache:
         assert self.root_pos_w is not None
         assert self.root_quat_w is not None
         assert self.joint_angles is not None
+        assert self.foot_pos_w is not None
         assert self.foot_pos_root is not None
         assert self.contact_state is not None
         assert self.planned_touchdown_w is not None
@@ -340,6 +347,7 @@ class ReferenceTrajectoryCache:
 
         check_float("root_quat_w", self.root_quat_w, (4,))
         check_float("joint_angles", self.joint_angles, (12,))
+        check_float("foot_pos_w", self.foot_pos_w, (4, 3))
         check_float("foot_pos_root", self.foot_pos_root, (4, 3))
         check_bool("contact_state", self.contact_state, (4,))
         check_float("planned_touchdown_w", self.planned_touchdown_w, (4, 3))

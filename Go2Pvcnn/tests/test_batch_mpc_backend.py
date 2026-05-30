@@ -68,6 +68,11 @@ from extension.batch_mpc_planner.planner import (
     plan_segment,
     sample_touchdown_positions,
 )
+from extension.batch_mpc_planner.adapter import (
+    clone_reference_cache,
+    mpc_result_to_reference_cache,
+    scatter_cache_rows,
+)
 from extension.batch_mpc_planner.semantic_policy import (
     SemanticObstacleMode,
     build_parametric_nominal,
@@ -159,6 +164,22 @@ def _task_cfg(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _make_simple_mpc_result(*, batch: int, horizon: int, offset: float = 0.0):
+    root = torch.zeros((batch, horizon, 3), dtype=torch.float32)
+    root[..., 0] = torch.arange(horizon, dtype=torch.float32).view(1, horizon) + float(offset)
+    foot = root[:, :, None, :].expand(batch, horizon, 4, 3).clone()
+    foot[..., 0] += torch.tensor([0.2, 0.2, -0.2, -0.2], dtype=torch.float32).view(1, 1, 4)
+    foot[..., 1] += torch.tensor([0.1, -0.1, 0.1, -0.1], dtype=torch.float32).view(1, 1, 4)
+    return SimpleNamespace(
+        root_pos=root,
+        root_rpy=torch.zeros((batch, horizon, 3), dtype=torch.float32),
+        foot_pos=foot,
+        joint_angles=torch.zeros((batch, horizon, 12), dtype=torch.float32),
+        contact_state=torch.ones((batch, horizon, 4), dtype=torch.bool),
+        planned_touchdown_w=foot,
+    )
 
 
 class _FakeCommandManager:
@@ -1215,6 +1236,7 @@ def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_sha
     assert cache.root_pos_w.shape == (3, 6, 3)
     assert cache.root_quat_w.shape == (3, 6, 4)
     assert cache.joint_angles.shape == (3, 6, 12)
+    assert cache.foot_pos_w.shape == (3, 6, 4, 3)
     assert cache.foot_pos_root.shape == (3, 6, 4, 3)
     assert cache.contact_state.shape == (3, 6, 4)
     assert cache.contact_state.dtype == torch.bool
@@ -1228,6 +1250,7 @@ def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_sha
         "root_pos_w",
         "root_quat_w",
         "joint_angles",
+        "foot_pos_w",
         "foot_pos_root",
         "contact_state",
         "planned_touchdown_w",
@@ -1237,6 +1260,7 @@ def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_sha
     assert current["root_pos_w"].shape == (3, 3)
     assert current["root_quat_w"].shape == (3, 4)
     assert current["joint_angles"].shape == (3, 12)
+    assert current["foot_pos_w"].shape == (3, 4, 3)
     assert current["foot_pos_root"].shape == (3, 4, 3)
     assert current["contact_state"].shape == (3, 4)
     assert current["planned_touchdown_w"].shape == (3, 4, 3)
@@ -1255,6 +1279,28 @@ def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_sha
     assert next_step_cache is env._trajectory_reference_cache
     assert next_step_cache.root_pos_w.shape == (3, 6, 3)
     assert manager.current_frame_ids().shape == (3,)
+
+
+def test_mpc_reference_cache_exports_world_feet() -> None:
+    result = _make_simple_mpc_result(batch=2, horizon=5)
+    cache = mpc_result_to_reference_cache(result)
+    assert cache.foot_pos_w is not None
+    assert cache.foot_pos_w.shape == (2, 5, 4, 3)
+    torch.testing.assert_close(cache.foot_pos_w, result.foot_pos)
+
+
+def test_reference_cache_clone_scatter_preserve_world_feet() -> None:
+    result = _make_simple_mpc_result(batch=3, horizon=6)
+    cache = mpc_result_to_reference_cache(result)
+    cloned = clone_reference_cache(cache)
+    assert cloned.foot_pos_w is not None
+    assert cache.foot_pos_w is not None
+    torch.testing.assert_close(cloned.foot_pos_w, cache.foot_pos_w)
+
+    new = mpc_result_to_reference_cache(_make_simple_mpc_result(batch=1, horizon=6, offset=10.0))
+    scatter_cache_rows(cloned, new, torch.tensor([1], device=cache.root_pos_w.device))
+    assert new.foot_pos_w is not None
+    torch.testing.assert_close(cloned.foot_pos_w[1], new.foot_pos_w[0])
 
 
 def test_mpc_manager_global_sync_samples_parallel_plan_batch_size() -> None:

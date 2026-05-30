@@ -465,6 +465,7 @@ class MpcTrajectoryManager:
             "root_pos_w": self._cache.root_pos_w[env_idx, idx],
             "root_quat_w": self._cache.root_quat_w[env_idx, idx],
             "joint_angles": self._cache.joint_angles[env_idx, idx],
+            "foot_pos_w": self._cache.foot_pos_w[env_idx, idx],
             "foot_pos_root": self._cache.foot_pos_root[env_idx, idx],
             "contact_state": self._cache.contact_state[env_idx, idx],
             "planned_touchdown_w": self._cache.planned_touchdown_w[env_idx, idx],

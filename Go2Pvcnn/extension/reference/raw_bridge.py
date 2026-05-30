@@ -45,6 +45,7 @@ def trajectory_result_to_reference_cache(result: Any, *, dtype: torch.dtype = to
     root_quat_w = torch.as_tensor(np.asarray(result.root_quat_w), dtype=dtype)
     joint_angles = torch.as_tensor(np.asarray(result.joint_angles), dtype=dtype)
     foot_pos_root = torch.as_tensor(np.asarray(result.foot_pos_root), dtype=dtype)
+    foot_pos_w = root_pos_w[:, None, :] + foot_pos_root
 
     contact_np = np.asarray(result.contact_state)
     if contact_np.dtype == np.dtype(bool):
@@ -63,6 +64,7 @@ def trajectory_result_to_reference_cache(result: Any, *, dtype: torch.dtype = to
         root_pos_w=root_pos_w,
         root_quat_w=root_quat_w,
         joint_angles=joint_angles,
+        foot_pos_w=foot_pos_w,
         foot_pos_root=foot_pos_root,
         contact_state=contact_state,
         planned_touchdown_w=planned_touchdown_w,

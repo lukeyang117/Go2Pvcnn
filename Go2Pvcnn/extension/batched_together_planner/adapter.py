@@ -45,9 +45,16 @@ def together_result_to_reference_cache(result) -> ReferenceTrajectoryCache:
         root_rpy = _as_device_tensor(result.root_rpy, like=root_pos_w)
         root_quat_value = euler_to_quat_batch(root_rpy[..., 0], root_rpy[..., 1], root_rpy[..., 2])
     foot_pos_root_value = getattr(result, "foot_pos_root", None)
+    foot_pos_w_value = getattr(result, "foot_pos_w", getattr(result, "foot_pos", None))
     if foot_pos_root_value is None:
-        foot_pos = _as_device_tensor(result.foot_pos, like=root_pos_w)
-        foot_pos_root_value = foot_pos - root_pos_w.unsqueeze(2)
+        if foot_pos_w_value is None:
+            raise ValueError("planner result missing foot_pos/foot_pos_w/foot_pos_root")
+        foot_pos_w_value = _as_device_tensor(foot_pos_w_value, like=root_pos_w)
+        foot_pos_root_value = foot_pos_w_value - root_pos_w.unsqueeze(2)
+    elif foot_pos_w_value is None:
+        foot_pos_w_value = root_pos_w.unsqueeze(2) + _as_device_tensor(foot_pos_root_value, like=root_pos_w)
+    else:
+        foot_pos_w_value = _as_device_tensor(foot_pos_w_value, like=root_pos_w)
     touchdown_value = getattr(result, "planned_touchdown_w", None)
     if touchdown_value is None:
         touchdown_value = result.touchdown_seq[:, :, 0, :]
@@ -57,6 +64,7 @@ def together_result_to_reference_cache(result) -> ReferenceTrajectoryCache:
         root_pos_w=root_pos_w,
         root_quat_w=_as_device_tensor(root_quat_value, like=root_pos_w),
         joint_angles=_as_device_tensor(result.joint_angles, like=root_pos_w),
+        foot_pos_w=_as_device_tensor(foot_pos_w_value, like=root_pos_w),
         foot_pos_root=_as_device_tensor(foot_pos_root_value, like=root_pos_w),
         contact_state=_as_device_tensor(result.contact_state, like=root_pos_w, dtype=torch.bool),
         planned_touchdown_w=_expand_touchdowns(touchdown, num_envs=num_envs, horizon=horizon),
@@ -100,6 +108,7 @@ def standstill_cache_from_state(states, *, horizon: int) -> ReferenceTrajectoryC
         root_pos_w=root_pos.unsqueeze(1).expand(num_envs, int(horizon), 3).contiguous(),
         root_quat_w=root_quat.unsqueeze(1).expand(num_envs, int(horizon), 4).contiguous(),
         joint_angles=joint_angles.unsqueeze(1).expand(num_envs, int(horizon), 12).contiguous(),
+        foot_pos_w=foot_pos_w.unsqueeze(1).expand(num_envs, int(horizon), 4, 3).contiguous(),
         foot_pos_root=foot_pos_root.unsqueeze(1).expand(num_envs, int(horizon), 4, 3).contiguous(),
         contact_state=torch.ones((num_envs, int(horizon), 4), dtype=torch.bool, device=root_pos.device),
         planned_touchdown_w=foot_pos_w.unsqueeze(1).expand(num_envs, int(horizon), 4, 3).contiguous(),
@@ -131,6 +140,7 @@ def blend_reference_caches(
         root_pos_w=torch.where(row_3, new_cache.root_pos_w, torch.where(fb_3, fallback_cache.root_pos_w, old_cache.root_pos_w)),
         root_quat_w=torch.where(row_3, new_cache.root_quat_w, torch.where(fb_3, fallback_cache.root_quat_w, old_cache.root_quat_w)),
         joint_angles=torch.where(row_3, new_cache.joint_angles, torch.where(fb_3, fallback_cache.joint_angles, old_cache.joint_angles)),
+        foot_pos_w=torch.where(row_4, new_cache.foot_pos_w, torch.where(fb_4, fallback_cache.foot_pos_w, old_cache.foot_pos_w)),
         foot_pos_root=torch.where(row_4, new_cache.foot_pos_root, torch.where(fb_4, fallback_cache.foot_pos_root, old_cache.foot_pos_root)),
         contact_state=torch.where(row_3, new_cache.contact_state, torch.where(fb_3, fallback_cache.contact_state, old_cache.contact_state)),
         planned_touchdown_w=torch.where(
