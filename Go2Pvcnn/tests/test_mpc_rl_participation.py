@@ -15,6 +15,11 @@ if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 from extension.mdp.rewards_reference import reference_foot_pos_reward
+from extension.batch_mpc_planner.participation import (
+    MpcReferenceParticipationCfg,
+    MpcTerrainDifficultyPair,
+    select_mpc_reference_envs,
+)
 
 
 class _FakeManager:
@@ -70,3 +75,51 @@ def test_reference_foot_pos_reward_uses_world_feet_and_manager_phase() -> None:
 
     torch.testing.assert_close(reward[0], torch.tensor(1.0))
     torch.testing.assert_close(reward[1], torch.tensor(0.0))
+
+
+def test_participation_exclude_pair_is_terrain_and_row_logic() -> None:
+    terrain_types = torch.tensor([0, 0, 1, 1, 2], dtype=torch.long)
+    terrain_levels = torch.tensor([0, 3, 3, 7, 7], dtype=torch.long)
+    cfg = MpcReferenceParticipationCfg(
+        enabled=True,
+        exclude_pairs=(MpcTerrainDifficultyPair(terrain_cols=(1,), terrain_rows=(7,)),),
+        selection_mode="round_robin",
+    )
+
+    selected, next_cursor, eligible = select_mpc_reference_envs(
+        num_envs=5,
+        device=torch.device("cpu"),
+        terrain_types=terrain_types,
+        terrain_levels=terrain_levels,
+        terrain_names=["flat", "stairs", "rough"],
+        cfg=cfg,
+        sample_count=5,
+        cursor=0,
+        return_eligible=True,
+    )
+
+    assert eligible.tolist() == [True, True, True, False, True]
+    assert selected.tolist() == [True, True, True, False, True]
+    assert next_cursor == 0
+
+
+def test_participation_round_robin_wraps_inside_eligible_ids() -> None:
+    terrain_types = torch.zeros(6, dtype=torch.long)
+    terrain_levels = torch.zeros(6, dtype=torch.long)
+    cfg = MpcReferenceParticipationCfg(enabled=True, selection_mode="round_robin")
+
+    selected, next_cursor, eligible = select_mpc_reference_envs(
+        num_envs=6,
+        device=torch.device("cpu"),
+        terrain_types=terrain_types,
+        terrain_levels=terrain_levels,
+        terrain_names=["flat"],
+        cfg=cfg,
+        sample_count=4,
+        cursor=4,
+        return_eligible=True,
+    )
+
+    assert eligible.tolist() == [True, True, True, True, True, True]
+    assert selected.tolist() == [True, True, False, False, True, True]
+    assert next_cursor == 2

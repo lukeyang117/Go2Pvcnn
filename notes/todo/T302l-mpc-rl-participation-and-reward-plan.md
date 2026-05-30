@@ -354,7 +354,7 @@ git commit -m "fix: track reference feet in world frame"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/config.py`
 - Test: `Go2Pvcnn/tests/test_mpc_rl_participation.py`
 
-- [ ] **Step 1: Write failing selector tests**
+- [x] **Step 1: Write failing selector tests**
 
 Append:
 
@@ -409,7 +409,7 @@ def test_participation_round_robin_wraps_inside_eligible_ids():
     assert next_cursor == 2
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_participation_exclude_pair_is_terrain_and_row_logic Go2Pvcnn/tests/test_mpc_rl_participation.py::test_participation_round_robin_wraps_inside_eligible_ids -q
@@ -417,7 +417,7 @@ pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_participation_exclude_p
 
 Expected: FAIL because `participation.py` does not exist.
 
-- [ ] **Step 3: Implement selector dataclasses**
+- [x] **Step 3: Implement selector dataclasses**
 
 Create `participation.py`:
 
@@ -447,7 +447,7 @@ class MpcReferenceParticipationCfg:
     selection_mode: str = "round_robin"
 ```
 
-- [ ] **Step 4: Implement filtering helpers and selector**
+- [x] **Step 4: Implement filtering helpers and selector**
 
 Add:
 
@@ -510,7 +510,7 @@ def select_mpc_reference_envs(...):
     return (selected, next_cursor, eligible) if return_eligible else (selected, next_cursor)
 ```
 
-- [ ] **Step 5: Add config fields**
+- [x] **Step 5: Add config fields**
 
 In `config.py`, import the dataclasses and add to `MpcPlannerCfg`:
 
@@ -529,7 +529,7 @@ _tuple_ints_if_has(task_cfg, "mpc_reference_include_terrain_rows", rp, "include_
 
 For names and exclude pairs, first implementation can rely on direct `mpc_planner_cfg.reference_participation` assignment in env cfg to avoid parsing nested tuples from task cfg.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_participation_exclude_pair_is_terrain_and_row_logic Go2Pvcnn/tests/test_mpc_rl_participation.py::test_participation_round_robin_wraps_inside_eligible_ids -q
@@ -537,7 +537,7 @@ pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_participation_exclude_p
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/batch_mpc_planner/participation.py Go2Pvcnn/extension/batch_mpc_planner/config.py Go2Pvcnn/tests/test_mpc_rl_participation.py

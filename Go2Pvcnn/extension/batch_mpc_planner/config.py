@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 
+from .participation import MpcReferenceParticipationCfg, MpcTerrainDifficultyPair
+
 
 @dataclass
 class MpcRuntimeCfg:
@@ -411,6 +413,7 @@ class MpcPlannerCfg:
     runtime: MpcRuntimeCfg = field(default_factory=MpcRuntimeCfg)
     diagnostics: MpcDiagnosticsCfg = field(default_factory=MpcDiagnosticsCfg)
     losses: MpcLossesCfg = field(default_factory=MpcLossesCfg)
+    reference_participation: MpcReferenceParticipationCfg = field(default_factory=MpcReferenceParticipationCfg)
     profile_name: str = "train_4096"
     debug_loss_variant: str | None = None
     debug_loss_variant_cfg_applied: bool = False
@@ -439,6 +442,29 @@ def _tuple_ints_if_has(cfg, attr: str, target, target_attr: str) -> None:
     value = getattr(cfg, attr, None)
     if value is not None:
         setattr(target, target_attr, tuple(int(v) for v in value))
+
+
+def _tuple_strs_if_has(cfg, attr: str, target, target_attr: str) -> None:
+    value = getattr(cfg, attr, None)
+    if value is not None:
+        setattr(target, target_attr, tuple(str(v) for v in value))
+
+
+def _participation_pair_from_value(value) -> MpcTerrainDifficultyPair:
+    if isinstance(value, MpcTerrainDifficultyPair):
+        return value
+    if isinstance(value, dict):
+        cols = value.get("terrain_cols", None)
+        names = value.get("terrain_names", None)
+        rows = value.get("terrain_rows", ())
+    else:
+        cols, rows = value
+        names = None
+    return MpcTerrainDifficultyPair(
+        terrain_cols=None if cols is None else tuple(int(v) for v in cols),
+        terrain_names=None if names is None else tuple(str(v) for v in names),
+        terrain_rows=tuple(int(v) for v in rows),
+    )
 
 
 def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
@@ -496,6 +522,16 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     _set_if_has(task_cfg, "mpc_diagnostics_emit_viewer_fields", bool, out.diagnostics, "emit_viewer_fields")
     _set_if_has(task_cfg, "mpc_diagnostics_emit_runtime_counters", bool, out.diagnostics, "emit_runtime_counters")
     _set_if_has(task_cfg, "mpc_diagnostics_profile_cuda_sync", bool, out.diagnostics, "profile_cuda_sync")
+
+    participation = out.reference_participation
+    _set_if_has(task_cfg, "mpc_reference_participation_enabled", bool, participation, "enabled")
+    _set_if_has(task_cfg, "mpc_reference_selection_mode", str, participation, "selection_mode")
+    _tuple_ints_if_has(task_cfg, "mpc_reference_include_terrain_cols", participation, "include_terrain_cols")
+    _tuple_strs_if_has(task_cfg, "mpc_reference_include_terrain_names", participation, "include_terrain_names")
+    _tuple_ints_if_has(task_cfg, "mpc_reference_include_terrain_rows", participation, "include_terrain_rows")
+    exclude_pairs = getattr(task_cfg, "mpc_reference_exclude_pairs", None)
+    if exclude_pairs is not None:
+        participation.exclude_pairs = tuple(_participation_pair_from_value(v) for v in exclude_pairs)
 
     losses = out.losses
     _override_loss_term(task_cfg, prefix="mpc_loss_tracking", loss_term=losses.tracking)
@@ -806,6 +842,8 @@ def validate_mpc_config(cfg: MpcPlannerCfg) -> None:
         raise ValueError("runtime.optimize_steps must be >= 0")
     if cfg.runtime.parallel_plan_batch_size <= 0:
         raise ValueError("runtime.parallel_plan_batch_size must be positive")
+    if cfg.reference_participation.selection_mode != "round_robin":
+        raise ValueError("reference_participation.selection_mode must be 'round_robin'")
     if cfg.runtime.touchdown_event_cap <= 0:
         raise ValueError("runtime.touchdown_event_cap must be positive")
     if len(cfg.runtime.leg_phase_offsets) != 4:
