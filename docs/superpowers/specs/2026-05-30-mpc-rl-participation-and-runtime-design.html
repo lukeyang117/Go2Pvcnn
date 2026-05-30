@@ -369,8 +369,11 @@ base</code></pre>
         <tr><td>selector 单元测试</td><td>include 生效；exclude pair 的 AND 逻辑生效；只命中地形或只命中难度不排除；round-robin wrap 生效。</td></tr>
         <tr><td>manager 单元测试</td><td>只对 selected env 调 <code>plan_segment</code>；未选中 env 的 <code>reference_reward_mask</code> 为 False；cache shape 仍是 full-shaped <code>[num_envs, 25, ...]</code>。</td></tr>
         <tr><td>world foot tracking 单元测试</td><td><code>ReferenceTrajectoryCache.foot_pos_w</code> 存在；MPC adapter 写入 world foot；<code>reference_foot_pos_reward</code> 比较 IsaacLab <code>body_pos_w</code> 与 cache <code>foot_pos_w</code>；MPC backend 使用 <code>manager.current_frame_ids()</code>。</td></tr>
-        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0；真实 contact reward 使用 <code>force_matrix_w</code> 聚合 small/large filtered contacts。</td></tr>
+        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0；真实 contact reward 使用 <code>force_matrix_w</code> 聚合 filtered contacts。</td></tr>
+        <tr><td>不同语义物体碰撞区分</td><td>small obstacle 和 large obstacle 必须由不同 filtered contact sensor 或不同明确分组分别统计；日志/测试输出至少包含 <code>small_contact_penalty</code>、<code>large_contact_penalty</code>、<code>small_contact_count</code>、<code>large_contact_count</code>；测试中只碰 small 时 large 指标为 0，只碰 large 时 small 指标为 0。</td></tr>
+        <tr><td>真实 contact 数值实现</td><td>实现必须使用 <code>force_matrix_w</code>，按 <code>F(e,b,k)=Σ_j ||f(e,b,k,j)||</code> 聚合；惩罚使用 <code>clamp(ReLU(F-F_threshold)/F_scale, 0, c_max)</code>；单元测试覆盖 threshold 下为 0、超过 threshold 后单调增加、超过 clip 后饱和、输出无 NaN/Inf。</td></tr>
         <tr><td>IsaacLab smoke</td><td>使用 <code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC；per-body filtered contact sensors 在并行 env 下 shape 正确且能读到全局 semantic course contact。</td></tr>
+        <tr><td>RL 训练性能验收</td><td>使用真实 IsaacLab 训练入口验证 <code>1024</code> 个并行环境、其中 <code>64</code> 个环境参与 MPC；关闭训练期 CUDA sync profiling；单个 RL epoch 耗时必须 <code>&lt;= 10s</code>；日志记录 <code>num_envs=1024</code>、<code>selected_mpc_envs=64</code>、epoch time、planner time、reward time、GPU id。</td></tr>
         <tr><td>low-small 回归</td><td>继续跑 2026-05-28 设计中的 full matrix / FK semantic collision probe；crossing-covered rows 不允许出现 FK semantic collision 回归。</td></tr>
       </tbody>
     </table>
