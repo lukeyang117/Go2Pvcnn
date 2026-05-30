@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPC 接入 RL 的参与环境选择与运行时优化设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #16202a;
+      --muted: #5c6670;
+      --line: #d7dde4;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --warn: #9a5b00;
+      --ok: #247047;
+      --bad: #9f2f24;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note, .guard, .ok, .danger {
+      padding: 12px 14px;
+      margin: 14px 0;
+      border-left: 4px solid;
+    }
+    .note { background: var(--panel); border-left-color: var(--accent); }
+    .guard { background: #fff8eb; border-left-color: var(--warn); }
+    .ok { background: #eef8f1; border-left-color: var(--ok); }
+    .danger { background: #fff0ee; border-left-color: var(--bad); }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC 接入 RL 的参与环境选择与运行时优化设计</h1>
+  <div class="meta">
+    日期：2026-05-30 ｜ 主线：MPC semantic trajectory reward ｜ 文件范围：
+    <code>Go2Pvcnn/extension/batch_mpc_planner</code>、
+    <code>Go2Pvcnn/extension/mdp/rewards_reference.py</code>、
+    <code>Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code>
+  </div>
+
+  <section>
+    <h2>1. 设计目标</h2>
+    <p>把当前 MPC reference 接入 RL 训练时，不让所有环境都参与 MPC 规划。只允许用户配置范围内的环境进入 MPC 抽签；当前明确隔离的地形和难度组合不参与 MPC，其余环境仍可以参与抽签。</p>
+    <p>未被选中的环境不调用 MPC，不更新新的 MPC reference，其 MPC reference reward 返回 0。基础 locomotion reward、速度跟踪、碰撞惩罚等其他 reward 不受影响。</p>
+    <div class="guard">
+      <strong>不变约束：</strong>本设计不修改 low-small loss 公式，不新增 optimizer loss，不新增硬约束，不改变 <code>decode_parametric_trajectory()</code> 的职责。2026-05-28 low-small 设计效果不能回退。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 25 帧对齐约束</h2>
+    <p>MPC 规划帧数、reference cache 帧数和重规划周期必须对齐：</p>
+    <div class="math">MPC horizon = reference cache horizon = replan interval = 25</div>
+    <p>任务配置需要显式设置：</p>
+    <pre><code>reference_trajectory_horizon = 25
+reference_replan_interval_steps = 25</code></pre>
+    <p><code>MpcRuntimeCfg.horizon_steps</code> 默认已经是 25。由于 <code>planner_cfg_from_task_cfg()</code> 会用 <code>reference_trajectory_horizon</code> 覆盖 <code>runtime.horizon_steps</code>，MPC semantic 任务必须显式覆盖父类默认值 50。</p>
+    <p>验收检查：</p>
+    <pre><code>manager.horizon_steps() == 25
+cache.horizon_length() == 25
+cfg.reference_replan_interval_steps == 25</code></pre>
+  </section>
+
+  <section>
+    <h2>3. 参与环境选择函数</h2>
+    <p>新增一个纯 selector 函数。它只判断哪些 env 本次允许参与 MPC，不做规划、不写 cache、不计算 reward。</p>
+    <p>建议位置：</p>
+    <pre><code>Go2Pvcnn/extension/batch_mpc_planner/participation.py</code></pre>
+    <p>函数接口：</p>
+    <pre><code>select_mpc_reference_envs(
+    *,
+    num_envs: int,
+    device: torch.device,
+    terrain_types: Tensor | None,
+    terrain_levels: Tensor | None,
+    terrain_names: list[str] | None,
+    cfg: MpcReferenceParticipationCfg,
+    sample_count: int,
+    cursor: int,
+) -&gt; tuple[Tensor, int]</code></pre>
+    <table>
+      <thead>
+        <tr><th>输入</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>num_envs</code></td><td>总环境数。</td></tr>
+        <tr><td><code>device</code></td><td>输出 mask 所在设备。</td></tr>
+        <tr><td><code>terrain_types</code></td><td>shape 为 <code>[num_envs]</code>，IsaacLab terrain col / 地形类型 id。</td></tr>
+        <tr><td><code>terrain_levels</code></td><td>shape 为 <code>[num_envs]</code>，IsaacLab terrain row / 难度 id。</td></tr>
+        <tr><td><code>terrain_names</code></td><td>col id 到 terrain name 的映射，来自 <code>terrain.cfg.terrain_generator.sub_terrains</code>。</td></tr>
+        <tr><td><code>cfg</code></td><td>用户可调参与规则。</td></tr>
+        <tr><td><code>sample_count</code></td><td>本次最多选择多少 env 参与 MPC。</td></tr>
+        <tr><td><code>cursor</code></td><td>round-robin 当前游标。</td></tr>
+      </tbody>
+    </table>
+    <p>函数输出：</p>
+    <pre><code>selected_mask: Tensor  # shape [num_envs], dtype bool
+next_cursor: int</code></pre>
+    <p><code>selected_mask[i] == True</code> 表示第 <code>i</code> 个 env 本次参与 MPC 规划，并且后续 25 step MPC reference reward 生效。<code>False</code> 表示本次不参与 MPC，MPC reference reward 为 0。</p>
+  </section>
+
+  <section>
+    <h2>4. 可调参数</h2>
+    <p>新增配置对象：</p>
+    <pre><code>MpcReferenceParticipationCfg:
+    enabled: bool
+    include_terrain_cols: tuple[int, ...] | None
+    include_terrain_names: tuple[str, ...] | None
+    include_terrain_rows: tuple[int, ...] | None
+
+    exclude_pairs: tuple[MpcTerrainDifficultyPair, ...]
+    selection_mode: str</code></pre>
+    <p>其中 <code>selection_mode</code> 默认是 <code>"round_robin"</code>。</p>
+    <p><code>exclude_pairs</code> 用于表达“这个地形和这个难度组合不参与 MPC”。</p>
+    <pre><code>MpcTerrainDifficultyPair:
+    terrain_cols: tuple[int, ...] | None
+    terrain_names: tuple[str, ...] | None
+    terrain_rows: tuple[int, ...]</code></pre>
+  </section>
+
+  <section>
+    <h2>5. 隔离规则：地形和难度是 AND 逻辑</h2>
+    <p>用户希望隔离的环境必须同时满足“指定地形”和“指定难度”，才会被排除。只满足地形或只满足难度的环境，仍然需要参与抽签。</p>
+    <div class="math">excluded(env) = terrain_match(env) AND row_match(env)</div>
+    <p>例子：</p>
+    <pre><code>exclude_pairs = [
+  {
+    terrain_names = ("stairs_down", "rough_large"),
+    terrain_rows = (7, 8, 9),
+  }
+]</code></pre>
+    <table>
+      <thead>
+        <tr><th>env 情况</th><th>是否排除</th><th>原因</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>terrain 是 <code>stairs_down</code>，row 是 8</td><td>排除</td><td>地形和难度同时命中。</td></tr>
+        <tr><td>terrain 是 <code>stairs_down</code>，row 是 3</td><td>不排除</td><td>只命中地形，没有命中难度。</td></tr>
+        <tr><td>terrain 是 <code>flat</code>，row 是 8</td><td>不排除</td><td>只命中难度，没有命中地形。</td></tr>
+        <tr><td>terrain 是 <code>flat</code>，row 是 3</td><td>不排除</td><td>地形和难度都未命中。</td></tr>
+      </tbody>
+    </table>
+    <p>如果 <code>include_terrain_*</code> 或 <code>include_terrain_rows</code> 被设置，它们先定义“允许参与抽签的大范围”；然后 <code>exclude_pairs</code> 在这个范围内按 AND 逻辑扣掉坏组合。</p>
+    <div class="math">eligible(env) = include_match(env) AND NOT any_pair_excluded(env)</div>
+  </section>
+
+  <section>
+    <h2>6. 轮转抽样</h2>
+    <p>从 <code>eligible_ids</code> 里使用 round-robin 抽样，而不是每次随机抽样。</p>
+    <div class="math">eligible_ids = 满足参与规则的 env ids
+selected_ids = eligible_ids[cursor : cursor + sample_count]
+如果越过末尾，则 wrap around
+next_cursor = (cursor + sample_count) % len(eligible_ids)</div>
+    <p>好处是每个符合条件的 env 都会周期性拿到完整 25-step MPC reference，显存由 <code>sample_count</code> 控制，reward 覆盖稳定，日志更容易解释。</p>
+  </section>
+
+  <section>
+    <h2>7. Manager 调用流程</h2>
+    <p><code>MpcTrajectoryManager.refresh_from_env()</code> 的流程调整为：</p>
+    <pre><code>1. 每 25 step 触发一次 global_due
+2. 从 IsaacLab terrain 读取：
+   - terrain.terrain_types
+   - terrain.terrain_levels
+   - terrain.cfg.terrain_generator.sub_terrains names
+3. 调 select_mpc_reference_envs(...)
+4. 只对 selected_ids 构建 state / command / terrain subset
+5. 只对 selected_ids 调 plan_segment(...)
+6. selected_ids 的结果写入 full-shaped cache
+7. reference_reward_mask = replace_mask
+8. 未选中 env 的 reference reward 为 0</code></pre>
+    <p>reward 侧已有 <code>reference_foot_pos_reward()</code> 乘 <code>manager.reference_reward_mask()</code> 的逻辑，因此未参与 env 不需要额外 reward 分支。</p>
+  </section>
+
+  <section>
+    <h2>8. 训练信号密度</h2>
+    <p>为了让模型学会轨迹，MPC reward 不能太稀疏。建议监控：</p>
+    <div class="math">duty_cycle = selected_env_count / eligible_env_count</div>
+    <p>第一版建议 <code>duty_cycle &gt;= 0.25</code>。例如：</p>
+    <pre><code>eligible_env_count = 512
+selected_env_count = 128
+duty_cycle = 25%</code></pre>
+    <p>未参与 env 只是不拿 MPC reference reward，其他基础训练信号仍然存在。</p>
+  </section>
+
+  <section>
+    <h2>9. 显存和速度优化边界</h2>
+    <p>第一版只做不改变 low-small 优化结果的优化：</p>
+    <ul>
+      <li>只规划 selected env。</li>
+      <li>horizon / replan / cache 全部对齐到 25。</li>
+      <li>训练期关闭 CUDA sync profiling。</li>
+      <li>优化结束后的 cache/export/FK 写回使用 detach 或 <code>torch.no_grad()</code>。</li>
+      <li><code>steps &gt; 0</code> 时，不再保留 Adam loop 前那次冗余 sampled loss 计算。</li>
+    </ul>
+    <pre><code>mpc_diagnostics_emit_runtime_counters = False
+mpc_diagnostics_profile_cuda_sync = False</code></pre>
+    <p>以下优化暂不做，因为可能改变 low-small 效果：</p>
+    <ul>
+      <li>减少 <code>optimize_steps</code>。</li>
+      <li>让 FK collision / touchdown keepout 等 heavy loss 隔步计算。</li>
+      <li>AMP / float16。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>10. Low-small 不变项</h2>
+    <p>为了保证 2026-05-28 low-small 设计效果不变，以下内容保持不变：</p>
+    <ul>
+      <li><code>decode_parametric_trajectory()</code> 只消费 nominal + variables。</li>
+      <li>不新增 touchdown hard projection。</li>
+      <li>不新增 touchdown snapping。</li>
+      <li>不新增足端硬分离。</li>
+      <li>不新增 optimizer loss。</li>
+      <li>第 0 条 low-small FK semantic collision probe 仍然只作为优化后诊断。</li>
+      <li>现有 low-small loss 集合和公式不变。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>11. 验收</h2>
+    <table>
+      <thead>
+        <tr><th>类别</th><th>验收内容</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>selector 单元测试</td><td>include 生效；exclude pair 的 AND 逻辑生效；只命中地形或只命中难度不排除；round-robin wrap 生效。</td></tr>
+        <tr><td>manager 单元测试</td><td>只对 selected env 调 <code>plan_segment</code>；未选中 env 的 <code>reference_reward_mask</code> 为 False；cache shape 仍是 full-shaped <code>[num_envs, 25, ...]</code>。</td></tr>
+        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0。</td></tr>
+        <tr><td>IsaacLab smoke</td><td>使用 <code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC。</td></tr>
+        <tr><td>low-small 回归</td><td>继续跑 2026-05-28 设计中的 full matrix / FK semantic collision probe；crossing-covered rows 不允许出现 FK semantic collision 回归。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>
