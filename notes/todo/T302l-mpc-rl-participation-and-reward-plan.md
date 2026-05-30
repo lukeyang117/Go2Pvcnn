@@ -79,7 +79,7 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python ..
 - Modify: `Go2Pvcnn/extension/batched_together_planner/adapter.py`
 - Test: `Go2Pvcnn/tests/test_batch_mpc_backend.py`
 
-- [ ] **Step 1: Write failing cache ABI tests**
+- [x] **Step 1: Write failing cache ABI tests**
 
 Add tests near the existing cache adapter tests in `Go2Pvcnn/tests/test_batch_mpc_backend.py`:
 
@@ -123,7 +123,7 @@ def _make_simple_mpc_result(batch: int, horizon: int, offset: float = 0.0):
     )
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -133,7 +133,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_reference_cache_export
 
 Expected: FAIL because `ReferenceTrajectoryCache` has no `foot_pos_w`.
 
-- [ ] **Step 3: Implement `foot_pos_w` in cache ABI**
+- [x] **Step 3: Implement `foot_pos_w` in cache ABI**
 
 Update `ReferenceTrajectoryCache`:
 
@@ -172,7 +172,7 @@ if self.foot_pos_w is not None:
     check_float("foot_pos_w", self.foot_pos_w, (4, 3))
 ```
 
-- [ ] **Step 4: Implement adapter propagation**
+- [x] **Step 4: Implement adapter propagation**
 
 In `Go2Pvcnn/extension/batch_mpc_planner/adapter.py`, update `mpc_result_to_reference_cache()`:
 
@@ -200,7 +200,7 @@ foot_pos_w=foot_pos_w.unsqueeze(1).expand(num_envs, int(horizon), 4, 3).contiguo
 
 Update `clone_reference_cache`, `scatter_cache_rows`, and `blend_reference_caches` to include `foot_pos_w` using the same shape branch as `foot_pos_root`.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -210,7 +210,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_reference_cache_export
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/reference/cache.py Go2Pvcnn/extension/batch_mpc_planner/adapter.py Go2Pvcnn/extension/batched_together_planner/adapter.py Go2Pvcnn/tests/test_batch_mpc_backend.py
@@ -226,7 +226,7 @@ git commit -m "feat: add world foot positions to reference cache"
 - Modify: `Go2Pvcnn/extension/batch_mpc_planner/manager.py`
 - Test: `Go2Pvcnn/tests/test_mpc_rl_participation.py`
 
-- [ ] **Step 1: Write failing reward tests**
+- [x] **Step 1: Write failing reward tests**
 
 Create `Go2Pvcnn/tests/test_mpc_rl_participation.py` with:
 
@@ -284,7 +284,7 @@ def test_reference_foot_pos_reward_uses_world_feet_and_manager_phase():
     torch.testing.assert_close(reward[1], torch.tensor(0.0))
 ```
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 Run:
 
@@ -294,7 +294,7 @@ pytest Go2Pvcnn/tests/test_mpc_rl_participation.py::test_reference_foot_pos_rewa
 
 Expected: FAIL because current reward reads `foot_pos_root` and uses `episode_length % horizon` for MPC.
 
-- [ ] **Step 3: Change frame selection**
+- [x] **Step 3: Change frame selection**
 
 In `_select_reference_frame(env)`, use manager phase for any manager that exposes `current_frame_ids()`:
 
@@ -306,7 +306,7 @@ else:
     frame_ids = _reference_indices(env, horizon)
 ```
 
-- [ ] **Step 4: Change reward to world frame**
+- [x] **Step 4: Change reward to world frame**
 
 Replace `_current_foot_positions_root()` use in `reference_foot_pos_reward()` with:
 
@@ -327,7 +327,7 @@ if manager is not None and hasattr(manager, "reference_reward_mask"):
     reward = reward * mask
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -338,7 +338,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q
 
 Expected: focused test PASS; backend tests PASS or only unrelated existing skips.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/mdp/rewards_reference.py Go2Pvcnn/tests/test_mpc_rl_participation.py

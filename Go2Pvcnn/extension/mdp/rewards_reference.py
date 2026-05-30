@@ -176,7 +176,7 @@ def _select_reference_frame(env):
     if horizon is None:
         raise RuntimeError("reference cache has no horizon")
     manager = _trajectory_manager(env)
-    if _uses_together_manager(manager):
+    if manager is not None and hasattr(manager, "current_frame_ids"):
         frame_ids = manager.current_frame_ids()
     else:
         frame_ids = _reference_indices(env, horizon)
@@ -256,14 +256,15 @@ def reference_foot_pos_reward(
     sigma: float = 0.5,
     asset_cfg=None,
 ) -> torch.Tensor:
-    """Reward current foot positions in root frame staying close to the reference frame."""
-    from isaaclab.managers import SceneEntityCfg
-
+    """Reward current world-frame foot positions staying close to the reference frame."""
     if asset_cfg is None:
+        from isaaclab.managers import SceneEntityCfg
+
         asset_cfg = SceneEntityCfg("robot", body_names=".*_foot")
     cache, frame_ids = _select_reference_frame(env)
-    current_foot = _current_foot_positions_root(env, asset_cfg)
-    ref_foot = _reference_field(env, cache, "foot_pos_root", frame_ids).to(dtype=current_foot.dtype)
+    asset = env.scene[asset_cfg.name]
+    current_foot = asset.data.body_pos_w[:, asset_cfg.body_ids, :]
+    ref_foot = _reference_field(env, cache, "foot_pos_w", frame_ids).to(dtype=current_foot.dtype)
     if os.environ.get("T302G_DEBUG_REF_REWARD_FINITE", "0").strip() == "1":
         if torch.any(~torch.isfinite(ref_foot)) or torch.any(~torch.isfinite(current_foot)):
             manager = _trajectory_manager(env)
