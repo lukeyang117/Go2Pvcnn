@@ -272,7 +272,81 @@ mpc_diagnostics_profile_cuda_sync = False</code></pre>
   </section>
 
   <section>
-    <h2>10. Low-small 不变项</h2>
+    <h2>10. reference_foot_pos_reward 世界坐标系跟踪</h2>
+    <p><code>reference_foot_pos_reward()</code> 需要改成世界坐标系下的足端跟踪。IsaacLab 当前足端和 MPC reference 足端都必须是 world frame。</p>
+    <p>当前真实足端：</p>
+    <pre><code>current_foot_w = asset.data.body_pos_w[:, foot_body_ids, :]</code></pre>
+    <p>MPC reference 足端：</p>
+    <pre><code>ref_foot_w = cache.foot_pos_w[env_id, frame_id]</code></pre>
+    <p>reward 公式：</p>
+    <div class="math">err_e = mean_l || current_foot_w(e,l) - ref_foot_w(e,l) ||
+R_foot(e) = exp( - err_e / sigma^2 ) * reference_reward_mask(e)</div>
+    <p>因此 <code>ReferenceTrajectoryCache</code> 需要新增字段：</p>
+    <pre><code>foot_pos_w: Tensor | None = None</code></pre>
+    <p>旧字段 <code>foot_pos_root</code> 第一版保留，用于兼容 together/legacy/已有测试；新的 MPC semantic foot tracking reward 读取 <code>foot_pos_w</code>。</p>
+    <p>同时，MPC backend 的参考帧选择需要使用 manager 自己维护的 phase：</p>
+    <pre><code>frame_ids = manager.current_frame_ids()</code></pre>
+    <p>而不是继续使用：</p>
+    <pre><code>frame_ids = env.episode_length_buf % horizon</code></pre>
+    <p>原因是 selected env 在任意 episode step 重新规划时，cache 第 0 帧对应当前状态；如果用 episode modulo，会出现当前真实足端追未来帧 reference 的错位。</p>
+  </section>
+
+  <section>
+    <h2>11. 基于 IsaacLab 真实 contact 的语义碰撞 reward</h2>
+    <p>当前 <code>swing_leg_collision_reward()</code> 基于 <code>semantic_height_scanner</code> 查询 height/semantic，这会受 scanner 更新周期和栅格分辨率影响。新的 RL 语义碰撞 reward 改为使用 IsaacLab / PhysX 的真实接触力。</p>
+    <p>IsaacLab <code>ContactSensor</code> 的关键限制是：filtered contact 只能可靠支持 one-to-many。也就是说，每个 sensor 在每个 env 中只能对应一个 robot body，然后 filter 到多个目标物体。不能用一个 sensor 写成 <code>Robot/.*_foot</code> 再 filter 到 semantic objects。</p>
+    <div class="guard">
+      <strong>并行环境约束：</strong>每个 robot body 需要单独建 filtered contact sensor；语义物体是全局 prim，不在 <code>{ENV_REGEX_NS}</code> 下面。
+    </div>
+    <p>语义物体 filter 使用全局路径：</p>
+    <pre><code>/World/semantic_course/small/.*
+/World/semantic_course/large/.*</code></pre>
+    <p>单个 body 的 sensor 示例：</p>
+    <pre><code>prim_path = "{ENV_REGEX_NS}/Robot/FL_foot"
+filter_prim_paths_expr = ["/World/semantic_course/small/.*"]</code></pre>
+    <p>filtered contact 数据读取：</p>
+    <pre><code>sensor.data.force_matrix_w</code></pre>
+    <p>shape：</p>
+    <pre><code>[num_envs, 1, num_filter_shapes, 3]</code></pre>
+    <p>对 env <code>e</code>、body <code>b</code>、语义类别 <code>k</code>，真实接触力聚合为：</p>
+    <div class="math">F(e,b,k) = Σ_j || force_matrix_w(e,0,j,:) ||</div>
+    <p>其中 <code>j</code> 是该语义类别下的全局 obstacle shape。</p>
+    <p>碰撞激活：</p>
+    <div class="math">c(e,b,k) = clamp( ReLU(F(e,b,k) - F_threshold) / F_scale, 0, c_max )</div>
+    <p>最终 penalty：</p>
+    <div class="math">P(e) = Σ_b w_body(b) * [ w_small * c(e,b,small) + w_large * c(e,b,large) ]
+R_collision(e) = -P(e)</div>
+    <p>body 列表和权重需要可配置。第一版建议覆盖：</p>
+    <pre><code>FL_foot, FR_foot, RL_foot, RR_foot
+FL_calf, FR_calf, RL_calf, RR_calf
+FL_thigh, FR_thigh, RL_thigh, RR_thigh
+base</code></pre>
+    <p>如果性能压力大，可以先缩小到 <code>foot + calf + base</code>。但无论覆盖哪些 body，都必须保持 one-body filtered sensor 的 IsaacLab 约束。</p>
+  </section>
+
+  <section>
+    <h2>12. 新增文件边界</h2>
+    <p>建议新增一个独立 reward 文件：</p>
+    <pre><code>Go2Pvcnn/extension/mdp/semantic_contact_rewards.py</code></pre>
+    <p>该文件只负责真实接触语义碰撞 reward，不放 MPC reference tracking 逻辑。</p>
+    <p>建议函数：</p>
+    <pre><code>semantic_filtered_contact_collision_reward(
+    env,
+    small_sensor_names,
+    large_sensor_names,
+    body_weights,
+    force_threshold,
+    force_scale,
+    force_clip,
+    small_weight,
+    large_weight,
+)</code></pre>
+    <p><code>rewards_reference.py</code> 继续负责 reference tracking，例如 <code>reference_foot_pos_reward()</code>。这样可以避免把 MPC reference reward 和 IsaacLab 真实 contact reward 混在一个文件里。</p>
+    <p>不需要修改 IsaacLab 源码；需要在 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code> 中增加 per-body filtered contact sensors，并把旧的高程图碰撞 reward 替换成新的真实 contact reward。</p>
+  </section>
+
+  <section>
+    <h2>13. Low-small 不变项</h2>
     <p>为了保证 2026-05-28 low-small 设计效果不变，以下内容保持不变：</p>
     <ul>
       <li><code>decode_parametric_trajectory()</code> 只消费 nominal + variables。</li>
@@ -286,7 +360,7 @@ mpc_diagnostics_profile_cuda_sync = False</code></pre>
   </section>
 
   <section>
-    <h2>11. 验收</h2>
+    <h2>14. 验收</h2>
     <table>
       <thead>
         <tr><th>类别</th><th>验收内容</th></tr>
@@ -294,8 +368,9 @@ mpc_diagnostics_profile_cuda_sync = False</code></pre>
       <tbody>
         <tr><td>selector 单元测试</td><td>include 生效；exclude pair 的 AND 逻辑生效；只命中地形或只命中难度不排除；round-robin wrap 生效。</td></tr>
         <tr><td>manager 单元测试</td><td>只对 selected env 调 <code>plan_segment</code>；未选中 env 的 <code>reference_reward_mask</code> 为 False；cache shape 仍是 full-shaped <code>[num_envs, 25, ...]</code>。</td></tr>
-        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0。</td></tr>
-        <tr><td>IsaacLab smoke</td><td>使用 <code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC。</td></tr>
+        <tr><td>world foot tracking 单元测试</td><td><code>ReferenceTrajectoryCache.foot_pos_w</code> 存在；MPC adapter 写入 world foot；<code>reference_foot_pos_reward</code> 比较 IsaacLab <code>body_pos_w</code> 与 cache <code>foot_pos_w</code>；MPC backend 使用 <code>manager.current_frame_ids()</code>。</td></tr>
+        <tr><td>reward 单元测试</td><td>selected env 的 <code>reference_foot_pos_reward</code> 正常；unselected env 的该 reward 为 0；真实 contact reward 使用 <code>force_matrix_w</code> 聚合 small/large filtered contacts。</td></tr>
+        <tr><td>IsaacLab smoke</td><td>使用 <code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC；per-body filtered contact sensors 在并行 env 下 shape 正确且能读到全局 semantic course contact。</td></tr>
         <tr><td>low-small 回归</td><td>继续跑 2026-05-28 设计中的 full matrix / FK semantic collision probe；crossing-covered rows 不允许出现 FK semantic collision 回归。</td></tr>
       </tbody>
     </table>
