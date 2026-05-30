@@ -106,7 +106,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--planner-backend",
         type=str,
-        default="together",
+        default=None,
         choices=["together", "legacy", "mpc"],
         help="For trajectory experiments: trajectory planner backend (together/legacy/mpc).",
     )

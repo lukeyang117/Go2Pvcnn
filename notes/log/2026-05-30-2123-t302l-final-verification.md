@@ -1,0 +1,35 @@
+# T302l MPC RL Participation Final Verification
+
+- Purpose: Final verification for MPC RL participation and reward redesign.
+- Design: `docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html`
+- Env: `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`
+- Commands:
+  - focused pytest: `pytest Go2Pvcnn/tests/test_mpc_rl_participation.py Go2Pvcnn/tests/test_semantic_contact_rewards.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q`
+  - backend pytest: `pytest Go2Pvcnn/tests/test_batch_mpc_backend.py Go2Pvcnn/tests/test_batch_mpc_parametric.py -q`
+  - IsaacLab contact smoke: `CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py::test_mpc_semantic_contact_sensors_real_isaaclab -q`
+  - RL 1024/64 performance probe: `CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/tests/mpc_rl_epoch_perf_probe.py`
+  - RL train entry: `CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py --experiment teacher_elevation_trajectory_mpc_semantic --planner-backend mpc --num_envs 1024 --max_iterations 1 --headless --device cuda:0`
+  - low-small regression: `PYTHONPATH=Go2Pvcnn CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/tests/mpc_low_small_reachable_crossing_probe.py --device cuda:0 --requested-n-frames 300 --cycles 2 --commands ...`
+- Results:
+  - focused pytest: PASS, `7 passed`.
+  - backend pytest: PASS, `140 passed, 1 warning`.
+  - IsaacLab contact smoke: PASS.
+  - RL 1024/64 performance: PASS.
+  - real train entry: PASS, process exited `0` with `--planner-backend mpc`.
+  - low-small regression: PASS for covered crossing rows.
+- Key Metrics:
+  - selected_mpc_envs: `64`
+  - epoch_seconds: `5.2561346013098955`
+  - small_contact_count / large_contact_count separation: separate small/large per-body sensors and reward inputs verified by config test and smoke.
+  - low-small cycle rows: `20`
+  - crossing-covered rows: `12`
+  - covered commands: `backward`, `diag_fl`, `diag_fr`, `forward`, `mixed_turn_l`, `mixed_turn_r`, `turn_left`, `turn_right`
+  - FK semantic collisions on crossing-covered rows: `0`
+  - crossing FK semantic collision rate max: `0.0`
+  - max crossing FK error: `0.0634172260761261m`
+  - max terminal planned-vs-FK foot error across all rows: `0.09332109987735748m`
+- Caveat:
+  - IsaacLab/PhysX emits filter pattern messages for global semantic course objects: small expected `1024`/found `7`, large expected `1024`/found `5`. The contact reward runs and sensors are distinct, but this global-object filtered-contact warning should be tracked if future validation requires zero PhysX filter-pattern messages.
+- Follow-up:
+  - Do not add new MPC losses or hard constraints without user approval.
+  - If optimizing runtime further, profile first-step MPC planning and semantic contact sensor overhead separately.

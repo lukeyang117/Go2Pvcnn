@@ -1113,7 +1113,7 @@ git commit -m "test: add mpc rl performance acceptance probe"
 - Modify: `notes/log/index.md`
 - Log: `notes/log/YYYY-MM-DD-HHMM-t302l-final-verification.md`
 
-- [ ] **Step 1: Run local focused tests**
+- [x] **Step 1: Run local focused tests**
 
 ```bash
 pytest Go2Pvcnn/tests/test_mpc_rl_participation.py Go2Pvcnn/tests/test_semantic_contact_rewards.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q
@@ -1121,7 +1121,7 @@ pytest Go2Pvcnn/tests/test_mpc_rl_participation.py Go2Pvcnn/tests/test_semantic_
 
 Expected: PASS.
 
-- [ ] **Step 2: Run backend regression subset**
+- [x] **Step 2: Run backend regression subset**
 
 ```bash
 pytest Go2Pvcnn/tests/test_batch_mpc_backend.py Go2Pvcnn/tests/test_batch_mpc_parametric.py -q
@@ -1129,7 +1129,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py Go2Pvcnn/tests/test_batch_mpc_pa
 
 Expected: PASS.
 
-- [ ] **Step 3: Run low-small regression in env_isaacsim**
+- [x] **Step 3: Run low-small regression in env_isaacsim**
 
 Run the existing low-small full matrix / FK semantic collision probe used by the 2026-05-28 design. Use the same command shape recorded in [../log/2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md](../log/2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md), with:
 
@@ -1144,7 +1144,7 @@ crossing-covered rows: no FK semantic collision regression
 max crossing FK error <= previous accepted 0.08m gate
 ```
 
-- [ ] **Step 4: Write final verification log**
+- [x] **Step 4: Write final verification log**
 
 Create `notes/log/YYYY-MM-DD-HHMM-t302l-final-verification.md`:
 
@@ -1169,7 +1169,7 @@ Create `notes/log/YYYY-MM-DD-HHMM-t302l-final-verification.md`:
   - none if all PASS
 ```
 
-- [ ] **Step 5: Update todo dashboard and log index**
+- [x] **Step 5: Update todo dashboard and log index**
 
 Update `notes/todo.md`:
 
@@ -1180,7 +1180,7 @@ Update `notes/todo.md`:
 
 Add recent log row to `notes/log/index.md`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add notes/todo.md notes/log/index.md notes/todo/T302l-mpc-rl-participation-and-reward-plan.md notes/log/YYYY-MM-DD-HHMM-t302l-final-verification.md

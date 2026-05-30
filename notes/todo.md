@@ -4,7 +4,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302l MPC RL participation and reward integration plan**.
+- Current focus: **T302l MPC RL participation and reward integration**.
 - Active branch page: [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md).
 - Active implementation plan: [T302l MPC RL participation and reward plan](todo/T302l-mpc-rl-participation-and-reward-plan.md).
 - Active code surface:
@@ -53,14 +53,14 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
-| T302l | active | Current RL integration front for MPC participation selection, world-frame foot tracking, and real IsaacLab semantic contact rewards. | Execute [T302l plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) task-by-task. |
+| T302l | verify | MPC participation selection, world-frame foot tracking, real IsaacLab semantic contact rewards, 1024/64 performance, and low-small regression are implemented and verified. | Track PhysX global-filter warning if future validation requires zero filter-pattern messages. |
 | T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
 
 ## Root Map
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
-| T302l | active | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Plan created for selector, world-frame foot tracking, true contact semantic reward, and 1024/64 performance acceptance | design commits `340c910`, `36c58c6`, `fd9c463`, `6858913` |
+| T302l | verify | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Implemented selector, world-frame foot tracking, true contact semantic reward, 1024/64 performance probe, train smoke, and low-small regression | final log [2026-05-30-2123](log/2026-05-30-2123-t302l-final-verification.md) |
 | T302k | active | parametric MPC trajectory contract | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | Low-small loss redesign and plane-only FK semantic collision testing | design commit `97c5b60` |
 | T302h | closed | semantic obstacle jitter/crossing evidence | [T302h](todo/T302h-semantic-obstacle-jitter-reproduction.md) | Closed as implementation route; retained as reproduction/evidence for T302k | rolling25 low-small production evidence |
 | T302i | closed | viewer realized-foot mismatch evidence | [T302i](todo/T302i-viewer-realized-foot-mismatch.md) | Closed as loss-sweep route; IK/FK mismatch evidence retained for T302k reachability | clamp trace and reachable probes |
@@ -78,7 +78,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
-| T302l.1 | T302l | active | P0 | Implement approved MPC RL participation/reward plan without changing low-small optimizer behavior. | [T302l plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
+| T302l.1 | T302l | verify | P0 | Approved MPC RL participation/reward plan is implemented without changing low-small optimizer behavior. | [T302l final verification](log/2026-05-30-2123-t302l-final-verification.md) |
 | T302k.12 | T302k | active | P0 | Replan touchdown/current-foot and touchdown IK/FK mismatch remain the main trajectory/reachability issue. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 | T302k.18 | T302k | verify | P0 | Low-small loss redesign is implemented and hard acceptance passes on covered full-matrix rows; remaining work is parameter tuning only unless user approves new loss. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
 | T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented, committed, and covered by local regression tests. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
@@ -103,6 +103,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 21:23 | T302l MPC RL final verification | pass; focused `7 passed`, backend `140 passed`, contact smoke PASS, 1024/64 probe `5.256s`, train entry PASS, low-small covered rows `0` FK semantic collisions and max crossing FK error `0.0634m`; PhysX global-filter warning recorded | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2123-t302l-final-verification.md](log/2026-05-30-2123-t302l-final-verification.md) |
+| 2026-05-30 21:14 | T302l 1024/64 performance | pass; probe `5.256s <= 10s`, train entry exits `0` with `--planner-backend mpc` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2114-t302l-rl-1024-64-performance.md](log/2026-05-30-2114-t302l-rl-1024-64-performance.md) |
+| 2026-05-30 21:03 | T302l semantic contact smoke | pass in `env_isaacsim`; 26 per-body filtered contact sensors expose force matrices `[4,1,filter_count,3]` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2103-t302l-semantic-contact-smoke.md](log/2026-05-30-2103-t302l-semantic-contact-smoke.md) |
 | 2026-05-28 22:59 | T302k low-small full matrix and FK inner-loop losses | pass for hard acceptance on crossing-covered rows; max FK semantic collision `0`, max crossing FK error `0.0634m`; four rows remain soft tuning risk over `0.05m` | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md](log/2026-05-28-2259-t302k-low-small-full-matrix-and-fk-inner-loop.md) |
 | 2026-05-28 21:06 | T302k plane low-small FK semantic collision probe | pass for metric/logging smoke; plane rows and required FK semantic keys present; crossing legs not covered in smoke | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md](log/2026-05-28-2106-t302k-plane-low-small-fk-collision-probe.md) |
 | 2026-05-28 21:25 | T302k plane root-z target | pass locally; plane-only root-z target sampled key added | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | [2026-05-28-2125-t302k-plane-root-z-target.md](log/2026-05-28-2125-t302k-plane-root-z-target.md) |
