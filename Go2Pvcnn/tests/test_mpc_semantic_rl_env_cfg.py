@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 import ast
+import sys
+import types
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+GO2PVCNN_ROOT = REPO_ROOT / "Go2Pvcnn"
 CFG_PATH = REPO_ROOT / "Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(GO2PVCNN_ROOT) not in sys.path:
+    sys.path.insert(0, str(GO2PVCNN_ROOT))
+
+
+def test_semantic_global_contact_sensor_importable(monkeypatch) -> None:
+    class ContactSensor:
+        pass
+
+    isaaclab_module = types.ModuleType("isaaclab")
+    sensors_module = types.ModuleType("isaaclab.sensors")
+    sensors_module.ContactSensor = ContactSensor
+    isaaclab_module.sensors = sensors_module
+    monkeypatch.setitem(sys.modules, "isaaclab", isaaclab_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors_module)
+
+    from go2_pvcnn.sensor.semantic_contacter import SemanticGlobalContactSensor
+
+    assert issubclass(SemanticGlobalContactSensor, ContactSensor)
 
 
 def test_mpc_semantic_cfg_has_one_body_filtered_contact_sensors() -> None:
