@@ -34,6 +34,71 @@ def _scene_sensor(env, name: str):
     return env.scene[name]
 
 
+def global_semantic_contact_penalty_from_matrices(
+    small_force_matrix_w: Tensor,
+    large_force_matrix_w: Tensor,
+    *,
+    body_weights: tuple[float, ...],
+    force_threshold: float,
+    force_scale: float,
+    force_clip: float,
+    small_weight: float,
+    large_weight: float,
+) -> Tensor:
+    """Aggregate two global semantic contact matrices into a per-env penalty."""
+
+    small = torch.as_tensor(small_force_matrix_w, dtype=torch.float32)
+    large = torch.as_tensor(large_force_matrix_w, dtype=torch.float32, device=small.device)
+    if small.ndim != 4 or large.ndim != 4 or int(small.shape[-1]) != 3 or int(large.shape[-1]) != 3:
+        raise ValueError("force matrices must have shape [N,B,O,3]")
+    if int(small.shape[0]) != int(large.shape[0]) or int(small.shape[1]) != int(large.shape[1]):
+        raise ValueError("small and large matrices must share [N,B]")
+
+    weights = torch.as_tensor(body_weights, dtype=torch.float32, device=small.device)
+    if int(weights.numel()) != int(small.shape[1]):
+        raise ValueError("body_weights length must match body dimension")
+
+    small_excess = torch.relu(torch.linalg.vector_norm(small, dim=-1) - float(force_threshold)).sum(dim=-1)
+    large_excess = torch.relu(torch.linalg.vector_norm(large, dim=-1) - float(force_threshold)).sum(dim=-1)
+    total = (weights[None, :] * (float(small_weight) * small_excess + float(large_weight) * large_excess)).sum(dim=-1)
+    return (total / max(float(force_scale), 1.0e-6)).clamp(0.0, float(force_clip))
+
+
+def semantic_global_contact_collision_reward(
+    env,
+    small_sensor_cfg,
+    large_sensor_cfg,
+    body_names: tuple[str, ...],
+    body_weights: tuple[float, ...],
+    force_threshold: float = 1.0,
+    force_scale: float = 50.0,
+    force_clip: float = 1.0,
+    small_weight: float = 1.0,
+    large_weight: float = 2.0,
+) -> Tensor:
+    """Return negative semantic collision penalty from two global contact sensors."""
+
+    device = torch.device(getattr(env, "device", "cpu"))
+    small_sensor = _scene_sensor(env, small_sensor_cfg.name)
+    large_sensor = _scene_sensor(env, large_sensor_cfg.name)
+    if tuple(getattr(small_sensor, "body_names", ())) != tuple(body_names):
+        raise ValueError("small semantic contact sensor body_names do not match reward body_names")
+    if tuple(getattr(large_sensor, "body_names", ())) != tuple(body_names):
+        raise ValueError("large semantic contact sensor body_names do not match reward body_names")
+
+    penalty = global_semantic_contact_penalty_from_matrices(
+        torch.as_tensor(small_sensor.data.force_matrix_w, dtype=torch.float32, device=device),
+        torch.as_tensor(large_sensor.data.force_matrix_w, dtype=torch.float32, device=device),
+        body_weights=body_weights,
+        force_threshold=force_threshold,
+        force_scale=force_scale,
+        force_clip=force_clip,
+        small_weight=small_weight,
+        large_weight=large_weight,
+    )
+    return -penalty.to(device=device)
+
+
 def semantic_filtered_contact_collision_reward(
     env,
     small_sensor_names: tuple[str, ...],
@@ -76,5 +141,7 @@ def semantic_filtered_contact_collision_reward(
 
 __all__ = [
     "filtered_contact_penalty_from_force_matrix",
+    "global_semantic_contact_penalty_from_matrices",
     "semantic_filtered_contact_collision_reward",
+    "semantic_global_contact_collision_reward",
 ]
