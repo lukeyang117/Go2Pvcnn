@@ -673,7 +673,7 @@ git commit -m "feat: select mpc reference envs in manager"
 - Create: `Go2Pvcnn/extension/mdp/semantic_contact_rewards.py`
 - Test: `Go2Pvcnn/tests/test_semantic_contact_rewards.py`
 
-- [ ] **Step 1: Write numeric tests**
+- [x] **Step 1: Write numeric tests**
 
 Create `Go2Pvcnn/tests/test_semantic_contact_rewards.py`:
 
@@ -709,7 +709,7 @@ def test_filtered_contact_penalty_zero_below_threshold():
     torch.testing.assert_close(penalty, torch.zeros(2))
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```bash
 pytest Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
@@ -717,7 +717,7 @@ pytest Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
 
 Expected: FAIL because module does not exist.
 
-- [ ] **Step 3: Implement numeric helper**
+- [x] **Step 3: Implement numeric helper**
 
 Create:
 
@@ -744,7 +744,7 @@ def filtered_contact_penalty_from_force_matrix(
     return scaled.clamp(0.0, float(force_clip))
 ```
 
-- [ ] **Step 4: Implement reward function**
+- [x] **Step 4: Implement reward function**
 
 Add:
 
@@ -796,7 +796,7 @@ def semantic_filtered_contact_collision_reward(
     return -out
 ```
 
-- [ ] **Step 5: Run numeric tests**
+- [x] **Step 5: Run numeric tests**
 
 ```bash
 pytest Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
@@ -804,7 +804,7 @@ pytest Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/mdp/semantic_contact_rewards.py Go2Pvcnn/tests/test_semantic_contact_rewards.py
