@@ -4,16 +4,28 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302k low-small parametric loss redesign plan**.
-- Active branch page: [T302k](todo/T302k-parametric-mpc-trajectory-contract.md).
-- Active implementation plan: [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md).
+- Current focus: **T302l MPC RL participation and reward integration plan**.
+- Active branch page: [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md).
+- Active implementation plan: [T302l MPC RL participation and reward plan](todo/T302l-mpc-rl-participation-and-reward-plan.md).
 - Active code surface:
+  - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
+  - [Go2Pvcnn/extension/batch_mpc_planner/manager.py](../Go2Pvcnn/extension/batch_mpc_planner/manager.py)
+  - [Go2Pvcnn/extension/reference/cache.py](../Go2Pvcnn/extension/reference/cache.py)
+  - [Go2Pvcnn/extension/mdp/rewards_reference.py](../Go2Pvcnn/extension/mdp/rewards_reference.py)
+  - [Go2Pvcnn/extension/mdp/semantic_contact_rewards.py](../Go2Pvcnn/extension/mdp/semantic_contact_rewards.py)
+  - [Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/planner.py](../Go2Pvcnn/extension/batch_mpc_planner/planner.py)
   - [Go2Pvcnn/tests/test_batch_mpc_parametric.py](../Go2Pvcnn/tests/test_batch_mpc_parametric.py)
   - [Go2Pvcnn/tests/test_batch_mpc_backend.py](../Go2Pvcnn/tests/test_batch_mpc_backend.py)
 - Current contract:
+  - T302l design approved in [../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html).
+  - T302l implementation plan lives in [todo/T302l-mpc-rl-participation-and-reward-plan.md](todo/T302l-mpc-rl-participation-and-reward-plan.md).
+  - MPC RL runtime must align `reference_trajectory_horizon = reference_replan_interval_steps = 25`.
+  - Only selected envs participate in MPC reference reward; selection filters by terrain/difficulty and excludes only AND-matching terrain+difficulty pairs.
+  - `reference_foot_pos_reward()` must compare IsaacLab and MPC feet in world frame.
+  - RL semantic collision reward must use IsaacLab real filtered contact sensors, not semantic height-map collision approximation.
   - Design approved in [../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html).
   - Implementation plan lives in [todo/T302k-low-small-loss-redesign-plan.md](todo/T302k-low-small-loss-redesign-plan.md).
   - Task 1 restored the nominal extraction contract locally: `semantic_policy.py` builds `ParametricTrajectoryNominal`, `planner.py` builds nominal before optimization, and decode consumes `nominal + variables`.
@@ -41,12 +53,14 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
+| T302l | active | Current RL integration front for MPC participation selection, world-frame foot tracking, and real IsaacLab semantic contact rewards. | Execute [T302l plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) task-by-task. |
 | T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
 
 ## Root Map
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
+| T302l | active | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Plan created for selector, world-frame foot tracking, true contact semantic reward, and 1024/64 performance acceptance | design commits `340c910`, `36c58c6`, `fd9c463`, `6858913` |
 | T302k | active | parametric MPC trajectory contract | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | Low-small loss redesign and plane-only FK semantic collision testing | design commit `97c5b60` |
 | T302h | closed | semantic obstacle jitter/crossing evidence | [T302h](todo/T302h-semantic-obstacle-jitter-reproduction.md) | Closed as implementation route; retained as reproduction/evidence for T302k | rolling25 low-small production evidence |
 | T302i | closed | viewer realized-foot mismatch evidence | [T302i](todo/T302i-viewer-realized-foot-mismatch.md) | Closed as loss-sweep route; IK/FK mismatch evidence retained for T302k reachability | clamp trace and reachable probes |
@@ -64,6 +78,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
+| T302l.1 | T302l | active | P0 | Implement approved MPC RL participation/reward plan without changing low-small optimizer behavior. | [T302l plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
 | T302k.12 | T302k | active | P0 | Replan touchdown/current-foot and touchdown IK/FK mismatch remain the main trajectory/reachability issue. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 | T302k.18 | T302k | verify | P0 | Low-small loss redesign is implemented and hard acceptance passes on covered full-matrix rows; remaining work is parameter tuning only unless user approves new loss. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
 | T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented, committed, and covered by local regression tests. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
@@ -71,6 +86,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 ## Branch Pages
 
 - [todo/README.md](todo/README.md)
+- [T302l-mpc-rl-participation-and-reward-plan.md](todo/T302l-mpc-rl-participation-and-reward-plan.md)
 - [T302k-parametric-mpc-trajectory-contract.md](todo/T302k-parametric-mpc-trajectory-contract.md)
 - [T302k-low-small-loss-redesign-plan.md](todo/T302k-low-small-loss-redesign-plan.md)
 - [T302h-semantic-obstacle-jitter-reproduction.md](todo/T302h-semantic-obstacle-jitter-reproduction.md)
