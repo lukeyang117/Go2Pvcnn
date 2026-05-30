@@ -13,6 +13,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - [Go2Pvcnn/extension/reference/cache.py](../Go2Pvcnn/extension/reference/cache.py)
   - [Go2Pvcnn/extension/mdp/rewards_reference.py](../Go2Pvcnn/extension/mdp/rewards_reference.py)
   - [Go2Pvcnn/extension/mdp/semantic_contact_rewards.py](../Go2Pvcnn/extension/mdp/semantic_contact_rewards.py)
+  - [Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/](../Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/)
   - [Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -25,7 +26,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - MPC RL runtime must align `reference_trajectory_horizon = reference_replan_interval_steps = 25`.
   - Only selected envs participate in MPC reference reward; selection filters by terrain/difficulty and excludes only AND-matching terrain+difficulty pairs.
   - `reference_foot_pos_reward()` must compare IsaacLab and MPC feet in world frame.
-  - RL semantic collision reward must use IsaacLab real filtered contact sensors, not semantic height-map collision approximation.
+  - RL semantic collision reward must use IsaacLab real contact, not semantic height-map collision approximation.
+  - Current T302l front is reopened for semantic contact sensor replacement: replace the old 26 per-body global filtered ContactSensor route with 2 custom global semantic sensors, `semantic_contact_small` and `semantic_contact_large`, each covering all selected robot bodies and all `row_*/col_*/slot_*` semantic objects.
+  - Final semantic contact acceptance must run the real MPC semantic cfg with `num_envs=1024` and assert `force_matrix_w` shapes `[1024, 13, N_small_slot, 3]` and `[1024, 13, N_large_slot, 3]`.
   - Design approved in [../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html).
   - Implementation plan lives in [todo/T302k-low-small-loss-redesign-plan.md](todo/T302k-low-small-loss-redesign-plan.md).
   - Task 1 restored the nominal extraction contract locally: `semantic_policy.py` builds `ParametricTrajectoryNominal`, `planner.py` builds nominal before optimization, and decode consumes `nominal + variables`.
@@ -53,14 +56,14 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
-| T302l | verify | MPC participation selection, world-frame foot tracking, real IsaacLab semantic contact rewards, 1024/64 performance, and low-small regression are implemented and verified. | Track PhysX global-filter warning if future validation requires zero filter-pattern messages. |
+| T302l | active | MPC participation selection and world-frame foot tracking are implemented; semantic contact reward route must be replaced with 2 global semantic contact sensors to remove PhysX global-filter mismatch. | Follow [T302l plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) Task 10 onward; final acceptance is 1024-env quantity alignment with no filter-pattern errors. |
 | T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
 
 ## Root Map
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
-| T302l | verify | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Implemented selector, world-frame foot tracking, true contact semantic reward, 1024/64 performance probe, train smoke, and low-small regression | final log [2026-05-30-2123](log/2026-05-30-2123-t302l-final-verification.md) |
+| T302l | active | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Selector/world-foot runtime complete; old per-body semantic contact route superseded; replacing with 2 global semantic contact sensors and 1024 quantity-alignment acceptance | design [2026-05-30](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html) |
 | T302k | active | parametric MPC trajectory contract | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | Low-small loss redesign and plane-only FK semantic collision testing | design commit `97c5b60` |
 | T302h | closed | semantic obstacle jitter/crossing evidence | [T302h](todo/T302h-semantic-obstacle-jitter-reproduction.md) | Closed as implementation route; retained as reproduction/evidence for T302k | rolling25 low-small production evidence |
 | T302i | closed | viewer realized-foot mismatch evidence | [T302i](todo/T302i-viewer-realized-foot-mismatch.md) | Closed as loss-sweep route; IK/FK mismatch evidence retained for T302k reachability | clamp trace and reachable probes |
@@ -78,7 +81,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
-| T302l.1 | T302l | verify | P0 | Approved MPC RL participation/reward plan is implemented without changing low-small optimizer behavior. | [T302l final verification](log/2026-05-30-2123-t302l-final-verification.md) |
+| T302l.1 | T302l | active | P0 | Replace superseded per-body global filtered ContactSensor route with 2 global semantic contact sensors and verify 1024-env quantity alignment. | [T302l implementation plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
 | T302k.12 | T302k | active | P0 | Replan touchdown/current-foot and touchdown IK/FK mismatch remain the main trajectory/reachability issue. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 | T302k.18 | T302k | verify | P0 | Low-small loss redesign is implemented and hard acceptance passes on covered full-matrix rows; remaining work is parameter tuning only unless user approves new loss. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
 | T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented, committed, and covered by local regression tests. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
