@@ -946,7 +946,7 @@ git commit -m "feat: add semantic contact sensors to mpc rl cfg"
 - Create: `Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py`
 - Log: `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-contact-smoke.md`
 
-- [ ] **Step 1: Write real IsaacLab smoke test**
+- [x] **Step 1: Write real IsaacLab smoke test**
 
 Create a test that starts the MPC semantic env with a small number of envs and validates sensor shapes:
 
@@ -975,7 +975,7 @@ def test_mpc_semantic_contact_sensors_real_isaaclab():
         env.close()
 ```
 
-- [ ] **Step 2: Run smoke in requested env**
+- [x] **Step 2: Run smoke in requested env**
 
 Run:
 
@@ -985,7 +985,7 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m
 
 Expected: PASS. If it fails because `filter_count == 0`, inspect whether `"/World/semantic_course/small/.*"` needs an explicit prim list from `semantic_course.py`.
 
-- [ ] **Step 3: Write log**
+- [x] **Step 3: Write log**
 
 Create `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-contact-smoke.md` with:
 
@@ -1003,7 +1003,7 @@ Create `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-contact-smoke.md` with:
 - Follow-up: none if PASS.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py notes/log/YYYY-MM-DD-HHMM-t302l-semantic-contact-smoke.md
