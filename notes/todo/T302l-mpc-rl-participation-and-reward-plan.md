@@ -1018,7 +1018,7 @@ git commit -m "test: validate semantic contact sensors in isaaclab"
 - Create: `Go2Pvcnn/tests/mpc_rl_epoch_perf_probe.py`
 - Log: `notes/log/YYYY-MM-DD-HHMM-t302l-rl-1024-64-performance.md`
 
-- [ ] **Step 1: Add probe script**
+- [x] **Step 1: Add probe script**
 
 Create a script that launches the real training env, attaches the manager, runs one short runner epoch/iteration or a fixed rollout matching the training loop, and prints JSON:
 
@@ -1056,7 +1056,7 @@ def main():
 
 If RSL-RL runner one-iteration timing is available without long startup overhead, prefer the real runner. If not, this probe is the minimum runtime proxy and the final task must still run a real `train.py --max_iterations 1` command.
 
-- [ ] **Step 2: Run performance probe**
+- [x] **Step 2: Run performance probe**
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/tests/mpc_rl_epoch_perf_probe.py
@@ -1070,7 +1070,7 @@ Expected JSON includes:
 
 Acceptance: `epoch_seconds <= 10.0`.
 
-- [ ] **Step 3: Run real train entry one iteration**
+- [x] **Step 3: Run real train entry one iteration**
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py --experiment teacher_elevation_trajectory_mpc_semantic --num_envs 1024 --max_iterations 1 --headless --device cuda:0
@@ -1078,7 +1078,7 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 
 Expected: exits 0 and logs one iteration timing. If CLI does not accept `--device cuda:0`, use AppLauncher's supported device flag from `--help` and record the exact command.
 
-- [ ] **Step 4: Write performance log**
+- [x] **Step 4: Write performance log**
 
 Create `notes/log/YYYY-MM-DD-HHMM-t302l-rl-1024-64-performance.md`:
 
@@ -1096,7 +1096,7 @@ Create `notes/log/YYYY-MM-DD-HHMM-t302l-rl-1024-64-performance.md`:
 - Follow-up: if FAIL, do not change loss semantics; profile selected-env planning, contact sensor count, and reward time first.
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Go2Pvcnn/tests/mpc_rl_epoch_perf_probe.py notes/log/YYYY-MM-DD-HHMM-t302l-rl-1024-64-performance.md
