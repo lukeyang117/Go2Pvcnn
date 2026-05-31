@@ -42,6 +42,11 @@
 - [x] card1 上 1024 env / 64 MPC env / 25 step 性能 probe 已通过。
   - Worktree fix: `SemanticGlobalContactSensor` body path resolution changed from whole-stage regex traversal to exact `stage.GetPrimAtPath(...)`.
   - Log: [../log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md](../log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md)
+- [x] 真实 robot drop 语义碰撞诊断已完成。
+  - Script: [../../Go2Pvcnn/tests/semantic_contact_robot_drop_probe.py](../../Go2Pvcnn/tests/semantic_contact_robot_drop_probe.py)
+  - Test: [../../Go2Pvcnn/tests/test_semantic_contact_robot_drop_probe.py](../../Go2Pvcnn/tests/test_semantic_contact_robot_drop_probe.py)
+  - Log: [../log/2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md](../log/2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md)
+  - Result: small 和 large 真实接触都可检测，无 NaN/Inf，无 empty-env 串扰；small 接触帧明显更稀疏。
 
 ### Superseded And To Replace
 

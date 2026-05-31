@@ -29,6 +29,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - RL semantic collision reward must use IsaacLab real contact, not semantic height-map collision approximation.
   - Current T302l semantic contact route uses 2 custom global semantic sensors, `semantic_contact_small` and `semantic_contact_large`, each covering all selected robot bodies and all `row_*/col_*/slot_*` semantic objects.
   - Final semantic contact acceptance on card1 passed with `num_envs=1024`, `force_matrix_w` shapes `[1024, 13, 640, 3]` and `[1024, 13, 100, 3]`, and `epoch_seconds=5.6489s` for 1024 env / 64 MPC env / 25 steps.
+  - Robot-drop semantic contact probe on card1 passed: small and large obstacle contacts are detectable with no NaN/Inf and no empty-env cross-talk; small-obstacle contact is much sparser than large-obstacle contact in the controlled drop setup.
   - Design approved in [../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html](../docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html).
   - Implementation plan lives in [todo/T302k-low-small-loss-redesign-plan.md](todo/T302k-low-small-loss-redesign-plan.md).
   - Task 1 restored the nominal extraction contract locally: `semantic_policy.py` builds `ParametricTrajectoryNominal`, `planner.py` builds nominal before optimization, and decode consumes `nominal + variables`.
@@ -106,6 +107,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-31 10:49 | T302l semantic contact robot drop probe | pass; real robot drop detects small and large semantic contacts; empty envs stay zero; no NaN/Inf; small active frames `5` vs large active frames `150` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md](log/2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md) |
 | 2026-05-30 23:13 | T302l semantic global contact card1 performance | pass after exact-path body resolution fix; card1 quantity alignment PASS, shapes `[1024,13,640,3]` and `[1024,13,100,3]`, 1024/64 probe `5.6489s` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md](log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md) |
 | 2026-05-30 21:23 | T302l MPC RL final verification | pass; focused `7 passed`, backend `140 passed`, contact smoke PASS, 1024/64 probe `5.256s`, train entry PASS, low-small covered rows `0` FK semantic collisions and max crossing FK error `0.0634m`; PhysX global-filter warning recorded | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2123-t302l-final-verification.md](log/2026-05-30-2123-t302l-final-verification.md) |
 | 2026-05-30 21:14 | T302l 1024/64 performance | pass; probe `5.256s <= 10s`, train entry exits `0` with `--planner-backend mpc` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2114-t302l-rl-1024-64-performance.md](log/2026-05-30-2114-t302l-rl-1024-64-performance.md) |
