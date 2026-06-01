@@ -793,15 +793,10 @@ def test_mpc_runtime_viewer_style_replan_keeps_feet_moving(real_semantic_mpc_run
 
     for _ in range(8):
         result = viewer._plan_viewer_trajectory(
-            backend=runtime.planner_backend,
-            terrain=terrain,
-            state=state,
-            command=command,
-            requested_n_frames=runtime.requested_n_frames,
-            dt=runtime.plan_dt,
-            legacy_cfg=runtime.planner_cfg,
-            together_cfg=runtime.together_planner_cfg,
-            mpc_cfg=runtime.mpc_planner_cfg,
+                terrain=terrain,
+                state=state,
+                command=command,
+                mpc_cfg=runtime.mpc_planner_cfg,
         )
         foot = torch.as_tensor(result.foot_pos_w, dtype=torch.float64)
         foot_step = torch.linalg.vector_norm(foot[:, 1:] - foot[:, :-1], dim=-1)
@@ -858,14 +853,9 @@ def test_mpc_runtime_command_matrix_tracks_motion_and_limits_drift(real_semantic
 
         for _ in range(8):
             result = viewer._plan_viewer_trajectory(
-                backend=runtime.planner_backend,
                 terrain=terrain,
                 state=state,
                 command=command,
-                requested_n_frames=runtime.requested_n_frames,
-                dt=runtime.plan_dt,
-                legacy_cfg=runtime.planner_cfg,
-                together_cfg=runtime.together_planner_cfg,
                 mpc_cfg=runtime.mpc_planner_cfg,
             )
             root = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
@@ -945,14 +935,9 @@ def test_mpc_runtime_long_replan_foot_drift_reproduction(real_semantic_mpc_runti
 
         for _ in range(cycles):
             result = viewer._plan_viewer_trajectory(
-                backend=runtime.planner_backend,
                 terrain=terrain,
                 state=state,
                 command=command,
-                requested_n_frames=runtime.requested_n_frames,
-                dt=runtime.plan_dt,
-                legacy_cfg=runtime.planner_cfg,
-                together_cfg=runtime.together_planner_cfg,
                 mpc_cfg=runtime.mpc_planner_cfg,
             )
             root = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
@@ -1090,14 +1075,9 @@ def test_mpc_runtime_long_replan_variant_sweep(real_semantic_mpc_runtime):
                         plan_state = _clone_mpc_state(state, foot_pos=anchored_feet)
 
                     result = viewer._plan_viewer_trajectory(
-                        backend=runtime.planner_backend,
                         terrain=terrain,
                         state=plan_state,
                         command=command,
-                        requested_n_frames=runtime.requested_n_frames,
-                        dt=runtime.plan_dt,
-                        legacy_cfg=runtime.planner_cfg,
-                        together_cfg=runtime.together_planner_cfg,
                         mpc_cfg=runtime.mpc_planner_cfg,
                     )
                     root = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
@@ -1319,15 +1299,10 @@ def test_mpc_runtime_long_replan_variant_sequence_sweep(real_semantic_mpc_runtim
                             plan_state = _clone_mpc_state(state, foot_pos=anchored_feet)
 
                         result = viewer._plan_viewer_trajectory(
-                            backend=runtime.planner_backend,
-                            terrain=terrain,
-                            state=plan_state,
-                            command=command,
-                            requested_n_frames=runtime.requested_n_frames,
-                            dt=runtime.plan_dt,
-                            legacy_cfg=runtime.planner_cfg,
-                            together_cfg=runtime.together_planner_cfg,
-                            mpc_cfg=runtime.mpc_planner_cfg,
+                        terrain=terrain,
+                        state=plan_state,
+                        command=command,
+                        mpc_cfg=runtime.mpc_planner_cfg,
                         )
                         root = torch.as_tensor(result.root_pos_w, dtype=torch.float64)
                         foot = torch.as_tensor(result.foot_pos_w, dtype=torch.float64)

@@ -415,8 +415,6 @@ class MpcPlannerCfg:
     losses: MpcLossesCfg = field(default_factory=MpcLossesCfg)
     reference_participation: MpcReferenceParticipationCfg = field(default_factory=MpcReferenceParticipationCfg)
     profile_name: str = "train_4096"
-    debug_loss_variant: str | None = None
-    debug_loss_variant_cfg_applied: bool = False
 
 
 def _copy_if_has(cfg, attr: str, cast, default):
@@ -515,8 +513,6 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     if leg_phase is not None:
         runtime.leg_phase_offsets = tuple(float(v) for v in leg_phase)
     out.profile_name = str(getattr(task_cfg, "mpc_profile_name", out.profile_name))
-    debug_variant = getattr(task_cfg, "mpc_debug_loss_variant", out.debug_loss_variant)
-    out.debug_loss_variant = None if debug_variant in (None, "", "baseline") else str(debug_variant)
     out.diagnostics.enabled = bool(getattr(task_cfg, "mpc_diagnostics_enabled", out.diagnostics.enabled))
     _set_if_has(task_cfg, "mpc_diagnostics_strict_failure_mask", bool, out.diagnostics, "strict_failure_mask")
     _set_if_has(task_cfg, "mpc_diagnostics_emit_viewer_fields", bool, out.diagnostics, "emit_viewer_fields")

@@ -114,15 +114,10 @@ def _sample_ground_height(terrain, xy: torch.Tensor) -> torch.Tensor:
 def _plan_with_viewer_memory(runtime, terrain, state, command, memory):
     viewer = runtime._viewer
     result = viewer._plan_viewer_trajectory(
-        backend=runtime.planner_backend,
-        terrain=terrain,
-        state=state,
-        command=command,
-        requested_n_frames=runtime.requested_n_frames,
-        dt=runtime.plan_dt,
-        legacy_cfg=runtime.planner_cfg,
-        together_cfg=runtime.together_planner_cfg,
-        mpc_cfg=runtime.mpc_planner_cfg,
+                terrain=terrain,
+                state=state,
+                command=command,
+                mpc_cfg=runtime.mpc_planner_cfg,
     )
     return result, memory
 

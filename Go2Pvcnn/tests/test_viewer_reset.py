@@ -137,8 +137,6 @@ def test_viewer_main_builds_only_selected_backend_planner_cfgs(monkeypatch) -> N
     monkeypatch.setattr(viewer, "_prepare_runtime_args", lambda args: args)
     monkeypatch.setattr(viewer, "_launch_app", lambda _args: (None, SimpleNamespace(close=lambda: None)))
     monkeypatch.setattr(viewer, "_build_env_cfg", lambda _args: SimpleNamespace())
-    monkeypatch.setattr(viewer, "_build_planner_cfg", lambda _env_cfg: calls.append("legacy") or SimpleNamespace())
-    monkeypatch.setattr(viewer, "_build_together_planner_cfg", lambda _env_cfg: calls.append("together") or SimpleNamespace())
     monkeypatch.setattr(viewer, "_build_mpc_planner_cfg", lambda _env_cfg, args_cli=None: calls.append("mpc") or SimpleNamespace())
 
     class _Stop(Exception):
@@ -158,7 +156,7 @@ def test_viewer_main_builds_only_selected_backend_planner_cfgs(monkeypatch) -> N
     with pytest.raises(_Stop):
         viewer.main()
 
-    assert calls == ["legacy", "mpc"]
+    assert calls == ["mpc"]
 
 
 def test_viewer_ground_robot_from_scanner_shifts_root_z_to_match_ground(monkeypatch) -> None:

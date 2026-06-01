@@ -1,4 +1,4 @@
-"""Backend factory and attach helpers for trajectory managers."""
+"""Attach helpers for the active MPC trajectory manager."""
 
 from __future__ import annotations
 
@@ -7,34 +7,22 @@ import functools
 import torch
 
 
-VALID_PLANNER_BACKENDS = ("together", "legacy", "mpc")
-TRAJECTORY_MANAGER_EXPERIMENTS = (
-    "teacher_elevation_trajectory",
-    "teacher_elevation_trajectory_mpc_semantic",
-)
+VALID_PLANNER_BACKENDS = ("mpc",)
+TRAJECTORY_MANAGER_EXPERIMENTS = ("teacher_elevation_trajectory_mpc_semantic",)
 
 
 def planner_backend_from_cfg(cfg) -> str:
-    backend = str(getattr(cfg, "planner_backend", "together")).lower()
+    backend = str(getattr(cfg, "planner_backend", "mpc")).lower()
     if backend not in VALID_PLANNER_BACKENDS:
-        valid = ", ".join(VALID_PLANNER_BACKENDS)
-        raise ValueError(f"Invalid planner_backend={backend!r}; expected one of: {valid}")
+        raise ValueError("Invalid planner_backend={!r}; expected mpc".format(backend))
     return backend
 
 
 def create_trajectory_manager(cfg, *, device):
-    backend = planner_backend_from_cfg(cfg)
-    if backend == "legacy":
-        from extension.batched_planner.manager import BatchedTrajectoryManager
+    planner_backend_from_cfg(cfg)
+    from extension.batch_mpc_planner.manager import MpcTrajectoryManager
 
-        return BatchedTrajectoryManager(cfg, device=device)
-    if backend == "mpc":
-        from extension.batch_mpc_planner.manager import MpcTrajectoryManager
-
-        return MpcTrajectoryManager(cfg, device=device)
-    from extension.batched_together_planner.manager import TogetherTrajectoryManager
-
-    return TogetherTrajectoryManager(cfg, device=device)
+    return MpcTrajectoryManager(cfg, device=device)
 
 
 def _env_root(env):

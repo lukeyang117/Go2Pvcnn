@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>teacher_elevation_trajectory_mpc_semantic 项目清理设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --paper: #ffffff;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee9;
+      --accent: #2563eb;
+      --accent-soft: #e8f0ff;
+      --warn: #b45309;
+      --warn-soft: #fff7ed;
+      --ok: #047857;
+      --ok-soft: #ecfdf5;
+      --danger: #b91c1c;
+      --danger-soft: #fef2f2;
+      --code: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.62;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 36px 22px 72px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 22px;
+      margin-bottom: 26px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 30px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 32px 0 12px;
+      font-size: 22px;
+      line-height: 1.3;
+      letter-spacing: 0;
+      border-left: 4px solid var(--accent);
+      padding-left: 10px;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 8px 24px; padding: 0; }
+    li { margin: 5px 0; }
+    code {
+      color: var(--code);
+      background: #eef2f7;
+      border: 1px solid #dbe3ee;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      background: #111827;
+      color: #f9fafb;
+      padding: 14px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    pre code {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      padding: 0;
+      font-size: inherit;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      background: var(--paper);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #eef2f7;
+      font-weight: 650;
+    }
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin: 14px 0;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .ok {
+      background: var(--ok-soft);
+      border-color: #bbf7d0;
+    }
+    .warn {
+      background: var(--warn-soft);
+      border-color: #fed7aa;
+    }
+    .danger {
+      background: var(--danger-soft);
+      border-color: #fecaca;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .flow div {
+      background: var(--accent-soft);
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 10px 12px;
+      min-height: 74px;
+    }
+    .tag {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 9px;
+      margin-right: 6px;
+      background: #eef2f7;
+      color: #374151;
+      font-size: 12px;
+      border: 1px solid #d8dee9;
+    }
+    .decision {
+      border-left: 4px solid var(--ok);
+      padding-left: 12px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>teacher_elevation_trajectory_mpc_semantic 项目清理设计</h1>
+    <p class="meta">日期：2026-05-31；范围：当前 working tree；状态：设计草案，等待确认后再写 plan 和改代码。</p>
+    <p>本设计把项目收敛到单一主线：<code>viewer</code>、<code>play</code>、<code>train</code>，以及实验 <code>teacher_elevation_trajectory_mpc_semantic</code> 使用的 <code>mpc</code> backend。</p>
+  </header>
+
+  <section class="card ok">
+    <h2>已确认边界</h2>
+    <ul>
+      <li>只修改当前工作区代码，不提交 git，不改历史提交。</li>
+      <li><code>train.py</code> / <code>play.py</code> 的 experiment 只保留 <code>teacher_elevation_trajectory_mpc_semantic</code>。</li>
+      <li><code>planner-backend</code> 只保留 <code>mpc</code>，旧 <code>legacy</code> / <code>together</code> backend 清理。</li>
+      <li>viewer 只保留当前 semantic MPC viewer 路线。</li>
+      <li><code>batch_mpc_planner</code> 内部也要清理旧代码、重复逻辑和 debug/probe 代码。</li>
+      <li>debug/probe 代码不能直接放在 <code>Go2Pvcnn/extension/batch_mpc_planner</code>，需要迁移到 <code>Go2Pvcnn/tests</code> 或删除。</li>
+    </ul>
+  </section>
+
+  <h2>目标训练命令</h2>
+  <p>清理后必须继续支持下面命令，并保持当前语义 MPC 训练效果：</p>
+  <pre><code>CUDA_VISIBLE_DEVICES=3 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1024 \
+  --max_iterations 10000 \
+  --experiment teacher_elevation_trajectory_mpc_semantic \
+  --planner-backend mpc</code></pre>
+
+  <h2>必须保留的效果</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>效果</th>
+        <th>保留要求</th>
+        <th>依据</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>low-small MPC 跨越效果</td>
+        <td>不恢复硬投影、不恢复 touchdown snapping、不新增未确认 loss；保留 nominal extraction、GPU circle keepout、swing clearance、FK body/leg collision、FK consistency、plane root-z target。</td>
+        <td><code>docs/superpowers/specs/2026-05-28-parametric-low-small-loss-redesign.html</code></td>
+      </tr>
+      <tr>
+        <td>RL participation / reward runtime</td>
+        <td>保留 25 step horizon / 25 step replan；保留 selected env 参与；保留 world-frame foot reward；保留 1024 env + 64 MPC env 性能目标。</td>
+        <td><code>docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html</code></td>
+      </tr>
+      <tr>
+        <td>semantic contactor</td>
+        <td>保留 small / large 两个全局真实碰撞 sensor；覆盖全部语义物体；保持数量对齐、无 NaN/Inf、无 empty-env 串扰。</td>
+        <td><code>go2_pvcnn/sensor/semantic_contacter</code> 和当前 robot-drop probe</td>
+      </tr>
+      <tr>
+        <td>semantic raycaster</td>
+        <td>保留当前 <code>semantic_height_scanner</code> 的高程 + 语义 grid 输出，作为观测和 MPC terrain 构建输入。</td>
+        <td><code>go2_pvcnn/sensor/semantic_raycaster</code></td>
+      </tr>
+      <tr>
+        <td>viewer/play/train</td>
+        <td>三条入口都指向同一个 semantic MPC runtime，不再分叉到旧 experiment 或旧 backend。</td>
+        <td>当前用户要求</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>目标运行链路</h2>
+  <div class="flow">
+    <div><strong>入口</strong><br><code>train.py</code><br><code>play.py</code><br><code>go2_foostep_planner.py</code></div>
+    <div><strong>唯一实验</strong><br><code>teacher_elevation_trajectory_mpc_semantic</code></div>
+    <div><strong>场景和观测</strong><br><code>SemanticCourseTerrainImporter</code><br><code>semantic_height_scanner</code></div>
+    <div><strong>奖励和传感器</strong><br><code>reference_foot_pos_reward</code><br><code>semantic_global_contact_collision_reward</code></div>
+    <div><strong>参考轨迹</strong><br><code>MpcTrajectoryManager</code><br><code>ReferenceTrajectoryCache</code></div>
+    <div><strong>优化器</strong><br><code>extension/batch_mpc_planner</code><br><code>plan_segment()</code></div>
+  </div>
+
+  <h2>入口清理设计</h2>
+  <h3><code>train.py</code></h3>
+  <ul>
+    <li><code>--experiment</code> choices 只保留 <code>teacher_elevation_trajectory_mpc_semantic</code>。</li>
+    <li>删除其它 experiment cfg imports 和 <code>EXPERIMENT_ENV_MAP</code> 分支。</li>
+    <li><code>--planner-backend</code> 只允许 <code>mpc</code>，或者保留参数但非 <code>mpc</code> 直接报错。</li>
+    <li>保留当前 RSL-RL wrapper、日志目录、distributed/device 逻辑。</li>
+  </ul>
+
+  <h3><code>play.py</code></h3>
+  <ul>
+    <li>只保留 semantic MPC play cfg 和 task id。</li>
+    <li>删除旧 experiment play map。</li>
+    <li>保留 checkpoint 加载、livestream、step mode、video、camera 逻辑。</li>
+  </ul>
+
+  <h3><code>register_envs.py</code></h3>
+  <ul>
+    <li>只注册 <code>Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0</code>。</li>
+    <li>只注册 <code>Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0</code>。</li>
+    <li>删除旧 env cfg imports 和旧 gym id 注册。</li>
+  </ul>
+
+  <h3><code>trajectory_manager_factory.py</code></h3>
+  <ul>
+    <li>只保留 <code>MpcTrajectoryManager</code>。</li>
+    <li>删除 <code>legacy</code> 和 <code>together</code> 分支。</li>
+    <li><code>planner_backend_from_cfg()</code> 只接受 <code>mpc</code>。</li>
+  </ul>
+
+  <h2>配置继承链压平</h2>
+  <p>当前 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code> 依赖旧 teacher cfg 父类。清理时不能直接删除父类文件，必须先把当前主线真正需要的字段搬进 semantic MPC 当前模块，或搬到一个只服务当前主线的 compact base。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>需要保留的配置</th>
+        <th>处理方式</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>robot asset、terrain importer、contact_forces、sky light</td>
+        <td>复制到当前 semantic MPC scene cfg 或当前主线 base cfg。</td>
+      </tr>
+      <tr>
+        <td>commands、actions、events、terminations、curriculum</td>
+        <td>只保留当前训练需要的项，删除旧 experiment 专用项。</td>
+      </tr>
+      <tr>
+        <td>semantic terrain generator</td>
+        <td>保留当前 small/large semantic course 布局和 semantic id 约定。</td>
+      </tr>
+      <tr>
+        <td>observations</td>
+        <td>只保留 policy/critic 的 <code>elevation_semantic_map</code> 和 state 观测。</td>
+      </tr>
+      <tr>
+        <td>rewards</td>
+        <td>只保留当前 locomotion 基础 reward、world foot reference reward、semantic contact collision reward。</td>
+      </tr>
+      <tr>
+        <td>MPC cfg</td>
+        <td>保留当前 <code>MpcPlannerCfg</code>，horizon/replan 对齐到 25。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <section class="card warn">
+    <h2>压平顺序要求</h2>
+    <ol>
+      <li>先让 semantic MPC cfg 不再 import 旧 teacher cfg。</li>
+      <li>再收窄 <code>train.py</code>、<code>play.py</code>、<code>register_envs.py</code>。</li>
+      <li>最后删除旧 cfg 文件。</li>
+    </ol>
+    <p>不能反过来先删旧 cfg，否则当前 cfg import 链会断，无法用测试定位真实回归。</p>
+  </section>
+
+  <h2><code>batch_mpc_planner</code> 内部清理设计</h2>
+  <h3>生产包保留内容</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>文件</th>
+        <th>保留理由</th>
+        <th>清理要求</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>config.py</code></td>
+        <td>MPC runtime / loss / diagnostics cfg。</td>
+        <td>删除旧 loss cfg、旧 debug variant 字段、旧 dense/legacy/together 兼容字段。</td>
+      </tr>
+      <tr>
+        <td><code>manager.py</code></td>
+        <td>RL selected-env planning、reference cache 写入。</td>
+        <td>保留必要 runtime counter；非必要 debug print 移到 tests。</td>
+      </tr>
+      <tr>
+        <td><code>planner.py</code></td>
+        <td><code>plan_segment()</code> 主流程。</td>
+        <td>删除 <code>debug_loss_variant</code> 消费；删除 probe-only loss；减少重复 terrain/IK/FK 查询。</td>
+      </tr>
+      <tr>
+        <td><code>parametric.py</code></td>
+        <td>变量初始化和 decode。</td>
+        <td>保持 decode 只消费 nominal + variables + optimized command，不做额外策略逻辑。</td>
+      </tr>
+      <tr>
+        <td><code>parametric_losses.py</code></td>
+        <td>当前 optimizer loss。</td>
+        <td>只保留已确认 loss；删除旧 loss 和未启用路线。</td>
+      </tr>
+      <tr>
+        <td><code>semantic_policy.py</code></td>
+        <td>nominal 构建和高大障碍物 command shaping。</td>
+        <td>作为策略前处理层，不把优化 loss 放进这里。</td>
+      </tr>
+      <tr>
+        <td><code>semantic_geometry.py</code></td>
+        <td>low-small GPU circle 构建。</td>
+        <td>保留 GPU 实现；避免 CPU component 拟合。</td>
+      </tr>
+      <tr>
+        <td><code>terrain.py</code></td>
+        <td>height / semantic query、scanner terrain 构建。</td>
+        <td>缓存可复用中间值，避免同一批采样点重复查询。</td>
+      </tr>
+      <tr>
+        <td><code>kinematics.py</code></td>
+        <td>IK/FK、body/knee/shank/foot 点。</td>
+        <td>统一 FK 结果供多个 loss 使用，避免每个 loss 重算。</td>
+      </tr>
+      <tr>
+        <td><code>adapter.py</code>、<code>types.py</code>、<code>participation.py</code></td>
+        <td>viewer/RL/cache 边界结构。</td>
+        <td>只保留 semantic MPC 所需字段。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>迁移或删除内容</h3>
+  <ul>
+    <li><code>debug_variants.py</code>：迁移到 <code>Go2Pvcnn/tests</code> 或删除；生产 planner 不再 import。</li>
+    <li><code>profiles.py</code> / <code>profiling.py</code>：如果只服务调试打印，迁到 tests；如果 train runtime counter 还需要，则保留最小版本。</li>
+    <li><code>losses/</code> 子包：如果当前 parametric path 不再使用，删除；如果某些函数仍被 tests/probe 引用，需要迁到 tests helper 或并入当前 loss 文件。</li>
+    <li>旧 dense/legacy/together 对齐断言、旧 mode 字段检查、旧 T116/T300/T302h 复现实验代码：不放在生产 planner 包。</li>
+  </ul>
+
+  <h3>重复计算清理点</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>重复项</th>
+        <th>目标处理</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>同一批 foot/root/body/knee/shank 采样点重复调用 <code>height_at</code> / <code>semantic_at</code></td>
+        <td>在 optimizer loss 入口统一采样和查询，再把结果传给各 loss。</td>
+      </tr>
+      <tr>
+        <td>low-small circle 在多个 loss 或 probe 中重复构建</td>
+        <td>每次 plan 对 terrain 构建一次，作为 loss context 复用。</td>
+      </tr>
+      <tr>
+        <td>IK/FK 在 FK collision、FK consistency、post metrics 中重复求</td>
+        <td>统一生成 FK realized trajectory context，loss 共享。</td>
+      </tr>
+      <tr>
+        <td>touchdown sample / swing arc sample 重复构造</td>
+        <td>把采样点作为 parametric decode 或 loss context 的明确输出。</td>
+      </tr>
+      <tr>
+        <td>diagnostics 为了 breakdown 重新算一遍 loss</td>
+        <td>训练默认不额外算；viewer 或 test 需要时才开启。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <section class="card danger">
+    <h2>禁止事项</h2>
+    <ul>
+      <li>不能为了清理而改变 low-small loss 设计效果。</li>
+      <li>不能新增未确认 loss。</li>
+      <li>不能恢复 touchdown 硬投影、硬 snapping、硬足间距约束。</li>
+      <li>不能把 debug/probe-only 逻辑留在 <code>extension/batch_mpc_planner</code> 热路径。</li>
+      <li>不能删除 semantic raycaster 或 semantic contactor 的当前验收能力。</li>
+      <li>不能修改 IsaacLab 源码。</li>
+    </ul>
+  </section>
+
+  <h2>测试和验收边界</h2>
+  <h3>保留测试类别</h3>
+  <ul>
+    <li>当前 train 命令 smoke。</li>
+    <li>当前 play/viewer import 或短步 smoke。</li>
+    <li>MPC planner 单测：只保留当前 <code>batch_mpc_planner</code> 主线相关部分。</li>
+    <li>low-small 验收 probe：语义圆、swing clearance、FK body/leg collision、FK consistency、plane root-z。</li>
+    <li>RL participation/reward：25 horizon/replan、selected env、world-frame foot reward。</li>
+    <li>semantic contact：small/large 数量对齐、真实 drop probe、无 NaN/Inf、无 env 串扰。</li>
+    <li>semantic raycaster smoke：<code>semantic_height_scanner</code> 输出高程+语义 grid。</li>
+  </ul>
+
+  <h3>新增清理验收</h3>
+  <ul>
+    <li><code>extension/batch_mpc_planner</code> 不再包含 probe-only/debug-only 文件。</li>
+    <li><code>plan_segment()</code> 不再消费 <code>debug_loss_variant</code>。</li>
+    <li>生产代码不再 import <code>batched_planner</code> 或 <code>batched_together_planner</code>。</li>
+    <li>生产代码不再 import 旧 teacher experiment cfg。</li>
+    <li>1024 env / 64 MPC env / 25 step 性能不慢于当前可接受基线；目标仍小于 10 秒/epoch。</li>
+  </ul>
+
+  <h2>建议执行顺序</h2>
+  <ol>
+    <li>冻结 golden tests 清单，先确认当前 HEAD 上测试能跑。</li>
+    <li>压平 semantic MPC cfg 的继承链，让当前 cfg 自包含。</li>
+    <li>收窄 train/play/register/factory 入口到唯一 experiment 和唯一 backend。</li>
+    <li>迁移或删除 <code>batch_mpc_planner</code> 里的 debug/probe-only 代码。</li>
+    <li>删除旧 backend 目录和旧 experiment cfg。</li>
+    <li>清理 tests：旧测试删除或改成当前主线测试，probe helper 放在 <code>Go2Pvcnn/tests</code>。</li>
+    <li>做重复计算优化，但每个优化都必须用 loss/effect/performance 验证，不和大规模删除混在一起。</li>
+    <li>运行完整验收，更新 todo/log/文档。</li>
+  </ol>
+
+  <section class="card decision">
+    <h2>需要用户确认的设计点</h2>
+    <p>本设计默认采用“先压平继承和收窄入口，再删除旧代码，最后做重复计算优化”的顺序。这样能把行为回归和结构清理分开定位。</p>
+    <p>如果确认本 HTML 设计，下一步写详细 todo/plan；plan 通过后才开始修改当前 working tree 代码。</p>
+  </section>
+</main>
+</body>
+</html>

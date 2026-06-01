@@ -19,8 +19,7 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT):
         sys.path.insert(0, _path_str)
 
 from extension.batch_mpc_planner.config import MpcRuntimeCfg
-from extension.batch_mpc_planner.kinematics import _JOINT_LIMITS
-from extension.batched_planner.ik import batch_forward_kinematics
+from extension.batch_mpc_planner.kinematics import _JOINT_LIMITS, fk_feet_from_joint_angles
 from Go2Pvcnn.tests.fixtures.viewer_runtime_diagnostics import make_real_runtime_fixture
 from Go2Pvcnn.tests.mpc_yaw_gait_failure_probe import (
     CUSTOM_COMMANDS,
@@ -130,17 +129,16 @@ def _summary(rows: list[dict[str, float]]) -> dict[str, float]:
 def _plan_with_memory_exposed(runtime, terrain, state, command, memory):
     viewer = runtime._viewer
     result = viewer._plan_viewer_trajectory(
-        backend=runtime.planner_backend,
-        terrain=terrain,
-        state=state,
-        command=command,
-        requested_n_frames=runtime.requested_n_frames,
-        dt=runtime.plan_dt,
-        legacy_cfg=runtime.planner_cfg,
-        together_cfg=runtime.together_planner_cfg,
-        mpc_cfg=runtime.mpc_planner_cfg,
+                terrain=terrain,
+                state=state,
+                command=command,
+                mpc_cfg=runtime.mpc_planner_cfg,
     )
     return result, memory, None
+
+
+def batch_forward_kinematics(root_pos, root_rpy, joint_angles):
+    return fk_feet_from_joint_angles(root_pos, root_rpy, joint_angles)
 
 
 def _runtime_metrics(runtime, terrain, state_before, command, memory, result, plan_memory) -> dict[str, float]:

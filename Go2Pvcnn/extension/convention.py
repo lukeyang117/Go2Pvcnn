@@ -77,13 +77,16 @@ def isaac_state_to_planner_state(
     foot_pos_w: Tensor,
     foot_vel_w: Tensor | None = None,
 ):
-    """Convert Isaac-facing state tensors into planner-facing batched state."""
-    from .batched_planner.types import BatchedRobotState
+    """Convert Isaac-facing state tensors into the active MPC state contract."""
+    from .batch_mpc_planner.types import MpcRobotState
 
+    root_quat = quat_xyzw_to_wxyz(root_quat_xyzw)
+    roll, pitch = extract_roll_pitch_batch(root_quat)
+    yaw = extract_yaw_batch(root_quat)
     foot_pos = torch.as_tensor(foot_pos_w)
-    return BatchedRobotState(
+    return MpcRobotState(
         root_pos=torch.as_tensor(root_pos_w),
-        root_quat=quat_xyzw_to_wxyz(root_quat_xyzw),
+        root_rpy=torch.stack((roll, pitch, yaw), dim=-1),
         joint_angles=torch.as_tensor(joint_pos),
         foot_pos=foot_pos,
         foot_vel=foot_pos.new_zeros(foot_pos.shape) if foot_vel_w is None else torch.as_tensor(foot_vel_w),

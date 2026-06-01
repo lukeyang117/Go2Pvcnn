@@ -80,13 +80,11 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
-from extension.batched_together_planner.parameterization import (
-    T116_MODE_APPROACH_SMALL,
-    T116_MODE_BYPASS_OBSTACLE,
-    T116_MODE_CROSS_SMALL,
-    T116_MODE_CRUISE,
-)
-from extension.batched_together_planner.types import HARD_REASON_NAMES
+T116_MODE_CRUISE = 0
+T116_MODE_APPROACH_SMALL = 1
+T116_MODE_CROSS_SMALL = 2
+T116_MODE_BYPASS_OBSTACLE = 3
+HARD_REASON_NAMES: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -189,66 +187,6 @@ class GroundedCrossingRuntimeReport:
     sampled_plans: tuple[RuntimePlanDiagnostics, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class PlannerStageSnapshot:
-    name: str
-    tensors: dict[str, torch.Tensor]
-    scalars: dict[str, float | bool | int]
-
-    @property
-    def primary_tensor(self) -> torch.Tensor:
-        for value in self.tensors.values():
-            return value
-        raise RuntimeError(f"stage '{self.name}' does not contain tensor diagnostics")
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimePlanStageDiagnostics:
-    plan: RuntimePlanDiagnostics
-    stages: dict[str, PlannerStageSnapshot]
-    stage_order: tuple[str, ...]
-    stage_summaries: dict[str, dict[str, float]]
-
-
-@dataclass(frozen=True, slots=True)
-class BatchedRuntimeCacheDiagnostics:
-    cache: object
-    root_pos_w: torch.Tensor
-    path_deltas: torch.Tensor
-
-
-@dataclass(frozen=True, slots=True)
-class BatchedRuntimePlanDiagnostics:
-    result: object
-    root_pos_w: torch.Tensor
-    path_deltas: torch.Tensor
-
-
-@dataclass(frozen=True, slots=True)
-class BatchedRuntimePlanStageDiagnostics:
-    plan: BatchedRuntimePlanDiagnostics
-    stages: dict[str, PlannerStageSnapshot]
-    stage_order: tuple[str, ...]
-    stage_summaries: dict[str, dict[str, float]]
-
-
-@dataclass(frozen=True, slots=True)
-class PlaybackDivergenceReport:
-    frame_idx: int
-    root_pos_max_abs: float
-    root_pos_mean_abs: float
-    joint_pos_max_abs: float
-    joint_pos_mean_abs: float
-    plan: RuntimePlanStageDiagnostics
-
-
-@dataclass(frozen=True, slots=True)
-class ViewerStyleReplanReport:
-    command_name: str
-    cycle_summaries: tuple[dict[str, float | bool], ...]
-    cycle_stage_summaries: tuple[dict[str, dict[str, float]], ...]
-
-
 _APP_STATE: _RuntimeAppState | None = None
 
 
@@ -309,140 +247,6 @@ def _constant_over_time_ratio(values: torch.Tensor, *, tol: float = 1e-6) -> flo
     return float((delta <= float(tol)).to(torch.float64).mean().item())
 
 
-def _summarize_stage_snapshot(
-    snapshot: PlannerStageSnapshot,
-    *,
-    input_foot_pos: torch.Tensor | None,
-) -> dict[str, float]:
-    summary: dict[str, float] = {"batch_size": _batch_size_from_tensors(snapshot.tensors)}
-    tensors = snapshot.tensors
-
-    commands = tensors.get("commands")
-    if commands is not None:
-        summary["command_vx_mean"] = float(commands[:, 0].mean().item())
-        summary["command_vy_mean"] = float(commands[:, 1].mean().item())
-        summary["command_yaw_mean"] = float(commands[:, 2].mean().item())
-
-    contact = tensors.get("contact_state", tensors.get("contact_seq"))
-    if contact is not None:
-        summary["contact_mean"] = float(contact.to(torch.float64).mean().item())
-
-    standstill_mask = tensors.get("standstill_mask")
-    if standstill_mask is not None:
-        summary["standstill_ratio"] = float(standstill_mask.to(torch.float64).mean().item())
-
-    path = tensors.get("root_pos_w", tensors.get("base_pos_approx"))
-    if path is not None and path.ndim >= 3:
-        delta = path[:, -1] - path[:, 0]
-        summary["path_dx_mean"] = float(delta[:, 0].mean().item())
-        summary["path_dy_mean"] = float(delta[:, 1].mean().item())
-        summary["path_dz_mean"] = float(delta[:, 2].mean().item())
-        path_standstill_ratio = _constant_over_time_ratio(path)
-    else:
-        path_standstill_ratio = None
-
-    yaw = tensors.get("yaw_approx")
-    if yaw is not None and yaw.ndim >= 2:
-        yaw_delta = yaw[:, -1] - yaw[:, 0]
-        summary["yaw_delta_mean"] = float(yaw_delta.mean().item())
-        summary["yaw_delta_abs_mean"] = float(yaw_delta.abs().mean().item())
-        if "standstill_ratio" not in summary:
-            yaw_standstill_ratio = _constant_over_time_ratio(yaw)
-            if path_standstill_ratio is None:
-                summary["standstill_ratio"] = yaw_standstill_ratio
-            else:
-                summary["standstill_ratio"] = min(path_standstill_ratio, yaw_standstill_ratio)
-    else:
-        root_quat = tensors.get("root_quat_w")
-        if root_quat is not None and root_quat.ndim >= 3:
-            yaw_values = _quat_wxyz_to_yaw(root_quat)
-            yaw_delta = yaw_values[:, -1] - yaw_values[:, 0]
-            summary["yaw_delta_mean"] = float(yaw_delta.mean().item())
-            summary["yaw_delta_abs_mean"] = float(yaw_delta.abs().mean().item())
-            if "standstill_ratio" not in summary:
-                quat_standstill_ratio = _constant_over_time_ratio(root_quat)
-                if path_standstill_ratio is None:
-                    summary["standstill_ratio"] = quat_standstill_ratio
-                else:
-                    summary["standstill_ratio"] = min(path_standstill_ratio, quat_standstill_ratio)
-        elif path_standstill_ratio is not None and "standstill_ratio" not in summary:
-            summary["standstill_ratio"] = path_standstill_ratio
-
-    touchdowns = tensors.get("planned_touchdown_w", tensors.get("touchdowns"))
-    if touchdowns is not None and input_foot_pos is not None:
-        touchdown_xy_delta = touchdowns[:, :, :2] - input_foot_pos[:, :, :2]
-        touchdown_norms = torch.linalg.vector_norm(touchdown_xy_delta, dim=-1)
-        summary["touchdown_dx_mean"] = float(touchdown_xy_delta[..., 0].mean().item())
-        summary["touchdown_delta_norm_max"] = float(touchdown_norms.max().item())
-        summary["touchdown_delta_norm_span"] = float((touchdown_norms.max() - touchdown_norms.min()).item())
-        summary["left_touchdown_mean_y"] = float(touchdown_xy_delta[:, (0, 2), 1].mean().item())
-        summary["right_touchdown_mean_y"] = float(touchdown_xy_delta[:, (1, 3), 1].mean().item())
-
-    feasible = tensors.get("feasible")
-    if feasible is not None:
-        summary["feasible_ratio"] = float(feasible.to(torch.float64).mean().item())
-
-    return summary
-
-
-def _summarize_stage_snapshots(
-    stages: dict[str, PlannerStageSnapshot],
-    *,
-    input_foot_pos: torch.Tensor | None,
-) -> dict[str, dict[str, float]]:
-    return {
-        name: _summarize_stage_snapshot(snapshot, input_foot_pos=input_foot_pos)
-        for name, snapshot in stages.items()
-    }
-
-
-def format_stage_summary_report(name: str, stage_summaries: dict[str, dict[str, float]], *, stage_order: tuple[str, ...] | None = None) -> str:
-    ordered_names = list(stage_order) if stage_order is not None else list(stage_summaries.keys())
-    seen: set[str] = set()
-    lines = [f"[planner-diag] case={name}"]
-    for stage_name in ordered_names:
-        if stage_name in seen or stage_name not in stage_summaries:
-            continue
-        seen.add(stage_name)
-        summary = stage_summaries[stage_name]
-        parts: list[str] = []
-        for key in (
-            "command_vx_mean",
-            "command_vy_mean",
-            "command_yaw_mean",
-            "path_dx_mean",
-            "path_dy_mean",
-            "yaw_delta_mean",
-            "standstill_ratio",
-            "touchdown_dx_mean",
-            "touchdown_delta_norm_max",
-            "feasible_ratio",
-            "contact_mean",
-        ):
-            if key in summary:
-                parts.append(f"{key}={summary[key]:+.4f}")
-        if not parts:
-            parts.append("no_numeric_summary")
-        lines.append(f"  - {stage_name}: " + " ".join(parts))
-    return "\n".join(lines)
-
-
-def format_playback_divergence_report(report: PlaybackDivergenceReport) -> str:
-    result_summary = report.plan.stage_summaries.get("result", {})
-    parts = [
-        f"[playback-diag] case={report.plan.plan.name}",
-        f"frame_idx={report.frame_idx}",
-        f"root_pos_max_abs={report.root_pos_max_abs:.6f}",
-        f"root_pos_mean_abs={report.root_pos_mean_abs:.6f}",
-        f"joint_pos_max_abs={report.joint_pos_max_abs:.6f}",
-        f"joint_pos_mean_abs={report.joint_pos_mean_abs:.6f}",
-    ]
-    for key in ("path_dx_mean", "path_dy_mean", "yaw_delta_mean", "standstill_ratio"):
-        if key in result_summary:
-            parts.append(f"{key}={result_summary[key]:+.6f}")
-    return " ".join(parts)
-
-
 def _format_hard_reason_mask(mask: torch.Tensor) -> str:
     values = torch.as_tensor(mask, dtype=torch.bool).reshape(-1)
     names = [name for name, enabled in zip(HARD_REASON_NAMES, values.tolist()) if enabled]
@@ -474,26 +278,6 @@ def format_hard_reason_summary(result) -> str:
     if selected_rank_t is not None:
         parts.insert(1, f"selected_hard_rank_cost={float(selected_rank_t.reshape(-1)[0].item()):0.3f}")
     return " ".join(parts)
-
-
-class _StageSnapshotCollector:
-    def __init__(self) -> None:
-        self._stage_order: list[str] = []
-        self._stages: dict[str, PlannerStageSnapshot] = {}
-
-    def capture(self, name: str, payload: dict[str, object]) -> None:
-        tensors: dict[str, torch.Tensor] = {}
-        scalars: dict[str, float | bool | int] = {}
-        for key, value in payload.items():
-            if isinstance(value, torch.Tensor):
-                tensors[key] = torch.as_tensor(value)
-            elif isinstance(value, (bool, int, float)):
-                scalars[key] = value
-        self._stage_order.append(str(name))
-        self._stages[str(name)] = PlannerStageSnapshot(name=str(name), tensors=tensors, scalars=scalars)
-
-    def finish(self) -> tuple[tuple[str, ...], dict[str, PlannerStageSnapshot]]:
-        return tuple(self._stage_order), dict(self._stages)
 
 
 def _close_runtime_app() -> None:
@@ -818,7 +602,7 @@ class RealViewerRuntimeFixture:
         warmup_steps: int = 6,
         requested_n_frames: int = 50,
         planner_max_touchdown_xy_reach: float = 0.22,
-        planner_backend: str = "legacy",
+        planner_backend: str = "mpc",
         heightmap_viz_stride: int = 10,
         semantic_small_height_m: float | None = None,
         semantic_small_diameter_m: float | None = None,
@@ -837,12 +621,10 @@ class RealViewerRuntimeFixture:
             import gymnasium as gym
 
             import go2_pvcnn.tasks.register_envs  # noqa: F401
-            from extension.batched_planner.trajectory import batched_generate_trajectory
             from extension.viz import go2_foostep_planner as viewer_module
 
             self._gym = gym
             self._viewer = viewer_module
-            self._batched_generate_trajectory = batched_generate_trajectory
             if env_cfg_cls is None and env_cfg_entry_point is not None:
                 module_name, class_name = env_cfg_entry_point.rsplit(":", 1)
                 module = __import__(module_name, fromlist=[class_name])
@@ -892,12 +674,9 @@ class RealViewerRuntimeFixture:
             self._configure_compact_semantic_runtime_grid()
             self._configure_compact_cobblestone_runtime_grid()
             self._configure_large_runtime_physx_buffers()
-            self.planner_cfg = self._viewer._build_planner_cfg(self.env_cfg)
-            self.planner_cfg.max_touchdown_xy_reach = float(planner_max_touchdown_xy_reach)
-            self.together_planner_cfg = (
-                self._viewer._build_together_planner_cfg(self.env_cfg) if self.planner_backend == "together" else None
-            )
             self.mpc_planner_cfg = self._viewer._build_mpc_planner_cfg(self.env_cfg)
+            if hasattr(self.mpc_planner_cfg, "max_touchdown_xy_reach"):
+                self.mpc_planner_cfg.max_touchdown_xy_reach = float(planner_max_touchdown_xy_reach)
             self.plan_dt = float(getattr(self.env_cfg, "plan_dt", self.env_cfg.decimation * self.env_cfg.sim.dt))
 
             self.env = self._gym.make(
@@ -1157,14 +936,9 @@ class RealViewerRuntimeFixture:
         terrain = self._single_env_terrain()
         command = self._command_tensor(command_name)[:1]
         result = self._viewer._plan_viewer_trajectory(
-            backend=self.planner_backend,
             terrain=terrain,
             state=state,
             command=command,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            legacy_cfg=self.planner_cfg,
-            together_cfg=self.together_planner_cfg,
             mpc_cfg=self.mpc_planner_cfg,
         )
         return self._build_runtime_plan_diagnostics(name=command_name, command=command, state=state, result=result)
@@ -1194,14 +968,9 @@ class RealViewerRuntimeFixture:
         terrain = self._single_env_terrain()
         command = self._command_tensor(command_name)[:1]
         result = self._viewer._plan_viewer_trajectory(
-            backend=self.planner_backend,
             terrain=terrain,
             state=state,
             command=command,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            legacy_cfg=self.planner_cfg,
-            together_cfg=self.together_planner_cfg,
             mpc_cfg=self.mpc_planner_cfg,
         )
         return self._build_runtime_plan_diagnostics(name=command_name, command=command, state=state, result=result)
@@ -1230,14 +999,9 @@ class RealViewerRuntimeFixture:
         terrain = self._single_env_terrain()
         command = self._command_tensor(command_name)[:1]
         result = self._viewer._plan_viewer_trajectory(
-            backend=self.planner_backend,
             terrain=terrain,
             state=state,
             command=command,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            legacy_cfg=self.planner_cfg,
-            together_cfg=self.together_planner_cfg,
             mpc_cfg=self.mpc_planner_cfg,
         )
         return self._build_runtime_plan_diagnostics(name=command_name, command=command, state=state, result=result)
@@ -1403,18 +1167,10 @@ class RealViewerRuntimeFixture:
         return command.to(device=self.base_env.device, dtype=torch.float64)
 
     def _single_env_state(self):
-        if self.planner_backend == "together":
-            return self._viewer._together_state_from_env(self.base_env, self.foot_ids.tolist())
-        if self.planner_backend == "mpc":
-            return self._viewer._mpc_state_from_env(self.base_env, self.foot_ids.tolist())
-        return self._viewer._planner_state_from_env(self.base_env, self.foot_ids.tolist())
+        return self._viewer._mpc_state_from_env(self.base_env, self.foot_ids.tolist())
 
     def _single_env_terrain_and_hits(self):
-        if self.planner_backend == "together":
-            return self._viewer._compute_together_local_terrain(self.scanner, env_id=0)
-        if self.planner_backend == "mpc":
-            return self._viewer._compute_mpc_local_terrain(self.scanner, env_id=0)
-        return self._viewer._compute_local_terrain(self.scanner, env_id=0)
+        return self._viewer._compute_mpc_local_terrain(self.scanner, env_id=0)
 
     def _single_env_terrain(self):
         terrain, _ = self._single_env_terrain_and_hits()
@@ -1454,56 +1210,18 @@ class RealViewerRuntimeFixture:
             right_touchdown_mean_y=right_touchdown_mean_y,
         )
 
-    def _build_stage_diagnostics(self, collector: _StageSnapshotCollector):
-        stage_order, stages = collector.finish()
-        input_stage = stages.get("input")
-        input_foot_pos = None if input_stage is None else input_stage.tensors.get("foot_pos")
-        stage_summaries = _summarize_stage_snapshots(stages, input_foot_pos=input_foot_pos)
-        return stage_order, stages, stage_summaries
-
     def plan_case(self, name: str) -> RuntimePlanDiagnostics:
         self.reset()
         state = self._single_env_state()
         terrain = self._single_env_terrain()
         command = self._command_tensor(name)[:1]
         result = self._viewer._plan_viewer_trajectory(
-            backend=self.planner_backend,
             terrain=terrain,
             state=state,
             command=command,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            legacy_cfg=self.planner_cfg,
-            together_cfg=self.together_planner_cfg,
             mpc_cfg=self.mpc_planner_cfg,
         )
         return self._build_runtime_plan_diagnostics(name=name, command=command, state=state, result=result)
-
-    def plan_case_with_stage_diagnostics(self, name: str) -> RuntimePlanStageDiagnostics:
-        if self.planner_backend != "legacy":
-            raise RuntimeError("stage diagnostics are only available for the legacy batched planner path")
-        self.reset()
-        state = self._single_env_state()
-        terrain = self._single_env_terrain()
-        command = self._command_tensor(name)[:1]
-        collector = _StageSnapshotCollector()
-        result = self._batched_generate_trajectory(
-            terrain,
-            state,
-            command,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            cfg=self.planner_cfg,
-            stage_diagnostics=collector.capture,
-        )
-        plan = self._build_runtime_plan_diagnostics(name=name, command=command, state=state, result=result)
-        stage_order, stages, stage_summaries = self._build_stage_diagnostics(collector)
-        return RuntimePlanStageDiagnostics(
-            plan=plan,
-            stages=stages,
-            stage_order=stage_order,
-            stage_summaries=stage_summaries,
-        )
 
     def playback_sync_authoritative_readback(self, result, *, frame_idx: int) -> PlaybackReadback:
         self._viewer._apply_direct_playback_to_robot(self.robot, result, frame_idx=int(frame_idx))
@@ -1518,139 +1236,6 @@ class RealViewerRuntimeFixture:
         return PlaybackReadback(
             root_pos_w=torch.as_tensor(self.robot.data.root_pos_w[:batch], dtype=torch.float64).clone(),
             joint_pos=joint_pos,
-        )
-
-    def refresh_manager_cache(self, case_names: list[str], *, episode_length_step: int) -> BatchedRuntimeCacheDiagnostics:
-        if len(case_names) != self.num_envs:
-            raise ValueError(f"expected {self.num_envs} case names, got {len(case_names)}")
-
-        self.reset()
-        manager = self.base_env._trajectory_manager
-        manager._cache = None
-        manager._last_episode_length_buf = None
-        manager._last_replan_episode_length_buf = None
-        manager._last_commands = None
-        commands = torch.stack([self._command_tensor(name)[env_id] for env_id, name in enumerate(case_names)], dim=0)
-        command_buffer = self.base_env.command_manager.get_command("base_velocity")
-        command_buffer[:] = commands.to(device=command_buffer.device, dtype=command_buffer.dtype)
-        self.base_env.episode_length_buf[:] = int(episode_length_step)
-        cache = manager.refresh_from_env(self.base_env)
-        root_pos_w = torch.as_tensor(cache.root_pos_w, dtype=torch.float64).clone()
-        path_deltas = (root_pos_w[:, -1] - root_pos_w[:, 0]).clone()
-        return BatchedRuntimeCacheDiagnostics(
-            cache=cache,
-            root_pos_w=root_pos_w,
-            path_deltas=path_deltas,
-        )
-
-    def plan_batched_cases(self, case_names: list[str]) -> BatchedRuntimePlanDiagnostics:
-        if len(case_names) != self.num_envs:
-            raise ValueError(f"expected {self.num_envs} case names, got {len(case_names)}")
-
-        self.reset()
-        manager = self.base_env._trajectory_manager
-        commands = torch.stack([self._command_tensor(name)[env_id] for env_id, name in enumerate(case_names)], dim=0)
-        states = manager._batched_state_from_env(self.base_env)
-        terrain = manager._terrain_from_env(self.base_env)
-        result = self._batched_generate_trajectory(
-            terrain,
-            states,
-            commands,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            cfg=self.planner_cfg,
-        )
-        root_pos_w = torch.as_tensor(result.root_pos_w, dtype=torch.float64).clone()
-        path_deltas = (root_pos_w[:, -1] - root_pos_w[:, 0]).clone()
-        return BatchedRuntimePlanDiagnostics(
-            result=result,
-            root_pos_w=root_pos_w,
-            path_deltas=path_deltas,
-        )
-
-    def plan_batched_cases_with_stage_diagnostics(self, case_names: list[str]) -> BatchedRuntimePlanStageDiagnostics:
-        if len(case_names) != self.num_envs:
-            raise ValueError(f"expected {self.num_envs} case names, got {len(case_names)}")
-
-        self.reset()
-        manager = self.base_env._trajectory_manager
-        commands = torch.stack([self._command_tensor(name)[env_id] for env_id, name in enumerate(case_names)], dim=0)
-        states = manager._batched_state_from_env(self.base_env)
-        terrain = manager._terrain_from_env(self.base_env)
-        collector = _StageSnapshotCollector()
-        result = self._batched_generate_trajectory(
-            terrain,
-            states,
-            commands,
-            requested_n_frames=self.requested_n_frames,
-            dt=self.plan_dt,
-            cfg=self.planner_cfg,
-            stage_diagnostics=collector.capture,
-        )
-        root_pos_w = torch.as_tensor(result.root_pos_w, dtype=torch.float64).clone()
-        path_deltas = (root_pos_w[:, -1] - root_pos_w[:, 0]).clone()
-        plan = BatchedRuntimePlanDiagnostics(
-            result=result,
-            root_pos_w=root_pos_w,
-            path_deltas=path_deltas,
-        )
-        stage_order, stages, stage_summaries = self._build_stage_diagnostics(collector)
-        return BatchedRuntimePlanStageDiagnostics(
-            plan=plan,
-            stages=stages,
-            stage_order=stage_order,
-            stage_summaries=stage_summaries,
-        )
-
-    def planner_output_vs_playback_divergence(self, name: str, *, frame_idx: int | None = None) -> PlaybackDivergenceReport:
-        plan = self.plan_case_with_stage_diagnostics(name)
-        actual_frame_idx = min(7, plan.plan.result.num_frames - 1) if frame_idx is None else int(frame_idx)
-        readback = self.playback_sync_authoritative_readback(plan.plan.result, frame_idx=actual_frame_idx)
-        root_pos_delta = readback.root_pos_w - plan.plan.result.root_pos_w[:, actual_frame_idx]
-        joint_pos_delta = readback.joint_pos - plan.plan.result.joint_angles[:, actual_frame_idx]
-        return PlaybackDivergenceReport(
-            frame_idx=actual_frame_idx,
-            root_pos_max_abs=float(root_pos_delta.abs().max().item()),
-            root_pos_mean_abs=float(root_pos_delta.abs().mean().item()),
-            joint_pos_max_abs=float(joint_pos_delta.abs().max().item()),
-            joint_pos_mean_abs=float(joint_pos_delta.abs().mean().item()),
-            plan=plan,
-        )
-
-    def viewer_style_replan_sequence(self, name: str, *, num_cycles: int = 3) -> ViewerStyleReplanReport:
-        if num_cycles < 1:
-            raise ValueError("num_cycles must be >= 1")
-
-        self.reset()
-        terrain = self._single_env_terrain()
-        command = self._command_tensor(name)[:1]
-        state = self._single_env_state()
-        cycle_summaries: list[dict[str, float | bool]] = []
-        cycle_stage_summaries: list[dict[str, dict[str, float]]] = []
-
-        for cycle_idx in range(num_cycles):
-            collector = _StageSnapshotCollector()
-            result = self._batched_generate_trajectory(
-                terrain,
-                state,
-                command,
-                requested_n_frames=self.requested_n_frames,
-                dt=self.plan_dt,
-                cfg=self.planner_cfg,
-                stage_diagnostics=collector.capture,
-            )
-            summary = self._viewer._trajectory_motion_summary(result)
-            _, stages, stage_summaries = self._build_stage_diagnostics(collector)
-            cycle_summaries.append(dict(summary))
-            cycle_stage_summaries.append(stage_summaries)
-
-            frame_idx = min(result.num_frames - 1, max(0, result.num_frames - 1))
-            state = self._viewer._planner_state_from_reference_result(result, frame_idx=frame_idx)
-
-        return ViewerStyleReplanReport(
-            command_name=name,
-            cycle_summaries=tuple(cycle_summaries),
-            cycle_stage_summaries=tuple(cycle_stage_summaries),
         )
 
 
@@ -1680,21 +1265,12 @@ def make_real_runtime_fixture(**kwargs) -> RealViewerRuntimeFixture:
 
 
 __all__ = [
-    "BatchedRuntimeCacheDiagnostics",
-    "BatchedRuntimePlanDiagnostics",
-    "BatchedRuntimePlanStageDiagnostics",
     "COMMAND_CASES",
     "CommandCase",
     "GroundedCrossingDiagnostics",
-    "PlaybackDivergenceReport",
     "PlaybackReadback",
-    "PlannerStageSnapshot",
     "RealViewerRuntimeFixture",
     "RuntimePlanDiagnostics",
-    "RuntimePlanStageDiagnostics",
-    "ViewerStyleReplanReport",
     "build_command_cases",
-    "format_playback_divergence_report",
-    "format_stage_summary_report",
     "make_real_runtime_fixture",
 ]

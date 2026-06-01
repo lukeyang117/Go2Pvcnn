@@ -4627,14 +4627,9 @@ def _plan_rolling_viewer_trajectory(
         segment_index = len(parts)
         with _patched_structural_loss_for_variant(effective_candidate_variant):
             segment = runtime._viewer._plan_viewer_trajectory(
-                backend=runtime.planner_backend,
                 terrain=segment_terrain,
                 state=segment_state,
                 command=command,
-                requested_n_frames=horizon,
-                dt=runtime.plan_dt,
-                legacy_cfg=runtime.planner_cfg,
-                together_cfg=runtime.together_planner_cfg,
                 mpc_cfg=candidate_cfg,
             )
         segment = _post_blend_result_for_variant(segment, effective_candidate_variant)

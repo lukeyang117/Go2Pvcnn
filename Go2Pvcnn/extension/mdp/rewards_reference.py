@@ -143,10 +143,6 @@ def _trajectory_manager(env):
     return getattr(env.unwrapped, "_trajectory_manager", None)
 
 
-def _uses_together_manager(manager) -> bool:
-    return getattr(manager, "planner_backend", None) == "together"
-
-
 def _reference_indices(env, horizon: int) -> torch.Tensor:
     return (env.episode_length_buf.to(dtype=torch.long) % int(horizon)).to(env.device)
 
@@ -184,13 +180,6 @@ def _select_reference_frame(env):
 
 
 def _reference_field(env, cache, name: str, frame_ids: torch.Tensor) -> torch.Tensor:
-    manager = _trajectory_manager(env)
-    if _uses_together_manager(manager):
-        current = manager.current_reference()
-        field = current.get(name)
-        if field is None:
-            raise RuntimeError(f"reference cache missing {name}")
-        return field.to(device=env.device)
     return _gather_reference_field(cache, name, frame_ids, env)
 
 

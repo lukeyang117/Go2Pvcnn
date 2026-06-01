@@ -1159,7 +1159,6 @@ def test_factory_rejects_unknown_backend_with_valid_backend_hint() -> None:
 
 def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> None:
     cfg_path = GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py"
-    old_cfg_path = GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_env_cfg.py"
     source = cfg_path.read_text()
     tree = ast.parse(source)
 
@@ -1176,21 +1175,21 @@ def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> N
     assert "replicate_physics=True" in source
     assert "SemanticCourseTerrainImporter" in source
     assert "self.scene.terrain.class_type = SemanticCourseTerrainImporter" in source
-    assert "generate_semantic_course = None" in source
-    assert 'mode="startup"' not in source
-    assert 'mode="prestartup"' not in source
+    assert "generate_semantic_course" not in source
+    assert "teacher_elevation_trajectory_env_cfg" not in source
+    assert "teacher_without_semantic_env_cfg" not in source
+    assert "teacher_semantic_env_cfg" not in source
     assert "height_scanner = None" in source
     assert "semantic_height_scanner = SemanticGridRayCasterCfg" in source
     assert "resolution=0.01" in source
     assert "size=[1.5, 1.5]" in source
     assert "downsampled_elevation_semantic_scan" in source
-    assert "reference_root_pose = None" in source
-    assert "reference_joint_pos = None" in source
     assert "reference_foot_pos" in source
-
-    old_source = old_cfg_path.read_text()
-    assert 'planner_backend: str = "together"' in old_source
-    assert "height_scanner = RayCasterCfg" in old_source
+    assert "semantic_contact_collision" in source
+    assert "reference_root_pose" not in source
+    assert "reference_joint_pos" not in source
+    assert "reference_contact" not in source
+    assert "reference_touchdown" not in source
 
 
 def test_semantic_raycaster_refreshes_mesh_after_startup_course_generation() -> None:
@@ -1218,10 +1217,50 @@ def test_mpc_semantic_train_play_parsers_and_gym_registration_are_isolated() -> 
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" in play_source
     assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0" in register_source
     assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0" in register_source
-    assert "TeacherElevationTrajectoryEnvCfg" in register_source
-    assert "TeacherElevationTrajectoryEnvCfg_PLAY" in register_source
     assert "_teacher_elevation_trajectory_mpc_semantic_train_cfg" in agent_source
     assert "teacher_elevation_trajectory_mpc_semantic" in factory_source
+
+
+def test_cleanup_entrypoints_only_expose_mpc_semantic_experiment() -> None:
+    train_source = (GO2PVCNN_ROOT / "scripts/train.py").read_text()
+    play_source = (GO2PVCNN_ROOT / "scripts/play.py").read_text()
+    register_source = (GO2PVCNN_ROOT / "go2_pvcnn/tasks/register_envs.py").read_text()
+
+    assert "teacher_elevation_trajectory_mpc_semantic" in train_source
+    assert "teacher_elevation_trajectory_mpc_semantic" in play_source
+    assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0" in register_source
+    forbidden = (
+        "teacher_without_semantic",
+        "teacher_semantic",
+        "teacher_elevation_semantic_map",
+        "teacher_elevation_trajectory\"",
+        "Isaac-Teacher-Without-Semantic-Go2-v0",
+        "Isaac-Teacher-Semantic-Go2-v0",
+        "Isaac-Teacher-Elevation-Semantic-Map-Go2-v0",
+        "Isaac-Teacher-Elevation-Trajectory-Go2-v0",
+    )
+    combined = "\n".join((train_source, play_source, register_source))
+    for token in forbidden:
+        assert token not in combined
+
+
+def test_cleanup_mpc_factory_has_no_legacy_or_together_backend() -> None:
+    source = (GO2PVCNN_ROOT / "extension/trajectory_manager_factory.py").read_text()
+
+    assert "MpcTrajectoryManager" in source
+    assert "batched_together_planner" not in source
+    assert "batched_planner" not in source
+    assert '"legacy"' not in source
+    assert '"together"' not in source
+
+
+def test_cleanup_batch_mpc_planner_has_no_debug_variants_module() -> None:
+    root = GO2PVCNN_ROOT / "extension" / "batch_mpc_planner"
+    assert not (root / "debug_variants.py").exists()
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py"))
+
+    assert "debug_loss_variant" not in combined
+    assert "apply_mpc_debug_variant_cfg" not in combined
 
 
 def test_mpc_manager_refreshes_reference_cache_and_returns_current_reference_shapes() -> None:
@@ -2120,7 +2159,7 @@ def test_teacher_mpc_semantic_env_raises_fk_body_leg_collision_weight() -> None:
         assignments[node.name] = values
 
     assert assignments["TeacherElevationTrajectoryMpcSemanticEnvCfg"] == [120.0]
-    assert assignments["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"] == [120.0]
+    assert assignments["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"] in ([], [120.0])
 
 
 def test_mpc_swing_clearance_loss_amplifies_sparse_heightfield_collisions() -> None:

@@ -31,15 +31,10 @@ from Go2Pvcnn.tests.test_mpc_runtime_headless import (
 
 def _viewer_plan_with_memory(runtime, viewer, terrain, state, command, memory):
     result = viewer._plan_viewer_trajectory(
-        backend=runtime.planner_backend,
-        terrain=terrain,
-        state=state,
-        command=command,
-        requested_n_frames=runtime.requested_n_frames,
-        dt=runtime.plan_dt,
-        legacy_cfg=runtime.planner_cfg,
-        together_cfg=runtime.together_planner_cfg,
-        mpc_cfg=runtime.mpc_planner_cfg,
+                terrain=terrain,
+                state=state,
+                command=command,
+                mpc_cfg=runtime.mpc_planner_cfg,
     )
     return result, memory
 

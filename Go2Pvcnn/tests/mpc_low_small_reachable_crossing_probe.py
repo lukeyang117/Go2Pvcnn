@@ -21,10 +21,6 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT, GO2PVCNN_ROOT / "tests"):
         sys.path.insert(0, path_str)
 
 from extension.batch_mpc_planner.kinematics import fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory  # noqa: E402
-from extension.batch_mpc_planner.debug_variants import (  # noqa: E402
-    apply_mpc_debug_variant_cfg,
-    mpc_debug_extra_loss,
-)
 from extension.batch_mpc_planner.losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time  # noqa: E402
 from extension.batch_mpc_planner.planner import plan_segment, sample_touchdown_positions  # noqa: E402
 from extension.batch_mpc_planner.semantic_policy import shape_nominal_command_for_semantic_obstacles  # noqa: E402
@@ -70,6 +66,23 @@ DEFAULT_COMMANDS = (
 )
 
 PARAMETRIC_VARIANTS = {"parametric_v1"}
+
+
+def _removed_debug_variant_error(variant: str) -> RuntimeError:
+    return RuntimeError(
+        f"MPC debug variant {variant!r} was removed from extension.batch_mpc_planner. "
+        "Probe-only variants must live under Go2Pvcnn/tests, not in the production planner package."
+    )
+
+
+def apply_mpc_debug_variant_cfg(base_cfg, variant_name: str | None, command=None):
+    del base_cfg, command
+    raise _removed_debug_variant_error(str(variant_name))
+
+
+def mpc_debug_extra_loss(*args, **kwargs):
+    variant = str(kwargs.get("variant", "unknown"))
+    raise _removed_debug_variant_error(variant)
 
 
 def _command_frame(command: tuple[float, float, float], *, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor, float]:

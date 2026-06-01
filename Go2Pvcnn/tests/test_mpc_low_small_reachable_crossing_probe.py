@@ -28,7 +28,6 @@ from mpc_low_small_reachable_crossing_probe import (  # noqa: E402
 )
 from extension.batch_mpc_planner.config import MpcPlannerCfg  # noqa: E402
 from extension.batch_mpc_planner.types import MpcPlannerTerrain, MpcRobotState  # noqa: E402
-from extension.batch_mpc_planner.debug_variants import mpc_debug_extra_loss  # noqa: E402
 from extension.batch_mpc_planner.config import MpcPlannerCfg  # noqa: E402
 from fixtures.viewer_runtime_diagnostics import _apply_semantic_small_profile_override  # noqa: E402
 
@@ -423,54 +422,6 @@ def test_reachable_fk_cross_v9_keeps_mixed_yaw_reachability_barrier() -> None:
     assert breakdown["reachable_fk_command_direction_cosine"].item() >= 0.0
 
 
-def test_production_debug_variant_v9_matches_probe_extra_loss_terms() -> None:
-    decoded = type(
-        "Decoded",
-        (),
-        {
-            "root_pos": torch.tensor([[[0.00, 0.00, 0.16], [0.20, 0.00, 0.16], [0.40, 0.00, 0.16]]], dtype=torch.float32),
-            "root_rpy": torch.zeros((1, 3, 3), dtype=torch.float32),
-            "foot_pos": torch.tensor(
-                [
-                    [
-                        [[0.65, 0.20, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                        [[0.80, 0.20, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                        [[0.95, 0.20, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                    ]
-                ],
-                dtype=torch.float32,
-            ),
-            "contact_prob": torch.zeros((1, 3, 4), dtype=torch.float32),
-            "swing_prob": torch.ones((1, 3, 4), dtype=torch.float32),
-        },
-    )()
-    command = torch.tensor([[0.5, 0.0, 1.0]], dtype=torch.float32)
-    obstacle_xy = torch.tensor([[0.30, 0.00]], dtype=torch.float32)
-    obstacle_height = torch.tensor([0.12], dtype=torch.float32)
-
-    probe_extra, probe_breakdown = reachable_extra_loss(
-        decoded,
-        variant="reachable_fk_cross_v9",
-        command=command,
-        obstacle_xy=obstacle_xy,
-        obstacle_height=obstacle_height,
-    )
-    prod_extra, prod_breakdown = mpc_debug_extra_loss(
-        decoded,
-        variant="reachable_fk_cross_v9",
-        command=command,
-        obstacle_xy=obstacle_xy,
-        obstacle_height=obstacle_height,
-    )
-
-    torch.testing.assert_close(prod_extra, probe_extra)
-    assert set(prod_breakdown) == set(probe_breakdown)
-    torch.testing.assert_close(
-        prod_breakdown["reachable_fk_mixed_reachability_barrier"],
-        probe_breakdown["reachable_fk_mixed_reachability_barrier"],
-    )
-
-
 def test_reachable_fk_cross_v10_has_soft_mixed_yaw_combo_terms() -> None:
     decoded = type(
         "Decoded",
@@ -505,80 +456,6 @@ def test_reachable_fk_cross_v10_has_soft_mixed_yaw_combo_terms() -> None:
     assert breakdown["reachable_fk_mixed_base_height_guard"].item() > 0.0
     assert breakdown["reachable_fk_mixed_reachability_barrier"].item() > 0.0
     assert breakdown["reachable_fk_mixed_soft_balance"].item() >= 0.0
-
-
-def test_reachable_fk_cross_v11_adds_endpoint_touchdown_reachability_and_height_terms() -> None:
-    decoded = type(
-        "Decoded",
-        (),
-        {
-            "root_pos": torch.tensor([[[0.00, 0.00, 0.18], [0.10, 0.00, 0.18], [0.20, 0.00, 0.18]]], dtype=torch.float32),
-            "root_rpy": torch.zeros((1, 3, 3), dtype=torch.float32),
-            "foot_pos": torch.tensor(
-                [
-                    [
-                        [[0.10, 0.08, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                        [[0.55, 0.08, 0.36], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                        [[0.12, 0.08, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                    ]
-                ],
-                dtype=torch.float32,
-            ),
-            "contact_prob": torch.tensor([[[0.0, 1.0, 1.0, 1.0], [0.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]], dtype=torch.float32),
-            "swing_prob": torch.tensor([[[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]], dtype=torch.float32),
-            "swing_center": torch.tensor([[0.25, 0.20, 0.20, 0.20]], dtype=torch.float32),
-            "swing_width": torch.tensor([[0.90, 0.20, 0.20, 0.20]], dtype=torch.float32),
-        },
-    )()
-
-    _, breakdown = mpc_debug_extra_loss(
-        decoded,
-        variant="reachable_fk_cross_v11",
-        command=torch.tensor([[0.5, 0.0, 1.0]], dtype=torch.float32),
-        obstacle_xy=torch.tensor([[0.30, 0.00]], dtype=torch.float32),
-        obstacle_height=torch.tensor([0.12], dtype=torch.float32),
-    )
-
-    assert breakdown["reachable_fk_touchdown_endpoint_consistency"].item() > 0.0
-    assert breakdown["reachable_fk_sampled_touchdown_reachability"].item() > 0.0
-    assert breakdown["reachable_fk_foot_above_root_guard"].item() > 0.0
-
-
-def test_reachable_fk_cross_v12_prioritizes_endpoint_term_over_reachability_and_height() -> None:
-    decoded = type(
-        "Decoded",
-        (),
-        {
-            "root_pos": torch.tensor([[[0.00, 0.00, 0.18], [0.10, 0.00, 0.18], [0.20, 0.00, 0.18]]], dtype=torch.float32),
-            "root_rpy": torch.zeros((1, 3, 3), dtype=torch.float32),
-            "foot_pos": torch.tensor(
-                [
-                    [
-                        [[0.10, 0.08, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                        [[0.55, 0.08, 0.36], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                        [[0.12, 0.08, 0.00], [0.20, -0.10, 0.00], [-0.20, 0.10, 0.00], [-0.20, -0.10, 0.00]],
-                    ]
-                ],
-                dtype=torch.float32,
-            ),
-            "contact_prob": torch.tensor([[[0.0, 1.0, 1.0, 1.0], [0.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]], dtype=torch.float32),
-            "swing_prob": torch.tensor([[[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]], dtype=torch.float32),
-            "swing_center": torch.tensor([[0.25, 0.20, 0.20, 0.20]], dtype=torch.float32),
-            "swing_width": torch.tensor([[0.90, 0.20, 0.20, 0.20]], dtype=torch.float32),
-        },
-    )()
-    kwargs = {
-        "command": torch.tensor([[0.5, 0.0, 1.0]], dtype=torch.float32),
-        "obstacle_xy": torch.tensor([[0.30, 0.00]], dtype=torch.float32),
-        "obstacle_height": torch.tensor([0.12], dtype=torch.float32),
-    }
-
-    _, v11 = mpc_debug_extra_loss(decoded, variant="reachable_fk_cross_v11", **kwargs)
-    _, v12 = mpc_debug_extra_loss(decoded, variant="reachable_fk_cross_v12", **kwargs)
-
-    assert v12["reachable_fk_touchdown_endpoint_consistency"].item() > v11["reachable_fk_touchdown_endpoint_consistency"].item()
-    assert v12["reachable_fk_sampled_touchdown_reachability"].item() < v11["reachable_fk_sampled_touchdown_reachability"].item()
-    assert v12["reachable_fk_foot_above_root_guard"].item() < v11["reachable_fk_foot_above_root_guard"].item()
 
 
 def test_command_direction_metrics_use_command_frame_for_lateral_motion() -> None:

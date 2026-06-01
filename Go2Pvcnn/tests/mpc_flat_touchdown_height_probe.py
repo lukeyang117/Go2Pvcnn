@@ -134,14 +134,9 @@ def run_probe(
                 state = runtime._single_env_state()
                 terrain = runtime._single_env_terrain()
                 result = runtime._viewer._plan_viewer_trajectory(
-                    backend="mpc",
                     terrain=terrain,
                     state=state,
                     command=command,
-                    requested_n_frames=runtime.requested_n_frames,
-                    dt=runtime.plan_dt,
-                    legacy_cfg=runtime.planner_cfg,
-                    together_cfg=runtime.together_planner_cfg,
                     mpc_cfg=runtime.mpc_planner_cfg,
                 )
                 touchdown = torch.as_tensor(
@@ -217,14 +212,9 @@ def run_probe(
             state = runtime._single_env_state()
             terrain = runtime._single_env_terrain()
             forward_result = runtime._viewer._plan_viewer_trajectory(
-                backend="mpc",
                 terrain=terrain,
                 state=state,
                 command=forward_command,
-                requested_n_frames=runtime.requested_n_frames,
-                dt=runtime.plan_dt,
-                legacy_cfg=runtime.planner_cfg,
-                together_cfg=runtime.together_planner_cfg,
                 mpc_cfg=runtime.mpc_planner_cfg,
             )
             frame_idx = min(int(zero_after_forward_frame), int(forward_result.num_frames) - 1)
@@ -251,14 +241,9 @@ def run_probe(
             zero_state = runtime._single_env_state()
             zero_terrain = runtime._single_env_terrain()
             zero_result = runtime._viewer._plan_viewer_trajectory(
-                backend="mpc",
                 terrain=zero_terrain,
                 state=zero_state,
                 command=zero_command,
-                requested_n_frames=runtime.requested_n_frames,
-                dt=runtime.plan_dt,
-                legacy_cfg=runtime.planner_cfg,
-                together_cfg=runtime.together_planner_cfg,
                 mpc_cfg=runtime.mpc_planner_cfg,
             )
             zero_viz_td = runtime._viewer.PlannerVisualizer._touchdown_markers_world(zero_result)

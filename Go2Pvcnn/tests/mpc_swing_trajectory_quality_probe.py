@@ -586,14 +586,9 @@ def _run_probe_case(
             for cycle in range(int(cycles)):
                 terrain_obj = runtime._single_env_terrain()
                 result = runtime._viewer._plan_viewer_trajectory(
-                    backend=runtime.planner_backend,
                     terrain=terrain_obj,
                     state=state,
                     command=command,
-                    requested_n_frames=runtime.requested_n_frames,
-                    dt=runtime.plan_dt,
-                    legacy_cfg=runtime.planner_cfg,
-                    together_cfg=runtime.together_planner_cfg,
                     mpc_cfg=mpc_cfg,
                 )
                 rows = _trajectory_summary(

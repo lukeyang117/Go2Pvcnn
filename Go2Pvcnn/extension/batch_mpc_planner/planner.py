@@ -6,7 +6,6 @@ import torch
 from torch import Tensor
 
 from .config import MpcPlannerCfg, validate_mpc_config
-from .debug_variants import apply_mpc_debug_variant_cfg
 from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
 from .kinematics import fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
@@ -913,8 +912,6 @@ def plan_segment(
     cfg: MpcPlannerCfg,
 ) -> MpcPlannerResult:
     """Plan one horizon for a batch of environments."""
-    if cfg.debug_loss_variant not in (None, "", "baseline") and not bool(getattr(cfg, "debug_loss_variant_cfg_applied", False)):
-        cfg = apply_mpc_debug_variant_cfg(cfg, cfg.debug_loss_variant, command=command)
     validate_mpc_config(cfg)
     profile = (
         MpcProfile(sync_cuda=bool(cfg.diagnostics.profile_cuda_sync))

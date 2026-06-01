@@ -119,4 +119,4 @@ def test_mpc_semantic_cfg_uses_two_global_semantic_contact_sensors() -> None:
     assert 'filter_prim_paths_expr=[f"{semantic_root}/.*"]' in source
     assert '"small_sensor_cfg": SceneEntityCfg("semantic_contact_small")' in source
     assert '"large_sensor_cfg": SceneEntityCfg("semantic_contact_large")' in source
-    assert "swing_leg_collision = None" in source
+    assert "swing_leg_collision" not in source

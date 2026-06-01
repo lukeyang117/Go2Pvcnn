@@ -4,9 +4,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302l MPC RL participation and reward integration**.
-- Active branch page: [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md).
-- Active implementation plan: [T302l MPC RL participation and reward plan](todo/T302l-mpc-rl-participation-and-reward-plan.md).
+- Current focus: **T302m teacher elevation MPC semantic cleanup**.
+- Active branch page: [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md).
+- Active implementation plan: [T302m teacher elevation MPC semantic cleanup plan](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/manager.py](../Go2Pvcnn/extension/batch_mpc_planner/manager.py)
@@ -21,6 +21,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - [Go2Pvcnn/tests/test_batch_mpc_parametric.py](../Go2Pvcnn/tests/test_batch_mpc_parametric.py)
   - [Go2Pvcnn/tests/test_batch_mpc_backend.py](../Go2Pvcnn/tests/test_batch_mpc_backend.py)
 - Current contract:
+  - T302m cleanup is implemented locally: production train/play/register/factory/viewer are narrowed to `teacher_elevation_trajectory_mpc_semantic + mpc`; old `batched_planner`, `batched_together_planner`, old teacher cfgs, old script entrypoints, and production debug variants are deleted from the working tree.
+  - T302m local/static verification passed: cleanup guards `3 passed`, viewer tests `16 passed`, current focused suite `43 passed`, backend suite `128 passed`, production pycompile pass, and production old-route scan has no matches.
+  - T302m real IsaacLab acceptance passed on card1 after fixing train/play local `rsl_rl` imports, the RSL-RL wrapper observation contract, and the active PPO config: contact drop probe pass, 1024-env 1-iteration train smoke pass, 1024/64/25-step performance `epoch_seconds=5.8828s`.
   - T302l design approved in [../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html).
   - T302l implementation plan lives in [todo/T302l-mpc-rl-participation-and-reward-plan.md](todo/T302l-mpc-rl-participation-and-reward-plan.md).
   - MPC RL runtime must align `reference_trajectory_horizon = reference_replan_interval_steps = 25`.
@@ -57,6 +60,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
+| T302m | verify | Current working tree has been cleaned to the single semantic MPC route; local/static tests pass and card1 IsaacLab acceptance passes. | Keep as regression guard; no further cleanup changes unless user asks for a second pass. |
 | T302l | verify | MPC participation selection, world-frame foot tracking, and 2 global semantic contact sensors are implemented; card1 1024 quantity alignment and 1024/64/25-step probe pass after exact-path body resolution. | Keep as regression guard; run train smoke only if changing RL reward/sensor wiring again. |
 | T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
 
@@ -64,6 +68,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
+| T302m | verify | teacher elevation MPC semantic cleanup | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | Single-route cleanup implemented locally; card1 IsaacLab acceptance and 1024/64/25 performance pass | design [2026-05-31](../docs/superpowers/specs/2026-05-31-teacher-elevation-mpc-semantic-cleanup-design.html) |
 | T302l | verify | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Selector/world-foot runtime complete; old per-body semantic contact route superseded by 2 global semantic contact sensors; card1 1024 quantity and performance acceptance pass | design [2026-05-30](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html) |
 | T302k | active | parametric MPC trajectory contract | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | Low-small loss redesign and plane-only FK semantic collision testing | design commit `97c5b60` |
 | T302h | closed | semantic obstacle jitter/crossing evidence | [T302h](todo/T302h-semantic-obstacle-jitter-reproduction.md) | Closed as implementation route; retained as reproduction/evidence for T302k | rolling25 low-small production evidence |
@@ -82,6 +87,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
+| T302m.1 | T302m | verify | P0 | Route cleanup, local regression, card1 contact/drop, 1024-env train smoke, and 1024/64/25-step perf pass. | [T302m cleanup plan](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) |
 | T302l.1 | T302l | verify | P0 | Two global semantic contact sensors are implemented; exact-path body resolution fixes 1024-env `gym.make` stall; card1 quantity and 25-step performance pass. | [T302l implementation plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
 | T302k.12 | T302k | active | P0 | Replan touchdown/current-foot and touchdown IK/FK mismatch remain the main trajectory/reachability issue. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 | T302k.18 | T302k | verify | P0 | Low-small loss redesign is implemented and hard acceptance passes on covered full-matrix rows; remaining work is parameter tuning only unless user approves new loss. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
@@ -90,6 +96,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 ## Branch Pages
 
 - [todo/README.md](todo/README.md)
+- [T302m-teacher-elevation-mpc-semantic-cleanup-plan.md](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md)
 - [T302l-mpc-rl-participation-and-reward-plan.md](todo/T302l-mpc-rl-participation-and-reward-plan.md)
 - [T302k-parametric-mpc-trajectory-contract.md](todo/T302k-parametric-mpc-trajectory-contract.md)
 - [T302k-low-small-loss-redesign-plan.md](todo/T302k-low-small-loss-redesign-plan.md)
@@ -107,6 +114,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-05-31 23:06 | T302m card1 IsaacLab acceptance | pass; contact drop probe, 1024-env 1-iteration train smoke, and 1024/64/25-step perf pass; `epoch_seconds=5.8828s` | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | [2026-05-31-2306-t302m-card1-isaaclab-acceptance.md](log/2026-05-31-2306-t302m-card1-isaaclab-acceptance.md) |
+| 2026-05-31 22:49 | T302m teacher elevation MPC semantic cleanup | local pass; cleanup guards `3 passed`, viewer `16 passed`, focused `43 passed`, backend `128 passed`; IsaacLab card3 smoke blocked by existing 20.6GB 1024-env train process causing OOM | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | [2026-05-31-2249-t302m-teacher-mpc-semantic-cleanup.md](log/2026-05-31-2249-t302m-teacher-mpc-semantic-cleanup.md) |
 | 2026-05-31 10:49 | T302l semantic contact robot drop probe | pass; real robot drop detects small and large semantic contacts; empty envs stay zero; no NaN/Inf; small active frames `5` vs large active frames `150` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md](log/2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md) |
 | 2026-05-30 23:13 | T302l semantic global contact card1 performance | pass after exact-path body resolution fix; card1 quantity alignment PASS, shapes `[1024,13,640,3]` and `[1024,13,100,3]`, 1024/64 probe `5.6489s` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md](log/2026-05-30-2313-t302l-semantic-global-contact-card1-perf.md) |
 | 2026-05-30 21:23 | T302l MPC RL final verification | pass; focused `7 passed`, backend `140 passed`, contact smoke PASS, 1024/64 probe `5.256s`, train entry PASS, low-small covered rows `0` FK semantic collisions and max crossing FK error `0.0634m`; PhysX global-filter warning recorded | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-30-2123-t302l-final-verification.md](log/2026-05-30-2123-t302l-final-verification.md) |

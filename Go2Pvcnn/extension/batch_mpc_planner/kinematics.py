@@ -7,7 +7,18 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from extension.batched_planner.types import CALF_LENGTH, HIP_OFFSETS_ARRAY, HIP_OFFSET_Y, THIGH_LENGTH
+HIP_OFFSETS_ARRAY = torch.tensor(
+    (
+        (0.1934, 0.0465, 0.0),
+        (0.1934, -0.0465, 0.0),
+        (-0.1934, 0.0465, 0.0),
+        (-0.1934, -0.0465, 0.0),
+    ),
+    dtype=torch.float32,
+)
+THIGH_LENGTH = 0.213
+CALF_LENGTH = 0.213
+HIP_OFFSET_Y = 0.0955
 
 _JOINT_LIMITS = torch.tensor(
     (

@@ -6,8 +6,19 @@ from dataclasses import dataclass
 
 import torch
 
-from ..batched_planner.types import HIP_HEIGHT, HIP_OFFSETS_ARRAY, LEG_ORDER
 from .cache import ReferenceTrajectoryCache
+
+HIP_HEIGHT = 0.30
+LEG_ORDER = ("FL", "FR", "RL", "RR")
+HIP_OFFSETS_ARRAY = torch.tensor(
+    (
+        (0.1934, 0.0465, 0.0),
+        (0.1934, -0.0465, 0.0),
+        (-0.1934, 0.0465, 0.0),
+        (-0.1934, -0.0465, 0.0),
+    ),
+    dtype=torch.float32,
+)
 
 
 @dataclass

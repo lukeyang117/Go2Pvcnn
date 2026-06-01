@@ -8,10 +8,7 @@ VIEWER_FILE = REPO_ROOT / "Go2Pvcnn" / "extension" / "viz" / "go2_foostep_planne
 def test_viewer_adds_go2pvcnn_root_before_extension_imports():
     source = VIEWER_FILE.read_text(encoding="utf-8")
     path_insert = "sys.path.insert(0, str(GO2PVCNN_ROOT))"
-    extension_import = (
-        "from extension.batched_together_planner.types import "
-        "HARD_REASON_NAMES, TogetherPlannerStatus"
-    )
+    extension_import = "from extension.batch_mpc_planner.planner import plan_segment"
 
     assert path_insert in source
     assert extension_import in source

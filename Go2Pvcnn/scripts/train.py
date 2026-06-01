@@ -31,8 +31,10 @@ import torch
 
 THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parent.parent
-if str(GO2PVCNN_ROOT) not in sys.path:
-    sys.path.insert(0, str(GO2PVCNN_ROOT))
+RSL_RL_ROOT = GO2PVCNN_ROOT / "rsl_rl"
+for _path in (GO2PVCNN_ROOT, RSL_RL_ROOT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 
 def build_run_log_dir(
@@ -83,19 +85,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--experiment",
         type=str,
-        default="teacher_semantic",
-        choices=[
-            "teacher_semantic",
-            "teacher_without_semantic",
-            "teacher_elevation",
-            "teacher_elevation_semantic_map",
-            "teacher_elevation_trajectory",
-            "teacher_elevation_trajectory_mpc_semantic",
-        ],
-        help="Experiment: teacher_semantic (CNN+state), teacher_without_semantic (state-only), "
-        "teacher_elevation (elevation map CNN), teacher_elevation_semantic_map (dual grid CNN), "
-        "teacher_elevation_trajectory (high-res elevation + trajectory reward), "
-        "teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward).",
+        default="teacher_elevation_trajectory_mpc_semantic",
+        choices=["teacher_elevation_trajectory_mpc_semantic"],
+        help="Experiment: teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward).",
     )
     parser.add_argument(
         "--verbose-planner",
@@ -106,9 +98,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--planner-backend",
         type=str,
-        default=None,
-        choices=["together", "legacy", "mpc"],
-        help="For trajectory experiments: trajectory planner backend (together/legacy/mpc).",
+        default="mpc",
+        choices=["mpc"],
+        help="Trajectory planner backend. Cleanup build supports only mpc.",
     )
 
     AppLauncher.add_app_launcher_args(parser)
@@ -180,7 +172,7 @@ def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> 
     )
     if manager is not None:
         print(
-            f"[Planner] Attached {getattr(manager, 'planner_backend', 'legacy')} trajectory manager "
+            f"[Planner] Attached {getattr(manager, 'planner_backend', 'mpc')} trajectory manager "
             f"for {experiment_name}"
         )
 
@@ -339,19 +331,14 @@ def main() -> int:
     import gymnasium as gym
 
     from agent import get_train_cfg
-    from go2_pvcnn.tasks.teacher_elevation_env_cfg import TeacherElevationEnvCfg
-    from go2_pvcnn.tasks.teacher_elevation_semantic_map_env_cfg import TeacherElevationSemanticMapEnvCfg
-    from go2_pvcnn.tasks.teacher_elevation_trajectory_env_cfg import TeacherElevationTrajectoryEnvCfg
     from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
         TeacherElevationTrajectoryMpcSemanticEnvCfg,
     )
-    from go2_pvcnn.tasks.teacher_semantic_env_cfg import TeacherSemanticEnvCfg
-    from go2_pvcnn.tasks.teacher_without_semantic_env_cfg import TeacherWithoutSemanticEnvCfg
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.utils.dict import print_dict
     from isaaclab.utils.io import dump_yaml
-    from rsl_rl_2_01.runners import OnPolicyRunner
+    from rsl_rl.runners import OnPolicyRunner
 
     # Configure PyTorch only when the script is actually running.
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -412,17 +399,6 @@ def main() -> int:
     # Create Environment Configuration
     # ========================================
     EXPERIMENT_ENV_MAP = {
-        "teacher_semantic": (TeacherSemanticEnvCfg, "Isaac-Teacher-Semantic-Go2-v0"),
-        "teacher_without_semantic": (TeacherWithoutSemanticEnvCfg, "Isaac-Teacher-Without-Semantic-Go2-v0"),
-        "teacher_elevation": (TeacherElevationEnvCfg, "Isaac-Teacher-Elevation-Go2-v0"),
-        "teacher_elevation_semantic_map": (
-            TeacherElevationSemanticMapEnvCfg,
-            "Isaac-Teacher-Elevation-Semantic-Map-Go2-v0",
-        ),
-        "teacher_elevation_trajectory": (
-            TeacherElevationTrajectoryEnvCfg,
-            "Isaac-Teacher-Elevation-Trajectory-Go2-v0",
-        ),
         "teacher_elevation_trajectory_mpc_semantic": (
             TeacherElevationTrajectoryMpcSemanticEnvCfg,
             "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
@@ -439,10 +415,8 @@ def main() -> int:
         env_cfg.seed = args_cli.seed
 
     # Planner verbosity is owned by the planner/manager path; the train CLI only toggles it.
-    if args_cli.experiment in ("teacher_elevation_trajectory", "teacher_elevation_trajectory_mpc_semantic"):
-        setattr(env_cfg, "verbose_planner", bool(getattr(args_cli, "verbose_planner", False)))
-        if getattr(args_cli, "planner_backend", None) is not None:
-            setattr(env_cfg, "planner_backend", str(args_cli.planner_backend))
+    setattr(env_cfg, "verbose_planner", bool(getattr(args_cli, "verbose_planner", False)))
+    setattr(env_cfg, "planner_backend", str(args_cli.planner_backend))
 
     # ========================================
     # Setup Logging Directory
@@ -458,7 +432,7 @@ def main() -> int:
         print(f"[Logging] Directory: {log_dir}")
         
         if args_cli.distributed:
-            temp_log_path = "/tmp/teacher_semantic_log_dir.txt"
+            temp_log_path = "/tmp/teacher_mpc_semantic_log_dir.txt"
             with open(temp_log_path, "w") as f:
                 f.write(log_dir)
     
@@ -466,7 +440,7 @@ def main() -> int:
     if args_cli.distributed:
         dist.barrier()
         if rank != 0:
-            with open("/tmp/teacher_semantic_log_dir.txt", "r") as f:
+            with open("/tmp/teacher_mpc_semantic_log_dir.txt", "r") as f:
                 log_dir = f.read().strip()
             print(f"[Rank {rank}] Using shared log dir: {log_dir}")
     
@@ -508,7 +482,7 @@ def main() -> int:
     # For now, we'll use the PVCNN wrapper without actual PVCNN (set to None)
     # Or we can create a simpler wrapper. Let me create a simple wrapper class:
     
-    from rsl_rl_2_01.env import VecEnv
+    from rsl_rl.env import VecEnv
     
     class SimpleRslRlEnvWrapper(VecEnv):
         """Simple wrapper for RSL-RL without PVCNN."""
@@ -534,6 +508,18 @@ def main() -> int:
             
             # Reset environment
             self.env.reset()
+
+        def _flatten_group(self, obs_dict, group_names: list[str]) -> torch.Tensor:
+            values = []
+            for name in group_names:
+                value = obs_dict[name]
+                values.append(value.reshape(value.shape[0], -1))
+            return torch.cat(values, dim=-1)
+
+        def _format_observations(self, obs_dict) -> tuple[torch.Tensor, dict]:
+            policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
+            critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
+            return policy_obs, {"observations": {"critic": critic_obs}}
         
         @property
         def unwrapped(self):
@@ -561,26 +547,12 @@ def main() -> int:
             return self.env.action_space
         
         def get_observations(self):
-            from tensordict import TensorDict
             obs_dict = self.env.unwrapped.observation_manager.compute()
-            if isinstance(obs_dict, dict) and not isinstance(obs_dict, TensorDict):
-                td = TensorDict(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-                # print(f"[Debug][get_observations] converted to TensorDict, keys: {list(td.keys())}")
-                # for k in td.keys():
-                #     v = td[k]
-                #     shape = tuple(v.shape) if hasattr(v, "shape") else "N/A"
-                #     dtype = getattr(v, "dtype", type(v))
-                #     print(f"  - td key={k}, shape={shape}, dtype={dtype}")
-                return td
-            return obs_dict
+            return self._format_observations(obs_dict)
         
         def reset(self):
             obs_dict, _ = self.env.reset()
-            # Return TensorDict directly, not just "policy" key
-            from tensordict import TensorDict
-            if isinstance(obs_dict, dict) and not isinstance(obs_dict, TensorDict):
-                obs_dict = TensorDict(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-            return obs_dict, None
+            return self._format_observations(obs_dict)
         
         def step(self, actions):
             if self.clip_actions is not None:
@@ -589,30 +561,15 @@ def main() -> int:
             obs_dict, rewards, dones, truncated, extras = self.env.step(actions)
 
 
-            # Convert to TensorDict if it's a plain dict
-            from tensordict import TensorDict
-            if isinstance(obs_dict, dict) and not isinstance(obs_dict, TensorDict):
-                # print(f"[Debug][step] Converting plain dict to TensorDict...")
-                obs_dict = TensorDict(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-                # print(f"[Debug][step] AFTER conversion - type: {type(obs_dict)}")
-                # print(f"[Debug][step] keys: {list(obs_dict.keys())}")
-
-            # # Debug: verify TensorDict
-            # if isinstance(obs_dict, TensorDict):
-            #     print(f"[Debug][step] ✅ obs is TensorDict, keys: {list(obs_dict.keys())}")
-            #     for k in obs_dict.keys():
-            #         v = obs_dict[k]
-            #         shape = tuple(v.shape) if hasattr(v, "shape") else "N/A"
-            #         dtype = getattr(v, "dtype", type(v))
-            #         print(f"  - key={k}, shape={shape}, dtype={dtype}")
-
             # Combine dones and truncated
             dones = dones | truncated
 
             # PPO bootstrap on timeout (for correct value estimation)
             extras["time_outs"] = truncated
+            policy_obs, obs_extras = self._format_observations(obs_dict)
+            extras.setdefault("observations", {}).update(obs_extras["observations"])
 
-            return obs_dict, rewards, dones, extras
+            return policy_obs, rewards, dones, extras
     
     # Create wrapper
     wrapped_env = SimpleRslRlEnvWrapper(base_env, clip_actions=100.0)
@@ -622,35 +579,32 @@ def main() -> int:
     # Create Runner Configuration
     # ========================================
     print(f"\n[Runner] Creating RSL-RL runner configuration...")
-    
-    from rsl_rl_2_01.runners import OnPolicyRunner
-    
+
     # Training configuration from agent module
     train_cfg = get_train_cfg(experiment_name)
-    if experiment_name in ("teacher_elevation_trajectory", "teacher_elevation_trajectory_mpc_semantic"):
-        # 4096-env trajectory runs with CNN elevation maps can exceed 24GB cards when
-        # rollout horizon/minibatch are too large. Keep the CLI unchanged and apply a
-        # runtime memory guardrail on the trainer config.
-        num_envs = int(env_cfg.scene.num_envs)
-        if num_envs >= 4096 and int(train_cfg.get("num_steps_per_env", 0)) > 24:
-            old_steps = int(train_cfg["num_steps_per_env"])
-            train_cfg["num_steps_per_env"] = 24
+    # 4096-env semantic MPC runs with CNN maps can exceed 24GB cards when rollout
+    # horizon/minibatch are too large. Keep the CLI unchanged and apply a runtime
+    # memory guardrail on the trainer config.
+    num_envs = int(env_cfg.scene.num_envs)
+    if num_envs >= 4096 and int(train_cfg.get("num_steps_per_env", 0)) > 24:
+        old_steps = int(train_cfg["num_steps_per_env"])
+        train_cfg["num_steps_per_env"] = 24
+        print(
+            f"[Runner][MemGuard] {experiment_name} @ 4096 envs: "
+            f"num_steps_per_env {old_steps} -> {train_cfg['num_steps_per_env']}"
+        )
+    algorithm_cfg = train_cfg.get("algorithm", {})
+    if num_envs >= 4096 and isinstance(algorithm_cfg, dict):
+        total_batch = int(num_envs * int(train_cfg.get("num_steps_per_env", 24)))
+        target_mini_batch = 12_288
+        min_mini_batches = max(1, math.ceil(total_batch / target_mini_batch))
+        old_mini_batches = int(algorithm_cfg.get("num_mini_batches", 4))
+        if old_mini_batches < min_mini_batches:
+            algorithm_cfg["num_mini_batches"] = min_mini_batches
             print(
                 f"[Runner][MemGuard] {experiment_name} @ 4096 envs: "
-                f"num_steps_per_env {old_steps} -> {train_cfg['num_steps_per_env']}"
+                f"num_mini_batches {old_mini_batches} -> {min_mini_batches}"
             )
-        algorithm_cfg = train_cfg.get("algorithm", {})
-        if num_envs >= 4096 and isinstance(algorithm_cfg, dict):
-            total_batch = int(num_envs * int(train_cfg.get("num_steps_per_env", 24)))
-            target_mini_batch = 12_288
-            min_mini_batches = max(1, math.ceil(total_batch / target_mini_batch))
-            old_mini_batches = int(algorithm_cfg.get("num_mini_batches", 4))
-            if old_mini_batches < min_mini_batches:
-                algorithm_cfg["num_mini_batches"] = min_mini_batches
-                print(
-                    f"[Runner][MemGuard] {experiment_name} @ 4096 envs: "
-                    f"num_mini_batches {old_mini_batches} -> {min_mini_batches}"
-                )
 
     # Print configuration
     if rank == 0:
