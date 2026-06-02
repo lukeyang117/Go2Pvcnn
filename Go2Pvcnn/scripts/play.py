@@ -42,6 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Experiment/task: teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward)",
     )
     parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
+    parser.add_argument("--max-steps", type=int, default=0, help="Stop after this many play steps; 0 means run until the app exits.")
     parser.add_argument(
         "--use-raw-reference-trajectory",
         action="store_true",
@@ -110,6 +111,12 @@ def _should_update_follow_camera(*, timestep: int, num_envs: int, livestream: in
     if livestream in (1, 2):
         return timestep % max(1, interval) == 0
     return True
+
+
+def _play_loop_should_continue(simulation_app, *, timestep: int, max_steps: int) -> bool:
+    if max_steps > 0:
+        return timestep < max_steps
+    return bool(simulation_app.is_running())
 
 
 @dataclass
@@ -415,7 +422,8 @@ def _make_env_wrapper(env, *, gym_module, vec_env_cls, tensor_dict_cls, clip_act
                     dtype=env.action_space.dtype,
                 )
 
-            self.env.reset()
+            obs_dict, _ = self.env.reset()
+            self._initial_observations = self._format_observations(obs_dict)
 
         @property
         def unwrapped(self):
@@ -441,17 +449,32 @@ def _make_env_wrapper(env, *, gym_module, vec_env_cls, tensor_dict_cls, clip_act
         def action_space(self):
             return self.env.action_space
 
+        def _flatten_group(self, obs_dict, group_names: list[str]) -> torch.Tensor:
+            values = []
+            for name in group_names:
+                value = obs_dict[name]
+                values.append(value.reshape(value.shape[0], -1))
+            return torch.cat(values, dim=-1)
+
+        def _format_observations(self, obs_dict) -> tuple[torch.Tensor, dict]:
+            policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
+            critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
+            return policy_obs, {"observations": {"critic": critic_obs}}
+
         def get_observations(self):
             obs_dict = self.env.unwrapped.observation_manager.compute()
-            if isinstance(obs_dict, dict) and not isinstance(obs_dict, tensor_dict_cls):
-                return tensor_dict_cls(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-            return obs_dict
+            return self._format_observations(obs_dict)
 
         def reset(self):
             obs_dict, _ = self.env.reset()
-            if isinstance(obs_dict, dict) and not isinstance(obs_dict, tensor_dict_cls):
-                obs_dict = tensor_dict_cls(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-            return obs_dict, None
+            return self._format_observations(obs_dict)
+
+        def consume_initial_observations(self):
+            observations = self._initial_observations
+            self._initial_observations = None
+            if observations is not None:
+                return observations
+            return self.get_observations()
 
         def step(self, actions):
             if self.clip_actions is not None:
@@ -460,21 +483,22 @@ def _make_env_wrapper(env, *, gym_module, vec_env_cls, tensor_dict_cls, clip_act
             obs_dict, rewards, dones, truncated, extras = self.env.step(actions)
             dones = dones | truncated
 
-            if isinstance(obs_dict, dict) and not isinstance(obs_dict, tensor_dict_cls):
-                obs_dict = tensor_dict_cls(obs_dict, batch_size=[self.env.unwrapped.num_envs])
-
-            return obs_dict, rewards, dones, extras
+            obs, obs_extras = self._format_observations(obs_dict)
+            extras.update(obs_extras)
+            return obs, rewards, dones, extras
 
     return SimpleRslRlEnvWrapper(env, clip_actions=clip_actions)
 
 
 def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bool) -> None:
     if hasattr(env_cfg, "use_batched_reference_trajectory"):
-        env_cfg.use_batched_reference_trajectory = True
+        env_cfg.use_batched_reference_trajectory = False
+        if hasattr(env_cfg, "planner_owned_reference_cache"):
+            env_cfg.planner_owned_reference_cache = False
         if use_raw_reference_trajectory:
             print(
-                "[play.py] Warning: --use-raw-reference-trajectory is legacy-only and is ignored "
-                "for the batched GPU teacher_elevation_trajectory env.",
+                "[play.py] Warning: --use-raw-reference-trajectory is legacy-only and is ignored; "
+                "policy playback runs without MPC reference trajectory.",
                 flush=True,
             )
         return
@@ -484,6 +508,9 @@ def _configure_reference_trajectory(env_cfg, *, use_raw_reference_trajectory: bo
 
 
 def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> None:
+    if not getattr(env_cfg, "planner_owned_reference_cache", False):
+        return
+
     from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
 
     manager_device = getattr(env, "device", env_cfg.sim.device)
@@ -624,7 +651,7 @@ def main() -> int:
         policy = runner.get_inference_policy(device=wrapped_env.device)
     print(f"[Policy] Using {'sampling' if args_cli.sample else 'inference'} mode", flush=True)
 
-    obs, _ = wrapped_env.get_observations(), None
+    obs, _ = wrapped_env.consume_initial_observations()
     timestep = 0
     camera_interval = _livestream_camera_update_interval(getattr(args_cli, "livestream", 0))
     debug.mark_startup("first observations")
@@ -644,7 +671,7 @@ def main() -> int:
 
     try:
         with _TerminalStepGate(enabled=bool(args_cli.step_mode)) as step_gate:
-            while simulation_app.is_running():
+            while _play_loop_should_continue(simulation_app, timestep=timestep, max_steps=args_cli.max_steps):
                 if not step_gate.wait_for_step():
                     if args_cli.step_mode:
                         _pump_play_paused_window(base_env)
@@ -685,6 +712,8 @@ def main() -> int:
                 )
 
                 if args_cli.video and timestep == args_cli.video_length:
+                    break
+                if args_cli.max_steps > 0 and timestep >= args_cli.max_steps:
                     break
 
     except KeyboardInterrupt:

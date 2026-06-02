@@ -220,7 +220,10 @@ def run_probe(*, num_envs: int, steps: int, drop_height: float, output: Path | N
 
     cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg()
     cfg.scene.num_envs = int(num_envs)
-    cfg.mpc_parallel_plan_batch_size = min(int(num_envs), int(cfg.mpc_parallel_plan_batch_size))
+    cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = min(
+        int(num_envs),
+        int(cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size),
+    )
     env = None
     rows: list[dict[str, Any]] = []
     try:

@@ -1,0 +1,651 @@
+
+Create `notes/log/YYYY-MM-DD-HHMM-t302l-play-viewer-cfg-split.md` with:
+
+```text
+Purpose: Verify PLAY no-MPC and VIEWER MPC cfg split.
+Candidate Ref: current working tree.
+Commands: pytest commands, nvidia-smi summary, headless play command, low-small command.
+PLAY result: pass/fail; GPU id; model_14000.pt; planner attach line absent/present.
+VIEWER/low-small result: pass/fail; FK semantic collision metrics; crossing-covered rows.
+Conclusion: accepted/blocker.
+```
+
+Update `notes/log/index.md`, `notes/todo.md`, and this page statuses.
+
+---
+
+### Task 10: Add `SemanticGlobalContactSensor` Skeleton And Unit Tests
+
+**Files:**
+- Create: `Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/__init__.py`
+- Create: `Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/semantic_global_contact_sensor.py`
+- Test: `Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py`
+
+- [ ] **Step 1: Write cfg import test**
+
+Add a test in `Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py`:
+
+```python
+def test_semantic_global_contact_sensor_importable():
+    from go2_pvcnn.sensor.semantic_contacter import SemanticGlobalContactSensor
+    from isaaclab.sensors import ContactSensor
+
+    assert issubclass(SemanticGlobalContactSensor, ContactSensor)
+```
+
+- [ ] **Step 2: Run test to verify failure**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_semantic_global_contact_sensor_importable -q
+```
+
+Expected: FAIL because `go2_pvcnn.sensor.semantic_contacter` does not exist.
+
+- [ ] **Step 3: Add minimal package and class**
+
+Create `Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/semantic_global_contact_sensor.py`:
+
+```python
+from __future__ import annotations
+
+from isaaclab.sensors import ContactSensor
+
+
+class SemanticGlobalContactSensor(ContactSensor):
+    """ContactSensor variant for global static semantic-course objects."""
+```
+
+Create `Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/__init__.py`:
+
+```python
+from .semantic_global_contact_sensor import SemanticGlobalContactSensor
+
+__all__ = ["SemanticGlobalContactSensor"]
+```
+
+- [ ] **Step 4: Run test**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_semantic_global_contact_sensor_importable -q
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py
+git commit -m "feat: add semantic global contact sensor shell"
+```
+
+---
+
+### Task 11: Implement Semantic Leaf Path Resolution
+
+**Files:**
+- Modify: `Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/semantic_global_contact_sensor.py`
+- Test: `Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py`
+
+- [ ] **Step 1: Write pure path-resolution tests**
+
+Add tests that use fake path lists so they do not need IsaacLab:
+
+```python
+def test_semantic_global_contact_leaf_filter_keeps_only_slots():
+    from go2_pvcnn.sensor.semantic_contacter.semantic_global_contact_sensor import (
+        filter_semantic_leaf_obstacle_paths,
+    )
+
+    paths = [
+        "/World/semantic_course/small/row_00",
+        "/World/semantic_course/small/row_00/col_00",
+        "/World/semantic_course/small/row_00/col_00/slot_00",
+        "/World/semantic_course/small/row_00/col_01/slot_01",
+        "/World/semantic_course/large/row_00/col_00/slot_00",
+    ]
+
+    assert filter_semantic_leaf_obstacle_paths(paths, "/World/semantic_course/small") == [
+        "/World/semantic_course/small/row_00/col_00/slot_00",
+        "/World/semantic_course/small/row_00/col_01/slot_01",
+    ]
+```
+
+- [ ] **Step 2: Run test to verify failure**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_semantic_global_contact_leaf_filter_keeps_only_slots -q
+```
+
+Expected: FAIL because `filter_semantic_leaf_obstacle_paths` is not implemented.
+
+- [ ] **Step 3: Implement leaf filter**
+
+Add to `semantic_global_contact_sensor.py`:
+
+```python
+def filter_semantic_leaf_obstacle_paths(paths: list[str], semantic_root: str) -> list[str]:
+    prefix = semantic_root.rstrip("/") + "/"
+    out: list[str] = []
+    for path in sorted(str(p) for p in paths):
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix):]
+        parts = rel.split("/")
+        if len(parts) == 3 and parts[0].startswith("row_") and parts[1].startswith("col_") and parts[2].startswith("slot_"):
+            out.append(path)
+    return out
+```
+
+- [ ] **Step 4: Run test**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_semantic_global_contact_leaf_filter_keeps_only_slots -q
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/semantic_global_contact_sensor.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py
+git commit -m "test: define semantic obstacle leaf filtering"
+```
+
+---
+
+### Task 12: Replace Env CFG With Two Global Semantic Contact Sensors
+
+**Files:**
+- Modify: `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py`
+- Modify: `Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py`
+
+- [ ] **Step 1: Write cfg structure test**
+
+Replace the old per-body sensor expectations with:
+
+```python
+def test_mpc_semantic_cfg_uses_two_global_semantic_contact_sensors():
+    from isaaclab.managers import SceneEntityCfg
+    from go2_pvcnn.sensor.semantic_contacter import SemanticGlobalContactSensor
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        SEMANTIC_CONTACT_BODY_NAMES,
+        TeacherElevationTrajectoryMpcSemanticEnvCfg,
+    )
+
+    cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg()
+    assert cfg.scene.semantic_contact_small.class_type is SemanticGlobalContactSensor
+    assert cfg.scene.semantic_contact_large.class_type is SemanticGlobalContactSensor
+    assert cfg.scene.semantic_contact_small.filter_prim_paths_expr == ["/World/semantic_course/small/.*"]
+    assert cfg.scene.semantic_contact_large.filter_prim_paths_expr == ["/World/semantic_course/large/.*"]
+
+    for body in SEMANTIC_CONTACT_BODY_NAMES:
+        assert not hasattr(cfg.scene, f"semantic_contact_{body}_small")
+        assert not hasattr(cfg.scene, f"semantic_contact_{body}_large")
+
+    params = cfg.rewards.semantic_contact_collision.params
+    assert isinstance(params["small_sensor_cfg"], SceneEntityCfg)
+    assert isinstance(params["large_sensor_cfg"], SceneEntityCfg)
+    assert params["small_sensor_cfg"].name == "semantic_contact_small"
+    assert params["large_sensor_cfg"].name == "semantic_contact_large"
+```
+
+- [ ] **Step 2: Run test to verify failure**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py::test_mpc_semantic_cfg_uses_two_global_semantic_contact_sensors -q
+```
+
+Expected: FAIL because cfg still has old per-body sensor attributes and old reward params.
+
+- [ ] **Step 3: Modify scene cfg**
+
+In `teacher_elevation_trajectory_mpc_semantic_env_cfg.py`:
+
+- Import `SemanticGlobalContactSensor`.
+- Replace `_semantic_contact_sensor(body_name, semantic_root)` with `_semantic_global_contact_sensor(semantic_root)`.
+- Remove all `semantic_contact_{body}_{small,large}` assignments.
+- Add:
+
+```python
+semantic_contact_small = _semantic_global_contact_sensor(SEMANTIC_COURSE_SMALL_ROOT)
+semantic_contact_large = _semantic_global_contact_sensor(SEMANTIC_COURSE_LARGE_ROOT)
+```
+
+The helper should return:
+
+```python
+ContactSensorCfg(
+    class_type=SemanticGlobalContactSensor,
+    prim_path="{ENV_REGEX_NS}/Robot/.*",
+    update_period=0.0,
+    history_length=0,
+    track_air_time=False,
+    debug_vis=False,
+    filter_prim_paths_expr=[f"{semantic_root}/.*"],
+)
+```
+
+- [ ] **Step 4: Modify reward cfg**
+
+Update reward params:
+
+```python
+semantic_contact_collision = RewTerm(
+    func=semantic_global_contact_collision_reward,
+    weight=1.0,
+    params={
+        "small_sensor_cfg": SceneEntityCfg("semantic_contact_small"),
+        "large_sensor_cfg": SceneEntityCfg("semantic_contact_large"),
+        "body_names": SEMANTIC_CONTACT_BODY_NAMES,
+        "body_weights": SEMANTIC_CONTACT_BODY_WEIGHTS,
+        "force_threshold": 1.0,
+        "force_scale": 50.0,
+        "force_clip": 1.0,
+        "small_weight": 1.0,
+        "large_weight": 2.0,
+    },
+)
+```
+
+- [ ] **Step 5: Run cfg tests**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py
+git commit -m "feat: switch mpc semantic cfg to global contact sensors"
+```
+
+---
+
+### Task 13: Implement New Reward Interface
+
+**Files:**
+- Modify: `Go2Pvcnn/extension/mdp/semantic_contact_rewards.py`
+- Modify: `Go2Pvcnn/tests/test_semantic_contact_rewards.py`
+
+- [ ] **Step 1: Add tensor numeric helper test**
+
+Add:
+
+```python
+def test_global_semantic_contact_penalty_shapes_and_body_weights():
+    from extension.mdp.semantic_contact_rewards import global_semantic_contact_penalty_from_matrices
+
+    small = torch.zeros((2, 3, 4, 3), dtype=torch.float32)
+    large = torch.zeros((2, 3, 2, 3), dtype=torch.float32)
+    small[0, 1, 2, 0] = 6.0
+    large[1, 2, 1, 1] = 11.0
+
+    penalty = global_semantic_contact_penalty_from_matrices(
+        small,
+        large,
+        body_weights=(1.0, 2.0, 5.0),
+        force_threshold=1.0,
+        force_scale=10.0,
+        force_clip=10.0,
+        small_weight=1.0,
+        large_weight=2.0,
+    )
+
+    torch.testing.assert_close(penalty, torch.tensor([1.0, 10.0]))
+```
+
+- [ ] **Step 2: Run test to verify failure**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_semantic_contact_rewards.py::test_global_semantic_contact_penalty_shapes_and_body_weights -q
+```
+
+Expected: FAIL because the helper does not exist.
+
+- [ ] **Step 3: Implement helper**
+
+Add:
+
+```python
+def global_semantic_contact_penalty_from_matrices(
+    small_force_matrix_w: Tensor,
+    large_force_matrix_w: Tensor,
+    *,
+    body_weights: tuple[float, ...],
+    force_threshold: float,
+    force_scale: float,
+    force_clip: float,
+    small_weight: float,
+    large_weight: float,
+) -> Tensor:
+    small = torch.as_tensor(small_force_matrix_w, dtype=torch.float32)
+    large = torch.as_tensor(large_force_matrix_w, dtype=torch.float32, device=small.device)
+    if small.ndim != 4 or large.ndim != 4 or int(small.shape[-1]) != 3 or int(large.shape[-1]) != 3:
+        raise ValueError("force matrices must have shape [N,B,O,3]")
+    if int(small.shape[0]) != int(large.shape[0]) or int(small.shape[1]) != int(large.shape[1]):
+        raise ValueError("small and large matrices must share [N,B]")
+    weights = torch.as_tensor(body_weights, dtype=torch.float32, device=small.device)
+    if int(weights.numel()) != int(small.shape[1]):
+        raise ValueError("body_weights length must match body dimension")
+    small_excess = torch.relu(torch.linalg.vector_norm(small, dim=-1) - float(force_threshold)).sum(dim=-1)
+    large_excess = torch.relu(torch.linalg.vector_norm(large, dim=-1) - float(force_threshold)).sum(dim=-1)
+    total = (weights[None, :] * (float(small_weight) * small_excess + float(large_weight) * large_excess)).sum(dim=-1)
+    return (total / max(float(force_scale), 1.0e-6)).clamp(0.0, float(force_clip))
+```
+
+- [ ] **Step 4: Add IsaacLab reward function test with fake env**
+
+Add:
+
+```python
+def test_semantic_global_contact_collision_reward_reads_scene_entity_cfgs():
+    from isaaclab.managers import SceneEntityCfg
+    from extension.mdp.semantic_contact_rewards import semantic_global_contact_collision_reward
+
+    class _Sensor:
+        def __init__(self, matrix):
+            self.data = type("Data", (), {"force_matrix_w": matrix})()
+            self.body_names = ["a", "b"]
+
+    class _Scene(dict):
+        pass
+
+    env = type("Env", (), {})()
+    env.device = "cpu"
+    env.num_envs = 1
+    env.scene = _Scene()
+    env.scene["semantic_contact_small"] = _Sensor(torch.zeros((1, 2, 1, 3)))
+    env.scene["semantic_contact_large"] = _Sensor(torch.ones((1, 2, 1, 3)) * 3.0)
+
+    reward = semantic_global_contact_collision_reward(
+        env,
+        small_sensor_cfg=SceneEntityCfg("semantic_contact_small"),
+        large_sensor_cfg=SceneEntityCfg("semantic_contact_large"),
+        body_names=("a", "b"),
+        body_weights=(1.0, 1.0),
+        force_threshold=1.0,
+        force_scale=10.0,
+        force_clip=10.0,
+        small_weight=1.0,
+        large_weight=2.0,
+    )
+    assert reward.shape == (1,)
+    assert reward.item() < 0.0
+```
+
+- [ ] **Step 5: Implement reward function**
+
+Add:
+
+```python
+def semantic_global_contact_collision_reward(
+    env,
+    small_sensor_cfg,
+    large_sensor_cfg,
+    body_names: tuple[str, ...],
+    body_weights: tuple[float, ...],
+    force_threshold: float = 1.0,
+    force_scale: float = 50.0,
+    force_clip: float = 1.0,
+    small_weight: float = 1.0,
+    large_weight: float = 2.0,
+) -> Tensor:
+    device = torch.device(getattr(env, "device", "cpu"))
+    small_sensor = _scene_sensor(env, small_sensor_cfg.name)
+    large_sensor = _scene_sensor(env, large_sensor_cfg.name)
+    if tuple(getattr(small_sensor, "body_names", ())) != tuple(body_names):
+        raise ValueError("small semantic contact sensor body_names do not match reward body_names")
+    if tuple(getattr(large_sensor, "body_names", ())) != tuple(body_names):
+        raise ValueError("large semantic contact sensor body_names do not match reward body_names")
+    penalty = global_semantic_contact_penalty_from_matrices(
+        torch.as_tensor(small_sensor.data.force_matrix_w, dtype=torch.float32, device=device),
+        torch.as_tensor(large_sensor.data.force_matrix_w, dtype=torch.float32, device=device),
+        body_weights=body_weights,
+        force_threshold=force_threshold,
+        force_scale=force_scale,
+        force_clip=force_clip,
+        small_weight=small_weight,
+        large_weight=large_weight,
+    )
+    return -penalty.to(device=device)
+```
+
+- [ ] **Step 6: Run reward tests**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
+```
+
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add Go2Pvcnn/extension/mdp/semantic_contact_rewards.py Go2Pvcnn/tests/test_semantic_contact_rewards.py
+git commit -m "feat: add global semantic contact reward"
+```
+
+---
+
+### Task 14: Implement PhysX Contact View Initialization
+
+**Files:**
+- Modify: `Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/semantic_global_contact_sensor.py`
+- Test: `Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py`
+
+- [ ] **Step 1: Add small IsaacLab smoke test**
+
+Update `Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py` to start the real MPC semantic cfg with a small env count first, for example `num_envs=8`, and assert:
+
+```python
+assert root.scene.sensors["semantic_contact_small"].data.force_matrix_w.ndim == 4
+assert root.scene.sensors["semantic_contact_large"].data.force_matrix_w.ndim == 4
+assert root.scene.sensors["semantic_contact_small"].data.force_matrix_w.shape[0] == 8
+assert root.scene.sensors["semantic_contact_small"].data.force_matrix_w.shape[1] == len(SEMANTIC_CONTACT_BODY_NAMES)
+assert root.scene.sensors["semantic_contact_large"].data.force_matrix_w.shape[1] == len(SEMANTIC_CONTACT_BODY_NAMES)
+```
+
+- [ ] **Step 2: Run smoke to verify failure**
+
+Run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py::test_mpc_semantic_global_contact_sensors_real_isaaclab_small -q
+```
+
+Expected: FAIL until `_initialize_impl()` creates a valid contact view.
+
+- [ ] **Step 3: Implement `_initialize_impl()`**
+
+Implementation must copy only the necessary shape/buffer setup from IsaacLab `ContactSensor._initialize_impl()` and change the contact view creation:
+
+```python
+sensor_paths = self._resolve_ordered_robot_body_paths()
+filter_paths = self._resolve_semantic_filter_leaf_paths()
+self._contact_physx_view = self._physics_sim_view.create_rigid_contact_view(
+    sensor_paths,
+    filter_patterns=[filter_paths] * len(sensor_paths),
+)
+self._num_bodies = len(self._configured_body_names)
+self._data.force_matrix_w = torch.zeros(
+    self._num_envs,
+    self._num_bodies,
+    len(filter_paths),
+    3,
+    device=self._device,
+)
+```
+
+The implementation must also set:
+
+```python
+self._body_names = list(self._configured_body_names)
+self._semantic_filter_paths = list(filter_paths)
+```
+
+and expose `body_names` as the configured body order.
+
+- [ ] **Step 4: Implement `_update_buffers_impl()` reshape**
+
+Use:
+
+```python
+force_matrix = self.contact_physx_view.get_contact_force_matrix(dt=self._sim_physics_dt)
+force_matrix = force_matrix.view(self._num_envs, self._num_bodies, self.contact_physx_view.filter_count, 3)
+self._data.force_matrix_w[env_ids] = force_matrix[env_ids]
+```
+
+If `track_pose` and `track_air_time` are not needed for these sensors, keep them disabled and raise a clear `RuntimeError` if enabled.
+
+- [ ] **Step 5: Run small smoke**
+
+Run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py::test_mpc_semantic_global_contact_sensors_real_isaaclab_small -q
+```
+
+Expected: PASS and no PhysX `expected 1024, found 7/5` errors.
+
+- [ ] **Step 6: Write log and commit**
+
+Create `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-smoke.md` with:
+
+```text
+Purpose: Validate SemanticGlobalContactSensor with real IsaacLab small env count.
+Command: CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest ...
+Result: PASS/FAIL
+Observed shapes: small=[N,B,O,3], large=[N,B,O,3]
+PhysX filter errors: none or copied error lines
+```
+
+Commit:
+
+```bash
+git add Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-smoke.md
+git commit -m "feat: implement semantic global contact sensor"
+```
+
+---
+
+### Task 15: 1024 Env Quantity Alignment Acceptance
+
+**Files:**
+- Modify: `Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py`
+- Create: `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-1024.md`
+
+- [ ] **Step 1: Add 1024 alignment test**
+
+The test must use the real cfg from `teacher_elevation_trajectory_mpc_semantic_env_cfg.py` and `num_envs=1024`.
+
+Assertions:
+
+```python
+expected_small = count_stage_paths("/World/semantic_course/small/row_*/col_*/slot_*")
+expected_large = count_stage_paths("/World/semantic_course/large/row_*/col_*/slot_*")
+small = root.scene.sensors["semantic_contact_small"]
+large = root.scene.sensors["semantic_contact_large"]
+
+assert small.data.force_matrix_w.shape == (1024, len(SEMANTIC_CONTACT_BODY_NAMES), expected_small, 3)
+assert large.data.force_matrix_w.shape == (1024, len(SEMANTIC_CONTACT_BODY_NAMES), expected_large, 3)
+assert small.body_names == list(SEMANTIC_CONTACT_BODY_NAMES)
+assert large.body_names == list(SEMANTIC_CONTACT_BODY_NAMES)
+assert small.contact_physx_view.sensor_count == 1024 * len(SEMANTIC_CONTACT_BODY_NAMES)
+assert large.contact_physx_view.sensor_count == 1024 * len(SEMANTIC_CONTACT_BODY_NAMES)
+assert small.contact_physx_view.filter_count == expected_small
+assert large.contact_physx_view.filter_count == expected_large
+```
+
+- [ ] **Step 2: Run 1024 test**
+
+Run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py::test_mpc_semantic_global_contact_sensors_quantity_alignment_1024 -q
+```
+
+Expected: PASS. The run must not emit:
+
+```text
+Filter pattern '/World/semantic_course/small/*' did not match the correct number of entries
+Filter pattern '/World/semantic_course/large/*' did not match the correct number of entries
+```
+
+- [ ] **Step 3: Write acceptance log**
+
+Create `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-1024.md` with:
+
+```text
+Purpose: Validate real 1024-env quantity alignment for semantic global contact sensors.
+Command: CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest ...
+num_envs: 1024
+body_count: 13
+expected_small_slot_count: <value>
+expected_large_slot_count: <value>
+small_shape: [1024, 13, expected_small_slot_count, 3]
+large_shape: [1024, 13, expected_large_slot_count, 3]
+PhysX filter errors: none
+Result: PASS/FAIL
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add Go2Pvcnn/tests/test_mpc_semantic_contact_isaaclab.py notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-1024.md
+git commit -m "test: validate semantic contact quantity alignment"
+```
+
+---
+
+### Task 16: Final Regression And Notes Alignment
+
+**Files:**
+- Modify: `notes/todo.md`
+- Modify: `notes/todo/T302l-mpc-rl-participation-and-reward-plan.md`
+- Modify: `notes/log/index.md`
+- Create: `notes/log/YYYY-MM-DD-HHMM-t302l-semantic-global-contact-final.md`
+
+- [x] **Step 1: Run focused unit tests**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_rl_participation.py Go2Pvcnn/tests/test_semantic_contact_rewards.py Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py -q
+```
+
+Result: PASS on 2026-05-30 card1 follow-up for the currently touched subset:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_semantic_rl_env_cfg.py Go2Pvcnn/tests/test_semantic_contact_rewards.py -q
+```
+
+`8 passed`.
+
+- [ ] **Step 2: Run MPC backend regression subset**
+
+Run:
+
+```bash
+pytest Go2Pvcnn/tests/test_batch_mpc_backend.py Go2Pvcnn/tests/test_batch_mpc_parametric.py -q
+```
+
+Expected: PASS.

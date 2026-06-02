@@ -27,17 +27,51 @@
 
 - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
 
-当前关键合同：
+## 配置归属
+
+同一个任务文件里现在有三类 cfg，不能混用：
+
+| cfg | 使用入口 | MPC | 用途 |
+| --- | --- | --- | --- |
+| `TeacherElevationTrajectoryMpcSemanticEnvCfg` | `scripts/train.py` / Gym 训练 id | 开启 | 正式 RL 训练；MPC reference cache、world-frame foot reward、semantic contact reward 都参与训练。 |
+| `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` | `scripts/play.py` / Gym Play id | 关闭 | 普通 policy checkpoint 回放；不 attach MPC trajectory manager，不启用 `reference_foot_pos` 和 `semantic_contact_collision` reward。 |
+| `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` | `extension/viz/go2_foostep_planner.py` | 开启 | 交互/诊断 viewer；保留 MPC 规划、marker、runtime diagnostics 和低矮障碍物调试行为。 |
+
+当前训练 cfg 的关键合同：
 
 - `planner_backend = "mpc"`
-- `reference_trajectory_horizon = 25`
-- `reference_replan_interval_steps = 25`
-- `mpc_parallel_plan_batch_size = 64`
 - `planner_owned_reference_cache = True`
-- `reference_foot_pos_reward()` 使用 world-frame foot tracking
-- 语义碰撞 reward 使用 IsaacLab filtered `ContactSensor.data.force_matrix_w`
+- `use_batched_reference_trajectory = True`
+- `mpc_planner_cfg.runtime.horizon_steps = 25`
+- `mpc_planner_cfg.runtime.replan_interval_steps = 25`
+- `mpc_planner_cfg.runtime.dt = 0.02`
+- `mpc_planner_cfg.runtime.parallel_plan_batch_size = 64`
+- `mpc_planner_cfg.reference_participation.exclude_pairs` 是黑名单 AND 逻辑：同时满足 terrain name 和 terrain row 的 env 不参与 MPC 抽签，只满足其中一个条件仍可参与。
+- `reference_foot_pos_reward()` 使用 world-frame foot tracking。
+- 语义碰撞 reward 使用两个全局真实 contact sensor：`semantic_contact_small` 和 `semantic_contact_large`。
 
-`train.py` / `play.py` 的 `--planner-backend` 默认是 `None`，不传时会尊重 env cfg 里的 `planner_backend="mpc"`。实际跑命令时仍建议显式写 `--planner-backend mpc`，防止复制到其它 trajectory 实验时走错 backend。
+当前 PLAY cfg 的关键合同：
+
+- `planner_owned_reference_cache = False`
+- `use_batched_reference_trajectory = False`
+- `rewards.reference_foot_pos = None`
+- `rewards.semantic_contact_collision = None`
+- `scene.semantic_contact_small = None`
+- `scene.semantic_contact_large = None`
+
+当前 VIEWER cfg 的关键合同：
+
+- 继承 PLAY 的观测 / action / scanner 播放设置。
+- 恢复 `planner_owned_reference_cache = True` 和 `use_batched_reference_trajectory = True`。
+- 恢复 `reference_foot_pos` 和 `semantic_contact_collision`。
+- 恢复 `semantic_contact_small` 和 `semantic_contact_large`。
+- `mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096`。
+- `mpc_planner_cfg.diagnostics.emit_runtime_counters = True`。
+- `mpc_planner_cfg.diagnostics.profile_cuda_sync = True`。
+
+`train.py` 的 `--planner-backend` 默认是 `None`，不传时会尊重训练 cfg 里的 `planner_backend="mpc"`。实际训练命令仍建议显式写 `--planner-backend mpc`，防止复制到其它 trajectory 实验时走错 backend。
+
+`play.py` 现在是普通 policy playback 路线。不要把 `play.py` 当 MPC viewer 用；需要看 MPC 足端规划、marker 或 low-small 诊断时，使用 `go2_foostep_planner.py`。
 
 ## Mermaid 命令入口图
 
@@ -46,22 +80,26 @@ graph LR
     train["train.py\n../../Go2Pvcnn/scripts/train.py"]
     play["play.py\n../../Go2Pvcnn/scripts/play.py"]
     viewer["go2_foostep_planner.py\n../../Go2Pvcnn/extension/viz/go2_foostep_planner.py"]
-    cfg["TeacherElevationTrajectoryMpcSemanticEnvCfg\nhorizon=25 replan=25 batch=64"]
+    train_cfg["Train cfg\nTeacherElevationTrajectoryMpcSemanticEnvCfg\nmpc on, horizon=25, replan=25, batch=64"]
+    play_cfg["PLAY cfg\nTeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY\nmpc off"]
+    viewer_cfg["VIEWER cfg\nTeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER\nmpc on, diagnostics on"]
     factory["trajectory_manager_factory.py\nbackend=mpc"]
     manager["MpcTrajectoryManager\n../../Go2Pvcnn/extension/batch_mpc_planner/manager.py"]
     selector["select_mpc_reference_envs\nAND exclude + round-robin"]
     cache["ReferenceTrajectoryCache\nfoot_pos_w + foot_pos_root"]
     rewards["rewards_reference.py + semantic_contact_rewards.py"]
 
-    train --> cfg
-    play --> cfg
-    viewer -->|"--planner-backend mpc\n--n-frames 25"| cfg
-    cfg --> factory
+    train --> train_cfg
+    play --> play_cfg
+    viewer -->|"--planner-backend mpc\n--n-frames 25"| viewer_cfg
+    train_cfg --> factory
+    viewer_cfg --> factory
     factory --> manager
     manager --> selector
     manager --> cache
     cache --> rewards
-    cfg --> rewards
+    train_cfg --> rewards
+    play_cfg -.->|"no MPC manager\nno reference/contact reward"| play
 ```
 
 ## 环境前提
@@ -233,7 +271,6 @@ teleop 键位：
 ```bash
 CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory_mpc_semantic \
-  --planner-backend mpc \
   --run_dir 2026-05-30_00-00-00 \
   --checkpoint model_0.pt \
   --num_envs 1 \
@@ -248,7 +285,6 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   --device cuda:0 \
   --num_envs 1 \
   --experiment teacher_elevation_trajectory_mpc_semantic \
-  --planner-backend mpc \
   --run_dir 2026-05-30_00-00-00 \
   --checkpoint model_0.pt \
   --video \
@@ -261,7 +297,6 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 ```bash
 CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory_mpc_semantic \
-  --planner-backend mpc \
   --run_dir 2026-05-30_00-00-00 \
   --checkpoint model_0.pt \
   --num_envs 1 \
@@ -275,7 +310,6 @@ step-mode policy 回放：
 ```bash
 CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory_mpc_semantic \
-  --planner-backend mpc \
   --run_dir 2026-05-30_00-00-00 \
   --checkpoint model_0.pt \
   --num_envs 1 \
@@ -287,6 +321,34 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 
 play 侧 `--step-mode` 需要显式开启；启用后每按一次空格推进一个 policy/env step，不按空格时仍保持 IsaacLab/Kit 窗口 render/pump。
 
+headless policy smoke 示例：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 240s /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1 \
+  --experiment teacher_elevation_trajectory_mpc_semantic \
+  --run_dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --max-steps 5 \
+  --debug-livestream
+```
+
+这个 smoke 应该看到：
+
+```text
+[Policy] Loaded successfully
+Starting Play Loop
+Play Complete - Timesteps: 5
+```
+
+并且不应该出现：
+
+```text
+[Planner] Attached ... trajectory manager
+```
+
 ## 关键参数解释
 
 训练 / play 侧：
@@ -294,7 +356,7 @@ play 侧 `--step-mode` 需要显式开启；启用后每按一次空格推进一
 - `--experiment teacher_elevation_trajectory_mpc_semantic`
   进入 MPC + semantic grid trajectory reward 训练 / 回放路径。
 - `--planner-backend mpc`
-  使用 [../../Go2Pvcnn/extension/batch_mpc_planner](../../Go2Pvcnn/extension/batch_mpc_planner)。
+  训练侧使用 [../../Go2Pvcnn/extension/batch_mpc_planner](../../Go2Pvcnn/extension/batch_mpc_planner)。普通 `play.py` 现在不依赖这个参数启动 MPC。
 - `--num_envs`
   并行环境数。当前 1024 env / 64 MPC env 已通过 25-step probe 和 1-iteration train entry。
 - `--max_iterations`
@@ -335,14 +397,17 @@ viewer 侧：
 
 env cfg 侧关键字段：
 
-- `planner_backend = "mpc"`
-- `reference_trajectory_horizon = 25`
-- `reference_replan_interval_steps = 25`
-- `plan_dt = 0.02`
-- `mpc_parallel_plan_batch_size = 64`
-- `planner_owned_reference_cache = True`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.planner_backend = "mpc"`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.planner_owned_reference_cache = True`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.use_batched_reference_trajectory = True`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.mpc_planner_cfg.runtime.horizon_steps = 25`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.mpc_planner_cfg.runtime.replan_interval_steps = 25`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.mpc_planner_cfg.runtime.dt = 0.02`
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64`
 - `reference_height_scanner_name = "semantic_height_scanner"`
-- `semantic_contact_collision` reward 使用 per-body small/large filtered contact sensors
+- `semantic_contact_collision` reward 使用 `semantic_contact_small` / `semantic_contact_large` 两个全局 sensor。
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` 会关闭 MPC/reference/contact reward。
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` 会重新开启 MPC/reference/contact，并把 viewer 诊断 batch 调到 `4096`。
 
 这些字段主要在：
 
@@ -350,7 +415,7 @@ env cfg 侧关键字段：
 
 ## 当前已验证证据
 
-截至 `2026-05-30` 的验证：
+截至 `2026-06-02` 的验证：
 
 - focused local tests：`7 passed`
 - backend / parametric tests：`140 passed, 1 warning`
@@ -358,16 +423,19 @@ env cfg 侧关键字段：
 - 1024 env / 64 MPC env 25-step probe：`5.256s`
 - real train entry：`1024 env`, `--max_iterations 1`, `--planner-backend mpc`，退出码 `0`
 - low-small full matrix：`20` rows，`12` crossing-covered rows，FK semantic collision `0`，max crossing FK error `0.0634m`
+- PLAY / VIEWER split：PLAY headless 使用 `model_14000.pt` 完成 `5` steps，且没有 attach MPC trajectory manager。
+- PLAY / VIEWER split 后 low-small 回归：`5` rows，`2` crossing-covered rows，FK semantic collision `0`，max crossing FK error `0.0416m`
 
 记录：
 
 - [../log/2026-05-30-2103-t302l-semantic-contact-smoke.md](../log/2026-05-30-2103-t302l-semantic-contact-smoke.md)
 - [../log/2026-05-30-2114-t302l-rl-1024-64-performance.md](../log/2026-05-30-2114-t302l-rl-1024-64-performance.md)
 - [../log/2026-05-30-2123-t302l-final-verification.md](../log/2026-05-30-2123-t302l-final-verification.md)
+- [../log/2026-06-02-0006-t302l-play-viewer-cfg-split.md](../log/2026-06-02-0006-t302l-play-viewer-cfg-split.md)
 
 已知 caveat：
 
-- IsaacLab/PhysX 会对全局 semantic course filtered contact pattern 输出 small/large filter count warning。当前 reward 和 sensors 能运行并区分 small/large；如果后续验收要求零 PhysX filter warning，需要单独处理全局语义物体的 contact 映射。
+- 如果看到 `Filter pattern '/World/semantic_course/small/*' did not match the correct number of entries` 或 large 版本，通常说明跑到了旧 per-body filtered contact sensor 路线，或没有用当前全局 semantic contact sensor 代码。
 
 ## 常见报错与第一检查点
 
@@ -379,7 +447,8 @@ env cfg 侧关键字段：
 `planner-owned reference cache requires env.unwrapped._trajectory_manager`
 
 - 说明当前路径没有挂上 trajectory manager
-- 对 `teacher_elevation_trajectory_mpc_semantic` 来说，这不是允许的正常训练路径
+- 对训练 cfg / viewer cfg 来说，这不是允许的正常路径
+- 对 `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` / `scripts/play.py` 来说，普通回放本来就不挂 `_trajectory_manager`
 
 `horizon_s must equal the fixed 1.0s contract`
 
@@ -401,6 +470,6 @@ viewer 能启动但看不到 scripted 命令效果：
 
 1. 先跑 `32 env / 1 iteration` train smoke，确认 MPC semantic 训练路径能启动
 2. 再跑 `1024 env / 1 iteration`，确认 64 MPC env participation 性能
-3. 再跑 viewer scripted smoke，确认 `--planner-backend mpc` 和 25 帧 horizon
+3. 再跑 viewer scripted smoke，确认 `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER`、`--planner-backend mpc` 和 25 帧 horizon
 4. 再跑正式单卡训练，例如 `1024 env / 5000 iterations`
-5. 最后用 `play.py` 看训练出的 checkpoint 回放
+5. 最后用 `play.py` 看训练出的 checkpoint 回放；这里检查 policy 能跑，不检查 MPC marker

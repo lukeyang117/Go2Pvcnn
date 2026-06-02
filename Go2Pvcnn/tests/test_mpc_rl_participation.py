@@ -236,9 +236,10 @@ def test_mpc_manager_selects_only_participating_envs(monkeypatch) -> None:
         terrain_levels=[0, 1, 7, 7, 3, 7, 2, 1],
     )
     env.cfg.mpc_planner_cfg.reference_participation.exclude_pairs = (
+        MpcTerrainDifficultyPair(terrain_cols=(0,), terrain_rows=(0, 1)),
         MpcTerrainDifficultyPair(terrain_cols=(1,), terrain_rows=(7,)),
+        MpcTerrainDifficultyPair(terrain_cols=(2,), terrain_rows=(7, 2, 1)),
     )
-    env.cfg.mpc_planner_cfg.reference_participation.include_terrain_cols = (1,)
     manager = MpcTrajectoryManager(env.cfg, device=torch.device("cpu"))
 
     cache = manager.refresh_from_env(env)

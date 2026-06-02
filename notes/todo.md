@@ -4,9 +4,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302m teacher elevation MPC semantic cleanup**.
-- Active branch page: [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md).
-- Active implementation plan: [T302m teacher elevation MPC semantic cleanup plan](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md).
+- Current focus: **T302k low-small MPC parameter tuning / residual reachability checks**.
+- Active branch page: [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md).
+- Active implementation plan: [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/manager.py](../Go2Pvcnn/extension/batch_mpc_planner/manager.py)
@@ -15,6 +15,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - [Go2Pvcnn/extension/mdp/semantic_contact_rewards.py](../Go2Pvcnn/extension/mdp/semantic_contact_rewards.py)
   - [Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/](../Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/)
   - [Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
+  - [Go2Pvcnn/scripts/play.py](../Go2Pvcnn/scripts/play.py)
+  - [Go2Pvcnn/extension/viz/go2_foostep_planner.py](../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/planner.py](../Go2Pvcnn/extension/batch_mpc_planner/planner.py)
@@ -22,10 +24,13 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - [Go2Pvcnn/tests/test_batch_mpc_backend.py](../Go2Pvcnn/tests/test_batch_mpc_backend.py)
 - Current contract:
   - T302m cleanup is implemented locally: production train/play/register/factory/viewer are narrowed to `teacher_elevation_trajectory_mpc_semantic + mpc`; old `batched_planner`, `batched_together_planner`, old teacher cfgs, old script entrypoints, and production debug variants are deleted from the working tree.
+  - T302m MPC tuning entry is unified locally: `TeacherElevationTrajectoryMpcSemanticEnvCfg` now tunes planner runtime/diagnostics/participation through `mpc_planner_cfg: MpcPlannerCfg`; production task cfg no longer exposes duplicated top-level MPC aliases.
+  - T302m MPC participation config is now blacklist-only: `include_terrain_cols`, `include_terrain_names`, and `include_terrain_rows` were removed; use `exclude_pairs` to remove envs from MPC reference participation.
   - T302m local/static verification passed: cleanup guards `3 passed`, viewer tests `16 passed`, current focused suite `43 passed`, backend suite `128 passed`, production pycompile pass, and production old-route scan has no matches.
   - T302m real IsaacLab acceptance passed on card1 after fixing train/play local `rsl_rl` imports, the RSL-RL wrapper observation contract, and the active PPO config: contact drop probe pass, 1024-env 1-iteration train smoke pass, 1024/64/25-step performance `epoch_seconds=5.8828s`.
   - T302l design approved in [../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html).
   - T302l implementation plan lives in [todo/T302l-mpc-rl-participation-and-reward-plan.md](todo/T302l-mpc-rl-participation-and-reward-plan.md).
+  - T302l PLAY/VIEWER split is verified locally and in `env_isaacsim`: `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` is no-MPC for `scripts/play.py`; `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` preserves MPC viewer behavior; `model_14000.pt` headless play ran 5 steps with no planner attach.
   - MPC RL runtime must align `reference_trajectory_horizon = reference_replan_interval_steps = 25`.
   - Only selected envs participate in MPC reference reward; selection filters by terrain/difficulty and excludes only AND-matching terrain+difficulty pairs.
   - `reference_foot_pos_reward()` must compare IsaacLab and MPC feet in world frame.
@@ -60,8 +65,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
-| T302m | verify | Current working tree has been cleaned to the single semantic MPC route; local/static tests pass and card1 IsaacLab acceptance passes. | Keep as regression guard; no further cleanup changes unless user asks for a second pass. |
-| T302l | verify | MPC participation selection, world-frame foot tracking, and 2 global semantic contact sensors are implemented; card1 1024 quantity alignment and 1024/64/25-step probe pass after exact-path body resolution. | Keep as regression guard; run train smoke only if changing RL reward/sensor wiring again. |
+| T302m | verify | Current working tree has been cleaned to the single semantic MPC route; MPC tuning is unified under `mpc_planner_cfg`; participation filtering is blacklist-only; local/static tests pass and card1 IsaacLab acceptance passes. | Keep as regression guard; run train smoke only if changing task cfg/runtime wiring again. |
+| T302l | verify | MPC participation/contact route and PLAY/VIEWER split are verified; PLAY no longer attaches MPC, viewer uses VIEWER cfg, and low-small hard metrics remain clean. | Keep as regression guard; rerun PLAY smoke only if changing play wrapper, policy observation shape, or task cfg. |
 | T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
 
 ## Root Map
@@ -69,7 +74,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
 | T302m | verify | teacher elevation MPC semantic cleanup | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | Single-route cleanup implemented locally; card1 IsaacLab acceptance and 1024/64/25 performance pass | design [2026-05-31](../docs/superpowers/specs/2026-05-31-teacher-elevation-mpc-semantic-cleanup-design.html) |
-| T302l | verify | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Selector/world-foot runtime complete; old per-body semantic contact route superseded by 2 global semantic contact sensors; card1 1024 quantity and performance acceptance pass | design [2026-05-30](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html) |
+| T302l | verify | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Selector/world-foot/global contact work and PLAY/VIEWER split verified; prior card1 1024 quantity/perf acceptance retained | design [2026-05-30](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html) |
 | T302k | active | parametric MPC trajectory contract | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | Low-small loss redesign and plane-only FK semantic collision testing | design commit `97c5b60` |
 | T302h | closed | semantic obstacle jitter/crossing evidence | [T302h](todo/T302h-semantic-obstacle-jitter-reproduction.md) | Closed as implementation route; retained as reproduction/evidence for T302k | rolling25 low-small production evidence |
 | T302i | closed | viewer realized-foot mismatch evidence | [T302i](todo/T302i-viewer-realized-foot-mismatch.md) | Closed as loss-sweep route; IK/FK mismatch evidence retained for T302k reachability | clamp trace and reachable probes |
@@ -89,6 +94,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | --- | --- | --- | --- | --- | --- |
 | T302m.1 | T302m | verify | P0 | Route cleanup, local regression, card1 contact/drop, 1024-env train smoke, and 1024/64/25-step perf pass. | [T302m cleanup plan](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) |
 | T302l.1 | T302l | verify | P0 | Two global semantic contact sensors are implemented; exact-path body resolution fixes 1024-env `gym.make` stall; card1 quantity and 25-step performance pass. | [T302l implementation plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
+| T302l.2 | T302l | verify | P0 | PLAY/VIEWER split verified: PLAY no planner attach with `model_14000.pt`, VIEWER cfg static contract covered, low-small regression FK semantic collisions `0`. | [Task 20](todo/T302l-mpc-rl-participation-and-reward-plan.md#task-20-play--viewer-cfg-split) |
 | T302k.12 | T302k | active | P0 | Replan touchdown/current-foot and touchdown IK/FK mismatch remain the main trajectory/reachability issue. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 | T302k.18 | T302k | verify | P0 | Low-small loss redesign is implemented and hard acceptance passes on covered full-matrix rows; remaining work is parameter tuning only unless user approves new loss. | [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md) |
 | T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented, committed, and covered by local regression tests. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
@@ -114,6 +120,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-06-02 00:06 | T302l PLAY / VIEWER cfg split | pass; local focused tests pass, headless PLAY with `model_14000.pt` completes 5 steps with no planner attach, low-small covered rows `2` with FK semantic collisions `0` and max crossing FK error `0.0416m` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-06-02-0006-t302l-play-viewer-cfg-split.md](log/2026-06-02-0006-t302l-play-viewer-cfg-split.md) |
 | 2026-05-31 23:06 | T302m card1 IsaacLab acceptance | pass; contact drop probe, 1024-env 1-iteration train smoke, and 1024/64/25-step perf pass; `epoch_seconds=5.8828s` | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | [2026-05-31-2306-t302m-card1-isaaclab-acceptance.md](log/2026-05-31-2306-t302m-card1-isaaclab-acceptance.md) |
 | 2026-05-31 22:49 | T302m teacher elevation MPC semantic cleanup | local pass; cleanup guards `3 passed`, viewer `16 passed`, focused `43 passed`, backend `128 passed`; IsaacLab card3 smoke blocked by existing 20.6GB 1024-env train process causing OOM | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | [2026-05-31-2249-t302m-teacher-mpc-semantic-cleanup.md](log/2026-05-31-2249-t302m-teacher-mpc-semantic-cleanup.md) |
 | 2026-05-31 10:49 | T302l semantic contact robot drop probe | pass; real robot drop detects small and large semantic contacts; empty envs stay zero; no NaN/Inf; small active frames `5` vs large active frames `150` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md](log/2026-05-31-1049-t302l-semantic-contact-robot-drop-probe.md) |

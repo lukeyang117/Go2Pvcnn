@@ -109,6 +109,10 @@ def compare_reference_tensors(
 
 
 def _reference_horizon_steps(env) -> int:
+    mpc_cfg = getattr(env.cfg, "mpc_planner_cfg", None)
+    runtime = getattr(mpc_cfg, "runtime", None)
+    if runtime is not None:
+        return int(getattr(runtime, "horizon_steps", 50))
     return int(getattr(env.cfg, "reference_trajectory_horizon", 50))
 
 

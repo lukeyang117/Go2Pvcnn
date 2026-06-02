@@ -469,9 +469,8 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     """Build planner cfg from task cfg while preserving MPC defaults."""
     cfg_obj = getattr(task_cfg, "mpc_planner_cfg", None)
     if isinstance(cfg_obj, MpcPlannerCfg):
-        out = copy.deepcopy(cfg_obj)
-    else:
-        out = MpcPlannerCfg()
+        return copy.deepcopy(cfg_obj)
+    out = MpcPlannerCfg()
     runtime = out.runtime
     runtime.horizon_steps = _copy_if_has(task_cfg, "reference_trajectory_horizon", int, runtime.horizon_steps)
     runtime.dt = _copy_if_has(task_cfg, "plan_dt", float, runtime.dt)
@@ -522,9 +521,6 @@ def planner_cfg_from_task_cfg(task_cfg) -> MpcPlannerCfg:
     participation = out.reference_participation
     _set_if_has(task_cfg, "mpc_reference_participation_enabled", bool, participation, "enabled")
     _set_if_has(task_cfg, "mpc_reference_selection_mode", str, participation, "selection_mode")
-    _tuple_ints_if_has(task_cfg, "mpc_reference_include_terrain_cols", participation, "include_terrain_cols")
-    _tuple_strs_if_has(task_cfg, "mpc_reference_include_terrain_names", participation, "include_terrain_names")
-    _tuple_ints_if_has(task_cfg, "mpc_reference_include_terrain_rows", participation, "include_terrain_rows")
     exclude_pairs = getattr(task_cfg, "mpc_reference_exclude_pairs", None)
     if exclude_pairs is not None:
         participation.exclude_pairs = tuple(_participation_pair_from_value(v) for v in exclude_pairs)

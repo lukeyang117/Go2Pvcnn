@@ -163,6 +163,8 @@ def _task_cfg(**overrides):
         "mpc_diagnostics_enabled": False,
     }
     values.update(overrides)
+    if "mpc_planner_cfg" not in values:
+        values["mpc_planner_cfg"] = planner_cfg_from_task_cfg(SimpleNamespace(**values))
     return SimpleNamespace(**values)
 
 
@@ -1149,7 +1151,7 @@ def test_factory_recognizes_mpc_backend(backend_name: str) -> None:
 
     assert isinstance(manager, MpcTrajectoryManager)
     assert manager.planner_backend == "mpc"
-    assert manager.horizon_steps() == cfg.reference_trajectory_horizon
+    assert manager.horizon_steps() == cfg.mpc_planner_cfg.runtime.horizon_steps
 
 
 def test_factory_rejects_unknown_backend_with_valid_backend_hint() -> None:
@@ -1165,11 +1167,24 @@ def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> N
     class_names = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg" in class_names
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" in class_names
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER" in class_names
     assert 'planner_backend: str = "mpc"' in source
     assert 'reference_height_scanner_name: str = "semantic_height_scanner"' in source
-    assert "planner_owned_reference_cache: bool = True" in source
-    assert "use_batched_reference_trajectory: bool = True" in source
-    assert "mpc_parallel_plan_batch_size: int = 4096" in source
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    class_sources = {name: ast.get_source_segment(source, node) or "" for name, node in classes.items()}
+    assert "planner_owned_reference_cache: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg"]
+    assert "use_batched_reference_trajectory: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg"]
+    assert "planner_owned_reference_cache: bool = False" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
+    assert "use_batched_reference_trajectory: bool = False" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
+    assert "self.rewards.reference_foot_pos = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
+    assert "self.rewards.semantic_contact_collision = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
+    assert "self.scene.semantic_contact_small = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
+    assert "self.scene.semantic_contact_large = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
+    assert "planner_owned_reference_cache: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "use_batched_reference_trajectory: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "semantic_contact_collision = TeacherElevationTrajectoryMpcSemanticRewardsCfg.semantic_contact_collision" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "reference_foot_pos = TeacherElevationTrajectoryMpcSemanticRewardsCfg.reference_foot_pos" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096" in source
     assert "mpc_max_dirty_envs_per_step" not in source
     assert "replicate_physics = True" in source
     assert "replicate_physics=True" in source
@@ -1215,10 +1230,12 @@ def test_mpc_semantic_train_play_parsers_and_gym_registration_are_isolated() -> 
     assert '"mpc"' in play_source
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg" in train_source
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" in play_source
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER" not in play_source
     assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0" in register_source
     assert "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0" in register_source
     assert "_teacher_elevation_trajectory_mpc_semantic_train_cfg" in agent_source
     assert "teacher_elevation_trajectory_mpc_semantic" in factory_source
+    assert "env_cfg.use_batched_reference_trajectory = True" not in play_source
 
 
 def test_cleanup_entrypoints_only_expose_mpc_semantic_experiment() -> None:
@@ -1691,6 +1708,32 @@ def test_mpc_runtime_defaults_to_deterministic_replan_phase_with_task_override()
 
     overridden = planner_cfg_from_task_cfg(SimpleNamespace(mpc_randomize_replan_phase=True))
     assert overridden.runtime.randomize_replan_phase is True
+
+
+def test_task_mpc_planner_cfg_is_single_source_when_present() -> None:
+    task_mpc = MpcPlannerCfg()
+    task_mpc.runtime.horizon_steps = 25
+    task_mpc.runtime.replan_interval_steps = 25
+    task_mpc.runtime.dt = 0.02
+    task_mpc.runtime.parallel_plan_batch_size = 64
+    task_mpc.diagnostics.emit_runtime_counters = False
+
+    cfg = planner_cfg_from_task_cfg(
+        SimpleNamespace(
+            mpc_planner_cfg=task_mpc,
+            reference_trajectory_horizon=9,
+            reference_replan_interval_steps=7,
+            plan_dt=0.05,
+            mpc_parallel_plan_batch_size=3,
+            mpc_diagnostics_emit_runtime_counters=True,
+        )
+    )
+
+    assert cfg.runtime.horizon_steps == 25
+    assert cfg.runtime.replan_interval_steps == 25
+    assert cfg.runtime.dt == pytest.approx(0.02)
+    assert cfg.runtime.parallel_plan_batch_size == 64
+    assert cfg.diagnostics.emit_runtime_counters is False
 
 
 def test_mpc_semantic_policy_routes_low_small_by_command_type_and_high_large_to_avoidance() -> None:
@@ -3394,7 +3437,7 @@ def test_mpc_manager_runtime_counters_emit_when_enabled() -> None:
     assert counters["num_envs"] == 3
     assert counters["global_due"] is True
     assert counters["global_due_count"] == 3
-    assert 0 <= counters["sampled_plan_count"] <= cfg.mpc_parallel_plan_batch_size
+    assert 0 <= counters["sampled_plan_count"] <= cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size
     assert counters["max_stale_observed"] >= 0
     assert counters["planner_ms"] >= 0.0
     assert counters["cache_ms"] >= 0.0
@@ -3428,57 +3471,57 @@ def test_touchdown_event_cap_is_configurable() -> None:
     assert result.touchdown_seq.shape == (1, 4, 3, 3)
 
 
-def test_task_cfg_can_override_loss_and_diagnostics_parameters() -> None:
-    task_cfg = _task_cfg(
-        mpc_loss_tracking_weight=2.5,
-        mpc_loss_tracking_vel_weight=3.0,
-        mpc_loss_contact_regularization_enabled=False,
-        mpc_swing_window_min_width=0.35,
-        mpc_swing_window_max_width=0.65,
-        mpc_swing_window_center_scale=0.62,
-        mpc_loss_swing_window_weight=1.7,
-        mpc_loss_diagonal_pair_weight=1.8,
-        mpc_loss_swing_center_urgency_weight=2.1,
-        mpc_loss_stance_ground_weight=3.0,
-        mpc_loss_swing_clearance_terrain_min_clearance_m=0.06,
-        mpc_loss_touchdown_semantic_large_weight=80.0,
-        mpc_loss_touchdown_semantic_small_ids=(3,),
-        mpc_loss_stance_semantic_small_weight=12.0,
-        mpc_loss_stance_semantic_large_ids=(4, 5),
-        mpc_loss_semantic_contact_avoid_weight=7.0,
-        mpc_loss_semantic_contact_avoid_activation_margin=0.08,
-        mpc_loss_semantic_contact_avoid_worst_contact_weight=4.0,
-        mpc_loss_semantic_contact_avoid_soft_margin_m=0.16,
-        mpc_loss_semantic_contact_avoid_soft_field_weight=3.0,
-        mpc_loss_semantic_contact_avoid_soft_worst_field_weight=5.0,
-        mpc_loss_semantic_obstacle_soft_margin_m=0.22,
-        mpc_loss_semantic_obstacle_body_soft_field_weight=6.0,
-        mpc_loss_semantic_obstacle_body_soft_worst_field_weight=7.0,
-        mpc_loss_semantic_obstacle_foot_soft_field_weight=8.0,
-        mpc_loss_semantic_obstacle_foot_soft_worst_field_weight=9.0,
-        mpc_loss_body_collision_margin_m=0.07,
-        mpc_loss_leg_collision_shank_sample_count=3,
-        mpc_loss_obstacle_risk_high_small_relative_height_m=0.25,
-        mpc_loss_obstacle_risk_linear_scale_when_blocked=0.4,
-        mpc_loss_obstacle_risk_yaw_scale_when_blocked=0.6,
-        mpc_loss_low_small_crossing_weight=9.0,
-        mpc_loss_low_small_crossing_corridor_width_m=0.33,
-        mpc_loss_low_small_crossing_obstacle_depth_m=0.31,
-        mpc_loss_high_obstacle_avoidance_weight=11.0,
-        mpc_loss_high_obstacle_avoidance_lateral_clearance_m=0.37,
-        mpc_loss_touchdown_surface_max_slope=0.45,
-        mpc_loss_root_foot_center_weight=1.3,
-        mpc_loss_root_height_enabled=False,
-        mpc_loss_root_height_weight=4.2,
-        mpc_loss_support_plane_rp_swing_weight=0.15,
-        mpc_nominal_stride_scale=0.6,
-        mpc_nominal_swing_height_m=0.12,
-        mpc_nominal_yaw_stride_scale=0.55,
-        mpc_loss_kinematics_joint_limit_margin_rad=0.14,
-        mpc_parallel_plan_batch_size=123,
-        mpc_diagnostics_enabled=True,
-        mpc_diagnostics_emit_viewer_fields=False,
-    )
+def test_task_cfg_can_carry_complete_mpc_planner_cfg() -> None:
+    task_mpc = MpcPlannerCfg()
+    task_mpc.losses.tracking.weight = 2.5
+    task_mpc.losses.tracking.vel_weight = 3.0
+    task_mpc.losses.contact_regularization.enabled = False
+    task_mpc.runtime.swing_window_min_width = 0.35
+    task_mpc.runtime.swing_window_max_width = 0.65
+    task_mpc.runtime.swing_window_center_scale = 0.62
+    task_mpc.losses.swing_window.weight = 1.7
+    task_mpc.losses.diagonal_pair.weight = 1.8
+    task_mpc.losses.swing_center_urgency.weight = 2.1
+    task_mpc.losses.stance_ground.weight = 3.0
+    task_mpc.losses.swing_clearance_terrain.min_clearance_m = 0.06
+    task_mpc.losses.touchdown_semantic.large_weight = 80.0
+    task_mpc.losses.touchdown_semantic.small_ids = (3,)
+    task_mpc.losses.stance_semantic.small_weight = 12.0
+    task_mpc.losses.stance_semantic.large_ids = (4, 5)
+    task_mpc.losses.semantic_contact_avoid.weight = 7.0
+    task_mpc.losses.semantic_contact_avoid.activation_margin = 0.08
+    task_mpc.losses.semantic_contact_avoid.worst_contact_weight = 4.0
+    task_mpc.losses.semantic_contact_avoid.soft_margin_m = 0.16
+    task_mpc.losses.semantic_contact_avoid.soft_field_weight = 3.0
+    task_mpc.losses.semantic_contact_avoid.soft_worst_field_weight = 5.0
+    task_mpc.losses.semantic_obstacle.soft_margin_m = 0.22
+    task_mpc.losses.semantic_obstacle.body_soft_field_weight = 6.0
+    task_mpc.losses.semantic_obstacle.body_soft_worst_field_weight = 7.0
+    task_mpc.losses.semantic_obstacle.foot_soft_field_weight = 8.0
+    task_mpc.losses.semantic_obstacle.foot_soft_worst_field_weight = 9.0
+    task_mpc.losses.body_collision.margin_m = 0.07
+    task_mpc.losses.leg_collision.shank_sample_count = 3
+    task_mpc.losses.obstacle_risk.high_small_relative_height_m = 0.25
+    task_mpc.losses.obstacle_risk.linear_scale_when_blocked = 0.4
+    task_mpc.losses.obstacle_risk.yaw_scale_when_blocked = 0.6
+    task_mpc.losses.low_small_crossing.weight = 9.0
+    task_mpc.losses.low_small_crossing.corridor_width_m = 0.33
+    task_mpc.losses.low_small_crossing.obstacle_depth_m = 0.31
+    task_mpc.losses.high_obstacle_avoidance.weight = 11.0
+    task_mpc.losses.high_obstacle_avoidance.lateral_clearance_m = 0.37
+    task_mpc.losses.touchdown_surface.max_slope = 0.45
+    task_mpc.losses.root_foot_center.weight = 1.3
+    task_mpc.losses.root_height.enabled = False
+    task_mpc.losses.root_height.weight = 4.2
+    task_mpc.losses.support_plane_rp.swing_weight = 0.15
+    task_mpc.runtime.nominal_stride_scale = 0.6
+    task_mpc.runtime.nominal_swing_height_m = 0.12
+    task_mpc.runtime.nominal_yaw_stride_scale = 0.55
+    task_mpc.losses.kinematics.joint_limit_margin_rad = 0.14
+    task_mpc.runtime.parallel_plan_batch_size = 123
+    task_mpc.diagnostics.enabled = True
+    task_mpc.diagnostics.emit_viewer_fields = False
+    task_cfg = SimpleNamespace(mpc_planner_cfg=task_mpc)
     cfg = planner_cfg_from_task_cfg(task_cfg)
 
     assert cfg.losses.tracking.weight == pytest.approx(2.5)

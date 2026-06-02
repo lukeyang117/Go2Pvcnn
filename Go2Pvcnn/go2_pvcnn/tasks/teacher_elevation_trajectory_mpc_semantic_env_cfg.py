@@ -26,6 +26,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 from extension.batch_mpc_planner.config import MpcPlannerCfg
+from extension.batch_mpc_planner.participation import MpcTerrainDifficultyPair
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from extension.mdp.rewards_reference import reference_foot_pos_reward
 from extension.mdp.semantic_contact_rewards import semantic_global_contact_collision_reward
@@ -454,12 +455,6 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
     use_batched_reference_trajectory: bool = True
     planner_backend: str = "mpc"
     reference_height_scanner_name: str = "semantic_height_scanner"
-    reference_trajectory_horizon: int = 25
-    reference_replan_interval_steps: int = 25
-    mpc_parallel_plan_batch_size: int = 64
-    mpc_diagnostics_emit_runtime_counters: bool = False
-    mpc_diagnostics_profile_cuda_sync: bool = False
-    plan_dt: float = 0.02
     mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
 
     def __post_init__(self):
@@ -477,6 +472,23 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
         elif self.scene.terrain.terrain_generator is not None:
             self.scene.terrain.terrain_generator.curriculum = False
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
+        self.mpc_planner_cfg.runtime.horizon_steps = 25
+        self.mpc_planner_cfg.runtime.replan_interval_steps = 25
+        self.mpc_planner_cfg.runtime.dt = 0.02
+        self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
+        self.mpc_planner_cfg.diagnostics.emit_runtime_counters = False
+        self.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
+        self.mpc_planner_cfg.reference_participation.exclude_pairs = (
+            MpcTerrainDifficultyPair(
+                terrain_names=(
+                    "pyramid_stairs",
+                    "pyramid_stairs_inv",
+                    "boxes",
+                    "random_rough",
+                ),
+                terrain_rows=(5, 6, 7, 8, 9),
+            ),
+            )
         self.mpc_planner_cfg.losses.fk_body_leg_collision.weight = 120.0
 
 
@@ -497,20 +509,21 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY(TeacherElevationTrajector
     terminations: TeacherElevationTrajectoryMpcSemanticTerminationsCfg = TeacherElevationTrajectoryMpcSemanticTerminationsCfg()
     curriculum: TeacherElevationTrajectoryMpcSemanticCurriculumCfg = TeacherElevationTrajectoryMpcSemanticCurriculumCfg()
 
-    planner_owned_reference_cache: bool = True
-    use_batched_reference_trajectory: bool = True
+    planner_owned_reference_cache: bool = False
+    use_batched_reference_trajectory: bool = False
     planner_backend: str = "mpc"
     reference_height_scanner_name: str = "semantic_height_scanner"
-    reference_trajectory_horizon: int = 25
-    reference_replan_interval_steps: int = 25
-    mpc_parallel_plan_batch_size: int = 4096
-    mpc_diagnostics_emit_runtime_counters: bool = True
-    mpc_diagnostics_profile_cuda_sync: bool = True
     semantic_scanner_update_period_s: float = 0.02
     mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
 
     def __post_init__(self):
         super().__post_init__()
+        self.planner_owned_reference_cache = False
+        self.use_batched_reference_trajectory = False
+        self.rewards.reference_foot_pos = None
+        self.rewards.semantic_contact_collision = None
+        self.scene.semantic_contact_small = None
+        self.scene.semantic_contact_large = None
         tg = self.scene.terrain.terrain_generator
         if tg is not None:
             tg.num_rows = SEMANTIC_TERRAIN_CFG.num_rows
@@ -528,3 +541,22 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY(TeacherElevationTrajector
                 self.decimation * self.sim.dt,
                 float(self.semantic_scanner_update_period_s),
             )
+
+
+@configclass
+class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER(TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY):
+    planner_owned_reference_cache: bool = True
+    use_batched_reference_trajectory: bool = True
+    planner_backend: str = "mpc"
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.planner_owned_reference_cache = True
+        self.use_batched_reference_trajectory = True
+        self.rewards.reference_foot_pos = TeacherElevationTrajectoryMpcSemanticRewardsCfg.reference_foot_pos
+        self.rewards.semantic_contact_collision = TeacherElevationTrajectoryMpcSemanticRewardsCfg.semantic_contact_collision
+        self.scene.semantic_contact_small = _semantic_global_contact_sensor(SEMANTIC_COURSE_SMALL_ROOT)
+        self.scene.semantic_contact_large = _semantic_global_contact_sensor(SEMANTIC_COURSE_LARGE_ROOT)
+        self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096
+        self.mpc_planner_cfg.diagnostics.emit_runtime_counters = True
+        self.mpc_planner_cfg.diagnostics.profile_cuda_sync = True

@@ -1127,10 +1127,10 @@ class PlannerVisualizer:
 
 def _build_env_cfg(args_cli: argparse.Namespace):
     from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
-        TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
+        TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER,
     )
 
-    env_cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY()
+    env_cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER()
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.scene.env_spacing = 6.0
     env_cfg.sim.device = args_cli.device
@@ -1139,9 +1139,9 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     env_cfg.commands.base_velocity.debug_vis = False
     env_cfg.commands.base_velocity.ranges = env_cfg.commands.base_velocity.limit_ranges
     env_cfg.planner_backend = "mpc"
-    env_cfg.reference_trajectory_horizon = int(args_cli.n_frames)
-    env_cfg.reference_replan_interval_steps = int(args_cli.n_frames)
-    env_cfg.plan_dt = float(args_cli.plan_dt)
+    env_cfg.mpc_planner_cfg.runtime.horizon_steps = int(args_cli.n_frames)
+    env_cfg.mpc_planner_cfg.runtime.replan_interval_steps = int(args_cli.n_frames)
+    env_cfg.mpc_planner_cfg.runtime.dt = float(args_cli.plan_dt)
     reset_base = env_cfg.events.reset_base
     reset_base.params["pose_range"]["x"] = (0.0, 0.0)
     reset_base.params["pose_range"]["y"] = (0.0, 0.0)
@@ -1150,11 +1150,9 @@ def _build_env_cfg(args_cli: argparse.Namespace):
 
 
 def _build_mpc_planner_cfg(env_cfg, args_cli: argparse.Namespace | None = None):
-    from extension.batch_mpc_planner.config import MpcRuntimeCfg, planner_cfg_from_task_cfg
+    from extension.batch_mpc_planner.config import planner_cfg_from_task_cfg
 
     cfg = planner_cfg_from_task_cfg(env_cfg)
-    cfg.runtime.dt = float(getattr(env_cfg, "plan_dt", cfg.runtime.dt))
-    cfg.runtime.horizon_steps = int(getattr(getattr(env_cfg, "mpc_runtime_cfg", None), "horizon_steps", MpcRuntimeCfg().horizon_steps))
     variant = None if args_cli is None else getattr(args_cli, "mpc_debug_variant", None)
     if variant not in (None, "", "baseline"):
         raise ValueError("MPC debug variants were removed from the production planner package.")

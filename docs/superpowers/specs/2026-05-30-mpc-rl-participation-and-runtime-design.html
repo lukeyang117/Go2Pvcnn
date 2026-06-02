@@ -446,6 +446,23 @@ R_collision(e) = -clamp(P(e) / F_scale, 0, F_clip)</div>
   </section>
 
   <section>
+    <h2>13.1 PLAY / VIEWER 配置拆分</h2>
+    <p><code>scripts/play.py</code> 和 <code>extension/viz/go2_foostep_planner.py</code> 不能继续共用同一个带 MPC 的 PLAY 配置。普通 policy playback 只需要 observation/action 推理链路，不需要 MPC reference cache、trajectory manager 或 25-step replan；viewer 则需要保留当前 MPC 可视化和规划行为。</p>
+    <table>
+      <thead>
+        <tr><th>配置类</th><th>消费者</th><th>MPC 行为</th><th>设计要求</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>TeacherElevationTrajectoryMpcSemanticEnvCfg</code></td><td><code>scripts/train.py</code></td><td>开启</td><td>训练主配置保持当前 25-step MPC、64 个参与 env、semantic contact reward 和 reference reward 行为。</td></tr>
+        <tr><td><code>TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY</code></td><td><code>scripts/play.py</code></td><td>关闭</td><td>只给普通 RL policy playback 使用；<code>planner_owned_reference_cache=False</code>，<code>use_batched_reference_trajectory=False</code>，不得 attach MPC trajectory manager。</td></tr>
+        <tr><td><code>TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER</code></td><td><code>extension/viz/go2_foostep_planner.py</code></td><td>开启</td><td>只给 MPC viewer 使用；保留当前 PLAY 中已有的 MPC、diagnostics、<code>n_frames</code>、<code>plan_dt</code> 和可视化调试行为。</td></tr>
+      </tbody>
+    </table>
+    <p>Gym 的 <code>Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0</code> 继续指向 <code>TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY</code>。viewer 不复用这个 play env id，而是在自己的 <code>_build_env_cfg()</code> 中直接构建 <code>TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER</code>。</p>
+    <p>关闭 PLAY 的 MPC 后，policy playback 仍必须保留策略观测需要的 semantic height scanner、command、action 和基础 IsaacLab step 链路。若 reward manager 在 play 中仍会计算 reward，MPC reference reward 必须在无 trajectory manager 时返回 0 或被配置关闭，不能因为缺少 MPC cache 使 policy playback 崩溃。</p>
+  </section>
+
+  <section>
     <h2>14. 验收</h2>
     <div class="guard">
       <strong>固定验证环境：</strong>所有 IsaacLab smoke、真实 contact sensor 验证和 RL 训练性能验收都必须使用 conda 环境
@@ -468,7 +485,9 @@ R_collision(e) = -clamp(P(e) / F_scale, 0, F_clip)</div>
         <tr><td>IsaacLab smoke</td><td>使用 <code>env_isaacsim</code> 环境：<code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python</code>；用 <code>CUDA_VISIBLE_DEVICES</code> 选择卡；small obstacles 场景下只有配置允许且未被 AND pair 隔离的 env 参与 MPC；两个全局语义 contact sensor 在并行 env 下 shape 正确且覆盖全部 semantic course leaf obstacle。</td></tr>
         <tr><td>错误日志回归</td><td>真实配置启动后日志中不得再出现 <code>Filter pattern '/World/semantic_course/small/*' did not match the correct number of entries</code> 或 large 同类错误。</td></tr>
         <tr><td>RL 训练性能验收</td><td>使用 <code>env_isaacsim</code> 环境和真实 IsaacLab 训练入口验证 <code>1024</code> 个并行环境、其中 <code>64</code> 个环境参与 MPC；关闭训练期 CUDA sync profiling；单个 RL epoch 耗时必须 <code>&lt;= 10s</code>；日志记录 <code>num_envs=1024</code>、<code>selected_mpc_envs=64</code>、epoch time、planner time、reward time、GPU id。</td></tr>
-        <tr><td>low-small 回归</td><td>继续跑 2026-05-28 设计中的 full matrix / FK semantic collision probe；crossing-covered rows 不允许出现 FK semantic collision 回归。</td></tr>
+        <tr><td>PLAY 无 MPC headless 验收</td><td>使用 <code>env_isaacsim</code> 和 headless <code>scripts/play.py</code>，先查找空闲 GPU 并用 <code>CUDA_VISIBLE_DEVICES=&lt;空闲卡&gt;</code> 指定，明确不能使用卡 3。必须使用真实 policy：<code>--experiment teacher_elevation_trajectory_mpc_semantic --run_dir 2026-05-31_20-03-27 --checkpoint model_14000.pt</code>，对应权重 <code>logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic/2026-05-31_20-03-27/model_14000.pt</code>。验收要求：policy 能跑通若干 step；日志不得出现 <code>[Planner] Attached ... trajectory manager</code>；env 不应挂载 <code>_trajectory_manager</code>；observation/action 推理链路正常。</td></tr>
+        <tr><td>VIEWER MPC 保持验收</td><td><code>go2_foostep_planner.py</code> 必须改用 <code>TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER</code>，启动后仍能 attach MPC trajectory manager，并保持 <code>n_frames</code>、<code>plan_dt</code> 和 MPC 可视化行为不变。</td></tr>
+        <tr><td>low-small 回归</td><td>继续跑 2026-05-28 设计中的 full matrix / FK semantic collision probe；crossing-covered rows 不允许出现 FK semantic collision 回归。硬验收为 <code>fk_semantic_collision_count == 0</code>、<code>fk_semantic_collision_rate == 0</code>，并且 covered crossing rows 上 <code>planned_vs_fk_foot_error_crossing_leg_max_m &lt;= 0.08m</code>；必须记录 crossing-covered rows 数量，不能因为没有触发 crossing 而假通过。</td></tr>
       </tbody>
     </table>
   </section>

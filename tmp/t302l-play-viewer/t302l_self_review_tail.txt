@@ -1,0 +1,14 @@
+## Self-Review
+
+- Spec coverage:
+  - Two global semantic contact sensors: Task 10, Task 12, Task 14.
+  - Sensor path and semantic object quantity alignment: Task 11, Task 14, Task 15.
+  - IsaacLab reward interface: Task 12, Task 13.
+  - 1024 env real cfg validation: Task 15.
+  - Performance and train validation: Task 16.
+- Placeholder scan:
+  - This plan intentionally uses concrete file paths, commands, expected results, and test names. No open-ended placeholder steps remain.
+- Type/interface consistency:
+  - Sensor names are consistently `semantic_contact_small` and `semantic_contact_large`.
+  - Reward function is consistently `semantic_global_contact_collision_reward`.
+  - Force matrix shape is consistently `[num_envs, num_bodies, num_semantic_objects, 3]`.

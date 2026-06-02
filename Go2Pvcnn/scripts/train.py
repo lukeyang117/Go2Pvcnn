@@ -471,7 +471,7 @@ def main() -> int:
     print(
         "\n[Wrapper] Creating RSL-RL environment wrapper... "
         "(next: initial env.reset(); batched reference replans on startup + "
-        "cfg.reference_replan_interval_steps)",
+        "cfg.mpc_planner_cfg.runtime.replan_interval_steps)",
         flush=True,
     )
     

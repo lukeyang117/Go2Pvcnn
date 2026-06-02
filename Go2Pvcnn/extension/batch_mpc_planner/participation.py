@@ -18,9 +18,6 @@ class MpcTerrainDifficultyPair:
 @dataclass
 class MpcReferenceParticipationCfg:
     enabled: bool = True
-    include_terrain_cols: tuple[int, ...] | None = None
-    include_terrain_names: tuple[str, ...] | None = None
-    include_terrain_rows: tuple[int, ...] | None = None
     exclude_pairs: tuple[MpcTerrainDifficultyPair, ...] = field(default_factory=tuple)
     selection_mode: str = "round_robin"
 
@@ -79,16 +76,9 @@ def eligible_mpc_reference_envs(
     rows = None
     if terrain_types is not None:
         types = _as_1d_long(terrain_types, device=device, num_envs=num_envs, name="terrain_types")
-        base &= _isin(types, cfg.include_terrain_cols)
-        base &= _name_mask(types, terrain_names, cfg.include_terrain_names, none_matches=True)
-    elif cfg.include_terrain_cols is not None or cfg.include_terrain_names is not None:
-        base &= torch.zeros_like(base)
 
     if terrain_levels is not None:
         rows = _as_1d_long(terrain_levels, device=device, num_envs=num_envs, name="terrain_levels")
-        base &= _isin(rows, cfg.include_terrain_rows)
-    elif cfg.include_terrain_rows is not None:
-        base &= torch.zeros_like(base)
 
     for pair in cfg.exclude_pairs:
         if types is None:

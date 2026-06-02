@@ -31,11 +31,11 @@ def main() -> None:
 
         cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg()
         cfg.scene.num_envs = 1024
-        cfg.mpc_parallel_plan_batch_size = 64
-        cfg.reference_trajectory_horizon = 25
-        cfg.reference_replan_interval_steps = 25
-        cfg.mpc_diagnostics_emit_runtime_counters = False
-        cfg.mpc_diagnostics_profile_cuda_sync = False
+        cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
+        cfg.mpc_planner_cfg.runtime.horizon_steps = 25
+        cfg.mpc_planner_cfg.runtime.replan_interval_steps = 25
+        cfg.mpc_planner_cfg.diagnostics.emit_runtime_counters = False
+        cfg.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
         env = gym.make("Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0", cfg=cfg)
         root = env.unwrapped
         attach_trajectory_manager_if_enabled(

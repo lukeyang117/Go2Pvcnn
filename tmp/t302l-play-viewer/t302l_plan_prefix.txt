@@ -341,7 +341,6 @@ Completed scope:
 Evidence:
 
 - [../log/2026-06-02-0006-t302l-play-viewer-cfg-split.md](../log/2026-06-02-0006-t302l-play-viewer-cfg-split.md)
-
 ## Self-Review
 
 - Spec coverage:

@@ -17,6 +17,7 @@ if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
 from extension.batch_mpc_planner.types import MpcPlannerTerrain
+from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.viz import go2_foostep_planner as viewer
 from scripts import play
 
@@ -159,6 +160,193 @@ def test_viewer_main_builds_only_selected_backend_planner_cfgs(monkeypatch) -> N
     assert calls == ["mpc"]
 
 
+def test_viewer_build_env_cfg_uses_viewer_cfg_name() -> None:
+    source = (GO2PVCNN_ROOT / "extension/viz/go2_foostep_planner.py").read_text(encoding="utf-8")
+    build_env_cfg_source = source[source.index("def _build_env_cfg") : source.index("def _build_mpc_planner_cfg")]
+
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER" in build_env_cfg_source
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" not in build_env_cfg_source
+
+
+def test_play_configure_reference_trajectory_disables_mpc() -> None:
+    env_cfg = SimpleNamespace(
+        use_batched_reference_trajectory=True,
+        planner_owned_reference_cache=True,
+    )
+
+    play._configure_reference_trajectory(env_cfg, use_raw_reference_trajectory=False)
+
+    assert env_cfg.use_batched_reference_trajectory is False
+    assert env_cfg.planner_owned_reference_cache is False
+
+
+def test_play_attach_reference_manager_skips_when_cache_disabled(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _unexpected_attach(*_args, **_kwargs):
+        calls.append("attach")
+        raise AssertionError("play.py should not attach MPC when planner_owned_reference_cache is false")
+
+    monkeypatch.setattr(
+        "extension.trajectory_manager_factory.attach_trajectory_manager_if_enabled",
+        _unexpected_attach,
+    )
+    env_cfg = SimpleNamespace(planner_owned_reference_cache=False, sim=SimpleNamespace(device="cpu"))
+
+    play._attach_reference_manager_if_enabled(SimpleNamespace(device="cpu"), env_cfg, "teacher_elevation_trajectory_mpc_semantic")
+
+    assert calls == []
+
+
+def test_play_wrapper_get_observations_returns_rsl_rl_tuple() -> None:
+    compute_count = 0
+
+    class _FakeObservationManager:
+        def compute(self):
+            nonlocal compute_count
+            compute_count += 1
+            return {
+                "policy_elevation_semantic_map": torch.ones((2, 2, 2, 2), dtype=torch.float32),
+                "policy_state": torch.ones((2, 3), dtype=torch.float32) * 2.0,
+                "critic_elevation_semantic_map": torch.ones((2, 2, 2, 2), dtype=torch.float32) * 3.0,
+                "critic_state": torch.ones((2, 4), dtype=torch.float32) * 4.0,
+            }
+
+    class _FakeEnv:
+        num_envs = 2
+        device = "cpu"
+        max_episode_length = 10
+        action_space = SimpleNamespace(dtype="float32")
+        action_manager = SimpleNamespace(total_action_dim=12)
+        unwrapped = SimpleNamespace(num_envs=2, cfg=SimpleNamespace(), observation_manager=_FakeObservationManager())
+        episode_length_buf = torch.zeros(2, dtype=torch.long)
+
+        def reset(self):
+            return self.unwrapped.observation_manager.compute(), {}
+
+    class _FakeVecEnv:
+        pass
+
+    class _FakeBox:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    gym_module = SimpleNamespace(spaces=SimpleNamespace(Box=_FakeBox, flatdim=lambda _space: 12))
+    wrapped = play._make_env_wrapper(
+        _FakeEnv(),
+        gym_module=gym_module,
+        vec_env_cls=_FakeVecEnv,
+        tensor_dict_cls=dict,
+        clip_actions=None,
+    )
+
+    obs, extras = wrapped.get_observations()
+
+    assert obs.shape == (2, 11)
+    assert extras["observations"]["critic"].shape == (2, 12)
+    assert compute_count == 2
+
+
+def test_play_wrapper_consumes_cached_initial_observations_without_second_reset() -> None:
+    compute_count = 0
+
+    class _FakeObservationManager:
+        def compute(self):
+            nonlocal compute_count
+            compute_count += 1
+            return {
+                "policy_elevation_semantic_map": torch.ones((1, 2, 2, 2), dtype=torch.float32),
+                "policy_state": torch.ones((1, 3), dtype=torch.float32),
+                "critic_elevation_semantic_map": torch.ones((1, 2, 2, 2), dtype=torch.float32),
+                "critic_state": torch.ones((1, 4), dtype=torch.float32),
+            }
+
+    class _FakeEnv:
+        num_envs = 1
+        device = "cpu"
+        max_episode_length = 10
+        action_space = SimpleNamespace(dtype="float32")
+        action_manager = SimpleNamespace(total_action_dim=12)
+        unwrapped = SimpleNamespace(num_envs=1, cfg=SimpleNamespace(), observation_manager=_FakeObservationManager())
+        episode_length_buf = torch.zeros(1, dtype=torch.long)
+
+        def reset(self):
+            return self.unwrapped.observation_manager.compute(), {}
+
+    class _FakeVecEnv:
+        pass
+
+    gym_module = SimpleNamespace(spaces=SimpleNamespace(Box=lambda **kwargs: kwargs, flatdim=lambda _space: 12))
+    wrapped = play._make_env_wrapper(
+        _FakeEnv(),
+        gym_module=gym_module,
+        vec_env_cls=_FakeVecEnv,
+        tensor_dict_cls=dict,
+        clip_actions=None,
+    )
+
+    obs, extras = wrapped.consume_initial_observations()
+
+    assert obs.shape == (1, 11)
+    assert extras["observations"]["critic"].shape == (1, 12)
+    assert compute_count == 1
+
+
+
+def test_play_main_unpacks_get_observations_result_for_policy_obs() -> None:
+    source = (GO2PVCNN_ROOT / "scripts/play.py").read_text(encoding="utf-8")
+
+    assert "obs, _ = wrapped_env.consume_initial_observations()" in source
+    assert "obs, _ = wrapped_env.get_observations(), None" not in source
+
+
+def test_play_cli_has_optional_max_steps_exit_for_headless_smoke() -> None:
+    source = (GO2PVCNN_ROOT / "scripts/play.py").read_text(encoding="utf-8")
+
+    assert '"--max-steps"' in source
+    assert "while _play_loop_should_continue(simulation_app, timestep=timestep, max_steps=args_cli.max_steps):" in source
+    assert "if args_cli.max_steps > 0 and timestep >= args_cli.max_steps:" in source
+
+
+def test_play_loop_should_continue_uses_max_steps_without_app_running() -> None:
+    app = SimpleNamespace(is_running=lambda: False)
+
+    assert play._play_loop_should_continue(app, timestep=0, max_steps=1)
+    assert not play._play_loop_should_continue(app, timestep=1, max_steps=1)
+    assert not play._play_loop_should_continue(app, timestep=0, max_steps=0)
+
+
+def test_actor_critic_cnn_uses_group_cnn_cfg_for_saved_policy_shape() -> None:
+    from rsl_rl.modules.actor_critic_cnn import ActorCriticCNN
+
+    cfg = {
+        "output_channels": [32, 64],
+        "kernel_size": [3, 3],
+        "stride": [1, 1],
+        "padding": "zeros",
+        "max_pool": [True, True],
+        "activation": "elu",
+        "flatten": True,
+    }
+
+    model = ActorCriticCNN(
+        num_actor_obs=557,
+        num_critic_obs=560,
+        num_actions=12,
+        actor_cnn_cfg=cfg,
+        critic_cnn_cfg=cfg,
+        actor_hidden_dims=[256, 128],
+        critic_hidden_dims=[256, 128],
+        activation="elu",
+    )
+
+    state_keys = set(model.state_dict())
+    assert "actor_cnns.policy_elevation_semantic_map.0.weight" in state_keys
+    assert "critic_cnns.critic_elevation_semantic_map.3.weight" in state_keys
+    assert model.actor[0].weight.shape == (256, 1069)
+    assert model.critic[0].weight.shape == (256, 1072)
+
+
 def test_viewer_ground_robot_from_scanner_shifts_root_z_to_match_ground(monkeypatch) -> None:
     base_env, robot, scene, sim = _fake_base_env()
     terrain = MpcPlannerTerrain(
@@ -281,16 +469,18 @@ def test_viewer_rotates_mpc_body_frame_command_by_root_yaw() -> None:
     )
 
 
-def test_viewer_mpc_cfg_keeps_fixed_cycle_horizon_when_viewer_requests_long_playback() -> None:
-    env_cfg = SimpleNamespace(
-        plan_dt=0.02,
-        reference_trajectory_horizon=300,
-        reference_replan_interval_steps=300,
-    )
+def test_viewer_mpc_cfg_uses_nested_planner_runtime() -> None:
+    mpc_cfg = MpcPlannerCfg()
+    mpc_cfg.runtime.horizon_steps = 300
+    mpc_cfg.runtime.replan_interval_steps = 300
+    mpc_cfg.runtime.dt = 0.03
+    env_cfg = SimpleNamespace(mpc_planner_cfg=mpc_cfg)
 
     cfg = viewer._build_mpc_planner_cfg(env_cfg)
 
-    assert cfg.runtime.horizon_steps == 25
+    assert cfg.runtime.horizon_steps == 300
+    assert cfg.runtime.replan_interval_steps == 300
+    assert cfg.runtime.dt == pytest.approx(0.03)
 
 
 def test_play_step_gate_disabled_does_not_block() -> None:

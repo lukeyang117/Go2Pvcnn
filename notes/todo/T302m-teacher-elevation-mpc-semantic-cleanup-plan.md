@@ -521,3 +521,103 @@ Update:
 - one new log file under `notes/log/`
 
 Record commands, GPU, pass/fail, key metrics, and remaining risk.
+
+---
+
+### Task 10: Unify MPC Tuning Entry Under `mpc_planner_cfg`
+
+Status: complete locally on 2026-06-01.
+
+**Files:**
+- Modify: `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py`
+- Modify: `Go2Pvcnn/extension/batch_mpc_planner/config.py`
+- Modify: `Go2Pvcnn/extension/viz/go2_foostep_planner.py`
+- Modify: `Go2Pvcnn/extension/mdp/rewards_reference.py`
+- Modify: focused probes/tests under `Go2Pvcnn/tests/`
+
+- [x] **Step 1: Make `MpcPlannerCfg` the RL task tuning entry**
+
+`TeacherElevationTrajectoryMpcSemanticEnvCfg` now tunes MPC through:
+
+```python
+mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
+```
+
+Runtime horizon/replan/dt/parallel batch size, diagnostics, low-small FK collision weight, and MPC participation exclude pairs are set on `self.mpc_planner_cfg`.
+
+- [x] **Step 2: Stop production task cfg from exposing duplicated MPC aliases**
+
+Removed the active task cfg fields:
+
+- `reference_trajectory_horizon`
+- `reference_replan_interval_steps`
+- `mpc_parallel_plan_batch_size`
+- `mpc_diagnostics_emit_runtime_counters`
+- `mpc_diagnostics_profile_cuda_sync`
+- `plan_dt`
+
+Viewer CLI still exposes `--n-frames` / `--plan-dt`, but writes them into `env_cfg.mpc_planner_cfg.runtime`.
+
+- [x] **Step 3: Make planner bridge prefer official config object**
+
+`planner_cfg_from_task_cfg()` now returns a deep copy of `task_cfg.mpc_planner_cfg` when present. The old top-level override path remains only as compatibility for legacy tests/fake configs without `mpc_planner_cfg`.
+
+- [x] **Step 4: Verify focused regressions**
+
+Local result:
+
+```bash
+pytest Go2Pvcnn/tests/test_viewer_reset.py -q
+# 15 passed
+
+pytest Go2Pvcnn/tests/test_mpc_rl_participation.py Go2Pvcnn/tests/test_batch_mpc_backend.py -q
+# 133 passed, 1 warning
+```
+
+Related log: [../log/2026-06-01-1743-t302m-mpc-planner-cfg-unification.md](../log/2026-06-01-1743-t302m-mpc-planner-cfg-unification.md).
+
+---
+
+### Task 11: Remove MPC Participation Include Whitelist Fields
+
+Status: complete locally on 2026-06-01.
+
+**Files:**
+- Modify: `Go2Pvcnn/extension/batch_mpc_planner/participation.py`
+- Modify: `Go2Pvcnn/extension/batch_mpc_planner/config.py`
+- Modify: `Go2Pvcnn/tests/test_mpc_rl_participation.py`
+
+- [x] **Step 1: Remove include fields from `MpcReferenceParticipationCfg`**
+
+Removed:
+
+- `include_terrain_cols`
+- `include_terrain_names`
+- `include_terrain_rows`
+
+Participation now defaults all envs to eligible and only removes envs through `exclude_pairs`.
+
+- [x] **Step 2: Remove include alias bridge**
+
+Removed legacy `mpc_reference_include_*` mapping from `planner_cfg_from_task_cfg()`.
+
+- [x] **Step 3: Verify focused regressions**
+
+Local result:
+
+```bash
+pytest Go2Pvcnn/tests/test_mpc_rl_participation.py -q
+# 4 passed
+
+pytest Go2Pvcnn/tests/test_batch_mpc_backend.py -q
+# 129 passed, 1 warning
+```
+
+Source scan:
+
+```bash
+rg -n "include_terrain_cols|include_terrain_names|include_terrain_rows|mpc_reference_include" Go2Pvcnn notes -g '*.py' -g '*.md'
+# no matches
+```
+
+Related log: [../log/2026-06-01-2228-t302m-remove-participation-include-fields.md](../log/2026-06-01-2228-t302m-remove-participation-include-fields.md).
