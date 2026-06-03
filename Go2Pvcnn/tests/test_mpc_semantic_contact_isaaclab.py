@@ -38,10 +38,14 @@ def _run_global_contact_sensor_shape_check(num_envs: int) -> None:
         assert list(large.body_names) == list(SEMANTIC_CONTACT_BODY_NAMES)
         assert small_matrix.shape == (num_envs, body_count, expected_small, 3)
         assert large_matrix.shape == (num_envs, body_count, expected_large, 3)
-        assert small.contact_physx_view.sensor_count == num_envs * body_count
-        assert large.contact_physx_view.sensor_count == num_envs * body_count
-        assert small.contact_physx_view.filter_count == expected_small
-        assert large.contact_physx_view.filter_count == expected_large
+        assert small.has_semantic_filters == (expected_small > 0)
+        assert large.has_semantic_filters == (expected_large > 0)
+        if expected_small > 0:
+            assert small.contact_physx_view.sensor_count == num_envs * body_count
+            assert small.contact_physx_view.filter_count == expected_small
+        if expected_large > 0:
+            assert large.contact_physx_view.sensor_count == num_envs * body_count
+            assert large.contact_physx_view.filter_count == expected_large
     finally:
         if env is not None:
             env.close()

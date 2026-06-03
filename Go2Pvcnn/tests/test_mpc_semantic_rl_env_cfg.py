@@ -120,3 +120,46 @@ def test_mpc_semantic_cfg_uses_two_global_semantic_contact_sensors() -> None:
     assert '"small_sensor_cfg": SceneEntityCfg("semantic_contact_small")' in source
     assert '"large_sensor_cfg": SceneEntityCfg("semantic_contact_large")' in source
     assert "swing_leg_collision" not in source
+
+
+def test_mpc_semantic_cfg_exposes_semantic_obstacle_curriculum() -> None:
+    source = CFG_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert "SemanticObstacleCurriculumCfg" in source
+    assert "SemanticObstacleCount" in source
+    assert "semantic_obstacle_curriculum" in source
+    assert "terrain_levels_vel_semantic_plane_gate" in source
+    assert "semantic_obstacle_levels" not in source
+    assert "semantic_obstacle_curriculum_level" not in source
+    assert "consecutive_success_required=5" in source
+    assert "plane_collision_rate_threshold=0.03" in source
+    assert "semantic_curriculum_min_plane_episodes" not in source
+    assert "semantic_curriculum_eval_window_episodes" not in source
+    assert "semantic_curriculum_update_interval_steps" not in source
+    assert "require_terrain_ready" not in source
+
+    curriculum_class = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TeacherElevationTrajectoryMpcSemanticCurriculumCfg"
+    )
+    assignments = {
+        target.id
+        for node in curriculum_class.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert "terrain_levels" in assignments
+    assert "semantic_obstacle_levels" not in assignments
+
+    env_class = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TeacherElevationTrajectoryMpcSemanticEnvCfg"
+    )
+    ann_assignments = {
+        node.target.id
+        for node in env_class.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert "semantic_obstacle_curriculum" in ann_assignments
+
+    assert source.count("SemanticObstacleCount(small=") >= 20

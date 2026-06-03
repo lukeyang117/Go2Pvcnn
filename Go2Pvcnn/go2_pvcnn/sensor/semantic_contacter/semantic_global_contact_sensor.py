@@ -78,6 +78,10 @@ class SemanticGlobalContactSensor(ContactSensor):
     def semantic_filter_paths(self) -> list[str]:
         return list(getattr(self, "_semantic_filter_paths", ()))
 
+    @property
+    def has_semantic_filters(self) -> bool:
+        return bool(getattr(self, "_has_semantic_filters", True))
+
     def _initialize_impl(self):
         if self.cfg.track_pose:
             raise RuntimeError("SemanticGlobalContactSensor does not support track_pose=True.")
@@ -116,16 +120,37 @@ class SemanticGlobalContactSensor(ContactSensor):
         semantic_root = _semantic_root_from_filter_expr(str(self.cfg.filter_prim_paths_expr[0]))
         candidate_paths = sim_utils.find_matching_prim_paths(f"{semantic_root}/.*/.*/.*")
         filter_paths = filter_semantic_leaf_obstacle_paths(candidate_paths, semantic_root)
-        if not filter_paths:
-            raise RuntimeError(f"SemanticGlobalContactSensor found no semantic leaf obstacle paths under {semantic_root}.")
         self._semantic_filter_paths = filter_paths
+        self._has_semantic_filters = len(filter_paths) > 0
 
+        self._sensor_paths = list(sensor_paths)
         self._body_physx_view = self._physics_sim_view.create_rigid_body_view(sensor_paths)
+        self._num_bodies = len(self._body_names)
+        self._rebuild_contact_view(filter_paths)
+
+        self._data.net_forces_w = torch.zeros(self._num_envs, self._num_bodies, 3, device=self._device)
+        self._data.net_forces_w_history = self._data.net_forces_w.unsqueeze(1)
+        self._data.force_matrix_w = torch.zeros(
+            self._num_envs,
+            self._num_bodies,
+            len(filter_paths),
+            3,
+            device=self._device,
+        )
+
+    def _rebuild_contact_view(self, filter_paths: list[str]) -> None:
+        self._semantic_filter_paths = list(filter_paths)
+        self._has_semantic_filters = len(filter_paths) > 0
+        self._contact_physx_view = None
+        if not self._has_semantic_filters:
+            return
+        sensor_paths = list(getattr(self, "_sensor_paths", ()))
+        if not sensor_paths:
+            raise RuntimeError("SemanticGlobalContactSensor cannot rebuild contact view before sensor paths exist.")
         self._contact_physx_view = self._physics_sim_view.create_rigid_contact_view(
             sensor_paths,
             filter_patterns=[filter_paths] * len(sensor_paths),
         )
-        self._num_bodies = len(self._body_names)
         expected_sensor_count = self._num_envs * self._num_bodies
         if int(self.contact_physx_view.sensor_count) != expected_sensor_count:
             raise RuntimeError(
@@ -140,6 +165,13 @@ class SemanticGlobalContactSensor(ContactSensor):
                 f"\n\tActual: {self.contact_physx_view.filter_count}"
             )
 
+    def refresh_semantic_filters(self) -> None:
+        from isaaclab.sim import utils as sim_utils
+
+        semantic_root = _semantic_root_from_filter_expr(str(self.cfg.filter_prim_paths_expr[0]))
+        candidate_paths = sim_utils.find_matching_prim_paths(f"{semantic_root}/.*/.*/.*")
+        filter_paths = filter_semantic_leaf_obstacle_paths(candidate_paths, semantic_root)
+        self._rebuild_contact_view(filter_paths)
         self._data.net_forces_w = torch.zeros(self._num_envs, self._num_bodies, 3, device=self._device)
         self._data.net_forces_w_history = self._data.net_forces_w.unsqueeze(1)
         self._data.force_matrix_w = torch.zeros(
@@ -153,6 +185,11 @@ class SemanticGlobalContactSensor(ContactSensor):
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         if len(env_ids) == self._num_envs:
             env_ids = slice(None)
+
+        if not self.has_semantic_filters:
+            self._data.net_forces_w[env_ids, :, :] = 0.0
+            self._data.force_matrix_w[env_ids] = 0.0
+            return
 
         net_forces_w = self.contact_physx_view.get_net_contact_forces(dt=self._sim_physics_dt)
         self._data.net_forces_w[env_ids, :, :] = net_forces_w.view(self._num_envs, self._num_bodies, 3)[env_ids]

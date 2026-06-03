@@ -30,6 +30,10 @@ from extension.batch_mpc_planner.participation import MpcTerrainDifficultyPair
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from extension.mdp.rewards_reference import reference_foot_pos_reward
 from extension.mdp.semantic_contact_rewards import semantic_global_contact_collision_reward
+from extension.semantic_curriculum import (
+    SemanticObstacleCount,
+    SemanticObstacleCurriculumCfg,
+)
 from extension.semantic_course import (
     SEMANTIC_COURSE_LARGE_ROOT,
     SEMANTIC_COURSE_SMALL_ROOT,
@@ -127,6 +131,32 @@ def _semantic_global_contact_sensor(semantic_root: str) -> ContactSensorCfg:
         track_air_time=False,
         debug_vis=False,
         filter_prim_paths_expr=[f"{semantic_root}/.*"],
+    )
+
+
+def _reference_foot_pos_reward_term() -> RewTerm:
+    return RewTerm(
+        func=reference_foot_pos_reward,
+        weight=0.3,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot")},
+    )
+
+
+def _semantic_contact_collision_reward_term() -> RewTerm:
+    return RewTerm(
+        func=semantic_global_contact_collision_reward,
+        weight=1.0,
+        params={
+            "small_sensor_cfg": SceneEntityCfg("semantic_contact_small"),
+            "large_sensor_cfg": SceneEntityCfg("semantic_contact_large"),
+            "body_names": SEMANTIC_CONTACT_BODY_NAMES,
+            "body_weights": SEMANTIC_CONTACT_BODY_WEIGHTS,
+            "force_threshold": 1.0,
+            "force_scale": 50.0,
+            "force_clip": 1.0,
+            "small_weight": 1.0,
+            "large_weight": 2.0,
+        },
     )
 
 
@@ -396,26 +426,8 @@ class TeacherElevationTrajectoryMpcSemanticRewardsCfg:
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Head_.*", ".*_hip", ".*_thigh", ".*_calf"]),
         },
     )
-    reference_foot_pos = RewTerm(
-        func=reference_foot_pos_reward,
-        weight=0.3,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot")},
-    )
-    semantic_contact_collision = RewTerm(
-        func=semantic_global_contact_collision_reward,
-        weight=1.0,
-        params={
-            "small_sensor_cfg": SceneEntityCfg("semantic_contact_small"),
-            "large_sensor_cfg": SceneEntityCfg("semantic_contact_large"),
-            "body_names": SEMANTIC_CONTACT_BODY_NAMES,
-            "body_weights": SEMANTIC_CONTACT_BODY_WEIGHTS,
-            "force_threshold": 1.0,
-            "force_scale": 50.0,
-            "force_clip": 1.0,
-            "small_weight": 1.0,
-            "large_weight": 2.0,
-        },
-    )
+    reference_foot_pos = _reference_foot_pos_reward_term()
+    semantic_contact_collision = _semantic_contact_collision_reward_term()
 
 
 @configclass
@@ -430,7 +442,10 @@ class TeacherElevationTrajectoryMpcSemanticTerminationsCfg:
 
 @configclass
 class TeacherElevationTrajectoryMpcSemanticCurriculumCfg:
-    terrain_levels = CurrTerm(func=mdp.terrain_levels_vel_unitree_rl_lab)
+    terrain_levels = CurrTerm(
+        func=mdp.terrain_levels_vel_semantic_plane_gate,
+        params={"cfg_name": "semantic_obstacle_curriculum"},
+    )
     lin_vel_cmd_levels = CurrTerm(mdp.lin_vel_cmd_levels)
 
 
@@ -456,6 +471,42 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
     planner_backend: str = "mpc"
     reference_height_scanner_name: str = "semantic_height_scanner"
     mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
+    semantic_obstacle_curriculum: SemanticObstacleCurriculumCfg = field(
+        default_factory=lambda: SemanticObstacleCurriculumCfg(
+            enabled=True,
+            plane_terrain_names=("flat",),
+            plane_counts=(
+                SemanticObstacleCount(small=1, large=0),
+                SemanticObstacleCount(small=3, large=1),
+                SemanticObstacleCount(small=4, large=1),
+                SemanticObstacleCount(small=5, large=1),
+                SemanticObstacleCount(small=6, large=1),
+                SemanticObstacleCount(small=7, large=1),
+                SemanticObstacleCount(small=8, large=1),
+                SemanticObstacleCount(small=9, large=1),
+                SemanticObstacleCount(small=10, large=2),
+                SemanticObstacleCount(small=11, large=3),
+            ),
+            non_plane_counts=(
+                SemanticObstacleCount(small=0, large=0),
+                SemanticObstacleCount(small=0, large=0),
+                SemanticObstacleCount(small=1, large=0),
+                SemanticObstacleCount(small=1, large=0),
+                SemanticObstacleCount(small=2, large=0),
+                SemanticObstacleCount(small=2, large=0),
+                SemanticObstacleCount(small=3, large=1),
+                SemanticObstacleCount(small=3, large=1),
+                SemanticObstacleCount(small=4, large=1),
+                SemanticObstacleCount(small=4, large=1),
+            ),
+            center_safety_half_extent_m=(0.85,),
+            min_spacing_clearance_m=(0.15,),
+            tile_margin_m=(0.50,),
+            collision_force_threshold=1.0,
+            plane_collision_rate_threshold=0.03,
+            consecutive_success_required=5,
+        )
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -472,6 +523,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
         elif self.scene.terrain.terrain_generator is not None:
             self.scene.terrain.terrain_generator.curriculum = False
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
+        self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
         self.mpc_planner_cfg.runtime.horizon_steps = 25
         self.mpc_planner_cfg.runtime.replan_interval_steps = 25
         self.mpc_planner_cfg.runtime.dt = 0.02
@@ -553,8 +605,8 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER(TeacherElevationTraject
         super().__post_init__()
         self.planner_owned_reference_cache = True
         self.use_batched_reference_trajectory = True
-        self.rewards.reference_foot_pos = TeacherElevationTrajectoryMpcSemanticRewardsCfg.reference_foot_pos
-        self.rewards.semantic_contact_collision = TeacherElevationTrajectoryMpcSemanticRewardsCfg.semantic_contact_collision
+        self.rewards.reference_foot_pos = _reference_foot_pos_reward_term()
+        self.rewards.semantic_contact_collision = _semantic_contact_collision_reward_term()
         self.scene.semantic_contact_small = _semantic_global_contact_sensor(SEMANTIC_COURSE_SMALL_ROOT)
         self.scene.semantic_contact_large = _semantic_global_contact_sensor(SEMANTIC_COURSE_LARGE_ROOT)
         self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096

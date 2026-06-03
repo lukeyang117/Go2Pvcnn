@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>语义物体课程学习设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17212b;
+      --muted: #5d6874;
+      --line: #d7dee7;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --warn: #9a5b00;
+      --ok: #247047;
+      --bad: #9f2f24;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul { margin-top: 8px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note, .guard, .ok, .danger {
+      padding: 12px 14px;
+      margin: 14px 0;
+      border-left: 4px solid;
+    }
+    .note { background: var(--panel); border-left-color: var(--accent); }
+    .guard { background: #fff8eb; border-left-color: var(--warn); }
+    .ok { background: #eef8f1; border-left-color: var(--ok); }
+    .danger { background: #fff0ee; border-left-color: var(--bad); }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>语义物体课程学习设计</h1>
+  <div class="meta">
+    日期：2026-06-03 ｜ 主线：Teacher semantic RL 训练 ｜ 目标文件：
+    <code>Go2Pvcnn/extension/semantic_course.py</code>、
+    <code>Go2Pvcnn/extension/semantic_curriculum.py</code>、
+    <code>Go2Pvcnn/go2_pvcnn/mdp/curriculums.py</code>、
+    <code>Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code>
+  </div>
+
+  <section>
+    <h2>1. 背景和修正方向</h2>
+    <p>旧设计把 <code>plane_counts</code> / <code>non_plane_counts</code> 解释成 semantic level 数量表，并在碰撞率达标后运行期重建 <code>/World/semantic_course</code>。这个方向过于复杂，也会让 <code>SemanticObstacleCount(small=0, large=0)</code> 在初始 level 0 时导致所有平地语义物体消失。</p>
+    <p>新方向改为：语义物体在环境初始化时一次性按 terrain row 生成，训练过程中不再删除和重建语义物体。terrain row 本身就是难度，row 越高，语义物体数量和密度越高。</p>
+    <div class="guard">
+      本设计删除旧的 semantic level / runtime rebuild 路线。后续代码中不应再保留 <code>semantic_obstacle_curriculum_level</code>、按 semantic level 取数量、或升级后重建语义 course 的生产逻辑。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 设计目标</h2>
+    <ul>
+      <li>语义物体数量由 terrain <code>row</code> 决定，而不是由独立 semantic level 决定。</li>
+      <li><code>plane_counts</code> 和 <code>non_plane_counts</code> 都设置为 10 个难度项，分别对齐 terrain row 0-9。</li>
+      <li>语义物体初始化后保持静态，不在训练中重建 <code>/World/semantic_course</code>。</li>
+      <li>平面 env 的 terrain row 升级必须同时满足地形指标和语义碰撞率指标。</li>
+      <li>非平面 env 的 reset / terrain curriculum 不受语义碰撞率 gate 影响。</li>
+      <li>语义碰撞率直接使用 <code>semantic_contact_small.data.force_matrix_w</code> 和 <code>semantic_contact_large.data.force_matrix_w</code>，不从 reward 值反推。</li>
+      <li>配置参数可以直接在 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code> 中调整。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. 核心配置</h2>
+    <p>配置类仍放在 <code>Go2Pvcnn/extension/semantic_curriculum.py</code>。任务 cfg 引入后，直接在 <code>TeacherElevationTrajectoryMpcSemanticEnvCfg</code> 中挂载实例。</p>
+    <pre><code>@dataclass
+class SemanticObstacleCount:
+    small: int = 0
+    large: int = 0
+
+
+@dataclass
+class SemanticObstacleCurriculumCfg:
+    enabled: bool = True
+    plane_terrain_names: tuple[str, ...] = ("flat",)
+
+    # 10 entries by default, aligned to terrain row 0-9.
+    plane_counts: tuple[SemanticObstacleCount, ...] = (...)
+    non_plane_counts: tuple[SemanticObstacleCount, ...] = (...)
+
+    center_safety_half_extent_m: tuple[float, ...] = (...)
+    min_spacing_clearance_m: tuple[float, ...] = (...)
+    tile_margin_m: tuple[float, ...] = (...)
+
+    collision_force_threshold: float = 1.0
+    plane_collision_rate_threshold: float = 0.03
+    consecutive_success_required: int = 5</code></pre>
+
+    <table>
+      <thead>
+        <tr><th>参数</th><th>作用</th><th>是否已确认</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>plane_counts</code></td>
+          <td>平面地形每个 terrain row 的 small/large 数量。默认 10 项，对齐 row 0-9。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>non_plane_counts</code></td>
+          <td>非平面地形每个 terrain row 的 small/large 数量。默认 10 项，对齐 row 0-9。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>center_safety_half_extent_m</code></td>
+          <td>tile 中心避让半径。值越小，障碍越可能靠近机器人初始区域。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>min_spacing_clearance_m</code></td>
+          <td>物体之间额外间距。中心距离必须大于 <code>radius_a + radius_b + min_spacing_clearance_m</code>。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>tile_margin_m</code></td>
+          <td>物体距离 terrain tile 边界的最小距离。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>collision_force_threshold</code></td>
+          <td>从 <code>force_matrix_w</code> 判定语义碰撞的力阈值。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>plane_collision_rate_threshold</code></td>
+          <td>当前所有平面 env 的语义碰撞率小于等于该阈值时，记一次达标。</td>
+          <td>保留</td>
+        </tr>
+        <tr>
+          <td><code>consecutive_success_required</code></td>
+          <td>连续多少次平面碰撞率达标后，允许平面 env 的 row 升级通过语义 gate。</td>
+          <td>保留</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      明确不加入 <code>semantic_curriculum_min_plane_episodes</code>、<code>semantic_curriculum_eval_window_episodes</code>、<code>semantic_curriculum_update_interval_steps</code>、<code>require_terrain_ready</code>。语义 gate 只看当前平面环境碰撞率和连续达标次数，并且只影响平面 env 的 row 升级。
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 推荐默认值</h2>
+    <pre><code>semantic_obstacle_curriculum = SemanticObstacleCurriculumCfg(
+    enabled=True,
+    plane_terrain_names=("flat",),
+    plane_counts=(
+        SemanticObstacleCount(small=0, large=0),  # row 0
+        SemanticObstacleCount(small=0, large=0),  # row 1
+        SemanticObstacleCount(small=1, large=0),  # row 2
+        SemanticObstacleCount(small=2, large=0),  # row 3
+        SemanticObstacleCount(small=3, large=0),  # row 4
+        SemanticObstacleCount(small=4, large=0),  # row 5
+        SemanticObstacleCount(small=5, large=1),  # row 6
+        SemanticObstacleCount(small=6, large=1),  # row 7
+        SemanticObstacleCount(small=7, large=2),  # row 8
+        SemanticObstacleCount(small=8, large=2),  # row 9
+    ),
+    non_plane_counts=(
+        SemanticObstacleCount(small=0, large=0),  # row 0
+        SemanticObstacleCount(small=0, large=0),  # row 1
+        SemanticObstacleCount(small=1, large=0),  # row 2
+        SemanticObstacleCount(small=1, large=0),  # row 3
+        SemanticObstacleCount(small=2, large=0),  # row 4
+        SemanticObstacleCount(small=2, large=0),  # row 5
+        SemanticObstacleCount(small=3, large=1),  # row 6
+        SemanticObstacleCount(small=3, large=1),  # row 7
+        SemanticObstacleCount(small=4, large=1),  # row 8
+        SemanticObstacleCount(small=4, large=1),  # row 9
+    ),
+    center_safety_half_extent_m=(0.85, 0.60, 0.45, 0.30, 0.20),
+    min_spacing_clearance_m=(0.25, 0.20, 0.16, 0.12, 0.10),
+    tile_margin_m=(0.50, 0.45, 0.40, 0.35, 0.30),
+    collision_force_threshold=1.0,
+    plane_collision_rate_threshold=0.03,
+    consecutive_success_required=5,
+)</code></pre>
+    <p>这里的每一项对应一个 terrain row，不对应 semantic level。row 越高，物体越多。平面和非平面各有 10 个可调项，便于分别控制同一 row 难度下的语义物体数量。</p>
+  </section>
+
+  <section>
+    <h2>5. tile 的含义</h2>
+    <p>当前 terrain generator 使用 <code>num_rows=10</code>、<code>num_cols=20</code>、<code>size=(8.0, 8.0)</code>。因此课程地形由 <code>10 x 20</code> 个小地形块组成，每个小地形块就是一个 tile，大小是 <code>8m x 8m</code>。</p>
+    <div class="math">row = 地形难度
+col = 地形类型
+tile = terrain_origins[row][col] 对应的 8m x 8m 地形块</div>
+    <p>语义物体当前就是按每个 tile 生成，路径保持为：</p>
+    <pre><code>/World/semantic_course/small/row_XX/col_YY/slot_ZZ
+/World/semantic_course/large/row_XX/col_YY/slot_ZZ</code></pre>
+    <p>新设计必须保留这个路径结构，因为 <code>SemanticGlobalContactSensor</code> 和语义 raycaster 都依赖 small/large 根路径下的真实语义物体。</p>
+  </section>
+
+  <section>
+    <h2>6. 语义碰撞率指标</h2>
+    <p>升级指标不使用 reward manager 的 <code>semantic_contact_collision</code> 数值，因为 reward 会经过阈值、权重、scale、clip 和 dt，无法直接代表真实碰撞率。</p>
+    <p>直接从两个真实碰撞 sensor 读取：</p>
+    <div class="math">small_force = semantic_contact_small.data.force_matrix_w
+large_force = semantic_contact_large.data.force_matrix_w
+
+small_collision_env = any(||small_force[env, body, object]|| &gt; collision_force_threshold)
+large_collision_env = any(||large_force[env, body, object]|| &gt; collision_force_threshold)
+semantic_collision_env = small_collision_env or large_collision_env</div>
+    <p>当前所有平面环境的碰撞率：</p>
+    <div class="math">plane_collision_rate =
+    count(semantic_collision_env and is_plane_env)
+    /
+    max(count(is_plane_env), 1)</div>
+    <p>如果当前没有平面 env，则语义 gate 视为未启用，不影响非平面 env 的 terrain curriculum。</p>
+  </section>
+
+  <section>
+    <h2>7. reset / 升 row 逻辑</h2>
+    <p>语义课程不再维护独立 semantic level。它参考 <code>terrain_levels_vel_unitree_rl_lab</code> 的 reset 逻辑，只在 reset 的 env 上决定是否允许平面 env 升到更高 terrain row。</p>
+    <div class="math">terrain_move_up = distance &gt; terrain_size_x / 2
+terrain_move_down = distance &lt; ||command_xy|| * episode_length_s * 0.5
+terrain_move_down = terrain_move_down and not terrain_move_up
+
+if plane_collision_rate &lt;= plane_collision_rate_threshold:
+    consecutive_success_count += 1
+else:
+    consecutive_success_count = 0
+
+semantic_gate_pass = consecutive_success_count &gt;= consecutive_success_required
+
+is_plane_env = terrain_types in plane_terrain_names
+
+move_up = where(
+    is_plane_env,
+    terrain_move_up and semantic_gate_pass,
+    terrain_move_up,
+)
+
+move_down = terrain_move_down
+terrain.update_env_origins(env_ids, move_up, move_down)</div>
+    <p>这表示：平面 env 必须地形指标通过且语义碰撞率连续达标，才升 row；非平面 env 完全保持原 terrain curriculum 行为。</p>
+    <div class="guard">
+      这个 reset gate 只作用在平面地形 env，不能影响其他地形的升降级。
+    </div>
+  </section>
+
+  <section>
+    <h2>8. 文件组织</h2>
+    <h3>8.1 <code>extension/semantic_curriculum.py</code></h3>
+    <p>新增配置类和状态类：</p>
+    <ul>
+      <li><code>SemanticObstacleCount</code>：表示一个 terrain row 的 small/large 数量。</li>
+      <li><code>SemanticObstacleCurriculumCfg</code>：所有可调参数。</li>
+      <li><code>SemanticObstacleCurriculumState</code>：只保存语义 gate 的 <code>consecutive_success_count</code> 和最近碰撞率统计，不保存 semantic level。</li>
+    </ul>
+    <p>状态类提供：</p>
+    <pre><code>counts_for_row(row, terrain_name)
+update_gate_from_plane_collision_rate(rate)</code></pre>
+
+    <h3>8.2 <code>go2_pvcnn/mdp/curriculums.py</code></h3>
+    <p>新增或替换 IsaacLab terrain curriculum term。它应参考当前 <code>terrain_levels_vel_unitree_rl_lab</code>，但对平面 env 的 <code>move_up</code> 增加语义 gate：</p>
+    <pre><code>def terrain_levels_vel_semantic_plane_gate(env, env_ids, cfg_name="semantic_obstacle_curriculum", ...):
+    ...
+</code></pre>
+    <p>职责：</p>
+    <ul>
+      <li>从 <code>env.cfg.semantic_obstacle_curriculum</code> 读取配置。</li>
+      <li>在 <code>env.unwrapped</code> 上创建或读取语义 gate 状态。</li>
+      <li>通过 <code>terrain.terrain_types</code> 和 terrain 名称判断哪些 env 是平面。</li>
+      <li>读取 <code>semantic_contact_small/large.data.force_matrix_w</code> 统计当前平面碰撞率。</li>
+      <li>更新连续达标计数，得到 <code>semantic_gate_pass</code>。</li>
+      <li>复用原 terrain distance 指标计算 <code>terrain_move_up</code> 和 <code>terrain_move_down</code>。</li>
+      <li>只对平面 env 使用 <code>terrain_move_up &amp; semantic_gate_pass</code>；非平面 env 使用原始 <code>terrain_move_up</code>。</li>
+      <li>返回 dict，供 IsaacLab curriculum logging 使用。</li>
+    </ul>
+
+    <h3>8.3 <code>extension/semantic_course.py</code></h3>
+    <p>修改语义物体生成数量来源。当前 <code>_stage_slots(...)</code> 内部直接使用 <code>stage_layout(stage)</code>，新逻辑改为按 row 取数量：</p>
+    <div class="math">if semantic curriculum enabled:
+    if terrain_name in plane_terrain_names:
+        counts = plane_counts[min(row, len(plane_counts)-1)]
+    else:
+        counts = non_plane_counts[min(row, len(non_plane_counts)-1)]
+    layout_cfg = base layout cfg
+else:
+    counts = _STAGE_LAYOUTS[stage]</div>
+    <p>保留现有 grounding、shape pool、prim path、scale profile override，不改 z 方向贴地逻辑。</p>
+
+    <h3>8.4 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code></h3>
+    <p>任务配置中加入可调配置，并在 curriculum cfg 里挂载新 term：</p>
+    <pre><code>@configclass
+class TeacherElevationTrajectoryMpcSemanticCurriculumCfg:
+    terrain_levels = CurrTerm(
+        func=mdp.terrain_levels_vel_semantic_plane_gate,
+        params={"cfg_name": "semantic_obstacle_curriculum"},
+    )
+    lin_vel_cmd_levels = CurrTerm(mdp.lin_vel_cmd_levels)
+
+
+@configclass
+class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
+    semantic_obstacle_curriculum: SemanticObstacleCurriculumCfg = SemanticObstacleCurriculumCfg(...)</code></pre>
+  </section>
+
+  <section>
+    <h2>9. 生成逻辑和运行期限制</h2>
+    <p>语义物体是 IsaacSim stage 上的静态全局物体，不是每个 env reset 时动态生成的独立对象。新设计要求：</p>
+    <ul>
+      <li>训练启动时一次性根据 row 和 terrain type 生成全部课程物体。</li>
+      <li>训练过程中不调用 <code>spawn_static_semantic_course()</code> 重建语义物体。</li>
+      <li>碰撞率达标只影响平面 env 是否允许升到更高 row，不改变已经生成的物体。</li>
+      <li>非平面 env 的 reset、升 row、降 row 不受语义 gate 影响。</li>
+    </ul>
+    <div class="ok">
+      这样可以避开运行期重建 stage 物体、刷新 contact sensor filter、刷新 semantic raycaster mesh 的复杂风险。
+    </div>
+  </section>
+
+  <section>
+    <h2>10. 兼容性</h2>
+    <ul>
+      <li><code>enabled=False</code> 时保持当前 <code>_STAGE_LAYOUTS</code> 行为。</li>
+      <li>不改变 <code>SemanticGlobalContactSensor</code> 的 small/large 分类方式。</li>
+      <li>不改变 MPC loss，不改变 low-small 跨越优化逻辑。</li>
+      <li>不改变 <code>TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY</code> 不启动 MPC 的要求。</li>
+      <li>不从 reward 数值推断碰撞率，避免 scale/clip/dt 干扰。</li>
+      <li>删除旧 <code>semantic_obstacle_levels</code> 动态重建路线，避免和新 row-gate 逻辑并存。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>11. 验收指标</h2>
+    <table>
+      <thead>
+        <tr><th>验收项</th><th>期望结果</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>配置可调</td>
+          <td>可以只修改 <code>teacher_elevation_trajectory_mpc_semantic_env_cfg.py</code> 中的 <code>semantic_obstacle_curriculum</code> 调整 10 个 row 难度的数量、间距、中心避让和语义 gate 阈值。</td>
+        </tr>
+        <tr>
+          <td>数量正确</td>
+          <td>flat tile 使用 <code>plane_counts[row]</code>，非 flat tile 使用 <code>non_plane_counts[row]</code>；默认 10 项对齐 row 0-9，越界 clamp 到最后一项。</td>
+        </tr>
+        <tr>
+          <td>布置更密集</td>
+          <td>row 升高后，数量增加；物体间距、中心避让和边界 margin 可通过配置调整。</td>
+        </tr>
+        <tr>
+          <td>碰撞率统计正确</td>
+          <td>从 <code>force_matrix_w</code> 统计 small/large 碰撞，不受 reward 权重、clip、scale 和 dt 影响。</td>
+        </tr>
+        <tr>
+          <td>平面升 row gate</td>
+          <td>只有当地形指标通过且平面碰撞率连续 <code>consecutive_success_required</code> 次小于等于阈值，平面 env 才允许升 row。</td>
+        </tr>
+        <tr>
+          <td>非平面不受影响</td>
+          <td>非平面 env 不参与平面碰撞率 gate，reset 升降 row 完全保持原 terrain curriculum 行为。</td>
+        </tr>
+        <tr>
+          <td>旧逻辑 fallback</td>
+          <td><code>enabled=False</code> 时恢复当前 S1-S4 固定数量逻辑。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>12. 待确认风险</h2>
+    <div class="danger">
+      主要实现风险是替换 terrain curriculum term 时不能改变非平面 env 的原始升降级行为。测试必须覆盖 flat 和 non-flat 两类 env，并检查只有 flat 的 <code>move_up</code> 被语义 gate 修改。
+    </div>
+    <p>验证环境：</p>
+    <pre><code>conda env: env_isaacsim
+path: /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim
+GPU: 使用 CUDA_VISIBLE_DEVICES 选择空闲卡</code></pre>
+  </section>
+</main>
+</body>
+</html>

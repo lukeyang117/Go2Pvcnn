@@ -11,6 +11,13 @@ from typing import Any, NamedTuple, Literal
 
 from isaaclab.terrains import TerrainImporter
 
+from extension.semantic_curriculum import (
+    SemanticObstacleCurriculumCfg,
+    count_for_row,
+    count_to_dict,
+    layout_values_for_row,
+)
+
 
 SEMANTIC_COURSE_ROOT = "/World/semantic_course"
 SEMANTIC_COURSE_SMALL_ROOT = f"{SEMANTIC_COURSE_ROOT}/small"
@@ -164,6 +171,58 @@ def stage_layout(stage: SemanticCourseStage) -> dict[str, int]:
 def course_anchor_counts(stage: SemanticCourseStage) -> dict[str, int]:
     layout = stage_layout(stage)
     return {semantic_class: int(layout[semantic_class]) for semantic_class in ("small", "large")}
+
+
+def terrain_name_for_col(
+    col: int,
+    terrain_names: tuple[str, ...] | list[str] | None,
+) -> str | None:
+    if terrain_names is None:
+        return None
+    if col < 0 or col >= len(terrain_names):
+        return None
+    return str(terrain_names[col])
+
+
+def terrain_names_from_generator(terrain_generator) -> tuple[str, ...] | None:
+    if terrain_generator is None:
+        return None
+    sub_terrains = getattr(terrain_generator, "sub_terrains", None)
+    if sub_terrains is None:
+        return None
+    if isinstance(sub_terrains, dict):
+        return tuple(str(name) for name in sub_terrains.keys())
+    return None
+
+
+def semantic_counts_for_tile(
+    *,
+    row: int,
+    col: int,
+    terrain_names: tuple[str, ...] | list[str] | None,
+    curriculum_cfg: SemanticObstacleCurriculumCfg | None,
+    fallback_stage: SemanticCourseStage,
+) -> dict[str, int]:
+    if curriculum_cfg is None or not bool(curriculum_cfg.enabled):
+        return course_anchor_counts(fallback_stage)
+    terrain_name = terrain_name_for_col(col, terrain_names)
+    return count_to_dict(count_for_row(curriculum_cfg, row=row, terrain_name=terrain_name))
+
+
+def layout_cfg_for_row(
+    base_layout_cfg: SemanticCourseLayoutCfg,
+    curriculum_cfg: SemanticObstacleCurriculumCfg | None,
+    row: int,
+) -> SemanticCourseLayoutCfg:
+    if curriculum_cfg is None or not bool(curriculum_cfg.enabled):
+        return base_layout_cfg
+    center_safety, min_spacing, tile_margin = layout_values_for_row(curriculum_cfg, row)
+    return SemanticCourseLayoutCfg(
+        tile_margin_m=float(tile_margin),
+        center_safety_half_extent_m=float(center_safety),
+        min_spacing_clearance_m=float(min_spacing),
+        max_layout_attempts=int(base_layout_cfg.max_layout_attempts),
+    )
 
 
 def semantic_scale_profile(
@@ -444,6 +503,7 @@ def _fallback_candidates(
 def _stage_slots(
     *,
     stage: SemanticCourseStage,
+    stage_counts: dict[str, int],
     row: int,
     col: int,
     tile_size: tuple[float, float],
@@ -451,7 +511,6 @@ def _stage_slots(
     layout_cfg: SemanticCourseLayoutCfg,
     scale_profile_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> list[_LayoutSlot]:
-    stage_counts = stage_layout(stage)
     ordered_classes = ("large", "small")
     placed: list[tuple[tuple[float, float], float]] = []
     slots: list[_LayoutSlot] = []
@@ -501,6 +560,8 @@ def build_course_anchors(
     semantic_course_seed: int = DEFAULT_SEMANTIC_COURSE_SEED,
     layout_cfg: SemanticCourseLayoutCfg = DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG,
     scale_profile_overrides: dict[str, tuple[float, float]] | None = None,
+    semantic_curriculum_cfg: SemanticObstacleCurriculumCfg | None = None,
+    terrain_names: tuple[str, ...] | list[str] | None = None,
 ) -> list[CourseAnchor]:
     """Build deterministic per-tile obstacle anchors before terrain grounding."""
     num_rows = len(terrain_origins)
@@ -509,20 +570,36 @@ def build_course_anchors(
         terrain_origins,
         terrain_generator=terrain_generator,
     )
+    resolved_terrain_names = terrain_names
+    if resolved_terrain_names is None:
+        resolved_terrain_names = terrain_names_from_generator(terrain_generator)
     anchors: list[CourseAnchor] = []
     for row in range(num_rows):
         stage = stage_for_row(row, num_rows)
+        resolved_layout_cfg = layout_cfg_for_row(
+            layout_cfg,
+            semantic_curriculum_cfg,
+            row,
+        )
         for col in range(num_cols):
             origin = terrain_origins[row][col]
             origin_x = _origin_component(origin, 0)
             origin_y = _origin_component(origin, 1)
+            stage_counts = semantic_counts_for_tile(
+                row=row,
+                col=col,
+                terrain_names=resolved_terrain_names,
+                curriculum_cfg=semantic_curriculum_cfg,
+                fallback_stage=stage,
+            )
             for slot in _stage_slots(
                 stage=stage,
+                stage_counts=stage_counts,
                 row=row,
                 col=col,
                 tile_size=resolved_tile_size,
                 semantic_course_seed=semantic_course_seed,
-                layout_cfg=layout_cfg,
+                layout_cfg=resolved_layout_cfg,
                 scale_profile_overrides=scale_profile_overrides,
             ):
                 semantic_class = slot.semantic_class
@@ -650,6 +727,9 @@ def spawn_semantic_course_prestartup(
         semantic_course_seed=semantic_course_seed,
         layout_cfg=layout_cfg,
         scale_profile_overrides=scale_profile_overrides,
+        semantic_curriculum_cfg=getattr(terrain_cfg, "semantic_obstacle_curriculum", None)
+        if terrain_cfg is not None
+        else None,
     )
     obstacles = _ground_with_runtime_terrain_sampler(
         anchors,
@@ -683,6 +763,7 @@ class SemanticCourseTerrainImporter(TerrainImporter):
             semantic_course_seed=int(getattr(self.cfg, "semantic_course_seed", DEFAULT_SEMANTIC_COURSE_SEED)),
             layout_cfg=getattr(self.cfg, "semantic_course_layout_cfg", DEFAULT_SEMANTIC_COURSE_LAYOUT_CFG),
             scale_profile_overrides=getattr(self.cfg, "semantic_course_scale_profile_overrides", None),
+            semantic_curriculum_cfg=getattr(self.cfg, "semantic_obstacle_curriculum", None),
         )
         obstacles = _ground_with_runtime_terrain_sampler(
             anchors,

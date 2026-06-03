@@ -1182,8 +1182,8 @@ def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> N
     assert "self.scene.semantic_contact_large = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
     assert "planner_owned_reference_cache: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
     assert "use_batched_reference_trajectory: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
-    assert "semantic_contact_collision = TeacherElevationTrajectoryMpcSemanticRewardsCfg.semantic_contact_collision" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
-    assert "reference_foot_pos = TeacherElevationTrajectoryMpcSemanticRewardsCfg.reference_foot_pos" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "self.rewards.semantic_contact_collision = _semantic_contact_collision_reward_term()" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "self.rewards.reference_foot_pos = _reference_foot_pos_reward_term()" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
     assert "self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096" in source
     assert "mpc_max_dirty_envs_per_step" not in source
     assert "replicate_physics = True" in source
