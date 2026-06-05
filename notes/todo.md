@@ -4,9 +4,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302k low-small MPC parameter tuning / residual reachability checks**.
-- Active branch page: [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md).
-- Active implementation plan: [T302k low-small loss redesign plan](todo/T302k-low-small-loss-redesign-plan.md).
+- Current focus: **T302o MPC policy evaluation script / tracking and small-collision metrics**.
+- Active branch page: [T302o](todo/T302o-mpc-policy-eval-plan.md).
+- Active implementation plan: [T302o MPC policy eval plan](todo/T302o-mpc-policy-eval-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/manager.py](../Go2Pvcnn/extension/batch_mpc_planner/manager.py)
@@ -16,6 +16,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - [Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/](../Go2Pvcnn/go2_pvcnn/sensor/semantic_contacter/)
   - [Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
   - [Go2Pvcnn/scripts/play.py](../Go2Pvcnn/scripts/play.py)
+  - [Go2Pvcnn/scripts/mpc_policy_eval.py](../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [Go2Pvcnn/extension/viz/go2_foostep_planner.py](../Go2Pvcnn/extension/viz/go2_foostep_planner.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py](../Go2Pvcnn/extension/batch_mpc_planner/semantic_policy.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/parametric.py](../Go2Pvcnn/extension/batch_mpc_planner/parametric.py)
@@ -52,6 +53,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - Full matrix on GPU0 passed hard acceptance for covered crossing rows: `20` cycle rows, `12` covered rows, `0` FK semantic collisions, max crossing FK error `0.0634m`; four rows exceed preferred `0.05m` but stay within accepted `0.08m`.
   - New low-small direction: no hard projection, no touchdown snapping, no hard foot separation; debug by tuning confirmed loss weights/parameters only.
 - Old dense residual MPC (`nominal.py`, `optimizer.py`, `variables.py`, `losses/registry.py`) is retired. Do not reopen V9/V10/V11/V12 scalar-loss branches unless explicitly requested.
+- T302o design is approved enough for implementation planning: [../docs/superpowers/specs/2026-06-05-mpc-policy-eval-design.html](../docs/superpowers/specs/2026-06-05-mpc-policy-eval-design.html). It adds one Python entry under `Go2Pvcnn/scripts/`, not a shell script, and keeps `scripts/play.py` no-MPC behavior unchanged.
 
 ## Status Legend
 
@@ -66,6 +68,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
 | T302n | verify | Semantic obstacle curriculum is now row-gated: static row-based obstacle generation, flat-only semantic gate for terrain row upgrades, and no runtime semantic-course rebuild. | Keep as regression guard; rerun row probe if changing terrain curriculum, semantic counts, or contact sensor wiring. |
+| T302o | active | New evaluation route will load policy checkpoints while enabling MPC reference/cache, report tracking metrics, and measure flat small-obstacle collision rate by collided envs per round. | Execute [T302o plan](todo/T302o-mpc-policy-eval-plan.md) task-by-task; preserve `play.py` no-MPC contract. |
 | T302m | verify | Current working tree has been cleaned to the single semantic MPC route; MPC tuning is unified under `mpc_planner_cfg`; participation filtering is blacklist-only; local/static tests pass and card1 IsaacLab acceptance passes. | Keep as regression guard; run train smoke only if changing task cfg/runtime wiring again. |
 | T302l | verify | MPC participation/contact route and PLAY/VIEWER split are verified; PLAY no longer attaches MPC, viewer uses VIEWER cfg, and low-small hard metrics remain clean. | Keep as regression guard; rerun PLAY smoke only if changing play wrapper, policy observation shape, or task cfg. |
 | T302k | active | Current parametric MPC path; low-small loss redesign implementation is verified on covered rows, with only parameter tuning left unless user approves a new loss. | Inspect loss breakdown and tune confirmed parameters only if continuing soft FK-error reduction. |
@@ -75,6 +78,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
 | T302n | verify | semantic obstacle curriculum | [T302n](todo/T302n-semantic-obstacle-curriculum-plan.md) | Row-based static semantic objects and flat-only terrain row gate implemented; local focused tests and card1 IsaacLab row probe pass | design [2026-06-03](../docs/superpowers/specs/2026-06-03-semantic-obstacle-curriculum-design.html) |
+| T302o | active | MPC policy evaluation script | [T302o](todo/T302o-mpc-policy-eval-plan.md) | Plan written for `mpc_policy_eval.py`: tracking mode compares policy feet to MPC reference feet; small_collision mode counts collided envs per round on dense-small flat terrain; livestream overlays MPC foot markers. | design [2026-06-05](../docs/superpowers/specs/2026-06-05-mpc-policy-eval-design.html) |
 | T302m | verify | teacher elevation MPC semantic cleanup | [T302m](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) | Single-route cleanup implemented locally; card1 IsaacLab acceptance and 1024/64/25 performance pass | design [2026-05-31](../docs/superpowers/specs/2026-05-31-teacher-elevation-mpc-semantic-cleanup-design.html) |
 | T302l | verify | MPC RL participation and reward integration | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | Selector/world-foot/global contact work and PLAY/VIEWER split verified; prior card1 1024 quantity/perf acceptance retained | design [2026-05-30](../docs/superpowers/specs/2026-05-30-mpc-rl-participation-and-runtime-design.html) |
 | T302k | active | parametric MPC trajectory contract | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md) | Low-small loss redesign and plane-only FK semantic collision testing | design commit `97c5b60` |
@@ -95,6 +99,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
 | T302n.1 | T302n | verify | P0 | Row-gated semantic curriculum implemented: 10-row `plane_counts`/`non_plane_counts`, flat-only semantic gate, no runtime rebuild; focused `24 passed` and IsaacLab row probe pass. | [T302n plan](todo/T302n-semantic-obstacle-curriculum-plan.md) |
+| T302o.1 | T302o | active | P0 | Implement the single Python evaluation entry, eval cfgs, tracking metrics, per-round collided-env small collision metrics, and livestream MPC foot overlays. | [T302o plan](todo/T302o-mpc-policy-eval-plan.md) |
 | T302m.1 | T302m | verify | P0 | Route cleanup, local regression, card1 contact/drop, 1024-env train smoke, and 1024/64/25-step perf pass. | [T302m cleanup plan](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) |
 | T302l.1 | T302l | verify | P0 | Two global semantic contact sensors are implemented; exact-path body resolution fixes 1024-env `gym.make` stall; card1 quantity and 25-step performance pass. | [T302l implementation plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
 | T302l.2 | T302l | verify | P0 | PLAY/VIEWER split verified: PLAY no planner attach with `model_14000.pt`, VIEWER cfg static contract covered, low-small regression FK semantic collisions `0`. | [Task 20](todo/T302l-mpc-rl-participation-and-reward-plan.md#task-20-play--viewer-cfg-split) |
@@ -106,6 +111,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 - [todo/README.md](todo/README.md)
 - [T302n-semantic-obstacle-curriculum-plan.md](todo/T302n-semantic-obstacle-curriculum-plan.md)
+- [T302o-mpc-policy-eval-plan.md](todo/T302o-mpc-policy-eval-plan.md)
 - [T302m-teacher-elevation-mpc-semantic-cleanup-plan.md](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md)
 - [T302l-mpc-rl-participation-and-reward-plan.md](todo/T302l-mpc-rl-participation-and-reward-plan.md)
 - [T302k-parametric-mpc-trajectory-contract.md](todo/T302k-parametric-mpc-trajectory-contract.md)
@@ -124,6 +130,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-06-05 | T302o MPC policy eval plan | plan recorded; dashboard switched to T302o; implementation not started | [T302o](todo/T302o-mpc-policy-eval-plan.md) | [2026-06-05-t302o-mpc-policy-eval-plan.md](log/2026-06-05-t302o-mpc-policy-eval-plan.md) |
 | 2026-06-03 20:52 | T302n row-gated semantic curriculum | pass; static row-based semantic objects, flat-only semantic gate, no runtime semantic level; focused `24 passed`, pycompile exit `0`, IsaacLab card1 row9 probe flat `8/2`, non-flat `4/1`, force shapes `[8,13,416,3]` / `[8,13,82,3]` | [T302n](todo/T302n-semantic-obstacle-curriculum-plan.md) | [2026-06-03-2052-t302n-row-gated-semantic-curriculum.md](log/2026-06-03-2052-t302n-row-gated-semantic-curriculum.md) |
 | 2026-06-03 19:58 | T302n viewer reference foot pos cfg fix | pass; `VIEWER` cfg builds, `reference_foot_pos` / `semantic_contact_collision` are enabled, and the user viewer command reaches env setup plus MPC manager attach | [T302n](todo/T302n-semantic-obstacle-curriculum-plan.md) | [2026-06-03-1958-t302n-viewer-reference-foot-pos-cfg-fix.md](log/2026-06-03-1958-t302n-viewer-reference-foot-pos-cfg-fix.md) |
 | 2026-06-02 00:06 | T302l PLAY / VIEWER cfg split | pass; local focused tests pass, headless PLAY with `model_14000.pt` completes 5 steps with no planner attach, low-small covered rows `2` with FK semantic collisions `0` and max crossing FK error `0.0416m` | [T302l](todo/T302l-mpc-rl-participation-and-reward-plan.md) | [2026-06-02-0006-t302l-play-viewer-cfg-split.md](log/2026-06-02-0006-t302l-play-viewer-cfg-split.md) |
