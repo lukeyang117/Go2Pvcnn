@@ -612,3 +612,35 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER(TeacherElevationTraject
         self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096
         self.mpc_planner_cfg.diagnostics.emit_runtime_counters = True
         self.mpc_planner_cfg.diagnostics.profile_cuda_sync = True
+
+
+@configclass
+class TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg(TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER):
+    """MPC-enabled policy evaluation config for terrain tracking metrics."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.planner_owned_reference_cache = True
+        self.use_batched_reference_trajectory = True
+        self.planner_backend = "mpc"
+        self.mpc_planner_cfg.runtime.horizon_steps = 25
+        self.mpc_planner_cfg.runtime.replan_interval_steps = 25
+        self.mpc_planner_cfg.runtime.dt = 0.02
+        self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
+        self.mpc_planner_cfg.diagnostics.emit_runtime_counters = False
+        self.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
+
+
+@configclass
+class TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg(
+    TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg
+):
+    """MPC-enabled policy evaluation config for dense small-obstacle flat collision metrics."""
+
+    small_collision_eval_small_count_per_tile: int = 80
+    small_collision_eval_large_count_per_tile: int = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.small_collision_eval_small_count_per_tile = 80
+        self.small_collision_eval_large_count_per_tile = 0

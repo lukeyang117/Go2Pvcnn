@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import sys
 import ast
+from dataclasses import MISSING
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -3635,3 +3636,259 @@ def test_mpc_plan_segment_accepts_inputs_created_under_inference_mode() -> None:
     assert result.root_pos.shape == (2, 6, 3)
     assert torch.isfinite(result.cost_total).all()
     assert torch.isfinite(result.root_pos).all()
+
+
+def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
+    import copy
+
+    class _Cfg:
+        def __init__(self, *args, **kwargs):
+            for index, value in enumerate(args):
+                setattr(self, f"arg{index}", value)
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+        def replace(self, **kwargs):
+            out = copy.deepcopy(self)
+            for key, value in kwargs.items():
+                setattr(out, key, value)
+            return out
+
+    def _configclass(cls):
+        def __init__(self, **kwargs):
+            for base in reversed(cls.mro()):
+                for name, value in base.__dict__.items():
+                    if name.startswith("__") or callable(value) or isinstance(
+                        value, (staticmethod, classmethod, property, type)
+                    ):
+                        continue
+                    if hasattr(value, "default_factory") and value.default_factory is not MISSING:
+                        setattr(self, name, value.default_factory())
+                    elif hasattr(value, "default") and value.default is not MISSING:
+                        setattr(self, name, copy.deepcopy(value.default))
+                    else:
+                        setattr(self, name, copy.deepcopy(value))
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+            post_init = getattr(self, "__post_init__", None)
+            if post_init is not None:
+                post_init()
+
+        cls.__init__ = __init__
+        return cls
+
+    def _module(name: str, **attrs):
+        module = ModuleType(name)
+        for key, value in attrs.items():
+            setattr(module, key, value)
+        return module
+
+    class _ManagerBasedRLEnvCfg:
+        def __post_init__(self):
+            if not hasattr(self, "sim"):
+                self.sim = SimpleNamespace(physx=SimpleNamespace())
+
+    for name in tuple(sys.modules):
+        if name.startswith("isaaclab") or name in {
+            "go2_pvcnn.tasks",
+            "go2_pvcnn.tasks.register_envs",
+            "go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg",
+            "go2_pvcnn.assets",
+            "go2_pvcnn.mdp",
+            "go2_pvcnn.sensor.semantic_contacter",
+            "go2_pvcnn.sensor.semantic_raycaster",
+            "extension.mdp.observations",
+            "extension.mdp.rewards_reference",
+            "extension.mdp.semantic_contact_rewards",
+            "extension.semantic_course",
+        }:
+            sys.modules.pop(name, None)
+
+    sim_module = _module(
+        "isaaclab.sim",
+        RigidBodyMaterialCfg=_Cfg,
+        MdlFileCfg=_Cfg,
+        DomeLightCfg=_Cfg,
+    )
+    terrain_module = _module(
+        "isaaclab.terrains",
+        TerrainGeneratorCfg=_Cfg,
+        MeshPlaneTerrainCfg=_Cfg,
+        HfRandomUniformTerrainCfg=_Cfg,
+        HfPyramidSlopedTerrainCfg=_Cfg,
+        HfInvertedPyramidSlopedTerrainCfg=_Cfg,
+        MeshRandomGridTerrainCfg=_Cfg,
+        MeshPyramidStairsTerrainCfg=_Cfg,
+        MeshInvertedPyramidStairsTerrainCfg=_Cfg,
+        TerrainImporterCfg=_Cfg,
+    )
+    managers_module = _module(
+        "isaaclab.managers",
+        CurriculumTermCfg=_Cfg,
+        EventTermCfg=_Cfg,
+        ObservationGroupCfg=object,
+        ObservationTermCfg=_Cfg,
+        SceneEntityCfg=_Cfg,
+        RewardTermCfg=_Cfg,
+        TerminationTermCfg=_Cfg,
+    )
+    envs_module = _module(
+        "isaaclab.envs",
+        ManagerBasedRLEnvCfg=_ManagerBasedRLEnvCfg,
+        mdp=_module(
+            "isaaclab.envs.mdp",
+            base_ang_vel=lambda *args, **kwargs: None,
+            projected_gravity=lambda *args, **kwargs: None,
+            joint_pos_rel=lambda *args, **kwargs: None,
+            joint_vel_rel=lambda *args, **kwargs: None,
+            generated_commands=lambda *args, **kwargs: None,
+            last_action=lambda *args, **kwargs: None,
+            base_lin_vel=lambda *args, **kwargs: None,
+        ),
+    )
+    sensors_module = _module(
+        "isaaclab.sensors",
+        ContactSensorCfg=_Cfg,
+        patterns=_module("isaaclab.sensors.patterns", GridPatternCfg=_Cfg),
+    )
+    isaaclab_module = _module(
+        "isaaclab",
+        sim=sim_module,
+        terrains=terrain_module,
+        managers=managers_module,
+        envs=envs_module,
+        sensors=sensors_module,
+    )
+
+    monkeypatch.setitem(sys.modules, "isaaclab", isaaclab_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.sim", sim_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.terrains", terrain_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "isaaclab.assets",
+        _module("isaaclab.assets", ArticulationCfg=_Cfg, AssetBaseCfg=_Cfg),
+    )
+    monkeypatch.setitem(sys.modules, "isaaclab.envs", envs_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.envs.mdp", envs_module.mdp)
+    monkeypatch.setitem(sys.modules, "isaaclab.managers", managers_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.scene", _module("isaaclab.scene", InteractiveSceneCfg=object))
+    monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.sensors.patterns", sensors_module.patterns)
+    monkeypatch.setitem(sys.modules, "isaaclab.utils", _module("isaaclab.utils", configclass=_configclass))
+    monkeypatch.setitem(sys.modules, "isaaclab.utils.assets", _module("isaaclab.utils.assets", ISAAC_NUCLEUS_DIR="/Nucleus"))
+    monkeypatch.setitem(sys.modules, "isaaclab.utils.noise", _module("isaaclab.utils.noise", AdditiveUniformNoiseCfg=_Cfg))
+    monkeypatch.setitem(sys.modules, "gymnasium", SimpleNamespace(register=lambda *args, **kwargs: None))
+    monkeypatch.setitem(sys.modules, "go2_pvcnn.assets", _module("go2_pvcnn.assets", UNITREE_GO2_CFG=_Cfg()))
+    monkeypatch.setitem(
+        sys.modules,
+        "go2_pvcnn.mdp",
+        _module(
+            "go2_pvcnn.mdp",
+            UniformLevelVelocityCommandCfg=type("UniformLevelVelocityCommandCfg", (_Cfg,), {"Ranges": _Cfg}),
+            JointPositionActionCfg=_Cfg,
+            randomize_rigid_body_material=lambda *args, **kwargs: None,
+            randomize_rigid_body_mass=lambda *args, **kwargs: None,
+            apply_external_force_torque=lambda *args, **kwargs: None,
+            reset_root_state_uniform=lambda *args, **kwargs: None,
+            reset_joints_by_scale=lambda *args, **kwargs: None,
+            push_by_setting_velocity=lambda *args, **kwargs: None,
+            track_lin_vel_xy_exp=lambda *args, **kwargs: None,
+            track_ang_vel_z_exp=lambda *args, **kwargs: None,
+            lin_vel_z_l2=lambda *args, **kwargs: None,
+            ang_vel_xy_l2=lambda *args, **kwargs: None,
+            joint_vel_l2=lambda *args, **kwargs: None,
+            joint_acc_l2=lambda *args, **kwargs: None,
+            joint_torques_l2=lambda *args, **kwargs: None,
+            action_rate_l2=lambda *args, **kwargs: None,
+            joint_pos_limits=lambda *args, **kwargs: None,
+            energy=lambda *args, **kwargs: None,
+            flat_orientation_l2=lambda *args, **kwargs: None,
+            joint_position_penalty=lambda *args, **kwargs: None,
+            feet_air_time=lambda *args, **kwargs: None,
+            air_time_variance_penalty=lambda *args, **kwargs: None,
+            feet_slide=lambda *args, **kwargs: None,
+            undesired_contacts=lambda *args, **kwargs: None,
+            time_out=lambda *args, **kwargs: None,
+            illegal_contact=lambda *args, **kwargs: None,
+            bad_orientation=lambda *args, **kwargs: None,
+            terrain_levels_vel_semantic_plane_gate=lambda *args, **kwargs: None,
+            lin_vel_cmd_levels=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "go2_pvcnn.sensor.semantic_contacter",
+        _module("go2_pvcnn.sensor.semantic_contacter", SemanticGlobalContactSensor=object),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "go2_pvcnn.sensor.semantic_raycaster",
+        _module(
+            "go2_pvcnn.sensor.semantic_raycaster",
+            SemanticGridRayCasterCfg=type("SemanticGridRayCasterCfg", (_Cfg,), {"OffsetCfg": _Cfg}),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "extension.mdp.observations",
+        _module("extension.mdp.observations", downsampled_elevation_semantic_scan=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "extension.mdp.rewards_reference",
+        _module("extension.mdp.rewards_reference", reference_foot_pos_reward=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "extension.mdp.semantic_contact_rewards",
+        _module(
+            "extension.mdp.semantic_contact_rewards",
+            semantic_global_contact_collision_reward=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "extension.semantic_course",
+        _module(
+            "extension.semantic_course",
+            SEMANTIC_COURSE_LARGE_ROOT="/World/semantic_course/large",
+            SEMANTIC_COURSE_SMALL_ROOT="/World/semantic_course/small",
+            SemanticCourseTerrainImporter=object,
+        ),
+    )
+
+
+def test_mpc_policy_eval_cfgs_enable_reference_without_changing_play(monkeypatch) -> None:
+    _install_fake_eval_cfg_import_dependencies(monkeypatch)
+
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
+        TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg,
+        TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg,
+    )
+
+    play = TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY()
+    assert play.planner_owned_reference_cache is False
+    assert play.use_batched_reference_trajectory is False
+    assert play.rewards.reference_foot_pos is None
+    assert play.scene.semantic_contact_small is None
+    assert play.scene.semantic_contact_large is None
+
+    tracking = TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg()
+    assert tracking.planner_owned_reference_cache is True
+    assert tracking.use_batched_reference_trajectory is True
+    assert tracking.planner_backend == "mpc"
+    assert tracking.rewards.reference_foot_pos is not None
+    assert tracking.scene.semantic_contact_small is not None
+    assert tracking.scene.semantic_contact_large is not None
+    assert tracking.mpc_planner_cfg.runtime.horizon_steps == 25
+    assert tracking.mpc_planner_cfg.runtime.replan_interval_steps == 25
+
+    collision = TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg()
+    assert collision.planner_owned_reference_cache is True
+    assert collision.use_batched_reference_trajectory is True
+    assert collision.planner_backend == "mpc"
+    assert collision.scene.semantic_contact_small is not None
+    assert collision.scene.semantic_contact_large is not None
+    assert hasattr(collision, "small_collision_eval_small_count_per_tile")
+    assert collision.small_collision_eval_small_count_per_tile > 0
