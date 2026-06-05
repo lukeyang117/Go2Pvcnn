@@ -841,7 +841,7 @@ python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py
 exit 0
 ```
 
-- [ ] **Step 6: Commit tracking metrics**
+- [x] **Step 6: Commit tracking metrics**
 
 Run:
 
@@ -849,6 +849,34 @@ Run:
 git add Go2Pvcnn/scripts/mpc_policy_eval.py Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py
 git commit -m "feat: collect mpc policy tracking metrics"
 ```
+
+Actual: committed as `d4eead0 feat: collect mpc policy tracking metrics`.
+
+- [x] **Step 7: Main-agent real tracking smoke**
+
+Actual: card0/env_isaacsim smoke exit `0`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 300s \
+  /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode tracking \
+  --headless \
+  --device cuda:0 \
+  --num-envs 1 \
+  --num-rounds 1 \
+  --max-steps 3 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --terrain-rows 0 \
+  --terrain-cols 0 \
+  --command-mode fixed \
+  --command "0.1 0.0 0.0" \
+  --output-dir logs/mpc_policy_eval/task4_tracking_smoke
+```
+
+Output: `logs/mpc_policy_eval/task4_tracking_smoke/2026-06-05_17-24-46-650674`, with `metrics.jsonl` 3 lines, `rounds.jsonl` 1 line, `summary.json` tracking mean `0.026642149935166042`, p95 `0.07784201204776764`, `reference_valid_ratio=1.0`, and `tracking_valid_step_count=3`.
+
+Spec compliance review: approved. Nonblocking/forward blocker note: `--terrain-rows/--terrain-cols` currently resize the generated terrain grid rather than selecting original terrain row/col IDs. This is not a Task 4 single-row smoke blocker, but it is a P1 acceptance blocker before claiming "different terrain" tracking comparisons.
 
 ---
 
@@ -1335,9 +1363,9 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Git Refs
 
-- Last Feature Commit: `b737977` for Task 4 tracking runtime metrics
-- Last Verified Commit: `b737977` for Task 4 local verification
-- Current Work Ref: `costmap-teacher-ablation` after Task 4 local verification
+- Last Feature Commit: `d4eead0` for Task 4 tracking runtime metrics
+- Last Verified Commit: `d4eead0` for Task 4 real tracking smoke
+- Current Work Ref: `costmap-teacher-ablation` after Task 4 real smoke verification
 - Key Files:
   - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
@@ -1348,7 +1376,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Next Step
 
-- Run main-agent real IsaacLab tracking smoke on card 0/env_isaacsim, then implement Task 5 small_collision runtime metrics.
+- Implement Task 5 small_collision runtime metrics, then run card0/env_isaacsim small_collision smoke.
 
 ## Node Details
 
