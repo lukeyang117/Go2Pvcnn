@@ -3702,7 +3702,7 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
             "extension.mdp.semantic_contact_rewards",
             "extension.semantic_course",
         }:
-            sys.modules.pop(name, None)
+            monkeypatch.delitem(sys.modules, name, raising=False)
 
     sim_module = _module(
         "isaaclab.sim",
