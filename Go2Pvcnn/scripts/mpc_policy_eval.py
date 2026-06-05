@@ -499,11 +499,11 @@ def _attach_reference_manager_if_enabled(env, env_cfg) -> None:
         )
 
 
-def apply_command_to_env(env, command: torch.Tensor) -> None:
+def sync_command_to_policy(env, command: torch.Tensor) -> bool:
     base = env.unwrapped if hasattr(env, "unwrapped") else env
     command_manager = getattr(base, "command_manager", None)
     if command_manager is None:
-        return
+        return False
     for name in ("base_velocity", "base_velocity_command", "velocity_command"):
         term = None
         try:
@@ -513,10 +513,51 @@ def apply_command_to_env(env, command: torch.Tensor) -> None:
         if term is None or not hasattr(term, "command"):
             continue
         term.command[:] = command.to(device=term.command.device, dtype=term.command.dtype)
-        manager = getattr(base, "_trajectory_manager", None)
-        if manager is not None and hasattr(manager, "mark_command_changed"):
-            manager.mark_command_changed()
+        return True
+    return False
+
+
+def sync_command_to_mpc(env, command: torch.Tensor) -> None:
+    base = env.unwrapped if hasattr(env, "unwrapped") else env
+    manager = getattr(base, "_trajectory_manager", None)
+    if manager is None:
         return
+    # MPC reads commands from the IsaacLab command manager during refresh_from_env().
+    # Marking command changes invalidates the old reference-mask without creating
+    # a second source of truth for command state.
+    if hasattr(manager, "mark_command_changed"):
+        manager.mark_command_changed()
+
+
+def apply_command_to_env(env, command: torch.Tensor) -> None:
+    if sync_command_to_policy(env, command):
+        sync_command_to_mpc(env, command)
+
+
+def build_mpc_foot_markers():
+    import isaaclab.sim as sim_utils
+    from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+
+    marker_cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/T302oMpcPolicyEval/foot_reference",
+        markers={
+            "foot_ref": sim_utils.SphereCfg(
+                radius=0.025,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.1, 0.9, 1.0)),
+            )
+        },
+    )
+    return VisualizationMarkers(marker_cfg)
+
+
+def update_mpc_foot_markers(markers, env) -> None:
+    reference = _reference_foot_pos_w(env)
+    if reference is None:
+        return
+    if reference.ndim != 3 or tuple(reference.shape[1:]) != (4, 3):
+        return
+    points = reference.reshape(-1, 3).to(dtype=torch.float32)
+    markers.visualize(translations=points)
 
 
 def _close_env(env) -> None:
@@ -585,6 +626,7 @@ def run_eval(args: argparse.Namespace) -> int:
         summaries: list[dict[str, object]] = []
         total_steps = 0
         overall_tracking = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
+        mpc_foot_markers = build_mpc_foot_markers() if getattr(args, "livestream", -1) in (1, 2) else None
         for round_idx in range(int(args.num_rounds)):
             obs, _ = wrapped_env.reset()
             step_limit = int(args.max_steps)
@@ -628,6 +670,8 @@ def run_eval(args: argparse.Namespace) -> int:
                 if collision_acc is not None:
                     force_matrix, body_names = semantic_small_force_matrix_w(base_env)
                     collision_acc.update(step=round_steps, force_matrix_w=force_matrix, body_names=body_names)
+                if mpc_foot_markers is not None:
+                    update_mpc_foot_markers(mpc_foot_markers, base_env)
                 write_jsonl(metrics_path, metric_row)
                 round_steps += 1
                 total_steps += 1

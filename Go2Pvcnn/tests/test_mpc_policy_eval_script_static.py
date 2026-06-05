@@ -86,3 +86,12 @@ def test_mpc_policy_eval_collects_small_collision_env_rate_from_semantic_sensor(
     assert "aggregate_small_collision_rounds" in source
     assert "small_collision_env_rate_per_round" in source
     assert "aggregate_small_collision_env_rate" in source
+
+
+def test_mpc_policy_eval_livestream_syncs_command_and_markers() -> None:
+    source = _source()
+    assert "sync_command_to_policy" in source
+    assert "sync_command_to_mpc" in source
+    assert "update_mpc_foot_markers" in source
+    assert "VisualizationMarkers" in source
+    assert "_trajectory_reference_cache" in source
