@@ -19,6 +19,7 @@
 - Design doc is committed as `f46eab8 docs: design mpc policy evaluation script`.
 - Task 1 static contracts are implemented and verified at `d6a0d45`: eval cfg classes exist, the Python-only CLI skeleton exists, and PLAY no-MPC behavior is covered by static contract tests.
 - Task 2 metric helpers are implemented and verified at `e84a78c` after import isolation review: tracking metrics report mean/p95/per-leg foot error, command helpers support fixed/sweep/random, and small-collision accumulation counts each env once per round.
+- Task 3 rollout skeleton is implemented and verified at `2fe1870`: output files are written per timestamped run, policy loading/checkpoint fallback is covered by source contracts, and real IsaacLab tracking smoke exits `0` with `total_steps=2` and `round_count=1`.
 - Existing `scripts/play.py` intentionally uses `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` and disables MPC attachment. T302o must not regress this.
 - Existing `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` enables MPC reference/cache, `reference_foot_pos`, and global semantic contact sensors.
 - Existing global semantic contact route provides `semantic_contact_small.data.force_matrix_w` and `semantic_contact_large.data.force_matrix_w`.
@@ -561,7 +562,7 @@ git commit -m "feat: add mpc policy eval metric helpers"
 - Modify: `Go2Pvcnn/scripts/mpc_policy_eval.py`
 - Modify: `Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py`
 
-- [ ] **Step 1: Add static tests for output contracts**
+- [x] **Step 1: Add static tests for output contracts**
 
 Append to `Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py`:
 
@@ -584,7 +585,7 @@ def test_mpc_policy_eval_loads_policy_and_uses_eval_cfgs() -> None:
     assert "TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg" in source
 ```
 
-- [ ] **Step 2: Run static tests and confirm RED**
+- [x] **Step 2: Run static tests and confirm RED**
 
 Run:
 
@@ -594,7 +595,7 @@ pytest Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py -q
 
 Expected: FAIL until rollout/output/policy loading symbols exist.
 
-- [ ] **Step 3: Implement output helpers**
+- [x] **Step 3: Implement output helpers**
 
 Add to `Go2Pvcnn/scripts/mpc_policy_eval.py`:
 
@@ -618,7 +619,7 @@ def write_summary(path: Path, summary: dict[str, object]) -> None:
     path.write_text(json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
 ```
 
-- [ ] **Step 4: Implement cfg selection and checkpoint path helpers**
+- [x] **Step 4: Implement cfg selection and checkpoint path helpers**
 
 Add:
 
@@ -651,7 +652,7 @@ def checkpoint_path(args: argparse.Namespace) -> Path:
     return path
 ```
 
-- [ ] **Step 5: Implement rollout skeleton with policy loading**
+- [x] **Step 5: Implement rollout skeleton with policy loading**
 
 Replace `run_eval()` with a real skeleton:
 
@@ -742,7 +743,7 @@ def apply_command_to_env(env, command: torch.Tensor) -> None:
 
 If `OnPolicyRunner` construction requires the existing train/play runner cfg rather than `env_cfg.to_dict()`, copy the exact runner cfg pattern from `Go2Pvcnn/scripts/play.py` during implementation and keep this task's tests focused on source contracts.
 
-- [ ] **Step 6: Run static tests and py_compile**
+- [x] **Step 6: Run static tests and py_compile**
 
 Run:
 
@@ -753,7 +754,7 @@ python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py
 
 Expected: PASS and py_compile exit `0`.
 
-- [ ] **Step 7: Commit rollout skeleton**
+- [x] **Step 7: Commit rollout skeleton**
 
 Run:
 
@@ -1387,15 +1388,16 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Related Logs
 
+- [../log/2026-06-05-t302o-task3-rollout-skeleton.md](../log/2026-06-05-t302o-task3-rollout-skeleton.md)
 - [../log/2026-06-05-t302o-task2-metric-helpers.md](../log/2026-06-05-t302o-task2-metric-helpers.md)
 - [../log/2026-06-05-t302o-task1-static-contracts.md](../log/2026-06-05-t302o-task1-static-contracts.md)
 - [../log/2026-06-05-t302o-mpc-policy-eval-plan.md](../log/2026-06-05-t302o-mpc-policy-eval-plan.md)
 
 ## Git Refs
 
-- Last Feature Commit: `33cb1f8` for Task 2 metric helpers; import isolation review fix at `e84a78c`
-- Last Verified Commit: `e84a78c` for Task 2
-- Current Work Ref: `costmap-teacher-ablation` after Task 2 verification follow-up
+- Last Feature Commit: `2fe1870` for Task 3 rollout skeleton
+- Last Verified Commit: `2fe1870` for Task 3
+- Current Work Ref: `costmap-teacher-ablation` after Task 3 verification follow-up
 - Key Files:
   - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
@@ -1406,7 +1408,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Next Step
 
-- Implement Task 3 headless rollout skeleton and output files.
+- Implement Task 4 tracking mode runtime metrics.
 
 ## Node Details
 
