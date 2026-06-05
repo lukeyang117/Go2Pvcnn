@@ -18,7 +18,7 @@ MPC semantic policy evaluation / small obstacle collision runtime metrics.
 
 ## Candidate Ref
 
-- `7f1e4cd` Task 5 small collision runtime metrics.
+- `aa3879d` Task 5 small collision runtime metrics.
 
 ## Current Work Ref
 
@@ -61,7 +61,7 @@ git diff --check -- Go2Pvcnn/scripts/mpc_policy_eval.py Go2Pvcnn/tests/test_mpc_
 
 ## Result
 
-Pass locally.
+Pass locally. Main-agent final smoke later verified the same collision denominator on card0/env_isaacsim; see [2026-06-05-1745-t302o-mpc-policy-eval-smoke.md](2026-06-05-1745-t302o-mpc-policy-eval-smoke.md).
 
 Implemented or confirmed:
 
@@ -83,6 +83,4 @@ where `total_env_rounds` is the sum of `num_envs` over rounds.
 
 ## Follow-Up
 
-- Main agent should run a real card0/env_isaacsim `small_collision` smoke.
 - Task 3 terrain row/col review note remains open before claiming real multi-terrain comparison semantics.
-- Continue Task 6 livestream command sync and MPC foot markers after Task 5 review/smoke.

@@ -30,7 +30,7 @@
 
 | Child | Status | Priority | Purpose | Primary Files |
 | --- | --- | --- | --- | --- |
-| T302o.1 | active | P0 | Implement CLI, eval cfg contracts, tracking metrics, small collision env-rate metrics, livestream command sync and MPC foot overlays. | `Go2Pvcnn/scripts/mpc_policy_eval.py`, `teacher_elevation_trajectory_mpc_semantic_env_cfg.py`, tests |
+| T302o.1 | verify | P0 | Python eval entry, eval cfg contracts, tracking metrics, small-collision env-rate metrics, livestream command sync, and MPC foot overlays are implemented and smoke-verified. | `Go2Pvcnn/scripts/mpc_policy_eval.py`, `teacher_elevation_trajectory_mpc_semantic_env_cfg.py`, tests |
 
 ## File Structure
 
@@ -1015,7 +1015,7 @@ Task 5 verification log: [../log/2026-06-05-t302o-task5-small-collision-runtime-
 - Modify: `Go2Pvcnn/scripts/mpc_policy_eval.py`
 - Modify: `Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py`
 
-- [ ] **Step 1: Add static tests for livestream contracts**
+- [x] **Step 1: Add static tests for livestream contracts**
 
 Append:
 
@@ -1029,7 +1029,7 @@ def test_mpc_policy_eval_livestream_syncs_command_and_markers() -> None:
     assert "_trajectory_reference_cache" in source
 ```
 
-- [ ] **Step 2: Run test and confirm RED**
+- [x] **Step 2: Run test and confirm RED**
 
 Run:
 
@@ -1039,7 +1039,7 @@ pytest Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py::test_mpc_policy_eva
 
 Expected: FAIL because these functions are not defined.
 
-- [ ] **Step 3: Split command sync helpers**
+- [x] **Step 3: Split command sync helpers**
 
 Replace `apply_command_to_env()` with:
 
@@ -1076,7 +1076,7 @@ sync_command_to_mpc(env, command)
 
 If the actual manager has no `last_command` field, keep `sync_command_to_mpc()` as a narrow compatibility shim and rely on the command manager as the source consumed by `refresh_from_env()`. Do not fabricate a second command state that changes planner semantics.
 
-- [ ] **Step 4: Add marker overlay helpers**
+- [x] **Step 4: Add marker overlay helpers**
 
 Add:
 
@@ -1117,7 +1117,7 @@ if markers is not None:
 
 If IsaacLab marker imports differ, adapt to the existing `go2_foostep_planner.py` marker construction pattern and keep function names stable.
 
-- [ ] **Step 5: Run static tests and py_compile**
+- [x] **Step 5: Run static tests and py_compile**
 
 Run:
 
@@ -1128,7 +1128,7 @@ python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py
 
 Expected: PASS and py_compile exit `0`.
 
-- [ ] **Step 6: Commit livestream overlay slice**
+- [x] **Step 6: Commit livestream overlay slice**
 
 Run:
 
@@ -1136,6 +1136,8 @@ Run:
 git add Go2Pvcnn/scripts/mpc_policy_eval.py Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py
 git commit -m "feat: add mpc policy eval livestream markers"
 ```
+
+Actual: committed as `996ce1f feat: add mpc policy eval livestream markers`; static livestream RED `1 failed`, then full script static `8 passed`, metrics `7 passed`, pycompile exit `0`.
 
 ---
 
@@ -1147,7 +1149,7 @@ git commit -m "feat: add mpc policy eval livestream markers"
 - Modify: `notes/log/index.md`
 - Create: `notes/log/YYYY-MM-DD-HHMM-t302o-mpc-policy-eval-smoke.md`
 
-- [ ] **Step 1: Run local/static regression**
+- [x] **Step 1: Run local/static regression**
 
 Run:
 
@@ -1161,7 +1163,7 @@ python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py \
 
 Expected: PASS and py_compile exit `0`.
 
-- [ ] **Step 2: Run tracking headless smoke**
+- [x] **Step 2: Run tracking headless smoke**
 
 Use an idle GPU and run:
 
@@ -1192,7 +1194,7 @@ Expected:
 - `foot_tracking_error_mean_m` is present
 - no NaN/Inf in summary
 
-- [ ] **Step 3: Run small_collision headless smoke**
+- [x] **Step 3: Run small_collision headless smoke**
 
 Run:
 
@@ -1221,7 +1223,7 @@ Expected:
 - `collided_env_count` denominator is `num_envs`, not `num_envs * max_steps`
 - `semantic_contact_small` force matrix is finite
 
-- [ ] **Step 4: Run livestream smoke if a visual session is needed**
+- [x] **Step 4: Run livestream smoke if a visual session is needed**
 
 Run with `num_envs=1`:
 
@@ -1248,7 +1250,7 @@ Expected:
 - MPC foot reference markers appear
 - metrics/config files are created
 
-- [ ] **Step 5: Write verification log**
+- [x] **Step 5: Write verification log**
 
 Create `notes/log/YYYY-MM-DD-HHMM-t302o-mpc-policy-eval-smoke.md` with:
 
@@ -1328,7 +1330,7 @@ Record `Pass` only if the static regression, pycompile, tracking smoke, and smal
 State what is accepted and what remains unverified.
 ```
 
-- [ ] **Step 6: Update todo/log indexes**
+- [x] **Step 6: Update todo/log indexes**
 
 Update:
 
@@ -1344,7 +1346,7 @@ Record:
 - livestream visual status
 - output directory paths
 
-- [ ] **Step 7: Commit notes and final verification**
+- [x] **Step 7: Commit notes and final verification**
 
 Run:
 
@@ -1359,6 +1361,8 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Related Logs
 
+- [../log/2026-06-05-1745-t302o-mpc-policy-eval-smoke.md](../log/2026-06-05-1745-t302o-mpc-policy-eval-smoke.md)
+- [../log/2026-06-05-t302o-task5-small-collision-runtime-metrics.md](../log/2026-06-05-t302o-task5-small-collision-runtime-metrics.md)
 - [../log/2026-06-05-t302o-task4-tracking-runtime-metrics.md](../log/2026-06-05-t302o-task4-tracking-runtime-metrics.md)
 - [../log/2026-06-05-t302o-task3-rollout-skeleton.md](../log/2026-06-05-t302o-task3-rollout-skeleton.md)
 - [../log/2026-06-05-t302o-task2-metric-helpers.md](../log/2026-06-05-t302o-task2-metric-helpers.md)
@@ -1367,9 +1371,9 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Git Refs
 
-- Last Feature Commit: `d4eead0` for Task 4 tracking runtime metrics
-- Last Verified Commit: `d4eead0` for Task 4 real tracking smoke
-- Current Work Ref: `costmap-teacher-ablation` after Task 4 real smoke verification
+- Last Feature Commit: `996ce1f` for Task 6 livestream markers
+- Last Verified Commit: `996ce1f` for final local/static, tracking, small_collision, and livestream startup smoke
+- Current Work Ref: `costmap-teacher-ablation` after final T302o smoke verification
 - Key Files:
   - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
@@ -1380,7 +1384,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Next Step
 
-- Implement Task 5 small_collision runtime metrics, then run card0/env_isaacsim small_collision smoke.
+- Treat T302o as regression-guarded. Remaining follow-up: fix `--terrain-rows/--terrain-cols` semantics before claiming true multi-terrain comparison results.
 
 ## Node Details
 
