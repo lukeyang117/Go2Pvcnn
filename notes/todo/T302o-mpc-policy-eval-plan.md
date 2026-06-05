@@ -886,7 +886,7 @@ Spec compliance review: approved. Nonblocking/forward blocker note: `--terrain-r
 - Modify: `Go2Pvcnn/scripts/mpc_policy_eval.py`
 - Modify: `Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py`
 
-- [ ] **Step 1: Add aggregate collision test**
+- [x] **Step 1: Add aggregate collision test**
 
 Append:
 
@@ -907,7 +907,7 @@ def test_aggregate_small_collision_rounds_uses_env_denominator() -> None:
     assert summary["total_env_rounds"] == 8
 ```
 
-- [ ] **Step 2: Run test and confirm RED**
+- [x] **Step 2: Run test and confirm RED**
 
 Run:
 
@@ -917,7 +917,9 @@ pytest Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py::test_aggregate_small_coll
 
 Expected: FAIL because aggregate helper is missing.
 
-- [ ] **Step 3: Implement sensor reader and aggregate helper**
+Actual: inherited Task 5 draft already contained the helper test and implementation, so this implementer did not reproduce a fresh RED without rewinding shared worktree state.
+
+- [x] **Step 3: Implement sensor reader and aggregate helper**
 
 Add:
 
@@ -943,7 +945,7 @@ def aggregate_small_collision_rounds(rounds: list[dict[str, object]]) -> dict[st
     }
 ```
 
-- [ ] **Step 4: Wire small_collision mode into rollout loop**
+- [x] **Step 4: Wire small_collision mode into rollout loop**
 
 Before each round loop:
 
@@ -983,7 +985,7 @@ if str(args.mode) == "small_collision":
 write_summary(summary_path, summary)
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -994,7 +996,7 @@ python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py
 
 Expected: PASS and py_compile exit `0`.
 
-- [ ] **Step 6: Commit small collision metrics**
+- [x] **Step 6: Commit small collision metrics**
 
 Run:
 
@@ -1002,6 +1004,8 @@ Run:
 git add Go2Pvcnn/scripts/mpc_policy_eval.py Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py
 git commit -m "feat: collect small obstacle collision env rates"
 ```
+
+Task 5 verification log: [../log/2026-06-05-t302o-task5-small-collision-runtime-metrics.md](../log/2026-06-05-t302o-task5-small-collision-runtime-metrics.md).
 
 ---
 

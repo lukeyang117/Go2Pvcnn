@@ -75,3 +75,14 @@ def test_mpc_policy_eval_collects_tracking_reference_from_runtime_manager() -> N
     assert "current_frame_ids" in source
     assert "reference_valid_ratio" in source
     assert "body_pos_w" in source
+
+
+def test_mpc_policy_eval_collects_small_collision_env_rate_from_semantic_sensor() -> None:
+    source = _source()
+    assert "semantic_small_force_matrix_w" in source
+    assert "semantic_contact_small" in source
+    assert "force_matrix_w" in source
+    assert "SmallCollisionRoundAccumulator" in source
+    assert "aggregate_small_collision_rounds" in source
+    assert "small_collision_env_rate_per_round" in source
+    assert "aggregate_small_collision_env_rate" in source

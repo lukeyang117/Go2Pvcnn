@@ -306,6 +306,27 @@ def tracking_metrics_for_env_step(env) -> dict[str, object]:
     return metrics
 
 
+def semantic_small_force_matrix_w(env) -> tuple[torch.Tensor, tuple[str, ...]]:
+    base = _base_env(env)
+    sensor = base.scene.sensors["semantic_contact_small"]
+    matrix = torch.as_tensor(sensor.data.force_matrix_w)
+    body_names = tuple(getattr(sensor, "body_names", ()) or getattr(sensor.data, "body_names", ()) or ())
+    if not body_names:
+        body_names = tuple(f"body_{idx}" for idx in range(int(matrix.shape[1])))
+    return matrix, body_names
+
+
+def aggregate_small_collision_rounds(rounds: list[dict[str, object]]) -> dict[str, object]:
+    total_collided = sum(int(row.get("collided_env_count", 0) or 0) for row in rounds)
+    total_env_rounds = sum(int(row.get("num_envs", 0) or 0) for row in rounds)
+    return {
+        "round_count": len(rounds),
+        "total_collided_envs": int(total_collided),
+        "total_env_rounds": int(total_env_rounds),
+        "aggregate_small_collision_env_rate": float(total_collided / max(1, total_env_rounds)),
+    }
+
+
 def write_jsonl(path: Path, row: dict[str, object]) -> None:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, sort_keys=True, default=str) + "\n")
@@ -569,6 +590,15 @@ def run_eval(args: argparse.Namespace) -> int:
             step_limit = int(args.max_steps)
             round_steps = 0
             round_tracking = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
+            collision_acc = (
+                SmallCollisionRoundAccumulator(
+                    num_envs=int(args.num_envs),
+                    threshold=float(args.collision_force_threshold),
+                    device=torch.device(str(args.device)),
+                )
+                if str(args.mode) == "small_collision"
+                else None
+            )
             while (step_limit == 0 and simulation_app.is_running()) or round_steps < step_limit:
                 command = command_for_step(
                     args,
@@ -595,6 +625,9 @@ def run_eval(args: argparse.Namespace) -> int:
                     round_tracking.update(tracking)
                     overall_tracking.update(tracking)
                     metric_row["tracking"] = tracking
+                if collision_acc is not None:
+                    force_matrix, body_names = semantic_small_force_matrix_w(base_env)
+                    collision_acc.update(step=round_steps, force_matrix_w=force_matrix, body_names=body_names)
                 write_jsonl(metrics_path, metric_row)
                 round_steps += 1
                 total_steps += 1
@@ -613,6 +646,8 @@ def run_eval(args: argparse.Namespace) -> int:
             }
             if round_tracking is not None:
                 round_summary["tracking"] = round_tracking.summary()
+            if collision_acc is not None:
+                round_summary.update(collision_acc.summary())
             write_jsonl(rounds_path, round_summary)
             summaries.append(round_summary)
             if step_limit == 0:
@@ -628,6 +663,8 @@ def run_eval(args: argparse.Namespace) -> int:
         }
         if overall_tracking is not None:
             summary["tracking"] = overall_tracking.summary()
+        if str(args.mode) == "small_collision":
+            summary.update(aggregate_small_collision_rounds(summaries))
         write_summary(summary_path, summary)
     except BaseException as exc:
         print(f"[mpc_policy_eval] abort: {type(exc).__name__}: {exc!r}", flush=True)

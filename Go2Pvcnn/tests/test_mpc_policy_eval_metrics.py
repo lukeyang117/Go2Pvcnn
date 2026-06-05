@@ -29,6 +29,7 @@ command_for_step = eval_module.command_for_step
 make_run_output_dir = eval_module.make_run_output_dir
 parse_command_sweep = eval_module.parse_command_sweep
 tracking_foot_metrics = eval_module.tracking_foot_metrics
+aggregate_small_collision_rounds = eval_module.aggregate_small_collision_rounds
 
 
 def test_tracking_foot_metrics_report_mean_p95_and_per_leg() -> None:
@@ -65,6 +66,20 @@ def test_small_collision_accumulator_counts_each_env_once_per_round() -> None:
     assert summary["first_collision_step_by_env"] == {"1": 0, "3": 5}
     assert summary["collision_body_names_by_env"]["1"] == ["base", "foot"]
     assert summary["round_small_force_max"] == pytest.approx(4.0)
+
+
+def test_aggregate_small_collision_rounds_uses_env_denominator() -> None:
+    summary = aggregate_small_collision_rounds(
+        [
+            {"collided_env_count": 2, "num_envs": 4},
+            {"collided_env_count": 1, "num_envs": 4},
+        ]
+    )
+
+    assert summary["aggregate_small_collision_env_rate"] == pytest.approx(3 / 8)
+    assert summary["round_count"] == 2
+    assert summary["total_collided_envs"] == 3
+    assert summary["total_env_rounds"] == 8
 
 
 def test_tracking_accumulator_averages_mean_and_valid_ratio_but_maxes_p95() -> None:
