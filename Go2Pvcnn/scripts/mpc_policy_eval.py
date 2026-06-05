@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -55,12 +56,110 @@ def validate_eval_args(args: argparse.Namespace) -> None:
         raise ValueError("--collision-force-threshold must be non-negative")
 
 
+def parse_command_sweep(value: str) -> list[tuple[float, float, float]]:
+    commands: list[tuple[float, float, float]] = []
+    for chunk in str(value).split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts = [float(v) for v in chunk.split()]
+        if len(parts) != 3:
+            raise ValueError("--command-sweep entries must be 'vx vy yaw'")
+        commands.append((parts[0], parts[1], parts[2]))
+    if not commands:
+        raise ValueError("--command-sweep must contain at least one command in sweep mode")
+    return commands
+
+
+def _command_tuple_from_args(args: argparse.Namespace, *, step: int) -> tuple[float, float, float]:
+    mode = str(args.command_mode)
+    if mode == "fixed":
+        parts = [float(v) for v in str(args.command).split()]
+        if len(parts) != 3:
+            raise ValueError("--command must contain exactly three floats: vx vy yaw")
+        return (parts[0], parts[1], parts[2])
+    if mode == "sweep":
+        commands = parse_command_sweep(args.command_sweep)
+        return commands[int(step) % len(commands)]
+    if mode == "random":
+        interval = max(1, int(args.random_command_interval))
+        bucket = int(step) // interval
+        candidates = (
+            (0.4, 0.0, 0.0),
+            (-0.25, 0.0, 0.0),
+            (0.0, 0.3, 0.0),
+            (0.0, -0.3, 0.0),
+            (0.25, 0.0, 0.5),
+            (0.25, 0.0, -0.5),
+            (0.2, 0.2, 0.0),
+            (0.2, -0.2, 0.0),
+        )
+        return candidates[bucket % len(candidates)]
+    raise ValueError(f"Unsupported command mode: {mode}")
+
+
 def command_for_step(args: argparse.Namespace, *, step: int, env_count: int, device: torch.device) -> torch.Tensor:
-    del step
-    values = [float(v) for v in str(args.command).split()]
-    if len(values) != 3:
-        raise ValueError("--command must contain exactly three floats: vx vy yaw")
-    return torch.tensor(values, dtype=torch.float32, device=device).repeat(int(env_count), 1)
+    values = _command_tuple_from_args(args, step=step)
+    command = torch.tensor(values, dtype=torch.float64, device=device).repeat(int(env_count), 1)
+    return torch.round(command * 1_000_000_000_000) / 1_000_000_000_000
+
+
+def tracking_foot_metrics(actual_foot_pos_w: torch.Tensor, reference_foot_pos_w: torch.Tensor) -> dict[str, object]:
+    actual = torch.as_tensor(actual_foot_pos_w, dtype=torch.float32)
+    reference = torch.as_tensor(reference_foot_pos_w, dtype=torch.float32, device=actual.device)
+    if actual.shape != reference.shape or actual.ndim != 3 or actual.shape[1:] != (4, 3):
+        raise ValueError(f"expected foot tensors with shape [N,4,3], got {tuple(actual.shape)} and {tuple(reference.shape)}")
+    error = torch.linalg.norm(actual - reference, dim=-1)
+    return {
+        "foot_tracking_error_mean_m": float(error.mean().item()),
+        "foot_tracking_error_p95_m": float(torch.quantile(error.reshape(-1), 0.95).item()),
+        "per_leg_foot_error_mean_m": [float(v) for v in error.mean(dim=0).tolist()],
+    }
+
+
+@dataclass
+class SmallCollisionRoundAccumulator:
+    num_envs: int
+    threshold: float
+    device: torch.device
+    collided: torch.Tensor = field(init=False)
+    first_step: dict[int, int] = field(default_factory=dict)
+    body_names_by_env: dict[int, set[str]] = field(default_factory=dict)
+    force_max: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.collided = torch.zeros((int(self.num_envs),), dtype=torch.bool, device=self.device)
+
+    def update(self, *, step: int, force_matrix_w: torch.Tensor, body_names: tuple[str, ...] | list[str]) -> None:
+        force = torch.as_tensor(force_matrix_w, dtype=torch.float32, device=self.device)
+        if force.ndim != 4 or force.shape[0] != int(self.num_envs) or force.shape[-1] != 3:
+            raise ValueError(f"force_matrix_w must have shape [N,B,F,3], got {tuple(force.shape)}")
+        magnitudes = torch.linalg.norm(force, dim=-1)
+        active_by_body = magnitudes > float(self.threshold)
+        active_env = active_by_body.any(dim=(1, 2))
+        self.force_max = max(self.force_max, float(magnitudes.max().item()) if magnitudes.numel() else 0.0)
+        active_ids = torch.nonzero(active_env, as_tuple=False).flatten().tolist()
+        for env_id in active_ids:
+            env_int = int(env_id)
+            if env_int not in self.first_step:
+                self.first_step[env_int] = int(step)
+            self.collided[env_int] = True
+            body_ids = torch.nonzero(active_by_body[env_int].any(dim=1), as_tuple=False).flatten().tolist()
+            names = self.body_names_by_env.setdefault(env_int, set())
+            for body_id in body_ids:
+                if int(body_id) < len(body_names):
+                    names.add(str(body_names[int(body_id)]))
+
+    def summary(self) -> dict[str, object]:
+        count = int(self.collided.sum().item())
+        return {
+            "collided_env_count": count,
+            "num_envs": int(self.num_envs),
+            "small_collision_env_rate_per_round": float(count / max(1, int(self.num_envs))),
+            "first_collision_step_by_env": {str(k): int(v) for k, v in sorted(self.first_step.items())},
+            "collision_body_names_by_env": {str(k): sorted(v) for k, v in sorted(self.body_names_by_env.items())},
+            "round_small_force_max": float(self.force_max),
+        }
 
 
 def run_eval(args: argparse.Namespace) -> int:
