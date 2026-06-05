@@ -17,7 +17,7 @@
 ## Current State
 
 - Design doc is committed as `f46eab8 docs: design mpc policy evaluation script`.
-- No implementation code has been written for T302o.
+- Task 1 static contracts are implemented and verified at `d6a0d45`: eval cfg classes exist, the Python-only CLI skeleton exists, and PLAY no-MPC behavior is covered by static contract tests.
 - Existing `scripts/play.py` intentionally uses `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` and disables MPC attachment. T302o must not regress this.
 - Existing `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` enables MPC reference/cache, `reference_foot_pos`, and global semantic contact sensors.
 - Existing global semantic contact route provides `semantic_contact_small.data.force_matrix_w` and `semantic_contact_large.data.force_matrix_w`.
@@ -76,7 +76,7 @@ aggregate_small_collision_env_rate = sum(collided_env_count) / (num_rounds * num
 - Modify: `Go2Pvcnn/tests/test_viewer_reset.py`
 - Create: `Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py`
 
-- [ ] **Step 1: Add failing cfg contract tests**
+- [x] **Step 1: Add failing cfg contract tests**
 
 Append these tests to `Go2Pvcnn/tests/test_batch_mpc_backend.py`:
 
@@ -115,7 +115,7 @@ def test_mpc_policy_eval_cfgs_enable_reference_without_changing_play() -> None:
     assert collision.small_collision_eval_small_count_per_tile > 0
 ```
 
-- [ ] **Step 2: Add failing script static tests**
+- [x] **Step 2: Add failing script static tests**
 
 Create `Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py`:
 
@@ -168,7 +168,7 @@ def test_mpc_policy_eval_script_defines_round_and_command_helpers() -> None:
     assert "main" in function_names
 ```
 
-- [ ] **Step 3: Run tests and confirm RED**
+- [x] **Step 3: Run tests and confirm RED**
 
 Run:
 
@@ -179,7 +179,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_policy_eval_cfgs_enabl
 
 Expected: FAIL because eval cfgs and `mpc_policy_eval.py` do not exist yet.
 
-- [ ] **Step 4: Add minimal eval cfg classes**
+- [x] **Step 4: Add minimal eval cfg classes**
 
 In `Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py`, add classes after `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER`:
 
@@ -216,7 +216,7 @@ class TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg(TeacherEleva
 
 If `configclass` is not imported in the file, use the same decorator/import style already used by nearby cfg classes.
 
-- [ ] **Step 5: Add script skeleton**
+- [x] **Step 5: Add script skeleton**
 
 Create `Go2Pvcnn/scripts/mpc_policy_eval.py`:
 
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 6: Run tests and confirm GREEN**
+- [x] **Step 6: Run tests and confirm GREEN**
 
 Run:
 
@@ -314,7 +314,7 @@ pytest Go2Pvcnn/tests/test_batch_mpc_backend.py::test_mpc_policy_eval_cfgs_enabl
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit static contract slice**
+- [x] **Step 7: Commit static contract slice**
 
 Run:
 
@@ -1386,13 +1386,14 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Related Logs
 
+- [../log/2026-06-05-t302o-task1-static-contracts.md](../log/2026-06-05-t302o-task1-static-contracts.md)
 - [../log/2026-06-05-t302o-mpc-policy-eval-plan.md](../log/2026-06-05-t302o-mpc-policy-eval-plan.md)
 
 ## Git Refs
 
-- Last Feature Commit: `f46eab8`
-- Last Verified Commit: pending implementation
-- Current Work Ref: working tree after `f46eab8` on 2026-06-05
+- Last Feature Commit: `d6a0d45` for Task 1
+- Last Verified Commit: `d6a0d45` for Task 1
+- Current Work Ref: `costmap-teacher-ablation` after Task 1 verification follow-up
 - Key Files:
   - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
@@ -1403,7 +1404,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Next Step
 
-- Implement Task 1 first. Do not start runtime smoke until static contracts and metric helper tests pass.
+- Implement Task 2 metric helpers for tracking and small collision.
 
 ## Node Details
 
