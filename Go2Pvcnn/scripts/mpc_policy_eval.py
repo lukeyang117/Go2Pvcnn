@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -29,7 +30,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--num-rounds", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=1000)
-    parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--terrain-rows", type=str, default="0,3,6,9")
     parser.add_argument("--terrain-cols", type=str, default="0")
     parser.add_argument("--command-mode", choices=["fixed", "random", "sweep"], default="fixed")
@@ -54,6 +54,16 @@ def validate_eval_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-steps 0 is only valid with --livestream 1 or --livestream 2")
     if float(args.collision_force_threshold) < 0.0:
         raise ValueError("--collision-force-threshold must be non-negative")
+
+
+def _parse_int_list(value: str) -> list[int]:
+    result: list[int] = []
+    for chunk in str(value).split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        result.append(int(chunk))
+    return result
 
 
 def parse_command_sweep(value: str) -> list[tuple[float, float, float]]:
@@ -162,11 +172,338 @@ class SmallCollisionRoundAccumulator:
         }
 
 
+def make_run_output_dir(base: Path) -> Path:
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    out = Path(base) / stamp
+    out.mkdir(parents=True, exist_ok=False)
+    return out
+
+
+def write_jsonl(path: Path, row: dict[str, object]) -> None:
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+
+def write_summary(path: Path, summary: dict[str, object]) -> None:
+    path.write_text(json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+
+
+def build_eval_env_cfg(args: argparse.Namespace):
+    if str(args.mode) == "tracking":
+        from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+            TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg,
+        )
+
+        env_cfg = TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg()
+    elif str(args.mode) == "small_collision":
+        from extension.semantic_curriculum import SemanticObstacleCount
+        from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+            TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg,
+        )
+
+        env_cfg = TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg()
+        small_count = int(args.small_count_per_tile)
+        env_cfg.small_collision_eval_small_count_per_tile = small_count
+        env_cfg.small_collision_eval_large_count_per_tile = 0
+        dense_flat = SemanticObstacleCount(small=small_count, large=0)
+        zero = SemanticObstacleCount(small=0, large=0)
+        env_cfg.semantic_obstacle_curriculum.plane_counts = (dense_flat,)
+        env_cfg.semantic_obstacle_curriculum.non_plane_counts = (zero,)
+    else:
+        raise ValueError(f"Unsupported mode: {args.mode}")
+
+    env_cfg.scene.num_envs = int(args.num_envs)
+    env_cfg.sim.device = str(args.device)
+    terrain_rows = _parse_int_list(str(args.terrain_rows))
+    terrain_cols = _parse_int_list(str(args.terrain_cols))
+    tg = getattr(env_cfg.scene.terrain, "terrain_generator", None)
+    if tg is not None:
+        if terrain_rows:
+            tg.num_rows = len(terrain_rows)
+            tg.curriculum = False
+        if terrain_cols:
+            tg.num_cols = len(terrain_cols)
+    return env_cfg
+
+
+def checkpoint_path(args: argparse.Namespace) -> Path:
+    path = (
+        GO2PVCNN_ROOT
+        / "logs"
+        / "rsl_rl"
+        / "teacher_elevation_trajectory_mpc_semantic"
+        / str(args.run_dir)
+        / str(args.checkpoint)
+    )
+    if path.exists():
+        return path
+    fallback = (
+        GO2PVCNN_ROOT.parent
+        / "logs"
+        / "rsl_rl"
+        / "teacher_elevation_trajectory_mpc_semantic"
+        / str(args.run_dir)
+        / str(args.checkpoint)
+    )
+    if fallback.exists():
+        print(f"[mpc_policy_eval] checkpoint fallback: {path} missing; using {fallback}", flush=True)
+        return fallback
+    raise FileNotFoundError(f"Checkpoint not found: {path} (fallback also missing: {fallback})")
+
+
+def _make_eval_env_wrapper(env, *, gym_module, vec_env_cls, clip_actions: float | None = None):
+    class SimpleRslRlEnvWrapper(vec_env_cls):
+        """RSL-RL wrapper matching the active semantic MPC policy observation contract."""
+
+        def __init__(self, env, clip_actions: float | None = None):
+            self.env = env
+            self.clip_actions = clip_actions
+            self.num_envs = env.num_envs
+            self.device = env.device
+            self.max_episode_length = env.max_episode_length
+
+            if hasattr(env, "action_manager"):
+                self.num_actions = env.action_manager.total_action_dim
+            else:
+                self.num_actions = gym_module.spaces.flatdim(env.single_action_space)
+
+            if clip_actions is not None:
+                self.env.action_space = gym_module.spaces.Box(
+                    low=-clip_actions,
+                    high=clip_actions,
+                    shape=(self.num_actions,),
+                    dtype=env.action_space.dtype,
+                )
+
+            self._initial_observations = None
+
+        @property
+        def unwrapped(self):
+            return self.env.unwrapped
+
+        @property
+        def cfg(self):
+            return self.env.unwrapped.cfg
+
+        @property
+        def episode_length_buf(self):
+            return self.env.unwrapped.episode_length_buf
+
+        @episode_length_buf.setter
+        def episode_length_buf(self, value):
+            self.env.unwrapped.episode_length_buf = value
+
+        @property
+        def observation_space(self):
+            return self.env.observation_space
+
+        @property
+        def action_space(self):
+            return self.env.action_space
+
+        def _flatten_group(self, obs_dict, group_names: list[str]) -> torch.Tensor:
+            values = []
+            for name in group_names:
+                value = obs_dict[name]
+                values.append(value.reshape(value.shape[0], -1))
+            return torch.cat(values, dim=-1)
+
+        def _format_observations(self, obs_dict) -> tuple[torch.Tensor, dict]:
+            policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
+            critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
+            return policy_obs, {"observations": {"critic": critic_obs}}
+
+        def get_observations(self):
+            obs_dict = self.env.unwrapped.observation_manager.compute()
+            return self._format_observations(obs_dict)
+
+        def reset(self):
+            obs_dict, _ = self.env.reset()
+            return self._format_observations(obs_dict)
+
+        def step(self, actions):
+            if self.clip_actions is not None:
+                actions = torch.clamp(actions, -self.clip_actions, self.clip_actions)
+            obs_dict, rewards, dones, truncated, extras = self.env.step(actions)
+            dones = dones | truncated
+            obs, obs_extras = self._format_observations(obs_dict)
+            extras.update(obs_extras)
+            return obs, rewards, dones, extras
+
+    return SimpleRslRlEnvWrapper(env, clip_actions=clip_actions)
+
+
+def _attach_reference_manager_if_enabled(env, env_cfg) -> None:
+    if not getattr(env_cfg, "planner_owned_reference_cache", False):
+        return
+    from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
+
+    manager = attach_trajectory_manager_if_enabled(
+        env,
+        env_cfg,
+        experiment_name="teacher_elevation_trajectory_mpc_semantic",
+        device=getattr(env, "device", env_cfg.sim.device),
+    )
+    if manager is not None:
+        print(
+            f"[mpc_policy_eval] attached {getattr(manager, 'planner_backend', 'mpc')} trajectory manager",
+            flush=True,
+        )
+
+
+def apply_command_to_env(env, command: torch.Tensor) -> None:
+    base = env.unwrapped if hasattr(env, "unwrapped") else env
+    command_manager = getattr(base, "command_manager", None)
+    if command_manager is None:
+        return
+    for name in ("base_velocity", "base_velocity_command", "velocity_command"):
+        term = None
+        try:
+            term = command_manager.get_term(name)
+        except Exception:
+            term = None
+        if term is None or not hasattr(term, "command"):
+            continue
+        term.command[:] = command.to(device=term.command.device, dtype=term.command.dtype)
+        manager = getattr(base, "_trajectory_manager", None)
+        if manager is not None and hasattr(manager, "mark_command_changed"):
+            manager.mark_command_changed()
+        return
+
+
+def _close_env(env) -> None:
+    try:
+        env.close()
+    except Exception:
+        pass
+
+
 def run_eval(args: argparse.Namespace) -> int:
     validate_eval_args(args)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    config_path = args.output_dir / "config.json"
-    config_path.write_text(json.dumps(vars(args), indent=2, default=str) + "\n", encoding="utf-8")
+    out_dir = make_run_output_dir(args.output_dir)
+    config_path = out_dir / "config.json"
+    metrics_path = out_dir / "metrics.jsonl"
+    rounds_path = out_dir / "rounds.jsonl"
+    summary_path = out_dir / "summary.json"
+    config_path.write_text(json.dumps(vars(args), indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    metrics_path.touch()
+    rounds_path.touch()
+
+    if getattr(args, "livestream", -1) in (1, 2) and not getattr(args, "enable_cameras", False):
+        args.enable_cameras = True
+
+    from isaaclab.app import AppLauncher
+
+    app_launcher = AppLauncher(args)
+    simulation_app = app_launcher.app
+    raw_env = None
+    wrapped_env = None
+    try:
+        import gymnasium as gym
+
+        from agent import get_train_cfg
+        import go2_pvcnn.tasks.register_envs  # noqa: F401
+        from isaaclab.envs import ManagerBasedRLEnv
+        from rsl_rl.env import VecEnv
+        from rsl_rl.runners import OnPolicyRunner
+
+        env_cfg = build_eval_env_cfg(args)
+        render_mode = "rgb_array" if getattr(args, "livestream", -1) in (1, 2) else None
+        if render_mode is not None:
+            env_cfg.sim.enable_cameras = True
+        checkpoint = checkpoint_path(args)
+        print(f"[mpc_policy_eval] checkpoint={checkpoint}", flush=True)
+        print(f"[mpc_policy_eval] output_dir={out_dir}", flush=True)
+
+        raw_env = gym.make(
+            "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
+            cfg=env_cfg,
+            render_mode=render_mode,
+        )
+        assert isinstance(raw_env.unwrapped, ManagerBasedRLEnv)
+        base_env = raw_env.unwrapped
+        _attach_reference_manager_if_enabled(base_env, env_cfg)
+
+        print("[mpc_policy_eval] creating wrapper", flush=True)
+        wrapped_env = _make_eval_env_wrapper(base_env, gym_module=gym, vec_env_cls=VecEnv, clip_actions=100.0)
+        print("[mpc_policy_eval] wrapper ready", flush=True)
+        train_cfg = get_train_cfg("teacher_elevation_trajectory_mpc_semantic")
+        runner = OnPolicyRunner(wrapped_env, train_cfg, log_dir=None, device=env_cfg.sim.device)
+        print("[mpc_policy_eval] runner ready", flush=True)
+        runner.load(str(checkpoint), load_optimizer=False)
+        print("[mpc_policy_eval] policy loaded", flush=True)
+        policy = runner.get_inference_policy(device=wrapped_env.device)
+
+        summaries: list[dict[str, object]] = []
+        total_steps = 0
+        for round_idx in range(int(args.num_rounds)):
+            obs, _ = wrapped_env.reset()
+            step_limit = int(args.max_steps)
+            round_steps = 0
+            while (step_limit == 0 and simulation_app.is_running()) or round_steps < step_limit:
+                command = command_for_step(
+                    args,
+                    step=round_steps,
+                    env_count=int(args.num_envs),
+                    device=torch.device(str(args.device)),
+                )
+                apply_command_to_env(base_env, command)
+                with torch.inference_mode():
+                    actions = policy(obs)
+                    obs, rewards, dones, extras = wrapped_env.step(actions)
+                reward_mean = float(torch.as_tensor(rewards).float().mean().item())
+                done_count = int(torch.as_tensor(dones).bool().sum().item())
+                write_jsonl(
+                    metrics_path,
+                    {
+                        "round": round_idx,
+                        "step": round_steps,
+                        "global_step": total_steps,
+                        "mode": str(args.mode),
+                        "reward_mean": reward_mean,
+                        "done_count": done_count,
+                    },
+                )
+                round_steps += 1
+                total_steps += 1
+                print(
+                    f"[mpc_policy_eval] round={round_idx} step={round_steps}/{step_limit}",
+                    flush=True,
+                )
+                if step_limit == 0 and round_steps > 0 and int(args.num_rounds) > 1:
+                    break
+            round_summary = {
+                "round": round_idx,
+                "mode": str(args.mode),
+                "num_envs": int(args.num_envs),
+                "max_steps": int(args.max_steps),
+                "steps": round_steps,
+            }
+            write_jsonl(rounds_path, round_summary)
+            summaries.append(round_summary)
+            if step_limit == 0:
+                break
+
+        write_summary(
+            summary_path,
+            {
+                "mode": str(args.mode),
+                "round_count": len(summaries),
+                "num_envs": int(args.num_envs),
+                "total_steps": total_steps,
+                "output_dir": str(out_dir),
+                "rounds": summaries,
+            },
+        )
+    except BaseException as exc:
+        print(f"[mpc_policy_eval] abort: {type(exc).__name__}: {exc!r}", flush=True)
+        raise
+    finally:
+        if wrapped_env is not None:
+            _close_env(wrapped_env.env)
+        elif raw_env is not None:
+            _close_env(raw_env)
+        simulation_app.close()
     return 0
 
 

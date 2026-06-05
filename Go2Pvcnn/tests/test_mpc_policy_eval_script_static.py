@@ -32,7 +32,8 @@ def test_mpc_policy_eval_script_exists_and_has_required_cli() -> None:
 
 def test_mpc_policy_eval_script_has_no_shell_wrapper_dependency() -> None:
     source = _source()
-    assert ".sh" not in source
+    assert "mpc_policy_eval.sh" not in source
+    assert "shell=True" not in source
     assert "subprocess" not in source
 
 
@@ -44,3 +45,21 @@ def test_mpc_policy_eval_script_defines_round_and_command_helpers() -> None:
     assert "command_for_step" in function_names
     assert "run_eval" in function_names
     assert "main" in function_names
+
+
+def test_mpc_policy_eval_writes_required_output_files() -> None:
+    source = _source()
+    assert "metrics.jsonl" in source
+    assert "rounds.jsonl" in source
+    assert "summary.json" in source
+    assert "config.json" in source
+    assert "write_jsonl" in source
+    assert "write_summary" in source
+
+
+def test_mpc_policy_eval_loads_policy_and_uses_eval_cfgs() -> None:
+    source = _source()
+    assert "OnPolicyRunner" in source
+    assert "runner.load" in source
+    assert "TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg" in source
+    assert "TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg" in source
