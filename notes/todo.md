@@ -54,6 +54,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
   - New low-small direction: no hard projection, no touchdown snapping, no hard foot separation; debug by tuning confirmed loss weights/parameters only.
 - Old dense residual MPC (`nominal.py`, `optimizer.py`, `variables.py`, `losses/registry.py`) is retired. Do not reopen V9/V10/V11/V12 scalar-loss branches unless explicitly requested.
 - T302o design is approved enough for implementation planning: [../docs/superpowers/specs/2026-06-05-mpc-policy-eval-design.html](../docs/superpowers/specs/2026-06-05-mpc-policy-eval-design.html). It adds one Python entry under `Go2Pvcnn/scripts/`, not a shell script, and keeps `scripts/play.py` no-MPC behavior unchanged.
+- T302o Task 2 metric helpers are implemented and verified: import-isolated pure tests cover tracking foot metrics, fixed/sweep command generation, and small-collision env-count accumulation; original RED was corrected because the first failure was only a bad test import path.
 
 ## Status Legend
 
@@ -99,7 +100,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
 | T302n.1 | T302n | verify | P0 | Row-gated semantic curriculum implemented: 10-row `plane_counts`/`non_plane_counts`, flat-only semantic gate, no runtime rebuild; focused `24 passed` and IsaacLab row probe pass. | [T302n plan](todo/T302n-semantic-obstacle-curriculum-plan.md) |
-| T302o.1 | T302o | active | P0 | Task 1 static contracts are implemented and verified: eval cfgs preserve PLAY no-MPC behavior and `mpc_policy_eval.py` exposes the required Python CLI skeleton; Task 2 metric helpers are next. | [T302o plan](todo/T302o-mpc-policy-eval-plan.md#task-2-metric-helpers-for-tracking-and-small-collision) |
+| T302o.1 | T302o | active | P0 | Task 1 static contracts and Task 2 metric helpers are implemented and verified; next is Task 3 headless rollout skeleton and output files. | [T302o plan](todo/T302o-mpc-policy-eval-plan.md#task-3-headless-rollout-skeleton-and-output-files) |
 | T302m.1 | T302m | verify | P0 | Route cleanup, local regression, card1 contact/drop, 1024-env train smoke, and 1024/64/25-step perf pass. | [T302m cleanup plan](todo/T302m-teacher-elevation-mpc-semantic-cleanup-plan.md) |
 | T302l.1 | T302l | verify | P0 | Two global semantic contact sensors are implemented; exact-path body resolution fixes 1024-env `gym.make` stall; card1 quantity and 25-step performance pass. | [T302l implementation plan](todo/T302l-mpc-rl-participation-and-reward-plan.md) |
 | T302l.2 | T302l | verify | P0 | PLAY/VIEWER split verified: PLAY no planner attach with `model_14000.pt`, VIEWER cfg static contract covered, low-small regression FK semantic collisions `0`. | [Task 20](todo/T302l-mpc-rl-participation-and-reward-plan.md#task-20-play--viewer-cfg-split) |
@@ -130,6 +131,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |
+| 2026-06-05 | T302o Task 2 metric helpers | pass after import isolation correction; invalid original RED recorded; corrected RED missing helper; GREEN `3 passed in 1.48s`, pycompile exit `0`, diff check exit `0`; Task 3 rollout skeleton next | [T302o](todo/T302o-mpc-policy-eval-plan.md) | [2026-06-05-t302o-task2-metric-helpers.md](log/2026-06-05-t302o-task2-metric-helpers.md) |
 | 2026-06-05 | T302o Task 1 static contracts | pass; RED `4 failed`, GREEN `4 passed in 2.10s`, pycompile exit `0`, staged diff check exit `0`; Task 2 metric helpers next | [T302o](todo/T302o-mpc-policy-eval-plan.md) | [2026-06-05-t302o-task1-static-contracts.md](log/2026-06-05-t302o-task1-static-contracts.md) |
 | 2026-06-05 | T302o MPC policy eval plan | plan recorded; dashboard switched to T302o; implementation not started | [T302o](todo/T302o-mpc-policy-eval-plan.md) | [2026-06-05-t302o-mpc-policy-eval-plan.md](log/2026-06-05-t302o-mpc-policy-eval-plan.md) |
 | 2026-06-03 20:52 | T302n row-gated semantic curriculum | pass; static row-based semantic objects, flat-only semantic gate, no runtime semantic level; focused `24 passed`, pycompile exit `0`, IsaacLab card1 row9 probe flat `8/2`, non-flat `4/1`, force shapes `[8,13,416,3]` / `[8,13,82,3]` | [T302n](todo/T302n-semantic-obstacle-curriculum-plan.md) | [2026-06-03-2052-t302n-row-gated-semantic-curriculum.md](log/2026-06-03-2052-t302n-row-gated-semantic-curriculum.md) |
