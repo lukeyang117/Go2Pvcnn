@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPC Policy 评估脚本设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17212b;
+      --muted: #5d6874;
+      --line: #d7dee7;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --warn: #9a5b00;
+      --ok: #247047;
+      --bad: #9f2f24;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul { margin-top: 8px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note, .guard, .ok, .danger {
+      padding: 12px 14px;
+      margin: 14px 0;
+      border-left: 4px solid;
+    }
+    .note { background: var(--panel); border-left-color: var(--accent); }
+    .guard { background: #fff8eb; border-left-color: var(--warn); }
+    .ok { background: #eef8f1; border-left-color: var(--ok); }
+    .danger { background: #fff0ee; border-left-color: var(--bad); }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC Policy 评估脚本设计</h1>
+  <div class="meta">
+    日期：2026-06-05 ｜ 主线：Teacher elevation trajectory MPC semantic 评估 ｜ 目标入口：
+    <code>Go2Pvcnn/scripts/mpc_policy_eval.py</code>
+  </div>
+
+  <section>
+    <h2>1. 背景和目标</h2>
+    <p>当前仓库已经把普通 policy playback 和 MPC viewer 拆开：<code>scripts/play.py</code> 使用 no-MPC 的 PLAY 配置，<code>extension/viz/go2_foostep_planner.py</code> 使用 MPC-enabled 的 VIEWER 配置。这次新增的不是普通播放入口，而是一个专门的 policy 评估入口，用于加载训练权重，并在真实 IsaacLab rollout 中启用 MPC reference/cache。</p>
+    <p>评估脚本需要覆盖两个测试内容：</p>
+    <ul>
+      <li><strong>tracking</strong>：在不同地形上运行 policy，比较 MPC 规划出的足端参考轨迹和 policy 实际足端轨迹。</li>
+      <li><strong>small_collision</strong>：在大量 small semantic obstacles 的平地上，给 Go2 输入不同速度方向，按环境统计真实语义碰撞率。</li>
+    </ul>
+    <div class="guard">
+      本设计不修改 <code>scripts/play.py</code> 的 no-MPC 合约，不新增 shell 启动脚本，不把评估逻辑塞进 viewer。新增入口只放在 <code>Go2Pvcnn/scripts/mpc_policy_eval.py</code>。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 总体方案</h2>
+    <p>新增一个 Python 脚本：</p>
+    <pre><code>Go2Pvcnn/scripts/mpc_policy_eval.py</code></pre>
+    <p>它负责启动 IsaacLab、构造评估环境、加载 RSL-RL policy checkpoint、同步速度命令到 policy 和 MPC runtime、采集指标、输出 JSONL 和 summary。脚本提供两个 mode：</p>
+    <table>
+      <thead>
+        <tr><th>Mode</th><th>用途</th><th>核心数据源</th><th>主指标</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>tracking</code></td>
+          <td>不同地形上评估 policy 是否能跟踪 MPC foot reference</td>
+          <td>MPC reference cache + Isaac robot body positions</td>
+          <td>实际足端 vs MPC 参考足端误差</td>
+        </tr>
+        <tr>
+          <td><code>small_collision</code></td>
+          <td>大量 small 语义障碍物平地上评估真实碰撞率</td>
+          <td><code>semantic_contact_small.data.force_matrix_w</code></td>
+          <td>每轮发生过碰撞的 env 数 / env 总数</td>
+        </tr>
+      </tbody>
+    </table>
+    <p><code>--headless</code> 和 <code>--livestream 2</code> 使用同一套 rollout 和统计逻辑。headless 用于自动跑指标；livestream 用于 WebRTC 可视化查看，同时仍然写出同样的指标文件。</p>
+  </section>
+
+  <section>
+    <h2>3. 环境配置</h2>
+    <h3>3.1 Tracking Eval 配置</h3>
+    <p>新增或等价构造 <code>TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg</code>。它应启用 MPC reference/cache，用于真实 policy rollout 中的 reference 生成和指标对比。</p>
+    <ul>
+      <li><code>planner_owned_reference_cache=True</code></li>
+      <li><code>use_batched_reference_trajectory=True</code></li>
+      <li><code>planner_backend="mpc"</code></li>
+      <li>保留 <code>reference_foot_pos</code> reward/cache 路径，保证 MPC reference 可用。</li>
+      <li>地形使用当前任务的 row-gated terrain；通过 CLI 选择 <code>terrain_rows</code> / <code>terrain_cols</code> 做分组评估。</li>
+      <li>不改变当前 MPC loss，不添加新 loss，不恢复旧 dense residual 路线。</li>
+    </ul>
+
+    <h3>3.2 Small Collision Eval 配置</h3>
+    <p>新增或等价构造 <code>TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg</code>。它用于平地上密集 small semantic obstacles 的真实 contact 碰撞率评估。</p>
+    <ul>
+      <li>强制选择 flat/plane terrain。</li>
+      <li>small semantic object 数量由 <code>--small-count-per-tile</code> 控制。</li>
+      <li>large semantic object 默认置为 0，避免污染 small collision 统计。</li>
+      <li>保留 <code>semantic_contact_small</code> sensor，并可保留 <code>semantic_contact_large</code> 作为配置检查。</li>
+      <li>碰撞主指标只来自真实 PhysX contact，不用高度图几何近似替代。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. 命令行参数</h2>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>--mode {tracking,small_collision}</code></td><td>必填</td><td>选择评估内容。</td></tr>
+        <tr><td><code>--run-dir</code></td><td>必填</td><td>RSL-RL run 目录名。</td></tr>
+        <tr><td><code>--checkpoint</code></td><td>必填</td><td>checkpoint 文件名，例如 <code>model_14000.pt</code>。</td></tr>
+        <tr><td><code>--num-envs</code></td><td><code>1</code></td><td>并行环境数；headless 可用 64/128，livestream 建议 1。</td></tr>
+        <tr><td><code>--num-rounds</code></td><td><code>1</code></td><td>评估轮数。</td></tr>
+        <tr><td><code>--max-steps</code></td><td><code>1000</code></td><td>每轮执行的 env step 数。执行完 <code>max_steps</code> 算一轮。</td></tr>
+        <tr><td><code>--device</code></td><td><code>cuda:0</code></td><td>IsaacLab 内部 device。</td></tr>
+        <tr><td><code>--headless</code></td><td>来自 AppLauncher</td><td>无界面自动评估。</td></tr>
+        <tr><td><code>--livestream 2</code></td><td>来自 AppLauncher</td><td>WebRTC 可视化查看。</td></tr>
+        <tr><td><code>--terrain-rows</code></td><td><code>0,3,6,9</code></td><td>tracking mode 的 terrain row 列表。</td></tr>
+        <tr><td><code>--terrain-cols</code></td><td><code>0</code></td><td>tracking mode 的 terrain col 列表。</td></tr>
+        <tr><td><code>--command-mode {fixed,random,sweep}</code></td><td><code>fixed</code></td><td>速度命令来源。</td></tr>
+        <tr><td><code>--command "vx vy yaw"</code></td><td><code>0.4 0.0 0.0</code></td><td>fixed mode 下的 body-frame 命令。</td></tr>
+        <tr><td><code>--command-sweep</code></td><td>空</td><td>sweep mode 的命令列表，例如 <code>"0.4 0 0;0 0.3 0;0.3 0 0.5"</code>。</td></tr>
+        <tr><td><code>--random-command-interval</code></td><td><code>100</code></td><td>random mode 每隔多少 step 换一次速度方向。</td></tr>
+        <tr><td><code>--small-count-per-tile</code></td><td><code>80</code></td><td>small_collision mode 每个 flat tile 的 small 物体数量目标。</td></tr>
+        <tr><td><code>--collision-force-threshold</code></td><td><code>1.0</code></td><td>真实 contact 判定阈值。</td></tr>
+        <tr><td><code>--output-dir</code></td><td>必填</td><td>输出 <code>metrics.jsonl</code>、<code>rounds.jsonl</code>、<code>summary.json</code>。</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      自动统计模式要求 <code>--max-steps &gt; 0</code>。<code>--max-steps 0</code> 只用于 livestream/manual 查看，因为它没有明确的轮结束条件。
+    </div>
+  </section>
+
+  <section>
+    <h2>5. 示例命令</h2>
+    <h3>5.1 Tracking headless</h3>
+    <pre><code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode tracking \
+  --headless \
+  --device cuda:0 \
+  --num-envs 64 \
+  --num-rounds 5 \
+  --max-steps 1000 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --terrain-rows 0,3,6,9 \
+  --terrain-cols 0,1 \
+  --command-mode fixed \
+  --command "0.4 0.0 0.0" \
+  --output-dir logs/mpc_policy_eval/tracking</code></pre>
+
+    <h3>5.2 Small collision headless</h3>
+    <pre><code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode small_collision \
+  --headless \
+  --device cuda:0 \
+  --num-envs 64 \
+  --num-rounds 10 \
+  --max-steps 1000 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --command-mode random \
+  --random-command-interval 100 \
+  --small-count-per-tile 80 \
+  --output-dir logs/mpc_policy_eval/small_collision</code></pre>
+
+    <h3>5.3 Livestream 可视化</h3>
+    <pre><code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode tracking \
+  --livestream 2 \
+  --device cuda:0 \
+  --num-envs 1 \
+  --num-rounds 1 \
+  --max-steps 0 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --command-mode fixed \
+  --command "0.4 0.0 0.0" \
+  --output-dir logs/mpc_policy_eval/visual_tracking</code></pre>
+  </section>
+
+  <section>
+    <h2>6. Livestream 可视化语义</h2>
+    <p>可视化模式下，同一个 body-frame 速度命令必须同时输入给 policy command manager 和 MPC planner/runtime。这样画面中比较的是同一速度目标下的两条轨迹，而不是 policy 和 MPC 各自收到不同命令。</p>
+    <div class="math">command source
+  -> policy command manager
+  -> MPC trajectory manager / planner cfg</div>
+    <p>画面中显示两类足端信息：</p>
+    <ul>
+      <li><strong>MPC 参考足端轨迹</strong>：从 <code>_trajectory_reference_cache.foot_pos_w</code> 或 manager 当前 cache 中读取，并用 marker 画出未来足端轨迹。</li>
+      <li><strong>Policy 实际足端轨迹</strong>：从 Isaac robot body positions 读取真实 feet world position，可显示当前实际足端点和短历史轨迹。</li>
+    </ul>
+    <p>marker 风格复用 <code>extension/viz/go2_foostep_planner.py</code> 的足端轨迹思路：四条腿用不同颜色或稳定 marker namespace，必要时叠加当前 reference frame 小球和实际 foot 小球。</p>
+  </section>
+
+  <section>
+    <h2>7. Tracking 指标</h2>
+    <h3>7.1 主指标</h3>
+    <table>
+      <thead>
+        <tr><th>指标</th><th>定义</th><th>用途</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>foot_tracking_error_mean_m</code></td>
+          <td>实际足端 world position 与 MPC reference <code>foot_pos_w</code> 的 L2 误差均值。</td>
+          <td>整体足端跟踪质量。</td>
+        </tr>
+        <tr>
+          <td><code>foot_tracking_error_p95_m</code></td>
+          <td>足端 L2 误差 95 分位。</td>
+          <td>发现均值掩盖的尖峰偏差。</td>
+        </tr>
+        <tr>
+          <td><code>per_leg_foot_error_mean_m</code></td>
+          <td>FL/FR/RL/RR 分腿足端误差均值。</td>
+          <td>定位单腿系统性问题。</td>
+        </tr>
+        <tr>
+          <td><code>reference_valid_ratio</code></td>
+          <td>MPC reference cache 有效比例。</td>
+          <td>先确认 planner/cache 没坏。</td>
+        </tr>
+        <tr>
+          <td><code>episode_alive_ratio</code></td>
+          <td>rollout 中没有提前 reset/fall 的比例。</td>
+          <td>过滤摔倒导致的异常 tracking 结果。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>7.2 诊断指标</h3>
+    <ul>
+      <li><code>root_xy_error_mean_m</code>：实际 base xy 与 MPC root reference 的误差。</li>
+      <li><code>root_yaw_error_mean_rad</code>：实际 yaw 与 MPC yaw reference 的误差。</li>
+      <li><code>joint_error_mean_rad</code>：实际关节角与 reference joint 的误差。</li>
+      <li><code>contact_match_rate</code>：实际接触状态与 MPC contact schedule 的匹配率。</li>
+      <li><code>command_tracking_error_mean</code>：实际 base velocity 与输入 command 的误差。</li>
+      <li><code>replan_count</code> / <code>planner_fail_count</code>：MPC runtime 稳定性。</li>
+      <li>按 <code>terrain_row</code>、<code>terrain_col</code>、<code>terrain_name</code> 分组输出。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. Small Collision 指标</h2>
+    <h3>8.1 主指标</h3>
+    <p>主指标按环境计数，而不是按 step 计数。一轮内某个 env 只要任意时刻发生过 small semantic contact，这个 env 就记为碰撞 1 次；同一个 env 碰 1 次和碰 20 次，主指标都只算 1 个 collided env。</p>
+    <div class="math">small_collision_env_rate_per_round = collided_env_count / num_envs</div>
+    <table>
+      <thead>
+        <tr><th>指标</th><th>定义</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>collided_env_count</code></td>
+          <td>当前轮中发生过至少一次 small contact 的 env 数。</td>
+          <td>每个 env 每轮最多计 1。</td>
+        </tr>
+        <tr>
+          <td><code>small_collision_env_rate_per_round</code></td>
+          <td><code>collided_env_count / num_envs</code></td>
+          <td>该轮主碰撞率。</td>
+        </tr>
+        <tr>
+          <td><code>aggregate_small_collision_env_rate</code></td>
+          <td><code>sum(collided_env_count) / (num_rounds * num_envs)</code></td>
+          <td>所有轮的总体碰撞率。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>示例：<code>num_envs=64</code>，一轮 <code>max_steps=1000</code>，其中 7 个 env 在任意 step 碰过 small obstacle，则这一轮碰撞率是 <code>7 / 64 = 10.94%</code>。</p>
+
+    <h3>8.2 诊断指标</h3>
+    <ul>
+      <li><code>first_collision_step_by_env</code>：每个碰撞 env 第一次碰撞 step。</li>
+      <li><code>collision_body_names_by_env</code>：每个碰撞 env 触发 contact 的 body 名称集合。</li>
+      <li><code>round_small_force_max</code>：该轮 small contact 最大力。</li>
+      <li><code>distance_traveled_m_by_env</code>：每个 env 的行走距离，防止没走动导致假低碰撞率。</li>
+      <li><code>collision_by_command_bin</code>：按速度方向/速度大小分组的碰撞 env rate。</li>
+      <li><code>large_collision_env_count</code>：large contact 诊断计数；small_collision 环境中应为 0 或接近 0。</li>
+      <li><code>semantic_contact_sensor_valid</code>：确认 <code>force_matrix_w</code> shape 非空且无 NaN/Inf。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. 输出文件</h2>
+    <p>每次运行在 <code>--output-dir</code> 下创建一个带时间戳的 run 子目录，避免覆盖历史结果。</p>
+    <table>
+      <thead>
+        <tr><th>文件</th><th>内容</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>metrics.jsonl</code></td>
+          <td>按 step 或采样间隔写轻量记录，包括 round、step、command、部分 tracking/collision 即时指标。</td>
+        </tr>
+        <tr>
+          <td><code>rounds.jsonl</code></td>
+          <td>每轮一条 summary，包括主指标、诊断指标、环境数、步数、terrain/command 分组。</td>
+        </tr>
+        <tr>
+          <td><code>summary.json</code></td>
+          <td>所有 rounds 的 aggregate，包括 mean/p95/max、按地形和命令分组的统计。</td>
+        </tr>
+        <tr>
+          <td><code>config.json</code></td>
+          <td>完整 CLI 参数、checkpoint 路径、git ref、环境配置摘要。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>10. 验收标准</h2>
+    <p>第一版评估先建立 baseline，不直接设定严格的 performance 门槛。必须满足的硬条件是：</p>
+    <ul>
+      <li>checkpoint 能加载，policy 能进入 rollout。</li>
+      <li>tracking mode 下 MPC reference/cache 有效，<code>reference_valid_ratio</code> 可计算。</li>
+      <li>small_collision mode 下 <code>semantic_contact_small.force_matrix_w</code> shape 非空、有限，且能按 env 聚合。</li>
+      <li>headless 模式能跑完 <code>num_rounds * max_steps</code>。</li>
+      <li>livestream 模式下同一个 command 同时输入 policy 和 MPC，并能看到 MPC foot reference marker。</li>
+      <li>所有输出文件稳定落盘，无 NaN/Inf 主指标。</li>
+    </ul>
+    <div class="ok">
+      后续可以基于 baseline 再设硬阈值，例如 tracking p95 足端误差上限或 small collision env rate 上限。第一版目标是把真实评估链路和指标口径固定下来。
+    </div>
+  </section>
+
+  <section>
+    <h2>11. 实现边界和风险</h2>
+    <ul>
+      <li>不得恢复旧的 <code>batched_planner</code> / dense residual 路线；当前目标是 <code>extension/batch_mpc_planner</code>。</li>
+      <li>不得修改 <code>scripts/play.py</code> 的 no-MPC 行为。</li>
+      <li>不得把真实碰撞率替换为语义高度图近似。</li>
+      <li>如果新增 eval cfg，改动范围限制在任务配置、脚本入口和必要测试；不调整 MPC loss。</li>
+      <li>livestream 可视化依赖 IsaacLab AppLauncher WebRTC 参数，需沿用现有 viewer/play 的 <code>--livestream 2</code> 处理习惯。</li>
+      <li>多 env headless 指标应避免每 step 大量 CPU 同步；可按固定 interval 写 <code>metrics.jsonl</code>，但 round summary 必须完整。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>12. 后续计划入口</h2>
+    <p>设计确认后，下一步进入实现计划，建议按以下任务拆分：</p>
+    <ol>
+      <li>新增静态/单元测试，锁定 CLI、mode、round 语义和 eval cfg 合约。</li>
+      <li>实现 <code>mpc_policy_eval.py</code> 的参数解析、checkpoint 加载和 rollout 骨架。</li>
+      <li>实现 tracking 采集器和 summary。</li>
+      <li>实现 small_collision 采集器和按 env 聚合的主指标。</li>
+      <li>实现 livestream marker overlay 和 command 同步。</li>
+      <li>运行 headless smoke、livestream smoke，并更新 notes/todo/log。</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>
