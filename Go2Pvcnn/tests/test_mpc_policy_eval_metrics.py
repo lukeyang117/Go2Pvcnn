@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,16 +8,25 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
-from Go2Pvcnn.scripts.mpc_policy_eval import (
-    SmallCollisionRoundAccumulator,
-    command_for_step,
-    parse_command_sweep,
-    tracking_foot_metrics,
-)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/mpc_policy_eval.py"
+
+
+def _load_eval_module():
+    spec = importlib.util.spec_from_file_location("mpc_policy_eval_under_test", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+eval_module = _load_eval_module()
+SmallCollisionRoundAccumulator = eval_module.SmallCollisionRoundAccumulator
+command_for_step = eval_module.command_for_step
+parse_command_sweep = eval_module.parse_command_sweep
+tracking_foot_metrics = eval_module.tracking_foot_metrics
 
 
 def test_tracking_foot_metrics_report_mean_p95_and_per_leg() -> None:
