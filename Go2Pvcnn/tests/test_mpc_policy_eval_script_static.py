@@ -63,3 +63,15 @@ def test_mpc_policy_eval_loads_policy_and_uses_eval_cfgs() -> None:
     assert "runner.load" in source
     assert "TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg" in source
     assert "TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg" in source
+
+
+def test_mpc_policy_eval_collects_tracking_reference_from_runtime_manager() -> None:
+    source = _source()
+    assert "TrackingRoundAccumulator" in source
+    assert "tracking_metrics_for_env_step" in source
+    assert "current_reference" in source
+    assert "\"foot_pos_w\"" in source
+    assert "_trajectory_reference_cache" in source
+    assert "current_frame_ids" in source
+    assert "reference_valid_ratio" in source
+    assert "body_pos_w" in source

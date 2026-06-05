@@ -128,6 +128,51 @@ def tracking_foot_metrics(actual_foot_pos_w: torch.Tensor, reference_foot_pos_w:
 
 
 @dataclass
+class TrackingRoundAccumulator:
+    step_count: int = 0
+    valid_step_count: int = 0
+    reference_valid_ratio_sum: float = 0.0
+    mean_error_sum: float = 0.0
+    p95_error_max: float = 0.0
+    per_leg_error_sum: torch.Tensor = field(default_factory=lambda: torch.zeros((4,), dtype=torch.float64))
+
+    def update(self, metrics: dict[str, object]) -> None:
+        self.step_count += 1
+        self.reference_valid_ratio_sum += float(metrics.get("reference_valid_ratio", 0.0) or 0.0)
+        if metrics.get("foot_tracking_error_mean_m") is None:
+            return
+        per_leg = metrics.get("per_leg_foot_error_mean_m")
+        if not isinstance(per_leg, list) or len(per_leg) != 4:
+            raise ValueError("per_leg_foot_error_mean_m must be a four-element list when tracking metrics are valid")
+        self.valid_step_count += 1
+        self.mean_error_sum += float(metrics["foot_tracking_error_mean_m"])
+        self.p95_error_max = max(self.p95_error_max, float(metrics["foot_tracking_error_p95_m"]))
+        self.per_leg_error_sum += torch.tensor([float(v) for v in per_leg], dtype=torch.float64)
+
+    def summary(self) -> dict[str, object]:
+        reference_valid_ratio = self.reference_valid_ratio_sum / max(1, self.step_count)
+        if self.valid_step_count == 0:
+            return {
+                "tracking_step_count": int(self.step_count),
+                "tracking_valid_step_count": 0,
+                "reference_valid_ratio": float(reference_valid_ratio),
+                "foot_tracking_error_mean_m": None,
+                "foot_tracking_error_p95_m": None,
+                "per_leg_foot_error_mean_m": None,
+            }
+        return {
+            "tracking_step_count": int(self.step_count),
+            "tracking_valid_step_count": int(self.valid_step_count),
+            "reference_valid_ratio": float(reference_valid_ratio),
+            "foot_tracking_error_mean_m": float(self.mean_error_sum / self.valid_step_count),
+            "foot_tracking_error_p95_m": float(self.p95_error_max),
+            "per_leg_foot_error_mean_m": [
+                float(v) for v in (self.per_leg_error_sum / self.valid_step_count).tolist()
+            ],
+        }
+
+
+@dataclass
 class SmallCollisionRoundAccumulator:
     num_envs: int
     threshold: float
@@ -173,10 +218,92 @@ class SmallCollisionRoundAccumulator:
 
 
 def make_run_output_dir(base: Path) -> Path:
-    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out = Path(base) / stamp
-    out.mkdir(parents=True, exist_ok=False)
-    return out
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
+    base = Path(base)
+    for suffix in range(1000):
+        name = stamp if suffix == 0 else f"{stamp}_{suffix:03d}"
+        out = base / name
+        try:
+            out.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return out
+    raise FileExistsError(f"could not create unique output directory under {base}")
+
+
+def _base_env(env):
+    return env.unwrapped if hasattr(env, "unwrapped") else env
+
+
+def _actual_foot_pos_w(env) -> torch.Tensor:
+    base = _base_env(env)
+    robot = base.scene["robot"]
+    foot_ids, _ = robot.find_bodies(".*_foot")
+    if len(foot_ids) != 4:
+        raise ValueError(f"expected exactly 4 robot foot bodies, got {len(foot_ids)}")
+    ids = torch.as_tensor([int(i) for i in foot_ids], dtype=torch.long, device=robot.data.body_pos_w.device)
+    foot_pos = robot.data.body_pos_w.index_select(1, ids)
+    if foot_pos.ndim != 3 or tuple(foot_pos.shape[1:]) != (4, 3):
+        raise ValueError(f"expected actual foot tensor shape [N,4,3], got {tuple(foot_pos.shape)}")
+    return foot_pos
+
+
+def _reference_foot_pos_w_from_cache(env) -> torch.Tensor | None:
+    base = _base_env(env)
+    cache = getattr(base, "_trajectory_reference_cache", None)
+    manager = getattr(base, "_trajectory_manager", None)
+    if cache is None or manager is None or not hasattr(manager, "current_frame_ids"):
+        return None
+    try:
+        frame_ids = manager.current_frame_ids()
+    except Exception:
+        return None
+    foot_pos_w = getattr(cache, "foot_pos_w", None)
+    if foot_pos_w is None:
+        return None
+    foot = torch.as_tensor(foot_pos_w)
+    idx = torch.as_tensor(frame_ids, dtype=torch.long, device=foot.device)
+    env_idx = torch.arange(idx.shape[0], dtype=torch.long, device=foot.device)
+    return foot[env_idx, idx]
+
+
+def _reference_foot_pos_w(env) -> torch.Tensor | None:
+    base = _base_env(env)
+    manager = getattr(base, "_trajectory_manager", None)
+    if manager is not None and hasattr(manager, "current_reference"):
+        try:
+            reference = manager.current_reference()
+        except Exception:
+            reference = None
+        if isinstance(reference, dict) and reference.get("foot_pos_w") is not None:
+            return torch.as_tensor(reference["foot_pos_w"])
+    return _reference_foot_pos_w_from_cache(base)
+
+
+def tracking_metrics_for_env_step(env) -> dict[str, object]:
+    reference = _reference_foot_pos_w(env)
+    if reference is None:
+        return {
+            "reference_valid_ratio": 0.0,
+            "foot_tracking_error_mean_m": None,
+            "foot_tracking_error_p95_m": None,
+            "per_leg_foot_error_mean_m": None,
+        }
+    if reference.ndim != 3 or tuple(reference.shape[1:]) != (4, 3):
+        raise ValueError(f"expected reference foot tensor shape [N,4,3], got {tuple(reference.shape)}")
+    if not bool(torch.isfinite(reference).all().item()):
+        return {
+            "reference_valid_ratio": 0.0,
+            "foot_tracking_error_mean_m": None,
+            "foot_tracking_error_p95_m": None,
+            "per_leg_foot_error_mean_m": None,
+        }
+    actual = _actual_foot_pos_w(env)
+    if actual.shape != reference.shape:
+        raise ValueError(f"actual/reference foot tensor shape mismatch: {tuple(actual.shape)} vs {tuple(reference.shape)}")
+    metrics = tracking_foot_metrics(actual, reference)
+    metrics["reference_valid_ratio"] = 1.0
+    return metrics
 
 
 def write_jsonl(path: Path, row: dict[str, object]) -> None:
@@ -436,10 +563,12 @@ def run_eval(args: argparse.Namespace) -> int:
 
         summaries: list[dict[str, object]] = []
         total_steps = 0
+        overall_tracking = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
         for round_idx in range(int(args.num_rounds)):
             obs, _ = wrapped_env.reset()
             step_limit = int(args.max_steps)
             round_steps = 0
+            round_tracking = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
             while (step_limit == 0 and simulation_app.is_running()) or round_steps < step_limit:
                 command = command_for_step(
                     args,
@@ -453,17 +582,20 @@ def run_eval(args: argparse.Namespace) -> int:
                     obs, rewards, dones, extras = wrapped_env.step(actions)
                 reward_mean = float(torch.as_tensor(rewards).float().mean().item())
                 done_count = int(torch.as_tensor(dones).bool().sum().item())
-                write_jsonl(
-                    metrics_path,
-                    {
-                        "round": round_idx,
-                        "step": round_steps,
-                        "global_step": total_steps,
-                        "mode": str(args.mode),
-                        "reward_mean": reward_mean,
-                        "done_count": done_count,
-                    },
-                )
+                metric_row = {
+                    "round": round_idx,
+                    "step": round_steps,
+                    "global_step": total_steps,
+                    "mode": str(args.mode),
+                    "reward_mean": reward_mean,
+                    "done_count": done_count,
+                }
+                if round_tracking is not None and overall_tracking is not None:
+                    tracking = tracking_metrics_for_env_step(base_env)
+                    round_tracking.update(tracking)
+                    overall_tracking.update(tracking)
+                    metric_row["tracking"] = tracking
+                write_jsonl(metrics_path, metric_row)
                 round_steps += 1
                 total_steps += 1
                 print(
@@ -479,22 +611,24 @@ def run_eval(args: argparse.Namespace) -> int:
                 "max_steps": int(args.max_steps),
                 "steps": round_steps,
             }
+            if round_tracking is not None:
+                round_summary["tracking"] = round_tracking.summary()
             write_jsonl(rounds_path, round_summary)
             summaries.append(round_summary)
             if step_limit == 0:
                 break
 
-        write_summary(
-            summary_path,
-            {
-                "mode": str(args.mode),
-                "round_count": len(summaries),
-                "num_envs": int(args.num_envs),
-                "total_steps": total_steps,
-                "output_dir": str(out_dir),
-                "rounds": summaries,
-            },
-        )
+        summary = {
+            "mode": str(args.mode),
+            "round_count": len(summaries),
+            "num_envs": int(args.num_envs),
+            "total_steps": total_steps,
+            "output_dir": str(out_dir),
+            "rounds": summaries,
+        }
+        if overall_tracking is not None:
+            summary["tracking"] = overall_tracking.summary()
+        write_summary(summary_path, summary)
     except BaseException as exc:
         print(f"[mpc_policy_eval] abort: {type(exc).__name__}: {exc!r}", flush=True)
         raise

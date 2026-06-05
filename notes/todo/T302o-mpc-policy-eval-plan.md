@@ -771,7 +771,7 @@ git commit -m "feat: add mpc policy eval rollout skeleton"
 - Modify: `Go2Pvcnn/scripts/mpc_policy_eval.py`
 - Modify: `Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py`
 
-- [ ] **Step 1: Add tests for tracking aggregation**
+- [x] **Step 1: Add tests for tracking aggregation**
 
 Append to `Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py`:
 
@@ -791,7 +791,7 @@ def test_tracking_round_accumulator_aggregates_step_metrics() -> None:
     assert summary["reference_valid_ratio"] == pytest.approx(1.0)
 ```
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
 Run:
 
@@ -799,99 +799,27 @@ Run:
 pytest Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py::test_tracking_round_accumulator_aggregates_step_metrics -q
 ```
 
-Expected: FAIL because `TrackingRoundAccumulator` is missing.
+Actual: FAIL because `TrackingRoundAccumulator` was missing:
 
-- [ ] **Step 3: Implement tracking accumulator and reference readers**
-
-Add:
-
-```python
-@dataclass
-class TrackingRoundAccumulator:
-    rows: list[dict[str, float]] = field(default_factory=list)
-
-    def update(self, row: dict[str, object]) -> None:
-        self.rows.append({k: float(v) for k, v in row.items() if isinstance(v, (int, float))})
-
-    def summary(self) -> dict[str, object]:
-        if not self.rows:
-            return {
-                "foot_tracking_error_mean_m": 0.0,
-                "foot_tracking_error_p95_m": 0.0,
-                "reference_valid_ratio": 0.0,
-            }
-        keys = sorted({key for row in self.rows for key in row})
-        out: dict[str, object] = {}
-        for key in keys:
-            values = [row[key] for row in self.rows if key in row]
-            if key.endswith("_p95_m"):
-                out[key] = max(values)
-            else:
-                out[key] = float(sum(values) / max(1, len(values)))
-        return out
-
-
-def current_reference_foot_pos_w(env) -> torch.Tensor | None:
-    base = env.unwrapped if hasattr(env, "unwrapped") else env
-    cache = getattr(base, "_trajectory_reference_cache", None)
-    if cache is None:
-        return None
-    foot = getattr(cache, "foot_pos_w", None)
-    if foot is None and isinstance(cache, dict):
-        foot = cache.get("foot_pos_w")
-    if foot is None:
-        return None
-    tensor = torch.as_tensor(foot)
-    if tensor.ndim == 4:
-        phase = getattr(getattr(base, "_trajectory_manager", None), "phase_counter", None)
-        if phase is None:
-            return tensor[:, 0]
-        idx = torch.as_tensor(phase, dtype=torch.long, device=tensor.device).clamp(0, tensor.shape[1] - 1)
-        return tensor[torch.arange(tensor.shape[0], device=tensor.device), idx]
-    if tensor.ndim == 3:
-        return tensor
-    return None
-
-
-def current_actual_foot_pos_w(env) -> torch.Tensor:
-    base = env.unwrapped if hasattr(env, "unwrapped") else env
-    robot = base.scene["robot"]
-    foot_ids = robot.find_bodies(".*foot")[0]
-    foot_ids_t = torch.as_tensor(foot_ids, dtype=torch.long, device=robot.data.body_pos_w.device)
-    return robot.data.body_pos_w.index_select(1, foot_ids_t)
+```text
+AttributeError: module 'mpc_policy_eval_under_test' has no attribute 'TrackingRoundAccumulator'
 ```
 
-- [ ] **Step 4: Wire tracking mode into rollout loop**
+- [x] **Step 3: Implement tracking accumulator and reference readers**
 
-In `run_eval()`, before each round loop create:
+Implemented:
 
-```python
-tracking_acc = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
-```
+- `TrackingRoundAccumulator` averages `foot_tracking_error_mean_m`, averages `reference_valid_ratio`, keeps max `foot_tracking_error_p95_m`, and averages per-leg means across valid steps.
+- `_actual_foot_pos_w()` reads `env.scene["robot"].data.body_pos_w` with `.*_foot` body ids.
+- `_reference_foot_pos_w()` first reads `env.unwrapped._trajectory_manager.current_reference()["foot_pos_w"]`, then falls back to `_trajectory_reference_cache.foot_pos_w` indexed by `current_frame_ids()`.
+- Missing/non-finite reference writes `reference_valid_ratio=0.0` and null tracking errors. Illegal tensor shape raises `ValueError` as configuration/runtime contract failure.
+- `make_run_output_dir()` now uses microsecond timestamps with suffix fallback to avoid same-second output collisions.
 
-Inside the step loop after `env.step(action)`:
+- [x] **Step 4: Wire tracking mode into rollout loop**
 
-```python
-if tracking_acc is not None:
-    reference_foot = current_reference_foot_pos_w(env)
-    if reference_foot is not None:
-        actual_foot = current_actual_foot_pos_w(env)
-        row = tracking_foot_metrics(actual_foot, reference_foot.to(device=actual_foot.device))
-        row["reference_valid_ratio"] = 1.0
-    else:
-        row = {"reference_valid_ratio": 0.0}
-    tracking_acc.update(row)
-    write_jsonl(metrics_path, {"round": round_idx, "step": step, "mode": str(args.mode), **row})
-```
+Tracking mode now adds a nested `tracking` object to each `metrics.jsonl` row, each `rounds.jsonl` row, and top-level `summary.json`.
 
-At round end:
-
-```python
-if tracking_acc is not None:
-    round_summary.update(tracking_acc.summary())
-```
-
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -900,7 +828,18 @@ pytest Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py -q
 python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py
 ```
 
-Expected: PASS and py_compile exit `0`.
+Actual:
+
+```text
+pytest Go2Pvcnn/tests/test_mpc_policy_eval_metrics.py -q
+6 passed in 1.60s
+
+pytest Go2Pvcnn/tests/test_mpc_policy_eval_script_static.py -q
+6 passed in 0.03s
+
+python -m py_compile Go2Pvcnn/scripts/mpc_policy_eval.py
+exit 0
+```
 
 - [ ] **Step 6: Commit tracking metrics**
 
@@ -1388,6 +1327,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Related Logs
 
+- [../log/2026-06-05-t302o-task4-tracking-runtime-metrics.md](../log/2026-06-05-t302o-task4-tracking-runtime-metrics.md)
 - [../log/2026-06-05-t302o-task3-rollout-skeleton.md](../log/2026-06-05-t302o-task3-rollout-skeleton.md)
 - [../log/2026-06-05-t302o-task2-metric-helpers.md](../log/2026-06-05-t302o-task2-metric-helpers.md)
 - [../log/2026-06-05-t302o-task1-static-contracts.md](../log/2026-06-05-t302o-task1-static-contracts.md)
@@ -1395,9 +1335,9 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Git Refs
 
-- Last Feature Commit: `2fe1870` for Task 3 rollout skeleton
-- Last Verified Commit: `2fe1870` for Task 3
-- Current Work Ref: `costmap-teacher-ablation` after Task 3 verification follow-up
+- Last Feature Commit: `b737977` for Task 4 tracking runtime metrics
+- Last Verified Commit: `b737977` for Task 4 local verification
+- Current Work Ref: `costmap-teacher-ablation` after Task 4 local verification
 - Key Files:
   - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
@@ -1408,7 +1348,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Next Step
 
-- Implement Task 4 tracking mode runtime metrics.
+- Run main-agent real IsaacLab tracking smoke on card 0/env_isaacsim, then implement Task 5 small_collision runtime metrics.
 
 ## Node Details
 

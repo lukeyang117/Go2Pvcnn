@@ -24,7 +24,9 @@ def _load_eval_module():
 
 eval_module = _load_eval_module()
 SmallCollisionRoundAccumulator = eval_module.SmallCollisionRoundAccumulator
+TrackingRoundAccumulator = eval_module.TrackingRoundAccumulator
 command_for_step = eval_module.command_for_step
+make_run_output_dir = eval_module.make_run_output_dir
 parse_command_sweep = eval_module.parse_command_sweep
 tracking_foot_metrics = eval_module.tracking_foot_metrics
 
@@ -63,6 +65,57 @@ def test_small_collision_accumulator_counts_each_env_once_per_round() -> None:
     assert summary["first_collision_step_by_env"] == {"1": 0, "3": 5}
     assert summary["collision_body_names_by_env"]["1"] == ["base", "foot"]
     assert summary["round_small_force_max"] == pytest.approx(4.0)
+
+
+def test_tracking_accumulator_averages_mean_and_valid_ratio_but_maxes_p95() -> None:
+    acc = TrackingRoundAccumulator()
+
+    acc.update(
+        {
+            "foot_tracking_error_mean_m": 0.10,
+            "foot_tracking_error_p95_m": 0.20,
+            "per_leg_foot_error_mean_m": [0.10, 0.20, 0.30, 0.40],
+            "reference_valid_ratio": 1.0,
+        }
+    )
+    acc.update(
+        {
+            "foot_tracking_error_mean_m": 0.30,
+            "foot_tracking_error_p95_m": 0.15,
+            "per_leg_foot_error_mean_m": [0.30, 0.20, 0.10, 0.00],
+            "reference_valid_ratio": 0.0,
+        }
+    )
+
+    summary = acc.summary()
+
+    assert summary["tracking_step_count"] == 2
+    assert summary["foot_tracking_error_mean_m"] == pytest.approx(0.20)
+    assert summary["foot_tracking_error_p95_m"] == pytest.approx(0.20)
+    assert summary["per_leg_foot_error_mean_m"] == pytest.approx([0.20, 0.20, 0.20, 0.20])
+    assert summary["reference_valid_ratio"] == pytest.approx(0.5)
+
+
+def test_tracking_accumulator_reports_empty_reference_as_zero_valid_ratio() -> None:
+    acc = TrackingRoundAccumulator()
+    acc.update({"reference_valid_ratio": 0.0})
+
+    summary = acc.summary()
+
+    assert summary["tracking_step_count"] == 1
+    assert summary["reference_valid_ratio"] == pytest.approx(0.0)
+    assert summary["foot_tracking_error_mean_m"] is None
+    assert summary["foot_tracking_error_p95_m"] is None
+    assert summary["per_leg_foot_error_mean_m"] is None
+
+
+def test_make_run_output_dir_avoids_same_second_collisions(tmp_path: Path) -> None:
+    first = make_run_output_dir(tmp_path)
+    second = make_run_output_dir(tmp_path)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
 
 
 def test_command_for_step_supports_fixed_and_sweep_modes() -> None:
