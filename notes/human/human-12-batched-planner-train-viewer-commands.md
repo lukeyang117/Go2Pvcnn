@@ -264,6 +264,81 @@ teleop 键位：
 - `X`：清零命令
 - `R`：reset，并触发重规划
 
+## MPC Policy Eval 命令
+
+`mpc_policy_eval.py` 是专门的评估入口，不是普通 `play.py` 回放。它会加载 policy checkpoint，同时启用 MPC reference/cache，用来跑两类测试：
+
+- `tracking`：对比 policy 实际足端轨迹和 MPC reference foot 轨迹。
+- `small_collision`：在平地小语义障碍物场景统计碰撞率；每轮里每个 env 只要发生过一次小障碍物碰撞就计 1，分母是 `num_envs`，不是 step 数。
+
+tracking headless：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 300s \
+  /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode tracking \
+  --headless \
+  --device cuda:0 \
+  --num-envs 4 \
+  --num-rounds 1 \
+  --max-steps 20 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --terrain-rows 0 \
+  --terrain-cols 0 \
+  --command-mode fixed \
+  --command "0.4 0.0 0.0" \
+  --output-dir logs/mpc_policy_eval/tracking_smoke
+```
+
+small_collision headless：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 300s \
+  /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode small_collision \
+  --headless \
+  --device cuda:0 \
+  --num-envs 4 \
+  --num-rounds 1 \
+  --max-steps 20 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --command-mode random \
+  --random-command-interval 5 \
+  --small-count-per-tile 80 \
+  --output-dir logs/mpc_policy_eval/small_collision_smoke
+```
+
+可视化 / livestream tracking：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 300s \
+  /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode tracking \
+  --livestream 2 \
+  --device cuda:0 \
+  --num-envs 1 \
+  --num-rounds 1 \
+  --max-steps 2 \
+  --run-dir 2026-05-31_20-03-27 \
+  --checkpoint model_14000.pt \
+  --command-mode fixed \
+  --command "0.4 0.0 0.0" \
+  --output-dir logs/mpc_policy_eval/visual_tracking_smoke
+```
+
+eval 侧关键参数：
+
+- `--num-rounds`：测试轮数。
+- `--max-steps`：每轮步数，执行完 `max_steps` 算一轮。
+- `--mode tracking`：输出 policy-vs-MPC 足端 tracking 指标。
+- `--mode small_collision`：输出小语义障碍物 env-rate 碰撞指标。
+- `--command-mode fixed|random|sweep`：控制 policy 和 MPC 共用的 body-frame 速度命令。
+- `--small-count-per-tile`：small_collision 平地小语义物体密度。
+- `--collision-force-threshold`：判定小障碍物碰撞的 contact force 阈值，默认 `1.0`。
+- `--terrain-rows/--terrain-cols`：当前用于 eval terrain grid 配置；它还不是严格的原始 terrain row/col ID selector，正式多地形对比前需要先修这个语义。
+
 ## Play 命令
 
 基础回放：
@@ -297,8 +372,8 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 ```bash
 CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
   --experiment teacher_elevation_trajectory_mpc_semantic \
-  --run_dir 2026-05-30_00-00-00 \
-  --checkpoint model_0.pt \
+  --run_dir 2026-05-31_20-03-27 \
+  --checkpoint model_19800.pt \
   --num_envs 1 \
   --headless \
   --livestream 2 \

@@ -728,6 +728,26 @@ def test_plan_segment_defaults_to_parametric_fk_realized_feet() -> None:
     torch.testing.assert_close(result.foot_pos[:, 1:], fk[:, 1:], atol=1.0e-5, rtol=1.0e-5)
 
 
+def test_plan_segment_flat_body_forward_tracks_root_yaw_direction() -> None:
+    terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    cfg.runtime.optimize_steps = 0
+    state = MpcRobotState(
+        root_pos=state.root_pos,
+        root_rpy=torch.tensor([[0.0, 0.0, torch.pi / 2.0]], dtype=torch.float32),
+        foot_pos=state.foot_pos,
+        joint_angles=state.joint_angles,
+    )
+    command = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+
+    result = plan_segment(terrain, state, command, cfg=cfg)
+
+    delta_xy = result.root_pos[0, -1, :2] - state.root_pos[0, :2]
+    direction = delta_xy / torch.linalg.vector_norm(delta_xy).clamp_min(1.0e-6)
+    torch.testing.assert_close(direction, torch.tensor([0.0, 1.0], dtype=torch.float32), atol=1.0e-5, rtol=1.0e-5)
+    assert abs(float(delta_xy[0])) <= 1.0e-5
+    assert float(delta_xy[1]) > 0.05
+
+
 def test_parametric_plan_exposes_sampled_frame_losses() -> None:
     terrain, state, _command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
     command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)

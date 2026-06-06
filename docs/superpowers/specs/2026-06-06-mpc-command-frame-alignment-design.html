@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPC command 坐标系对齐设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #59636e;
+      --line: #d7dde3;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --warn: #9a5b00;
+      --bad: #9f2f24;
+      --ok: #247047;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    ul { margin-top: 8px; }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note, .guard, .ok, .danger {
+      padding: 12px 14px;
+      margin: 14px 0;
+      border-left: 4px solid;
+    }
+    .note { background: var(--panel); border-left-color: var(--accent); }
+    .guard { background: #fff8eb; border-left-color: var(--warn); }
+    .ok { background: #eef8f1; border-left-color: var(--ok); }
+    .danger { background: #fff0ee; border-left-color: var(--bad); }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC command 坐标系对齐设计</h1>
+  <div class="meta">
+    日期：2026-06-06 ｜ 主线：T302o MPC policy eval / T302k parametric MPC command contract ｜ 文件范围：
+    <code>Go2Pvcnn/extension/batch_mpc_planner</code>、
+    <code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code>、
+    <code>Go2Pvcnn/scripts/mpc_policy_eval.py</code>
+  </div>
+
+  <section>
+    <h2>1. 设计目标</h2>
+    <p>统一训练、viewer 键盘、<code>mpc_policy_eval.py</code> 和 MPC runtime 的速度 command 方向语义。外部入口只传 root-yaw/body 水平坐标系下的 <code>[vx_body, vy_body, yaw_rate]</code>。MPC 内部需要做 world-frame 几何规划时，必须基于当前 <code>state.root_rpy[:, 2]</code> 把 body command 转成 world heading。</p>
+    <p>本设计只修正 command 方向坐标系解释，不改变 MPC loss 设计本身。</p>
+    <div class="guard">
+      <strong>硬约束：</strong>不新增 loss，不删除 loss，不修改任何 loss 权重，不新增硬约束，不改变 <code>decode_parametric_trajectory()</code> 的职责，不削弱 2026-05-28 low-small 设计效果，也不破坏 2026-05-30 MPC RL participation/runtime 设计中的语义避障、跨越和真实 semantic contact reward。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 已复现的问题</h2>
+    <p>在平地、无语义障碍物、固定前向 command <code>[1.0, 0.0, 0.0]</code> 的真实 IsaacLab probe 中，机器人初始 yaw 约为 <code>16.05 deg</code>。当前 MPC nominal 使用的 forward 是 world <code>[1.0, 0.0]</code>，而不是 root-yaw/body 前向旋转后的 world <code>[0.961, 0.277]</code>。</p>
+    <p>复现指标：</p>
+    <table>
+      <thead>
+        <tr><th>条件</th><th>body-frame root 横向偏移</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>当前默认 MPC command</td><td><code>-0.0937m</code></td><td>轨迹明显偏侧。</td></tr>
+        <tr><td>手动把 body command 按 root yaw 旋到 world 后</td><td><code>-0.0044m</code></td><td>偏侧基本消失。</td></tr>
+        <tr><td>去掉 semantic map 后默认 command</td><td><code>-0.0937m</code></td><td>证明不是语义避障导致。</td></tr>
+      </tbody>
+    </table>
+    <p>证据日志：<code>notes/log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md</code>。</p>
+  </section>
+
+  <section>
+    <h2>3. Command Contract</h2>
+    <p>新的边界契约如下：</p>
+    <div class="math">外部入口 command_body = [vx_body, vy_body, yaw_rate]
+command_body 永远是 root-yaw/body 水平坐标系
+
+MPC 内部 world heading:
+linear_world_xy = R(root_yaw) @ command_body[:2]
+forward_w = normalize(linear_world_xy)
+left_w = [-forward_w.y, forward_w.x]</div>
+    <p>该契约适用于：</p>
+    <ul>
+      <li>训练 command manager 采样出的 <code>base_velocity</code>。</li>
+      <li>viewer 键盘和 <code>--scripted-command</code>。</li>
+      <li><code>mpc_policy_eval.py --command</code>、random command 和 sweep command。</li>
+      <li>MPC manager 从 command manager 读取并传给 <code>plan_segment()</code> 的 command。</li>
+    </ul>
+    <p>MPC 内部必须同时保留两种语义：</p>
+    <table>
+      <thead>
+        <tr><th>数据</th><th>用途</th><th>原因</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>command_body</code></td><td>zero 判断、速度大小、<code>vy_body</code> 是否非零、<code>yaw_rate</code> 是否非零、mixed command 判断。</td><td>这些判断表达用户在 root-yaw 坐标系下的意图，不能被 world 化后丢失。</td></tr>
+        <tr><td><code>forward_w / left_w</code></td><td>root path、foot path、terrain corridor、semantic obstacle corridor、progress direction、touchdown world 几何。</td><td>这些计算发生在 world-frame terrain / foot / root 坐标上，必须使用 world heading。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 当前代码兼容点</h2>
+    <table>
+      <thead>
+        <tr><th>模块</th><th>当前状态</th><th>设计要求</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>训练 command</td><td>按 IsaacLab velocity command 语义使用 root-yaw/body command。</td><td>保持不变。</td></tr>
+        <tr><td><code>mpc_policy_eval.py</code></td><td>把 CLI command 写入 command manager，policy 和 MPC manager 读取同一份 command。</td><td>保持外部 command 为 body frame；不在 eval 中临时旋转。</td></tr>
+        <tr><td>viewer 键盘 / scripted command</td><td>输入和箭头显示本身是 body frame，但送 MPC 前存在 <code>_viewer_mpc_world_command_from_root_frame()</code> 临时转换。</td><td>MPC 修复后，viewer 不再提前把 command 转成 world，避免双重旋转。</td></tr>
+        <tr><td>MPC manager</td><td>从 command manager 读取 command 并原样传给 <code>plan_segment()</code>。</td><td>保持不变；manager 不负责坐标转换。</td></tr>
+        <tr><td><code>semantic_policy.py</code></td><td>部分 semantic corridor 逻辑已按 root yaw 把 body command 转 world heading。</td><td>保留正确语义，但避免和新的统一 helper 重复旋转。</td></tr>
+        <tr><td><code>parametric.py::command_frame_axes()</code></td><td>linear active 时直接把 <code>cmd[:, :2]</code> 当 world forward。</td><td>改为 body command 到 world axes 的统一入口。</td></tr>
+        <tr><td><code>planner.py</code> / <code>losses/terrain_clearance.py</code></td><td>存在多处直接用 <code>cmd[:, :2]</code> 当 heading 的 world 几何计算。</td><td>逐个归类：world 几何改用 world axes；mixed/zero/yaw 判断继续用 body command。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. 设计方案</h2>
+    <h3>5.1 统一 helper</h3>
+    <p>在 MPC 内部建立一个单一 helper，用来把 body command 和 root yaw 转成 world axes。命名可以在实现阶段确定，但职责必须固定：</p>
+    <pre><code>body_command_to_world_axes(command_body, root_yaw)
+  - padded_command_body
+  - speed_xy
+  - linear_active
+  - forward_w
+  - left_w
+  - yaw_forward_w</code></pre>
+    <p>当线速度接近 0 时，<code>forward_w</code> 退化为当前 root yaw 方向；当线速度非零时，<code>forward_w</code> 为 <code>R(root_yaw) @ normalize(command_body[:2])</code>。</p>
+
+    <h3>5.2 MPC 内部消费规则</h3>
+    <p>实现阶段只做坐标系替换，不改目标函数含义：</p>
+    <ul>
+      <li>root / foot 的 world path 解码使用 <code>forward_w / left_w</code>。</li>
+      <li>semantic obstacle 的 corridor 判断使用 <code>forward_w / left_w</code>。</li>
+      <li>low-small crossing、touchdown keepout、swing clearance 等已有 loss 的几何查询方向使用 <code>forward_w / left_w</code>。</li>
+      <li>是否 mixed、是否纯横向、是否 yaw active、速度大小阈值继续读取 <code>command_body</code>。</li>
+      <li>任何地方不得通过修改 loss 权重来掩盖方向坐标系错误。</li>
+    </ul>
+
+    <h3>5.3 Viewer 兼容迁移</h3>
+    <p>当前 viewer 中 <code>_viewer_mpc_world_command_from_root_frame()</code> 是旧兼容层。MPC 内部统一修复后，viewer 应传原始 body command 给 <code>plan_segment()</code>。viewer 的箭头显示仍使用 <code>root_yaw + atan2(vy_body, vx_body)</code>，因为这是正确的人机交互语义。</p>
+  </section>
+
+  <section>
+    <h2>6. 不采用的方案</h2>
+    <table>
+      <thead>
+        <tr><th>方案</th><th>不采用原因</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>只修 <code>parametric.command_frame_axes()</code></td><td>能修平地前向偏侧，但 <code>planner.py</code> 和 <code>terrain_clearance.py</code> 内部仍可能在语义障碍、横向和斜向 command 下坐标系不一致。</td></tr>
+        <tr><td>外部全部提前转 world command</td><td>违背用户目标，也会让训练、viewer、eval 和 MPC 的 public command contract 分裂。</td></tr>
+        <tr><td>新增 loss 或调整权重抵消偏侧</td><td>偏侧是坐标系错误，不是优化目标不足；新增或调权会污染 2026-05-28 和 2026-05-30 的验收结论。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>7. 平地全向方向验收</h2>
+    <p>平地无障碍验收只把方向作为硬指标。移动距离可以偏差，Z 方向可以偏差。</p>
+    <h3>7.1 测试条件</h3>
+    <ul>
+      <li>terrain 必须是纯 flat / plane。</li>
+      <li>semantic map 非零数量必须为 0。</li>
+      <li>至少覆盖一个非零 root yaw 的初始状态。</li>
+      <li>yaw-rate 为 0 的纯平移 command 用作每条腿 XY 硬验收。</li>
+    </ul>
+    <h3>7.2 Command 覆盖</h3>
+    <pre><code>[+1.0,  0.0, 0.0]
+[-1.0,  0.0, 0.0]
+[ 0.0, +1.0, 0.0]
+[ 0.0, -1.0, 0.0]
+[+0.7, +0.7, 0.0]
+[+0.7, -0.7, 0.0]
+[-0.7, +0.7, 0.0]
+[-0.7, -0.7, 0.0]</code></pre>
+    <h3>7.3 Command 同源验收</h3>
+    <p>eval 中必须记录并比较：</p>
+    <div class="math">requested_command_body
+policy_command_body = command_manager.get_command("base_velocity")
+mpc_input_command_body = manager._commands_from_env(env)</div>
+    <p>硬验收：</p>
+    <div class="math">policy_command_body == requested_command_body
+mpc_input_command_body == requested_command_body
+允许浮点误差：1e-6</div>
+
+    <h3>7.4 Root XY 方向硬指标</h3>
+    <p>把 body command 转成 world direction：</p>
+    <div class="math">command_world_dir = normalize(R(root_yaw_start) @ command_body_xy)
+command_world_left = [-command_world_dir.y, command_world_dir.x]
+mpc_root_delta_xy = root_pos_w[end, :2] - root_pos_w[start, :2]</div>
+    <p>硬验收：</p>
+    <div class="math">if norm(mpc_root_delta_xy) >= 0.05m:
+  direction_cosine = dot(normalize(mpc_root_delta_xy), command_world_dir) >= 0.98
+  lateral_ratio = abs(dot(mpc_root_delta_xy, command_world_left)) / norm(mpc_root_delta_xy) <= 0.10
+else:
+  标记 insufficient_motion，不作为方向失败</div>
+
+    <h3>7.5 每条 Leg XY 方向硬指标</h3>
+    <p>每条腿只检查 XY 方向，不检查 Z。对每条 leg：</p>
+    <div class="math">foot_delta_xy_i = foot_pos_w[end, leg_i, :2] - foot_pos_w[start, leg_i, :2]
+foot_step_len_i = norm(foot_delta_xy_i)
+foot_direction_cos_i = dot(normalize(foot_delta_xy_i), command_world_dir)
+foot_lateral_ratio_i = abs(dot(foot_delta_xy_i, command_world_left)) / foot_step_len_i</div>
+    <p>硬验收：</p>
+    <div class="math">if foot_step_len_i >= 0.03m:
+  foot_direction_cos_i >= 0.98
+  foot_lateral_ratio_i <= 0.10
+else:
+  标记 insufficient_leg_motion，不作为方向失败</div>
+    <p>Z 方向只记录诊断，例如 <code>foot_delta_z_i</code>、<code>foot_z_range_i</code>、<code>foot_z_peak_i</code>，不参与方向 fail。</p>
+
+    <h3>7.6 距离指标</h3>
+    <p>移动距离不作为本次核心硬指标，只记录诊断：</p>
+    <div class="math">root_distance = norm(mpc_root_delta_xy)
+expected_distance_like = norm(command_body_xy) * horizon_dt
+distance_ratio = root_distance / expected_distance_like</div>
+  </section>
+
+  <section>
+    <h2>8. 当前 eval 不歪验收</h2>
+    <p><code>mpc_policy_eval.py</code> 的 tracking / livestream 路径必须遵守同一 command contract。headless 和 livestream 看到的 MPC reference 方向必须一致。</p>
+    <p>验收输出应至少包含：</p>
+    <pre><code>{
+  "command_body": [vx, vy, yaw],
+  "policy_command_body": [...],
+  "mpc_command_body": [...],
+  "root_yaw": ...,
+  "command_world_dir": [...],
+  "mpc_root_delta": [...],
+  "root_direction_cosine": ...,
+  "root_lateral_ratio": ...,
+  "leg_direction_cosine": [FL, FR, RL, RR],
+  "leg_lateral_ratio": [FL, FR, RL, RR],
+  "insufficient_leg_motion": [FL, FR, RL, RR]
+}</code></pre>
+    <p>目标是数字上证明“不歪”，而不是只依赖 livestream 目测。</p>
+  </section>
+
+  <section>
+    <h2>9. 语义障碍兼容验收</h2>
+    <p>本次坐标系修复不能破坏既有语义障碍能力。验收必须覆盖以下回归：</p>
+    <table>
+      <thead>
+        <tr><th>回归项</th><th>硬要求</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>2026-05-28 low-small full matrix / FK semantic collision probe</td><td><code>fk_semantic_collision_count == 0</code>、<code>fk_semantic_collision_rate == 0</code>、covered crossing rows 上 <code>planned_vs_fk_foot_error_crossing_leg_max_m &lt;= 0.08m</code>；必须记录 crossing-covered rows 数量，不能因未触发 crossing 假通过。</td></tr>
+        <tr><td>low-small 跨越方向</td><td>语义 corridor 使用 <code>R(root_yaw) @ command_body_xy</code> 后的 world heading；前向、斜向、横向 body command 下都不能因为坐标系变化 miss 掉机器人运动方向上的 low-small。</td></tr>
+        <tr><td>high-small / large 绕行</td><td>障碍物相对运动方向的前后/左右判断使用 world heading；绕行侧选择不能因为 command 坐标系改变而反向或失效。</td></tr>
+        <tr><td>真实 semantic contact reward</td><td>small / large 两个 sensor 的 shape、force matrix、无 NaN/Inf、small/large 分开统计能力保持不变。</td></tr>
+        <tr><td>MPC participation/runtime</td><td>25-step horizon/cache/replan interval、selected env 才有 reference reward、未选中 env reward mask 为 0 的行为保持不变。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>10. 测试矩阵</h2>
+    <table>
+      <thead>
+        <tr><th>层级</th><th>测试目的</th><th>验收重点</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>纯函数单元测试</td><td>验证 body command + root yaw 到 world axes 的转换。</td><td><code>yaw=0</code>、<code>yaw=pi/2</code>、前/后/左/右/斜向、零线速度退化。</td></tr>
+        <tr><td>parametric MPC 单元测试</td><td>验证 root/foot path 的 XY 方向使用 world axes。</td><td>root 和每条 moving leg 的 direction cosine / lateral ratio。</td></tr>
+        <tr><td>viewer 静态/运行测试</td><td>验证 viewer 不再提前 world 化 command，箭头显示仍按 root-yaw/body 语义。</td><td>同一 command 下 plan 和箭头方向一致。</td></tr>
+        <tr><td>eval headless probe</td><td>验证 policy command 与 MPC command 同源，并输出方向指标。</td><td>全向平移 command 的 root/leg XY 方向硬指标通过。</td></tr>
+        <tr><td>real IsaacLab livestream smoke</td><td>验证可视化不歪。</td><td>单 env、非零 yaw、前向/横向/斜向 command 下 MPC marker 与速度方向一致。</td></tr>
+        <tr><td>语义障碍回归</td><td>验证 2026-05-28 和 2026-05-30 设计效果不回退。</td><td>low-small crossing、FK semantic collision、high/large avoid、semantic contact reward 和 participation contract。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>11. 实施边界</h2>
+    <div class="danger">
+      <strong>禁止事项：</strong>不得用调 loss 权重、新增 loss、改 optimizer 步数、增加 postprocess、强行投影 foot trajectory 的方式修方向偏差。本任务只允许修 command 坐标系契约和对应测试/诊断。
+    </div>
+    <p>如果实现过程中发现某个语义 loss 原本依赖 world command 输入，必须把它迁移到统一 world axes helper，而不是改变该 loss 的权重或公式。</p>
+  </section>
+
+  <section>
+    <h2>12. 成功标准</h2>
+    <ul>
+      <li>外部所有入口继续使用 root-yaw/body command。</li>
+      <li>MPC 内部 world 几何统一使用从 body command 和 root yaw 得到的 world axes。</li>
+      <li>平地无障碍全向平移 command 下，root 和每条 moving leg 的 XY 方向不歪。</li>
+      <li><code>mpc_policy_eval.py</code> 中 policy command 和 MPC command 同源同向同大小。</li>
+      <li>移动距离和 Z 方向允许偏差，只作为诊断记录。</li>
+      <li>2026-05-28 low-small 效果和 2026-05-30 semantic obstacle / contact / participation runtime 效果不回退。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

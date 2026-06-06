@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,6 +39,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-command-interval", type=int, default=100)
     parser.add_argument("--small-count-per-tile", type=int, default=80)
     parser.add_argument("--collision-force-threshold", type=float, default=1.0)
+    parser.add_argument(
+        "--debug-follow-camera",
+        action="store_true",
+        help="Log livestream follow-camera viewport/camera diagnostics to stdout and follow_camera_debug.jsonl.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -265,6 +271,18 @@ def _reference_foot_pos_w_from_cache(env) -> torch.Tensor | None:
     idx = torch.as_tensor(frame_ids, dtype=torch.long, device=foot.device)
     env_idx = torch.arange(idx.shape[0], dtype=torch.long, device=foot.device)
     return foot[env_idx, idx]
+
+
+def _reference_foot_trajectory_w(env) -> torch.Tensor | None:
+    base = _base_env(env)
+    cache = getattr(base, "_trajectory_reference_cache", None)
+    foot_pos_w = None if cache is None else getattr(cache, "foot_pos_w", None)
+    if foot_pos_w is None:
+        return None
+    foot = torch.as_tensor(foot_pos_w)
+    if foot.ndim != 4 or tuple(foot.shape[-2:]) != (4, 3):
+        return None
+    return foot
 
 
 def _reference_foot_pos_w(env) -> torch.Tensor | None:
@@ -534,30 +552,292 @@ def apply_command_to_env(env, command: torch.Tensor) -> None:
         sync_command_to_mpc(env, command)
 
 
-def build_mpc_foot_markers():
-    import isaaclab.sim as sim_utils
-    from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+def _policy_command_body_from_env(env) -> torch.Tensor | None:
+    base = env.unwrapped if hasattr(env, "unwrapped") else env
+    command_manager = getattr(base, "command_manager", None)
+    if command_manager is None:
+        return None
+    for name in ("base_velocity", "base_velocity_command", "velocity_command"):
+        try:
+            command = command_manager.get_command(name)
+        except Exception:
+            command = None
+        if command is not None:
+            return torch.as_tensor(command)
+    return None
 
-    marker_cfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/T302oMpcPolicyEval/foot_reference",
+
+def _mpc_input_command_body_from_env(env) -> torch.Tensor | None:
+    base = env.unwrapped if hasattr(env, "unwrapped") else env
+    manager = getattr(base, "_trajectory_manager", None)
+    if manager is None or not hasattr(manager, "_commands_from_env"):
+        return None
+    try:
+        return torch.as_tensor(manager._commands_from_env(base))
+    except Exception:
+        return None
+
+
+def command_body_source_diagnostics(env, requested_command_body: torch.Tensor) -> dict[str, object]:
+    requested = torch.as_tensor(requested_command_body).detach().to(dtype=torch.float32).cpu()
+    policy_command = _policy_command_body_from_env(env)
+    mpc_command = _mpc_input_command_body_from_env(env)
+    policy_cpu = None if policy_command is None else torch.as_tensor(policy_command).detach().to(dtype=torch.float32).cpu()
+    mpc_cpu = None if mpc_command is None else torch.as_tensor(mpc_command).detach().to(dtype=torch.float32).cpu()
+    errors = []
+    if policy_cpu is not None and policy_cpu.shape == requested.shape:
+        errors.append(torch.max(torch.abs(policy_cpu - requested)))
+    if mpc_cpu is not None and mpc_cpu.shape == requested.shape:
+        errors.append(torch.max(torch.abs(mpc_cpu - requested)))
+    max_error = None if not errors else float(torch.stack(errors).max().item())
+    return {
+        "requested_command_body": requested.tolist(),
+        "policy_command_body": None if policy_cpu is None else policy_cpu.tolist(),
+        "mpc_input_command_body": None if mpc_cpu is None else mpc_cpu.tolist(),
+        "command_body_match_max_abs_error": max_error,
+    }
+
+
+def _semantic_nonzero_count(env) -> int | None:
+    base = env.unwrapped if hasattr(env, "unwrapped") else env
+    sensor = None
+    try:
+        sensor = base.scene.sensors.get("height_scanner")
+    except Exception:
+        sensor = None
+    semantic_map = None if sensor is None else getattr(getattr(sensor, "data", None), "semantic_map", None)
+    if semantic_map is None:
+        return None
+    semantic = torch.as_tensor(semantic_map)
+    return int(torch.count_nonzero(semantic).item())
+
+
+def planned_direction_metrics_from_reference_cache(env, requested_command_body: torch.Tensor) -> dict[str, object]:
+    base = env.unwrapped if hasattr(env, "unwrapped") else env
+    cache = getattr(base, "_trajectory_reference_cache", None)
+    root_pos = None if cache is None else getattr(cache, "root_pos_w", None)
+    root_quat = None if cache is None else getattr(cache, "root_quat_w", None)
+    foot_pos = None if cache is None else getattr(cache, "foot_pos_w", None)
+    out: dict[str, object] = {
+        "planned_root_direction_cosine": None,
+        "planned_root_lateral_ratio": None,
+        "planned_per_leg_direction_cosine_xy": None,
+        "planned_per_leg_lateral_ratio_xy": None,
+        "planned_insufficient_motion": None,
+        "planned_insufficient_leg_motion": None,
+        "semantic_nonzero_count": _semantic_nonzero_count(base),
+    }
+    if root_pos is None or root_quat is None or foot_pos is None:
+        return out
+    root = torch.as_tensor(root_pos, dtype=torch.float32)
+    quat = torch.as_tensor(root_quat, dtype=torch.float32)
+    feet = torch.as_tensor(foot_pos, dtype=torch.float32)
+    if root.ndim != 3 or quat.ndim != 3 or feet.ndim != 4 or root.shape[0] < 1 or root.shape[1] < 2:
+        return out
+    command = torch.as_tensor(requested_command_body, dtype=torch.float32, device=root.device)
+    if command.ndim != 2 or command.shape[0] < 1:
+        return out
+    cmd_xy = command[0, :2]
+    speed = torch.linalg.vector_norm(cmd_xy)
+    if float(speed.item()) <= 1.0e-6:
+        return out
+    yaw = _root_yaw_from_quat_wxyz(quat[0, 0])
+    cy = torch.cos(yaw)
+    sy = torch.sin(yaw)
+    cmd_dir_body = cmd_xy / speed.clamp_min(1.0e-6)
+    cmd_dir_w = torch.stack((cy * cmd_dir_body[0] - sy * cmd_dir_body[1], sy * cmd_dir_body[0] + cy * cmd_dir_body[1]))
+    cmd_left_w = torch.stack((-cmd_dir_w[1], cmd_dir_w[0]))
+
+    root_delta = root[0, -1, :2] - root[0, 0, :2]
+    root_norm = torch.linalg.vector_norm(root_delta)
+    insufficient_root = bool(float(root_norm.item()) < 0.05)
+    out["planned_insufficient_motion"] = insufficient_root
+    if not insufficient_root:
+        out["planned_root_direction_cosine"] = float(((root_delta * cmd_dir_w).sum() / root_norm.clamp_min(1.0e-6)).item())
+        out["planned_root_lateral_ratio"] = float(torch.abs((root_delta * cmd_left_w).sum()).div(root_norm.clamp_min(1.0e-6)).item())
+
+    leg_delta = feet[0, -1, :, :2] - feet[0, 0, :, :2]
+    leg_norm = torch.linalg.vector_norm(leg_delta, dim=-1)
+    leg_insufficient = leg_norm < 0.03
+    leg_cos = torch.where(
+        leg_insufficient,
+        torch.full_like(leg_norm, float("nan")),
+        (leg_delta * cmd_dir_w.view(1, 2)).sum(dim=-1) / leg_norm.clamp_min(1.0e-6),
+    )
+    leg_lat = torch.where(
+        leg_insufficient,
+        torch.full_like(leg_norm, float("nan")),
+        torch.abs((leg_delta * cmd_left_w.view(1, 2)).sum(dim=-1)) / leg_norm.clamp_min(1.0e-6),
+    )
+    out["planned_per_leg_direction_cosine_xy"] = [None if bool(leg_insufficient[i].item()) else float(leg_cos[i].item()) for i in range(int(leg_norm.numel()))]
+    out["planned_per_leg_lateral_ratio_xy"] = [None if bool(leg_insufficient[i].item()) else float(leg_lat[i].item()) for i in range(int(leg_norm.numel()))]
+    out["planned_insufficient_leg_motion"] = [bool(v) for v in leg_insufficient.tolist()]
+    return out
+
+
+def _make_sphere_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]):
+    import isaaclab.sim as sim_utils
+    from isaaclab.markers import VisualizationMarkersCfg
+
+    return VisualizationMarkersCfg(
+        prim_path=prim_path,
         markers={
-            "foot_ref": sim_utils.SphereCfg(
-                radius=0.025,
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.1, 0.9, 1.0)),
+            "marker": sim_utils.SphereCfg(
+                radius=radius,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
             )
         },
     )
-    return VisualizationMarkers(marker_cfg)
+
+
+def build_mpc_foot_trajectory_markers():
+    from isaaclab.markers import VisualizationMarkers
+
+    leg_colors = (
+        (0.1, 0.9, 1.0),
+        (1.0, 0.4, 0.1),
+        (0.3, 1.0, 0.3),
+        (1.0, 0.2, 0.8),
+    )
+    foot_traj = []
+    for leg_idx, color in enumerate(leg_colors):
+        foot_traj.append(
+            VisualizationMarkers(
+                _make_sphere_marker_cfg(
+                    f"/Visuals/T302oMpcPolicyEval/foot_traj_{leg_idx}",
+                    radius=0.025,
+                    color=color,
+                )
+            )
+        )
+    return foot_traj
+
+
+def update_mpc_foot_trajectory_markers(foot_traj, env) -> None:
+    reference = _reference_foot_trajectory_w(env)
+    if reference is None or len(foot_traj) != 4 or reference.shape[0] < 1:
+        return
+    for leg_idx in range(4):
+        foot_traj[leg_idx].visualize(translations=reference[0, :, leg_idx].to(dtype=torch.float32))
+
+
+def build_mpc_foot_markers():
+    return build_mpc_foot_trajectory_markers()
 
 
 def update_mpc_foot_markers(markers, env) -> None:
-    reference = _reference_foot_pos_w(env)
-    if reference is None:
-        return
-    if reference.ndim != 3 or tuple(reference.shape[1:]) != (4, 3):
-        return
-    points = reference.reshape(-1, 3).to(dtype=torch.float32)
-    markers.visualize(translations=points)
+    update_mpc_foot_trajectory_markers(markers, env)
+
+
+def _root_yaw_from_quat_wxyz(root_quat_w: torch.Tensor) -> torch.Tensor:
+    quat = torch.as_tensor(root_quat_w)
+    w = quat[..., 0]
+    x = quat[..., 1]
+    y = quat[..., 2]
+    z = quat[..., 3]
+    return torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _usd_camera_world_position(camera_path: str | None) -> list[float] | None:
+    if not camera_path:
+        return None
+    try:
+        import omni.usd
+        from pxr import Gf, Usd, UsdGeom
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return None
+        prim = stage.GetPrimAtPath(str(camera_path))
+        camera = UsdGeom.Camera(prim) if prim else None
+        if not camera:
+            return None
+        pos = camera.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).Transform(Gf.Vec3d(0, 0, 0))
+        return [float(pos[0]), float(pos[1]), float(pos[2])]
+    except Exception as exc:
+        return [f"error:{type(exc).__name__}:{exc}"]  # type: ignore[list-item]
+
+
+def _collect_follow_camera_debug(
+    *,
+    root_pos: torch.Tensor,
+    root_yaw: torch.Tensor,
+    camera_position,
+    target_position,
+    step: int | None,
+    global_step: int | None,
+) -> dict[str, object]:
+    debug: dict[str, object] = {
+        "step": None if step is None else int(step),
+        "global_step": None if global_step is None else int(global_step),
+        "root_pos_w": [float(v) for v in root_pos.detach().cpu().tolist()],
+        "root_yaw": float(root_yaw.detach().cpu().item()),
+        "requested_camera_position": [float(v) for v in camera_position.tolist()],
+        "requested_target_position": [float(v) for v in target_position.tolist()],
+        "default_camera_path": "/OmniverseKit_Persp",
+        "default_camera_world_position": _usd_camera_world_position("/OmniverseKit_Persp"),
+    }
+    try:
+        import omni.kit.viewport.utility as viewport_utility
+
+        viewport_api, window = viewport_utility.get_active_viewport_and_window()
+        active_camera_path = None
+        if viewport_api is not None and getattr(viewport_api, "camera_path", None) is not None:
+            active_camera_path = viewport_api.camera_path.pathString
+        debug.update(
+            {
+                "active_viewport_present": viewport_api is not None,
+                "active_window_title": None if window is None else getattr(window, "title", None),
+                "active_viewport_camera_path": active_camera_path,
+                "active_viewport_camera_string": viewport_utility.get_active_viewport_camera_string(),
+                "default_window_camera_string": viewport_utility.get_viewport_window_camera_string(),
+                "viewport_window_camera_string": viewport_utility.get_viewport_window_camera_string("Viewport"),
+                "active_camera_world_position": _usd_camera_world_position(active_camera_path),
+            }
+        )
+    except Exception as exc:
+        debug["viewport_debug_error"] = f"{type(exc).__name__}: {exc}"
+    return debug
+
+
+def update_follow_camera(
+    env,
+    *,
+    distance: float = 3.2,
+    height: float = 1.6,
+    debug: bool = False,
+    debug_path: Path | None = None,
+    step: int | None = None,
+    global_step: int | None = None,
+) -> None:
+    base = _base_env(env)
+    robot = base.scene["robot"]
+    root_pos = torch.as_tensor(robot.data.root_pos_w[0])
+    root_yaw = _root_yaw_from_quat_wxyz(torch.as_tensor(robot.data.root_quat_w[0]))
+    yaw_val = float(root_yaw.item())
+    camera_offset = torch.tensor(
+        [-float(distance) * math.cos(yaw_val), -float(distance) * math.sin(yaw_val), float(height)],
+        dtype=root_pos.dtype,
+        device=root_pos.device,
+    )
+    camera_position = (root_pos + camera_offset).detach().cpu().numpy()
+    target_position = (
+        root_pos + torch.tensor([0.0, 0.0, 0.35], dtype=root_pos.dtype, device=root_pos.device)
+    ).detach().cpu().numpy()
+    base.sim.set_camera_view(camera_position, target_position)
+    base.sim.render()
+    if debug:
+        row = _collect_follow_camera_debug(
+            root_pos=root_pos,
+            root_yaw=root_yaw,
+            camera_position=camera_position,
+            target_position=target_position,
+            step=step,
+            global_step=global_step,
+        )
+        print("[mpc_policy_eval][follow_camera_debug] " + json.dumps(row, sort_keys=True), flush=True)
+        if debug_path is not None:
+            write_jsonl(debug_path, row)
 
 
 def _close_env(env) -> None:
@@ -569,16 +849,20 @@ def _close_env(env) -> None:
 
 def run_eval(args: argparse.Namespace) -> int:
     validate_eval_args(args)
+    livestream_enabled = int(getattr(args, "livestream", -1)) in (1, 2)
     out_dir = make_run_output_dir(args.output_dir)
     config_path = out_dir / "config.json"
     metrics_path = out_dir / "metrics.jsonl"
     rounds_path = out_dir / "rounds.jsonl"
     summary_path = out_dir / "summary.json"
+    follow_camera_debug_path = out_dir / "follow_camera_debug.jsonl"
     config_path.write_text(json.dumps(vars(args), indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     metrics_path.touch()
     rounds_path.touch()
+    if bool(getattr(args, "debug_follow_camera", False)):
+        follow_camera_debug_path.touch()
 
-    if getattr(args, "livestream", -1) in (1, 2) and not getattr(args, "enable_cameras", False):
+    if livestream_enabled and not getattr(args, "enable_cameras", False):
         args.enable_cameras = True
 
     from isaaclab.app import AppLauncher
@@ -597,7 +881,7 @@ def run_eval(args: argparse.Namespace) -> int:
         from rsl_rl.runners import OnPolicyRunner
 
         env_cfg = build_eval_env_cfg(args)
-        render_mode = "rgb_array" if getattr(args, "livestream", -1) in (1, 2) else None
+        render_mode = "rgb_array" if livestream_enabled else None
         if render_mode is not None:
             env_cfg.sim.enable_cameras = True
         checkpoint = checkpoint_path(args)
@@ -626,7 +910,7 @@ def run_eval(args: argparse.Namespace) -> int:
         summaries: list[dict[str, object]] = []
         total_steps = 0
         overall_tracking = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
-        mpc_foot_markers = build_mpc_foot_markers() if getattr(args, "livestream", -1) in (1, 2) else None
+        mpc_foot_markers = build_mpc_foot_markers() if livestream_enabled else None
         for round_idx in range(int(args.num_rounds)):
             obs, _ = wrapped_env.reset()
             step_limit = int(args.max_steps)
@@ -649,9 +933,11 @@ def run_eval(args: argparse.Namespace) -> int:
                     device=torch.device(str(args.device)),
                 )
                 apply_command_to_env(base_env, command)
+                command_diagnostics = command_body_source_diagnostics(base_env, command)
                 with torch.inference_mode():
                     actions = policy(obs)
                     obs, rewards, dones, extras = wrapped_env.step(actions)
+                planned_direction_metrics = planned_direction_metrics_from_reference_cache(base_env, command)
                 reward_mean = float(torch.as_tensor(rewards).float().mean().item())
                 done_count = int(torch.as_tensor(dones).bool().sum().item())
                 metric_row = {
@@ -661,6 +947,8 @@ def run_eval(args: argparse.Namespace) -> int:
                     "mode": str(args.mode),
                     "reward_mean": reward_mean,
                     "done_count": done_count,
+                    "command_body_source_diagnostics": command_diagnostics,
+                    "planned_direction_metrics": planned_direction_metrics,
                 }
                 if round_tracking is not None and overall_tracking is not None:
                     tracking = tracking_metrics_for_env_step(base_env)
@@ -672,6 +960,14 @@ def run_eval(args: argparse.Namespace) -> int:
                     collision_acc.update(step=round_steps, force_matrix_w=force_matrix, body_names=body_names)
                 if mpc_foot_markers is not None:
                     update_mpc_foot_markers(mpc_foot_markers, base_env)
+                if livestream_enabled and int(args.num_envs) == 1:
+                    update_follow_camera(
+                        base_env,
+                        debug=bool(getattr(args, "debug_follow_camera", False)),
+                        debug_path=follow_camera_debug_path,
+                        step=round_steps,
+                        global_step=total_steps,
+                    )
                 write_jsonl(metrics_path, metric_row)
                 round_steps += 1
                 total_steps += 1
@@ -688,6 +984,9 @@ def run_eval(args: argparse.Namespace) -> int:
                 "max_steps": int(args.max_steps),
                 "steps": round_steps,
             }
+            if round_steps > 0:
+                round_summary["command_body_source_diagnostics"] = command_diagnostics
+                round_summary["planned_direction_metrics"] = planned_direction_metrics
             if round_tracking is not None:
                 round_summary["tracking"] = round_tracking.summary()
             if collision_acc is not None:
@@ -705,6 +1004,10 @@ def run_eval(args: argparse.Namespace) -> int:
             "output_dir": str(out_dir),
             "rounds": summaries,
         }
+        if summaries and "command_body_source_diagnostics" in summaries[-1]:
+            summary["command_body_source_diagnostics"] = summaries[-1]["command_body_source_diagnostics"]
+        if summaries and "planned_direction_metrics" in summaries[-1]:
+            summary["planned_direction_metrics"] = summaries[-1]["planned_direction_metrics"]
         if overall_tracking is not None:
             summary["tracking"] = overall_tracking.summary()
         if str(args.mode) == "small_collision":

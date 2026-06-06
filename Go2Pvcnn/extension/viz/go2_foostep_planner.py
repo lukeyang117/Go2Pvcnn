@@ -1667,7 +1667,6 @@ def _plan_viewer_trajectory(
 ):
     from extension.batch_mpc_planner.planner import plan_segment
 
-    command = _viewer_mpc_world_command_from_root_frame(command, state)
     return _adapt_mpc_result_for_viewer(
         plan_segment(
             terrain,

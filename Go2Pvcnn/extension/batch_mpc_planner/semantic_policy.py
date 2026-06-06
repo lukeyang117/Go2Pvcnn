@@ -216,8 +216,8 @@ def shape_nominal_command_for_semantic_obstacles(
 
     cmd_xy = cmd[:, :2]
     speed = _safe_norm(cmd_xy, dim=-1)
-    direction = cmd_xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
-    left = torch.stack((-direction[:, 1], direction[:, 0]), dim=-1)
+    root_yaw = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)[:, 2]
+    direction, left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
     forward_offsets = torch.tensor((-0.10, 0.15, 0.40, 0.65), dtype=dtype, device=device)
     lateral_offsets = torch.tensor((0.24, 0.36, 0.50), dtype=dtype, device=device)
     for side_value, target in ((1.0, left_score), (-1.0, right_score)):

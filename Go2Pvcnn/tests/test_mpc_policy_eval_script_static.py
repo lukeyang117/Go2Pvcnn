@@ -95,3 +95,68 @@ def test_mpc_policy_eval_livestream_syncs_command_and_markers() -> None:
     assert "update_mpc_foot_markers" in source
     assert "VisualizationMarkers" in source
     assert "_trajectory_reference_cache" in source
+
+
+def test_mpc_policy_eval_livestream_draws_full_foot_trajectories_and_follows_robot() -> None:
+    source = _source()
+    assert "build_mpc_foot_trajectory_markers" in source
+    assert "update_mpc_foot_trajectory_markers" in source
+    assert "_reference_foot_trajectory_w" in source
+    assert "for leg_idx" in source
+    assert "foot_traj[leg_idx].visualize" in source
+    assert "set_camera_view" in source
+    assert "update_follow_camera" in source
+    assert "int(args.num_envs) == 1" in source
+    assert "base.sim.render()" in source
+
+
+def test_mpc_policy_eval_follow_camera_debug_logs_viewport_camera_state() -> None:
+    source = _source()
+    assert "--debug-follow-camera" in source
+    assert "follow_camera_debug.jsonl" in source
+    assert "_collect_follow_camera_debug" in source
+    assert "get_active_viewport_and_window" in source
+    assert "get_active_viewport_camera_string" in source
+    assert "get_viewport_window_camera_string" in source
+    assert "active_viewport_camera_path" in source
+    assert "default_camera_world_position" in source
+    assert "active_camera_world_position" in source
+
+
+def test_mpc_policy_eval_preserves_livestream_flag_before_applauncher_mutates_args() -> None:
+    source = _source()
+    assert "livestream_enabled = int(getattr(args, \"livestream\", -1)) in (1, 2)" in source
+    assert source.index("livestream_enabled = int(getattr(args, \"livestream\", -1)) in (1, 2)") < source.index(
+        "app_launcher = AppLauncher(args)"
+    )
+    assert "render_mode = \"rgb_array\" if livestream_enabled else None" in source
+    assert "mpc_foot_markers = build_mpc_foot_markers() if livestream_enabled else None" in source
+    assert "if livestream_enabled and int(args.num_envs) == 1:" in source
+
+
+def test_eval_records_body_command_source_diagnostics() -> None:
+    source = _source()
+    for field in (
+        "requested_command_body",
+        "policy_command_body",
+        "mpc_input_command_body",
+        "command_body_match_max_abs_error",
+    ):
+        assert field in source
+    assert "command_body_source_diagnostics" in source
+    assert "_commands_from_env" in source
+
+
+def test_eval_records_flat_planned_direction_metrics() -> None:
+    source = _source()
+    for field in (
+        "planned_root_direction_cosine",
+        "planned_root_lateral_ratio",
+        "planned_per_leg_direction_cosine_xy",
+        "planned_per_leg_lateral_ratio_xy",
+        "planned_insufficient_motion",
+        "planned_insufficient_leg_motion",
+        "semantic_nonzero_count",
+    ):
+        assert field in source
+    assert "planned_direction_metrics_from_reference_cache" in source

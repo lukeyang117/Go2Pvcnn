@@ -25,12 +25,16 @@
 - Existing global semantic contact route provides `semantic_contact_small.data.force_matrix_w` and `semantic_contact_large.data.force_matrix_w`.
 - Existing `play.py` has checkpoint loading patterns, AppLauncher livestream handling, and RSL-RL wrapper setup that T302o can mirror.
 - Existing `go2_foostep_planner.py` has MPC foot marker visualization patterns that T302o can reuse for livestream overlays.
+- Follow-camera gating is verified by reproduction: launcher args must be snapshotted as `livestream_enabled` before `AppLauncher(args)`, because later `args.livestream` checks can skip marker/camera branches. See [../log/2026-06-06-1452-t302o-follow-camera-reproduction-fix.md](../log/2026-06-06-1452-t302o-follow-camera-reproduction-fix.md).
+- Foot-trajectory lag is reproduced but not fixed: actual IsaacLab feet often match earlier MPC cache frames better than `current_frame_ids()`, with wide-probe best cache frame `0` in `28/51` warmed samples. See [../log/2026-06-06-1512-t302o-foot-trajectory-lag-reproduction.md](../log/2026-06-06-1512-t302o-foot-trajectory-lag-reproduction.md).
+- Foot-trajectory timebase is diagnosed but not fixed: there is no async MPC thread executing behind the policy. `refresh_from_env()` runs during IsaacLab post-step reward computation, and eval metrics/markers read the same cache/phase after `wrapped_env.step()` returns. The remaining convention issue is synchronous: refresh entry uses the previous phase, then refresh exit/after-step use the advanced phase. See [../log/2026-06-06-1616-t302o-foot-trajectory-timebase-probe.md](../log/2026-06-06-1616-t302o-foot-trajectory-timebase-probe.md).
+- Flat-forward lateral bias is reproduced but not fixed: on flat terrain with semantic map all zero, default command `[1,0,0]` was consumed as world `[1,0]` by parametric nominal planning while the robot yaw was `16deg`; manually rotating the command by root yaw reduced body-frame side drift from about `9.4cm` to about `4.4mm`. See [../log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md](../log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md).
 
 ## Open Children
 
 | Child | Status | Priority | Purpose | Primary Files |
 | --- | --- | --- | --- | --- |
-| T302o.1 | verify | P0 | Python eval entry, eval cfg contracts, tracking metrics, small-collision env-rate metrics, livestream command sync, and MPC foot overlays are implemented and smoke-verified. | `Go2Pvcnn/scripts/mpc_policy_eval.py`, `teacher_elevation_trajectory_mpc_semantic_env_cfg.py`, tests |
+| T302o.1 | verify | P0 | Python eval entry, eval cfg contracts, tracking metrics, small-collision env-rate metrics, livestream command sync, MPC foot overlays, and env-one follow camera are implemented and smoke/debug verified; foot-trajectory timebase has been diagnosed as sync post-step refresh plus phase advance, while policy/reference gait mismatch remains analysis-only follow-up. | `Go2Pvcnn/scripts/mpc_policy_eval.py`, `teacher_elevation_trajectory_mpc_semantic_env_cfg.py`, tests |
 
 ## File Structure
 
@@ -1362,6 +1366,11 @@ git commit -m "docs: record t302o mpc policy eval verification"
 ## Related Logs
 
 - [../log/2026-06-05-1745-t302o-mpc-policy-eval-smoke.md](../log/2026-06-05-1745-t302o-mpc-policy-eval-smoke.md)
+- [../log/2026-06-06-1413-t302o-livestream-marker-follow-camera.md](../log/2026-06-06-1413-t302o-livestream-marker-follow-camera.md)
+- [../log/2026-06-06-1452-t302o-follow-camera-reproduction-fix.md](../log/2026-06-06-1452-t302o-follow-camera-reproduction-fix.md)
+- [../log/2026-06-06-1512-t302o-foot-trajectory-lag-reproduction.md](../log/2026-06-06-1512-t302o-foot-trajectory-lag-reproduction.md)
+- [../log/2026-06-06-1616-t302o-foot-trajectory-timebase-probe.md](../log/2026-06-06-1616-t302o-foot-trajectory-timebase-probe.md)
+- [../log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md](../log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md)
 - [../log/2026-06-05-t302o-task5-small-collision-runtime-metrics.md](../log/2026-06-05-t302o-task5-small-collision-runtime-metrics.md)
 - [../log/2026-06-05-t302o-task4-tracking-runtime-metrics.md](../log/2026-06-05-t302o-task4-tracking-runtime-metrics.md)
 - [../log/2026-06-05-t302o-task3-rollout-skeleton.md](../log/2026-06-05-t302o-task3-rollout-skeleton.md)
@@ -1371,9 +1380,9 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Git Refs
 
-- Last Feature Commit: `996ce1f` for Task 6 livestream markers
-- Last Verified Commit: `996ce1f` for final local/static, tracking, small_collision, and livestream startup smoke
-- Current Work Ref: `costmap-teacher-ablation` after final T302o smoke verification
+- Last Feature Commit: working tree after `996ce1f`, then follow-up working tree fix for livestream flag gating and env-one follow camera
+- Last Verified Commit: working tree after follow-camera reproduction fix; last committed verification remains `9bd1e9f`
+- Current Work Ref: `costmap-teacher-ablation` after T302o follow-camera reproduction/debug verification
 - Key Files:
   - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
@@ -1384,7 +1393,7 @@ git commit -m "docs: record t302o mpc policy eval verification"
 
 ## Next Step
 
-- Treat T302o as regression-guarded. Remaining follow-up: fix `--terrain-rows/--terrain-cols` semantics before claiming true multi-terrain comparison results.
+- Treat T302o as regression-guarded for metrics, livestream marker path, and env-one follow-camera runtime path. Remaining follow-ups: analyze/fix policy-vs-MPC gait mismatch if accepted, and fix `--terrain-rows/--terrain-cols` semantics before claiming true multi-terrain comparison results. Timebase evidence says the current path is synchronous post-step refresh plus phase advance, not async MPC execution.
 
 ## Node Details
 

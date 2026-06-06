@@ -455,18 +455,15 @@ def test_viewer_selects_latched_command_while_step_mode_enabled() -> None:
     torch.testing.assert_close(selected, latched)
 
 
-def test_viewer_rotates_mpc_body_frame_command_by_root_yaw() -> None:
-    command = torch.tensor([[0.4, 0.0, 0.2]], dtype=torch.float64)
-    state = SimpleNamespace(root_rpy=torch.tensor([[0.0, 0.0, torch.pi / 2.0]], dtype=torch.float64))
+def test_viewer_mpc_planning_keeps_body_frame_command() -> None:
+    source = Path(viewer.__file__).read_text(encoding="utf-8")
+    function_start = source.index("def _plan_viewer_trajectory(")
+    next_function = source.index("\ndef ", function_start + 1)
+    function_source = source[function_start:next_function]
 
-    world_command = viewer._viewer_mpc_world_command_from_root_frame(command, state)
-
-    torch.testing.assert_close(
-        world_command,
-        torch.tensor([[0.0, 0.4, 0.2]], dtype=torch.float64),
-        atol=1.0e-6,
-        rtol=1.0e-6,
-    )
+    assert "_viewer_mpc_world_command_from_root_frame" not in function_source
+    assert "plan_segment(" in function_source
+    assert "command," in function_source
 
 
 def test_viewer_mpc_cfg_uses_nested_planner_runtime() -> None:

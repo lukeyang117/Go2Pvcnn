@@ -9,7 +9,7 @@ from .config import MpcPlannerCfg, validate_mpc_config
 from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
 from .kinematics import fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
-from .parametric import decode_parametric_trajectory, init_parametric_variables
+from .parametric import command_frame_axes, decode_parametric_trajectory, init_parametric_variables
 from .parametric_losses import (
     FkCollisionMargins,
     parametric_fk_body_leg_collision_loss,
@@ -134,7 +134,14 @@ def _nearest_low_small_obstacle(
     return obstacle_xy, valid
 
 
-def _command_farthest_touchdown_positions(terrain: MpcPlannerTerrain, foot_pos: Tensor, contact_state: Tensor, command: Tensor) -> Tensor:
+def _command_farthest_touchdown_positions(
+    terrain: MpcPlannerTerrain,
+    foot_pos: Tensor,
+    contact_state: Tensor,
+    command: Tensor,
+    *,
+    root_yaw: Tensor | None = None,
+) -> Tensor:
     batch, horizon, legs, _ = foot_pos.shape
     cmd = torch.as_tensor(command, dtype=foot_pos.dtype, device=foot_pos.device)
     if cmd.ndim != 2 or int(cmd.shape[0]) != batch:
@@ -143,7 +150,8 @@ def _command_farthest_touchdown_positions(terrain: MpcPlannerTerrain, foot_pos: 
         pad = torch.zeros((batch, 3 - int(cmd.shape[-1])), dtype=cmd.dtype, device=cmd.device)
         cmd = torch.cat((cmd, pad), dim=-1)
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading = cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    yaw = torch.zeros((batch,), dtype=cmd.dtype, device=cmd.device) if root_yaw is None else torch.as_tensor(root_yaw, dtype=cmd.dtype, device=cmd.device).reshape(-1)
+    heading, _left, _linear_active = command_frame_axes(cmd, yaw, linear_eps=1.0e-6)
     along = (foot_pos[..., :2] * heading[:, None, None, :]).sum(dim=-1)
     swing_mask = torch.logical_not(contact_state)
     along = torch.where(swing_mask, along, torch.full_like(along, -1.0e6))
@@ -169,7 +177,9 @@ def _structured_low_small_touchdown_positions(
     batch, horizon, legs, _ = foot_pos.shape
     dtype = foot_pos.dtype
     device = foot_pos.device
-    fallback = _command_farthest_touchdown_positions(terrain, foot_pos, contact_state, command)
+    state_rpy = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)
+    root_yaw = state_rpy[:, 2]
+    fallback = _command_farthest_touchdown_positions(terrain, foot_pos, contact_state, command, root_yaw=root_yaw)
     empty_mask = torch.zeros((batch, legs), dtype=torch.bool, device=device)
     cmd = torch.as_tensor(command, dtype=dtype, device=device)
     if cmd.ndim != 2 or int(cmd.shape[0]) != batch:
@@ -178,8 +188,7 @@ def _structured_low_small_touchdown_positions(
         pad = torch.zeros((batch, 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
         cmd = torch.cat((cmd, pad), dim=-1)
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading = cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1)
-    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+    heading, left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
     root0 = torch.as_tensor(state.root_pos, dtype=dtype, device=device)
     foot0 = torch.as_tensor(state.foot_pos, dtype=dtype, device=device)
     if foot0.ndim != 3 or int(foot0.shape[0]) != batch or int(foot0.shape[1]) != legs:
@@ -523,6 +532,8 @@ def _project_parametric_high_large_root_corridor(
     root_pos: Tensor,
     command: Tensor,
     cfg: MpcPlannerCfg,
+    *,
+    root_yaw: Tensor | None = None,
 ) -> Tensor:
     batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
     dtype = root_pos.dtype
@@ -549,10 +560,8 @@ def _project_parametric_high_large_root_corridor(
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
     yaw_active = torch.abs(cmd[:, 2]) > 1.0e-4
     active = torch.logical_or(speed > 1.0e-4, yaw_active)
-    fallback_heading = torch.zeros((batch, 2), dtype=dtype, device=device)
-    fallback_heading[:, 0] = 1.0
-    heading = torch.where((speed > 1.0e-4).unsqueeze(-1), cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1), fallback_heading)
-    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+    yaw = torch.zeros((batch,), dtype=dtype, device=device) if root_yaw is None else torch.as_tensor(root_yaw, dtype=dtype, device=device).reshape(-1)
+    heading, left, _linear_active = command_frame_axes(cmd, yaw, linear_eps=1.0e-4)
 
     grid_xy = _terrain_grid_world_xy(terrain, dtype=dtype, device=device)
     grid_z = height.reshape(batch, -1)
@@ -698,7 +707,15 @@ def _parametric_sampled_frame_losses(
     terrain_clearance = clearance_deficit.square().mean(dim=(1, 2))
     semantic = semantic_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(device=device)
     semantic_contact = (semantic != 0).to(dtype=dtype).mul(decoded.contact_prob.to(dtype=dtype)).mean(dim=(1, 2))
-    semantic_avoidance = _parametric_semantic_avoidance_loss(terrain, root_pos, foot_pos, decoded.touchdown_w, command)
+    root_yaw0 = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)[:, 2]
+    semantic_avoidance = _parametric_semantic_avoidance_loss(
+        terrain,
+        root_pos,
+        foot_pos,
+        decoded.touchdown_w,
+        command,
+        root_yaw=root_yaw0,
+    )
     if bool(cfg.losses.touchdown_keepout.enabled):
         touchdown_keepout = float(cfg.losses.touchdown_keepout.weight) * parametric_touchdown_keepout_loss(
             terrain,
@@ -717,7 +734,15 @@ def _parametric_sampled_frame_losses(
         )
     else:
         swing_foot_clearance = torch.zeros((batch,), dtype=dtype, device=device)
-    touchdown_endpoint = _parametric_touchdown_endpoint_loss(terrain, foot_pos, decoded.touchdown_w, decoded.swing_center, decoded.swing_width, command)
+    touchdown_endpoint = _parametric_touchdown_endpoint_loss(
+        terrain,
+        foot_pos,
+        decoded.touchdown_w,
+        decoded.swing_center,
+        decoded.swing_width,
+        command,
+        root_yaw=root_yaw0,
+    )
     foot_height_guard = _parametric_foot_height_guard_loss(root_pos, foot_pos, decoded.swing_prob)
     contact_weight = decoded.contact_prob.to(dtype=dtype, device=device).clamp_min(0.0)
     stance_mass = contact_weight.sum(dim=-1, keepdim=True).clamp_min(1.0e-4)
@@ -770,7 +795,8 @@ def _parametric_sampled_frame_losses(
         pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
         cmd = torch.cat((cmd, pad), dim=-1)
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading = cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    root_yaw = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)[:, 2]
+    heading, _left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
     root_delta = root_pos[:, -1, :2] - torch.as_tensor(state.root_pos, dtype=dtype, device=device)[:, :2]
     progress = (root_delta * heading).sum(dim=-1)
     target_progress = torch.clamp(speed * 0.50, max=0.35)
@@ -806,6 +832,8 @@ def _parametric_semantic_avoidance_loss(
     foot_pos: Tensor,
     touchdown_w: Tensor,
     command: Tensor,
+    *,
+    root_yaw: Tensor,
 ) -> Tensor:
     batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
     dtype = root_pos.dtype
@@ -835,8 +863,7 @@ def _parametric_semantic_avoidance_loss(
         pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
         cmd = torch.cat((cmd, pad), dim=-1)
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading = cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1)
-    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+    heading, left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
     delta0 = grid_xy - root_pos[:, :1, :2]
     along0 = (delta0 * heading[:, None, :]).sum(dim=-1)
     lateral0 = (delta0 * left[:, None, :]).sum(dim=-1)
@@ -880,6 +907,8 @@ def _parametric_touchdown_endpoint_loss(
     swing_center: Tensor,
     swing_width: Tensor,
     command: Tensor,
+    *,
+    root_yaw: Tensor,
 ) -> Tensor:
     del terrain
     batch = int(foot_pos.shape[0])
@@ -892,7 +921,7 @@ def _parametric_touchdown_endpoint_loss(
         pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
         cmd = torch.cat((cmd, pad), dim=-1)
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading = cmd[:, :2] / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    heading, _left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
     foot_along = ((foot_pos[..., :2] - touchdown_w[:, None, :, :2]) * heading[:, None, None, :]).sum(dim=-1)
     behind = torch.relu(foot_along.amax(dim=1) - 0.02).square().mean(dim=1)
     return torch.where(speed > 1.0e-4, 8.0 * endpoint_error + 10.0 * behind, torch.zeros((batch,), dtype=dtype, device=device))

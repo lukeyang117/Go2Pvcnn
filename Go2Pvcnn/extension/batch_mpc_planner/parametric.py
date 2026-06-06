@@ -20,9 +20,18 @@ def command_frame_axes(command: Tensor, root_yaw: Tensor, *, linear_eps: float) 
     xy = cmd[:, :2]
     speed = torch.linalg.vector_norm(xy, dim=-1)
     active = speed > float(linear_eps)
-    cmd_forward = xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
     yaw = torch.as_tensor(root_yaw, dtype=cmd.dtype, device=cmd.device).reshape(-1)
     yaw_forward = torch.stack((torch.cos(yaw), torch.sin(yaw)), dim=-1)
+    cmd_forward_body = xy / speed.clamp_min(1.0e-6).unsqueeze(-1)
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    cmd_forward = torch.stack(
+        (
+            cos_yaw * cmd_forward_body[:, 0] - sin_yaw * cmd_forward_body[:, 1],
+            sin_yaw * cmd_forward_body[:, 0] + cos_yaw * cmd_forward_body[:, 1],
+        ),
+        dim=-1,
+    )
     forward = torch.where(active.unsqueeze(-1), cmd_forward, yaw_forward)
     left = torch.stack((-forward[:, 1], forward[:, 0]), dim=-1)
     return forward, left, active

@@ -36,6 +36,39 @@ def test_command_frame_axes_uses_translation_direction() -> None:
     torch.testing.assert_close(left, torch.tensor([[-1.0, 0.0]]))
 
 
+def test_command_frame_axes_rotates_body_command_by_root_yaw() -> None:
+    command = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.7, 0.7, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    yaw = torch.tensor([0.0, torch.pi / 2.0, torch.pi / 2.0, torch.pi, torch.pi / 4.0, torch.pi / 2.0])
+
+    forward, left, active = command_frame_axes(command, yaw, linear_eps=1.0e-4)
+
+    expected_forward = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [-1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    expected_left = torch.stack((-expected_forward[:, 1], expected_forward[:, 0]), dim=-1)
+    assert active.tolist() == [True, True, True, True, True, False]
+    torch.testing.assert_close(forward, expected_forward, atol=1.0e-6, rtol=1.0e-6)
+    torch.testing.assert_close(left, expected_left, atol=1.0e-6, rtol=1.0e-6)
+
+
 def test_command_frame_axes_falls_back_to_root_yaw_for_pure_yaw() -> None:
     command = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float32)
     yaw = torch.tensor([1.5707964], dtype=torch.float32)

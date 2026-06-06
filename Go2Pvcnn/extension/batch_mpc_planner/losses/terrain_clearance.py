@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..parametric import command_frame_axes
 from ..terrain import TerrainQueryCache, _world_to_grid, height_at, semantic_at, slope_at, support_at
 from ..types import MpcPlannerTerrain
 
@@ -430,7 +431,7 @@ def low_small_crossing_progress_loss(
     cmd_xy = cmd[:, :2]
     cmd_speed = _safe_norm(cmd_xy, dim=-1)
     active = cmd_speed > float(linear_speed_eps)
-    heading = cmd_xy / cmd_speed.clamp_min(1.0e-6).unsqueeze(-1)
+    heading, _left, _linear_active = command_frame_axes(cmd, root_rpy[:, 0, 2], linear_eps=1.0e-6)
 
     delta = grid_xy - root0[:, None, :2]
     forward = (delta * heading[:, None, :]).sum(dim=-1)
