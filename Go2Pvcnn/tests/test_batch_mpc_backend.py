@@ -29,6 +29,7 @@ from extension.batch_mpc_planner.losses.gait_coupling import (
     root_foot_center_loss,
     support_plane_roll_pitch_loss,
     swing_center_urgency_order_loss,
+    swing_direction_loss,
 )
 from extension.batch_mpc_planner.losses.smoothness import (
     foot_acceleration_smoothness_loss,
@@ -91,6 +92,7 @@ from extension.batch_mpc_planner.terrain import (
 )
 from extension.batch_mpc_planner.losses.kinematics import ik_fk_residual_loss
 from extension.batch_mpc_planner.losses.kinematics import ik_fk_residual_loss_from_joint_angles
+from extension.batch_mpc_planner.losses.kinematics import joint_limit_loss_from_root_foot
 from extension.batch_mpc_planner.types import MpcPlannerTerrain, MpcRobotState
 from extension.mdp.observations import (
     _semantic_priority_pool2d,
@@ -117,8 +119,10 @@ PARAMETRIC_LOSS_KEYS = {
     "parametric_foot_height_guard",
     "parametric_root_foot_center",
     "parametric_gait_regularization",
+    "parametric_swing_direction",
     "parametric_command_progress",
     "parametric_curve_regularization",
+    "parametric_joint_limit",
 }
 
 
@@ -565,6 +569,44 @@ def test_fk_body_leg_collision_penalizes_shank_below_terrain() -> None:
     assert loss.item() > 0.0
 
 
+def test_fk_body_leg_collision_keeps_sparse_foot_collision_salient_across_horizon() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.full((1, 5, 5), 0.10, dtype=torch.float32),
+        world_x_range=(-0.5, 0.5),
+        world_y_range=(-0.5, 0.5),
+    )
+
+    def make_loss(horizon: int) -> torch.Tensor:
+        root_pos = torch.zeros((1, horizon, 3), dtype=torch.float32)
+        root_pos[..., 2] = 0.30
+        foot = torch.zeros((1, horizon, 4, 3), dtype=torch.float32)
+        foot[..., 2] = 0.30
+        foot[:, 0, 0, 2] = 0.05
+        points = SimpleNamespace(
+            foot_pos_world=foot,
+            knee_pos_world=foot + torch.tensor([0.0, 0.0, 0.25]),
+            shank_sample_world=(foot + torch.tensor([0.0, 0.0, 0.20])).unsqueeze(-2),
+        )
+        return parametric_fk_body_leg_collision_loss(
+            terrain,
+            root_pos,
+            points,
+            margins=FkCollisionMargins(
+                foot=0.015,
+                knee=0.01,
+                shank=0.01,
+                root=0.02,
+                underbody=0.015,
+            ),
+            underbody_sample_count=5,
+        )
+
+    short = make_loss(4)
+    long = make_loss(40)
+
+    assert float(long.item()) >= 0.5 * float(short.item())
+
+
 def test_trajectory_consistency_penalizes_absolute_and_root_relative_error() -> None:
     root = torch.zeros((1, 25, 3), dtype=torch.float32)
     rpy = torch.zeros((1, 25, 3), dtype=torch.float32)
@@ -784,6 +826,341 @@ def test_parametric_sampled_losses_include_fk_optimization_terms() -> None:
     assert "parametric_trajectory_fk_consistency" in losses
     assert losses["parametric_fk_body_leg_collision"].shape == (1,)
     assert losses["parametric_trajectory_fk_consistency"].shape == (1,)
+
+
+def test_parametric_trajectory_fk_consistency_uses_existing_ik_fk_weight() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    shifted_target = decoded.target_foot_pos.clone()
+    shifted_target[..., 0] += 0.05
+
+    cfg.losses.ik_fk_residual.weight = 3.0
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=decoded.target_foot_pos,
+        target_foot_pos=shifted_target,
+        decoded=decoded,
+        cfg=cfg,
+    )
+    fk_joint = solve_joint_angles_from_trajectory(decoded.root_pos, decoded.root_rpy, shifted_target)
+    fk_joint = fk_joint.clone()
+    fk_joint[:, 0, :] = state.joint_angles
+    fk_foot = fk_feet_from_joint_angles(decoded.root_pos, decoded.root_rpy, fk_joint)
+    fk_foot = fk_foot.clone()
+    fk_foot[:, 0, :, :] = state.foot_pos
+    raw = parametric_trajectory_fk_consistency_loss(
+        decoded.root_pos,
+        decoded.root_rpy,
+        shifted_target,
+        fk_foot,
+    )
+
+    torch.testing.assert_close(losses["parametric_trajectory_fk_consistency"], 3.0 * raw)
+
+
+def test_parametric_joint_limit_uses_existing_kinematics_weight_and_margin() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    shifted_target = decoded.target_foot_pos.clone()
+    shifted_target[..., 1] += 0.20
+
+    cfg.losses.kinematics.weight = 5.0
+    cfg.losses.kinematics.joint_limit_margin_rad = 0.18
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=decoded.target_foot_pos,
+        target_foot_pos=shifted_target,
+        decoded=decoded,
+        cfg=cfg,
+    )
+    raw = joint_limit_loss_from_root_foot(
+        decoded.root_pos,
+        decoded.root_rpy,
+        shifted_target,
+        joint_limit_margin_rad=0.18,
+    )
+
+    torch.testing.assert_close(losses["parametric_joint_limit"], 5.0 * raw)
+
+
+def test_parametric_command_progress_uses_existing_progress_weight_and_min_progress() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    short_root = decoded.root_pos.clone()
+    short_root[:, -1, 0] = 0.05
+
+    cfg.losses.progress.weight = 7.0
+    cfg.losses.progress.min_progress_m = 0.20
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=short_root,
+        foot_pos=decoded.target_foot_pos,
+        target_foot_pos=decoded.target_foot_pos,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    expected = torch.tensor([(0.20 - 0.05) ** 2 * 7.0], dtype=torch.float32)
+    torch.testing.assert_close(losses["parametric_command_progress"], expected)
+
+
+def test_parametric_command_progress_penalizes_flat_empty_lateral_direction_error() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    terrain = MpcPlannerTerrain(
+        height_map=terrain.height_map,
+        semantic_map=torch.zeros_like(terrain.semantic_map),
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        is_plane_terrain=torch.tensor([True]),
+    )
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    lateral_root = decoded.root_pos.clone()
+    lateral_root[:, -1, 0] = 0.20
+    lateral_root[:, -1, 1] = 0.10
+
+    cfg.losses.progress.weight = 4.0
+    cfg.losses.progress.min_progress_m = 0.20
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=lateral_root,
+        foot_pos=decoded.target_foot_pos,
+        target_foot_pos=decoded.target_foot_pos,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    expected = torch.tensor([0.10**2 * 4.0], dtype=torch.float32)
+    torch.testing.assert_close(losses["parametric_command_progress"], expected)
+
+
+def test_parametric_swing_direction_uses_existing_swing_direction_weight() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    terrain = MpcPlannerTerrain(
+        height_map=terrain.height_map,
+        semantic_map=torch.zeros_like(terrain.semantic_map),
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        is_plane_terrain=torch.tensor([True]),
+    )
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    lateral_foot = decoded.target_foot_pos.clone()
+    lateral_foot[:, -1, :, 1] += 0.10
+
+    cfg.losses.swing_direction.weight = 6.0
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=lateral_foot,
+        target_foot_pos=lateral_foot,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    assert "parametric_swing_direction" in losses
+    assert float(losses["parametric_swing_direction"].item()) > 0.0
+
+
+def test_parametric_swing_direction_uses_fk_realized_feet_for_direction_metric_alignment() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    terrain = MpcPlannerTerrain(
+        height_map=terrain.height_map,
+        semantic_map=torch.zeros_like(terrain.semantic_map),
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        is_plane_terrain=torch.tensor([True]),
+    )
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    target = decoded.target_foot_pos.clone()
+    target[:, -1, :, 1] += 0.10
+    fk_joint = solve_joint_angles_from_trajectory(decoded.root_pos, decoded.root_rpy, target)
+    fk_foot = fk_feet_from_joint_angles(decoded.root_pos, decoded.root_rpy, fk_joint)
+    fk_foot = fk_foot.clone()
+    fk_foot[:, -1, :, 1] += 0.20
+
+    cfg.losses.swing_direction.weight = 6.0
+    target_losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=target,
+        target_foot_pos=target,
+        decoded=decoded,
+        cfg=cfg,
+    )
+    fk_losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=fk_foot,
+        target_foot_pos=target,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    assert float(fk_losses["parametric_swing_direction"].item()) > float(
+        target_losses["parametric_swing_direction"].item()
+    )
+
+
+def test_parametric_swing_direction_penalizes_whole_segment_fk_foot_lateral_drift() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    terrain = MpcPlannerTerrain(
+        height_map=terrain.height_map,
+        semantic_map=torch.zeros_like(terrain.semantic_map),
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        is_plane_terrain=torch.tensor([True]),
+    )
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    aligned = decoded.target_foot_pos.clone()
+    aligned[:, -1, :, 0] += 0.20
+    lateral = aligned.clone()
+    lateral[:, -1, :, 1] += 0.20
+
+    cfg.losses.swing_direction.weight = 6.0
+    aligned_losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=aligned,
+        target_foot_pos=aligned,
+        decoded=decoded,
+        cfg=cfg,
+    )
+    lateral_losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=lateral,
+        target_foot_pos=lateral,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    assert float(lateral_losses["parametric_swing_direction"].item()) > float(
+        aligned_losses["parametric_swing_direction"].item()
+    ) + 0.10
+
+
+def test_swing_direction_loss_keeps_single_bad_leg_salient() -> None:
+    horizon = 25
+    root_pos = torch.zeros((1, horizon, 3), dtype=torch.float32)
+    root_rpy = torch.zeros((1, horizon, 3), dtype=torch.float32)
+    foot_pos = torch.zeros((1, horizon, 4, 3), dtype=torch.float32)
+    foot_pos[:, :, :, 0] = torch.linspace(0.0, 0.20, horizon).view(1, horizon, 1)
+    single_bad = foot_pos.clone()
+    single_bad[:, :, 2, 1] = torch.linspace(0.0, 0.20, horizon).view(1, horizon)
+    all_bad = foot_pos.clone()
+    all_bad[:, :, :, 1] = torch.linspace(0.0, 0.20, horizon).view(1, horizon, 1)
+    swing_center = torch.tensor([[0.5, 0.5, 0.5, 0.5]], dtype=torch.float32)
+    swing_width = torch.full((1, 4), 1.0, dtype=torch.float32)
+    command = torch.tensor([[0.4, 0.0, 0.0]], dtype=torch.float32)
+    runtime = MpcPlannerCfg().runtime
+    runtime.horizon_steps = horizon
+
+    single = swing_direction_loss(root_pos, root_rpy, single_bad, swing_center, swing_width, command, runtime)
+    all_legs = swing_direction_loss(root_pos, root_rpy, all_bad, swing_center, swing_width, command, runtime)
+
+    assert float(single.item()) >= 0.5 * float(all_legs.item())
+
+
+def test_parametric_swing_direction_does_not_constrain_semantic_obstacle_crossing() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    semantic = torch.zeros_like(terrain.semantic_map)
+    semantic[:, 2, 2] = 1
+    terrain = MpcPlannerTerrain(
+        height_map=terrain.height_map,
+        semantic_map=semantic,
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        is_plane_terrain=torch.tensor([True]),
+    )
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    lateral_foot = decoded.target_foot_pos.clone()
+    lateral_foot[:, -1, :, 1] += 0.10
+
+    cfg.losses.swing_direction.weight = 6.0
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=lateral_foot,
+        target_foot_pos=lateral_foot,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    torch.testing.assert_close(losses["parametric_swing_direction"], torch.zeros((1,), dtype=torch.float32))
+
+
+def test_parametric_swing_direction_applies_when_flat_metadata_is_unavailable_but_semantics_are_empty() -> None:
+    terrain, state, command, cfg = _mpc_plan_inputs(batch=1, horizon=25)
+    command = torch.tensor([[0.20, 0.0, 0.0]], dtype=torch.float32)
+    terrain = MpcPlannerTerrain(
+        height_map=terrain.height_map,
+        semantic_map=torch.zeros_like(terrain.semantic_map),
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        is_plane_terrain=None,
+    )
+    nominal = build_parametric_nominal(state, terrain, command, cfg, horizon=25)
+    variables = init_parametric_variables(state, nominal.command, horizon=25)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=25)
+    lateral_foot = decoded.target_foot_pos.clone()
+    lateral_foot[:, -1, :, 1] += 0.10
+
+    cfg.losses.swing_direction.weight = 6.0
+    losses = _parametric_sampled_frame_losses(
+        terrain,
+        state,
+        command,
+        root_pos=decoded.root_pos,
+        foot_pos=lateral_foot,
+        target_foot_pos=lateral_foot,
+        decoded=decoded,
+        cfg=cfg,
+    )
+
+    assert float(losses["parametric_swing_direction"].item()) > 0.0
 
 
 def test_parametric_optimization_exposes_touchdown_keepout_cost() -> None:
@@ -3903,6 +4280,13 @@ def test_mpc_policy_eval_cfgs_enable_reference_without_changing_play(monkeypatch
     assert tracking.scene.semantic_contact_large is not None
     assert tracking.mpc_planner_cfg.runtime.horizon_steps == 25
     assert tracking.mpc_planner_cfg.runtime.replan_interval_steps == 25
+    assert tracking.mpc_planner_cfg.losses.progress.weight > MpcPlannerCfg().losses.progress.weight
+    assert tracking.mpc_planner_cfg.losses.swing_direction.weight > MpcPlannerCfg().losses.swing_direction.weight
+    assert tracking.semantic_obstacle_curriculum.plane_counts[0].small == 0
+    assert tracking.semantic_obstacle_curriculum.plane_counts[0].large == 0
+    assert tracking.semantic_obstacle_curriculum.non_plane_counts[0].small == 0
+    assert tracking.semantic_obstacle_curriculum.non_plane_counts[0].large == 0
+    assert tracking.scene.terrain.semantic_obstacle_curriculum is tracking.semantic_obstacle_curriculum
 
     collision = TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg()
     assert collision.planner_owned_reference_cache is True

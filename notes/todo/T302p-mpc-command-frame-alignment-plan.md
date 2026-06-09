@@ -36,7 +36,25 @@
   - `planned_root_lateral_ratio = 0.04779195412993431`
   - `planned_per_leg_lateral_ratio_xy = [0.03437824174761772, 0.14927777647972107, 0.0919436365365982, 0.023816389963030815]`
   - one leg exceeded the preferred `0.10` lateral-ratio threshold, so full per-leg acceptance remains open.
-- Full eight-command flat acceptance and low-small semantic compatibility regression have not been rerun yet.
+- Full eight-command flat acceptance and low-small semantic compatibility regression have now been rerun and failed behavioral gates:
+  - eight-direction tracking all exited `0` and command-source equality passed with `command_body_match_max_abs_error=0.0`
+  - root direction failed for `forward`, `left`, and `right`
+  - moving-leg direction failed for all eight commands under the current hard threshold
+  - low-small GPU3 regression exited `0` but failed `fk_semantic_collision_count == 0`, `fk_semantic_collision_rate == 0`, and max crossing FK error `<= 0.08m`
+- Low-small semantic compatibility was fixed locally on 2026-06-07 without adding a new loss:
+  - existing `ik_fk_residual.weight` now scales existing `parametric_trajectory_fk_consistency_loss()`
+  - existing `kinematics.weight` and `joint_limit_margin_rad` now feed `parametric_joint_limit`
+  - existing FK collision aggregation now uses mean + worst so sparse foot collisions are not diluted by long horizons
+  - GPU0/env_isaacsim default `parametric_v1` low-small rerun passed `max_fk_semantic_collision_count=0` and max crossing FK error `0.04201m`
+- Flat-left tracking after the low-small fix still reports `planned_root_lateral_ratio=0.2169`; T302p remains open for flat direction/root and moving-leg metrics.
+- Direction-loss wiring continuation on 2026-06-07 fixed the flat-left root direction in real smoke and kept low-small compatibility clean:
+  - existing `progress.weight/min_progress_m` now feeds `parametric_command_progress`
+  - existing `swing_direction_loss()` now feeds `parametric_swing_direction`
+  - tracking eval now synchronizes zero-obstacle curriculum to terrain cfg so flat tracking is actually obstacle-free
+  - flat-left smoke root lateral ratio improved to `0.0200`
+  - direction breakdown probe root lateral ratio reached `0.00315` with active direction losses
+  - low-small GPU0 regression still has `max_fk_semantic_collision_count=0` and max crossing FK error `0.04201m`
+  - strict per-leg whole-cache endpoint metric remains open: two middle legs still show high lateral ratios under the current metric, likely because the metric uses each FK foot's entire segment endpoint displacement rather than swing-window motion.
 - T302o eval and livestream path are implemented and smoke-verified.
 - T302o timebase probe shows current eval is not async MPC-vs-policy execution; `refresh_from_env()` runs synchronously during post-step reward computation.
 - T302o flat-forward probe reproduced the lateral bias on a flat semantic-free run:
@@ -75,13 +93,15 @@
 ## Global Constraints
 
 - No `.sh` launcher or shell wrapper.
-- No loss additions, loss deletions, loss weight changes, optimizer changes, hard projection, or postprocess snapping.
+- No new loss additions, loss deletions, optimizer changes, hard projection, or postprocess snapping.
+- Latest user override allows fixing existing weight/loss coordinate or wiring issues, but not adding a new loss to optimize the metrics.
 - External command remains `command_body = [vx_body, vy_body, yaw_rate]` in root-yaw/body horizontal frame.
 - MPC manager keeps passing command-manager output unchanged into `plan_segment()`.
 - Viewer/eval/training must feed the same body-frame command into policy and MPC.
 - World-frame terrain, semantic corridor, root path, foot path, progress, and touchdown geometry use world axes derived from root yaw.
 - Body-frame command checks remain body-frame: zero linear command, speed magnitude, `vy_body`, mixed command, and yaw-rate conditions.
 - Do not regress low-small crossing and semantic avoidance metrics from T302k/T302l.
+- Do not claim per-leg acceptance until the metric contract is resolved: current evidence says planner direction losses are active, but the eval per-leg endpoint metric is not aligned with gait-phase swing motion.
 
 ---
 
@@ -406,9 +426,11 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
   --output-dir logs/mpc_policy_eval/t302p_flat_forward_smoke
 ```
 
-- [ ] **Step 2: Run or script the eight-command flat set**
+- [x] **Step 2: Run or script the eight-command flat set**
 
 Each command must produce command-source diagnostics and direction metrics. A run is accepted only when the hard direction metrics pass or the sample is explicitly marked `insufficient_motion` / `insufficient_leg_motion` according to thresholds.
+
+Result on 2026-06-06: executed, but acceptance failed. See [../log/2026-06-06-2317-t302p-real-acceptance-failures.md](../log/2026-06-06-2317-t302p-real-acceptance-failures.md).
 
 - [ ] **Step 3: Optional livestream visual check**
 
@@ -437,7 +459,7 @@ Expected: camera follows env 0, policy command and MPC command match, and MPC fo
 **Files:**
 - Runtime verification only; write log under `notes/log/`.
 
-- [ ] **Step 1: Rerun low-small hard regression**
+- [x] **Step 1: Rerun low-small hard regression**
 
 Use the existing T302k/T302l low-small verification route before claiming compatibility. Required acceptance:
 
@@ -447,6 +469,18 @@ fk_semantic_collision_rate == 0
 covered crossing rows > 0
 planned_vs_fk_foot_error_crossing_leg_max_m <= 0.08m
 ```
+
+Result on 2026-06-06: executed, but acceptance failed. `lateral_v050` produced `fk_semantic_collision_count=21`; `mixed_yaw_v050` produced `fk_semantic_collision_count=1` and crossing FK error `0.13923m`. See [../log/2026-06-06-2317-t302p-real-acceptance-failures.md](../log/2026-06-06-2317-t302p-real-acceptance-failures.md).
+
+Follow-up on 2026-06-07: after wiring existing FK/kinematics losses and changing existing FK collision aggregation from mean-only to mean + worst, default `parametric_v1` passed the low-small hard gates on GPU0/env_isaacsim:
+
+```text
+max_fk_semantic_collision_count = 0
+max_fk_semantic_collision_rate = 0.0
+max planned_vs_fk_foot_error_crossing_leg_max_m = 0.04200904071331024
+```
+
+See [../log/2026-06-07-1104-t302p-low-small-fk-loss-wiring.md](../log/2026-06-07-1104-t302p-low-small-fk-loss-wiring.md).
 
 - [ ] **Step 2: Preserve high-small/large avoidance**
 
@@ -523,13 +557,16 @@ what remains unverified
 - [ ] Flat no-obstacle all-direction root XY direction passes.
 - [ ] Moving-leg XY direction passes for legs with enough motion.
 - [x] Z and distance magnitude remain diagnostic only.
-- [x] No loss, loss weight, optimizer, projection, or snapping change.
-- [ ] Low-small crossing and semantic obstacle behavior do not regress.
+- [x] No new loss, optimizer change, projection, or snapping change.
+- [x] Low-small crossing and FK semantic collision hard gates pass after fixing existing FK/kinematics loss wiring.
+- [ ] High-small/large semantic obstacle behavior non-regression remains to verify if further planner loss changes are made.
 - [x] Real IsaacLab GPU0/env_isaacsim short smoke evidence is logged.
 
 ## Related Logs
 
 - [../log/2026-06-06-1858-t302p-command-frame-implementation.md](../log/2026-06-06-1858-t302p-command-frame-implementation.md)
+- [../log/2026-06-06-2317-t302p-real-acceptance-failures.md](../log/2026-06-06-2317-t302p-real-acceptance-failures.md)
+- [../log/2026-06-07-1104-t302p-low-small-fk-loss-wiring.md](../log/2026-06-07-1104-t302p-low-small-fk-loss-wiring.md)
 - [../log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md](../log/2026-06-06-1633-t302o-flat-forward-mpc-left-bias-reproduction.md)
 - [../log/2026-06-06-1616-t302o-foot-trajectory-timebase-probe.md](../log/2026-06-06-1616-t302o-foot-trajectory-timebase-probe.md)
 
@@ -547,4 +584,7 @@ what remains unverified
 
 ## Next Step
 
-Run the full eight-command flat direction acceptance with enough steps for per-leg motion, then rerun the low-small semantic compatibility regression before closing T302p.
+Continue systematic debugging from the failing flat-direction real rows before changing more code:
+
+- Flat direction: inspect `left` under `logs/mpc_policy_eval/t302p_eight_direction_120step/left/.../metrics.jsonl`.
+- Latest low-small regression now passes; keep it as a regression guard.

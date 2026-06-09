@@ -375,6 +375,7 @@ def build_eval_env_cfg(args: argparse.Namespace):
         zero = SemanticObstacleCount(small=0, large=0)
         env_cfg.semantic_obstacle_curriculum.plane_counts = (dense_flat,)
         env_cfg.semantic_obstacle_curriculum.non_plane_counts = (zero,)
+        env_cfg.scene.terrain.semantic_obstacle_curriculum = env_cfg.semantic_obstacle_curriculum
     else:
         raise ValueError(f"Unsupported mode: {args.mode}")
 
@@ -384,6 +385,11 @@ def build_eval_env_cfg(args: argparse.Namespace):
     terrain_cols = _parse_int_list(str(args.terrain_cols))
     tg = getattr(env_cfg.scene.terrain, "terrain_generator", None)
     if tg is not None:
+        if str(args.mode) == "small_collision":
+            sub_terrains = getattr(tg, "sub_terrains", None)
+            if not isinstance(sub_terrains, dict) or "flat" not in sub_terrains:
+                raise ValueError("small_collision mode requires a terrain generator with a 'flat' sub-terrain")
+            tg.sub_terrains = {"flat": sub_terrains["flat"]}
         if terrain_rows:
             tg.num_rows = len(terrain_rows)
             tg.curriculum = False
@@ -934,9 +940,9 @@ def run_eval(args: argparse.Namespace) -> int:
                 )
                 apply_command_to_env(base_env, command)
                 command_diagnostics = command_body_source_diagnostics(base_env, command)
-                with torch.inference_mode():
+                with torch.no_grad():
                     actions = policy(obs)
-                    obs, rewards, dones, extras = wrapped_env.step(actions)
+                obs, rewards, dones, extras = wrapped_env.step(actions)
                 planned_direction_metrics = planned_direction_metrics_from_reference_cache(base_env, command)
                 reward_mean = float(torch.as_tensor(rewards).float().mean().item())
                 done_count = int(torch.as_tensor(dones).bool().sum().item())

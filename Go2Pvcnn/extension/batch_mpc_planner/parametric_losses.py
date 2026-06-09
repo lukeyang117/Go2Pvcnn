@@ -58,15 +58,20 @@ def parametric_fk_body_leg_collision_loss(
     underbody_sample_count: int,
 ) -> Tensor:
     root = torch.as_tensor(root_pos)
-    foot = _terrain_collision_cost(terrain, leg_points.foot_pos_world, margin_m=float(margins.foot)).mean(dim=(1, 2))
-    knee = _terrain_collision_cost(terrain, leg_points.knee_pos_world, margin_m=float(margins.knee)).mean(dim=(1, 2))
-    shank = _terrain_collision_cost(terrain, leg_points.shank_sample_world, margin_m=float(margins.shank)).mean(dim=(1, 2, 3))
-    root_cost = _terrain_collision_cost(terrain, root, margin_m=float(margins.root)).mean(dim=1)
-    underbody = _terrain_collision_cost(
+    foot_raw = _terrain_collision_cost(terrain, leg_points.foot_pos_world, margin_m=float(margins.foot))
+    knee_raw = _terrain_collision_cost(terrain, leg_points.knee_pos_world, margin_m=float(margins.knee))
+    shank_raw = _terrain_collision_cost(terrain, leg_points.shank_sample_world, margin_m=float(margins.shank))
+    root_raw = _terrain_collision_cost(terrain, root, margin_m=float(margins.root))
+    underbody_raw = _terrain_collision_cost(
         terrain,
         _underbody_points(root, sample_count=int(underbody_sample_count)),
         margin_m=float(margins.underbody),
-    ).mean(dim=(1, 2))
+    )
+    foot = foot_raw.mean(dim=(1, 2)) + foot_raw.amax(dim=(1, 2))
+    knee = knee_raw.mean(dim=(1, 2)) + knee_raw.amax(dim=(1, 2))
+    shank = shank_raw.mean(dim=(1, 2, 3)) + shank_raw.amax(dim=(1, 2, 3))
+    root_cost = root_raw.mean(dim=1) + root_raw.amax(dim=1)
+    underbody = underbody_raw.mean(dim=(1, 2)) + underbody_raw.amax(dim=(1, 2))
     return foot + knee + shank + root_cost + underbody
 
 

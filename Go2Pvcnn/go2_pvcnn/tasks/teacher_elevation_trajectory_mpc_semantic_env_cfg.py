@@ -629,6 +629,12 @@ class TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg(TeacherElevationTr
         self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
         self.mpc_planner_cfg.diagnostics.emit_runtime_counters = False
         self.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
+        self.mpc_planner_cfg.losses.progress.weight = 240.0
+        self.mpc_planner_cfg.losses.swing_direction.weight = 80.0
+        zero = SemanticObstacleCount(small=0, large=0)
+        self.semantic_obstacle_curriculum.plane_counts = (zero,)
+        self.semantic_obstacle_curriculum.non_plane_counts = (zero,)
+        self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
 
 
 @configclass

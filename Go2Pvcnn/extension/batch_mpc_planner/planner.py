@@ -8,6 +8,8 @@ from torch import Tensor
 from .config import MpcPlannerCfg, validate_mpc_config
 from .diagnostics import evaluate_hard_reasons, status_from_hard_reasons
 from .kinematics import fk_feet_from_joint_angles, fk_leg_points_from_joint_angles, solve_joint_angles_from_trajectory
+from .losses.gait_coupling import swing_direction_loss
+from .losses.kinematics import joint_limit_loss_from_root_foot
 from .losses.terrain_clearance import finite_horizon_touchdown_phase, sample_time
 from .parametric import command_frame_axes, decode_parametric_trajectory, init_parametric_variables
 from .parametric_losses import (
@@ -779,12 +781,21 @@ def _parametric_sampled_frame_losses(
         )
     else:
         fk_body_leg_collision = torch.zeros((batch,), dtype=dtype, device=device)
-    trajectory_fk_consistency = parametric_trajectory_fk_consistency_loss(
+    trajectory_fk_consistency = float(cfg.losses.ik_fk_residual.weight) * parametric_trajectory_fk_consistency_loss(
         root_pos,
         decoded.root_rpy,
         target_foot_pos,
         fk_foot,
     )
+    if bool(cfg.losses.kinematics.enabled):
+        joint_limit = float(cfg.losses.kinematics.weight) * joint_limit_loss_from_root_foot(
+            root_pos,
+            decoded.root_rpy,
+            target_foot_pos,
+            joint_limit_margin_rad=float(cfg.losses.kinematics.joint_limit_margin_rad),
+        )
+    else:
+        joint_limit = torch.zeros((batch,), dtype=dtype, device=device)
     pair_same = _cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 3])
     pair_same = pair_same + _cyclic_phase_distance(decoded.swing_center[:, 1], decoded.swing_center[:, 2])
     pair_half = torch.abs(_cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 1]) - 0.5)
@@ -795,12 +806,44 @@ def _parametric_sampled_frame_losses(
         pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
         cmd = torch.cat((cmd, pad), dim=-1)
     speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
+    empty_semantic = torch.ones((batch,), dtype=torch.bool, device=device)
+    if terrain.semantic_map is not None:
+        semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
+        if semantic.ndim == 2:
+            semantic = semantic.unsqueeze(0)
+        if int(semantic.shape[0]) == 1 and batch > 1:
+            semantic = semantic.expand(batch, -1, -1)
+        if int(semantic.shape[0]) == batch:
+            empty_semantic = torch.count_nonzero(semantic.reshape(batch, -1), dim=1) == 0
+    empty_linear = torch.logical_and(empty_semantic, speed > 1.0e-4)
+    if bool(cfg.losses.swing_direction.enabled):
+        swing_direction = float(cfg.losses.swing_direction.weight) * swing_direction_loss(
+            root_pos,
+            decoded.root_rpy,
+            foot_pos,
+            decoded.swing_center,
+            decoded.swing_width,
+            command,
+            cfg.runtime,
+        )
+        swing_direction = torch.where(empty_linear, swing_direction, torch.zeros_like(swing_direction))
+    else:
+        swing_direction = torch.zeros((batch,), dtype=dtype, device=device)
     root_yaw = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)[:, 2]
-    heading, _left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
+    heading, left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
     root_delta = root_pos[:, -1, :2] - torch.as_tensor(state.root_pos, dtype=dtype, device=device)[:, :2]
     progress = (root_delta * heading).sum(dim=-1)
-    target_progress = torch.clamp(speed * 0.50, max=0.35)
-    command_progress = torch.relu(target_progress - progress).square()
+    target_progress = torch.maximum(
+        torch.clamp(speed * 0.50, max=0.35),
+        torch.full_like(speed, float(cfg.losses.progress.min_progress_m)),
+    )
+    progress_error = torch.relu(target_progress - progress).square()
+    lateral_progress = (root_delta * left).sum(dim=-1)
+    direction_error = torch.where(empty_linear, lateral_progress.square(), torch.zeros_like(progress_error))
+    if bool(cfg.losses.progress.enabled):
+        command_progress = float(cfg.losses.progress.weight) * (progress_error + direction_error)
+    else:
+        command_progress = torch.zeros((batch,), dtype=dtype, device=device)
     if horizon >= 3:
         root_acc = root_pos[:, 2:] - 2.0 * root_pos[:, 1:-1] + root_pos[:, :-2]
         foot_acc = target_foot_pos[:, 2:] - 2.0 * target_foot_pos[:, 1:-1] + target_foot_pos[:, :-2]
@@ -820,7 +863,9 @@ def _parametric_sampled_frame_losses(
         "parametric_plane_root_z_target": plane_root_z_target,
         "parametric_fk_body_leg_collision": fk_body_leg_collision,
         "parametric_trajectory_fk_consistency": trajectory_fk_consistency,
+        "parametric_joint_limit": joint_limit,
         "parametric_gait_regularization": gait_regularization,
+        "parametric_swing_direction": swing_direction,
         "parametric_command_progress": command_progress,
         "parametric_curve_regularization": curve_regularization,
     }

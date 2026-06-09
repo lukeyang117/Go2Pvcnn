@@ -1,0 +1,138 @@
+{
+  "command_body_source_diagnostics": {
+    "command_body_match_max_abs_error": 0.0,
+    "mpc_input_command_body": [
+      [
+        0.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "policy_command_body": [
+      [
+        0.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "requested_command_body": [
+      [
+        0.0,
+        1.0,
+        0.0
+      ]
+    ]
+  },
+  "mode": "tracking",
+  "num_envs": 1,
+  "output_dir": "tmp/t302p-command-frame/left_120_after_progress_probe/2026-06-07_11-26-41-498611",
+  "planned_direction_metrics": {
+    "planned_insufficient_leg_motion": [
+      false,
+      false,
+      false,
+      false
+    ],
+    "planned_insufficient_motion": false,
+    "planned_per_leg_direction_cosine_xy": [
+      0.9584977030754089,
+      0.6740854382514954,
+      0.9519155621528625,
+      0.9953173995018005
+    ],
+    "planned_per_leg_lateral_ratio_xy": [
+      0.28510037064552307,
+      0.7386534214019775,
+      0.3063606321811676,
+      0.09666121751070023
+    ],
+    "planned_root_direction_cosine": 0.9994423389434814,
+    "planned_root_lateral_ratio": 0.03339073434472084,
+    "semantic_nonzero_count": null
+  },
+  "round_count": 1,
+  "rounds": [
+    {
+      "command_body_source_diagnostics": {
+        "command_body_match_max_abs_error": 0.0,
+        "mpc_input_command_body": [
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "policy_command_body": [
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "requested_command_body": [
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ]
+      },
+      "max_steps": 120,
+      "mode": "tracking",
+      "num_envs": 1,
+      "planned_direction_metrics": {
+        "planned_insufficient_leg_motion": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "planned_insufficient_motion": false,
+        "planned_per_leg_direction_cosine_xy": [
+          0.9584977030754089,
+          0.6740854382514954,
+          0.9519155621528625,
+          0.9953173995018005
+        ],
+        "planned_per_leg_lateral_ratio_xy": [
+          0.28510037064552307,
+          0.7386534214019775,
+          0.3063606321811676,
+          0.09666121751070023
+        ],
+        "planned_root_direction_cosine": 0.9994423389434814,
+        "planned_root_lateral_ratio": 0.03339073434472084,
+        "semantic_nonzero_count": null
+      },
+      "round": 0,
+      "steps": 120,
+      "tracking": {
+        "foot_tracking_error_mean_m": 0.11376370590490599,
+        "foot_tracking_error_p95_m": 0.2596777677536011,
+        "per_leg_foot_error_mean_m": [
+          0.10318557853339977,
+          0.16090162278463443,
+          0.1054721049964428,
+          0.08549551872032074
+        ],
+        "reference_valid_ratio": 1.0,
+        "tracking_step_count": 120,
+        "tracking_valid_step_count": 120
+      }
+    }
+  ],
+  "total_steps": 120,
+  "tracking": {
+    "foot_tracking_error_mean_m": 0.11376370590490599,
+    "foot_tracking_error_p95_m": 0.2596777677536011,
+    "per_leg_foot_error_mean_m": [
+      0.10318557853339977,
+      0.16090162278463443,
+      0.1054721049964428,
+      0.08549551872032074
+    ],
+    "reference_valid_ratio": 1.0,
+    "tracking_step_count": 120,
+    "tracking_valid_step_count": 120
+  }
+}
