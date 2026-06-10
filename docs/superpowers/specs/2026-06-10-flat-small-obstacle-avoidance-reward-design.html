@@ -132,7 +132,7 @@
     </tr>
     <tr>
       <td>地形</td>
-      <td>只保留 flat terrain；语义课程只生成 small obstacles，large count 默认为 0。</td>
+      <td>只保留 flat terrain；当前 row-based semantic curriculum 改成 flat-small 专用数量表，large count 默认为 0。</td>
     </tr>
     <tr>
       <td>模型兼容</td>
@@ -183,7 +183,68 @@ cost = deficit ** 2</code></pre>
     本设计不做 root 平移或 yaw 差的衰减门控；旧地图何时替换完全由 scanner 更新决定。
   </p>
 
-  <h2>5. 身体部件采样</h2>
+  <h2>5. 当前 Curriculum 改造</h2>
+  <p>
+    本设计不新增另一套 curriculum。直接修改当前
+    <code>terrain_levels_vel_semantic_plane_gate</code> / row-based semantic obstacle curriculum 的 flat 语义 gate：
+    难度仍按 terrain row 推进，但 flat row 的通过条件改为 episode 级真实 small collision 成功率。
+  </p>
+
+  <h3>5.1 障碍数量和难度</h3>
+  <p>
+    flat small obstacle 数量参考 <code>mpc_policy_eval.py --mode small_collision</code> 的评估场景。
+    当前评估默认 <code>--small-count-per-tile=80</code>，并在 small_collision 模式中写入
+    <code>plane_counts=(SemanticObstacleCount(small=80, large=0),)</code>。
+    训练 curriculum 默认使用 10 个 row，逐步递增到 80：
+  </p>
+  <pre><code>plane_counts = (
+    SemanticObstacleCount(small=8, large=0),
+    SemanticObstacleCount(small=16, large=0),
+    SemanticObstacleCount(small=24, large=0),
+    SemanticObstacleCount(small=32, large=0),
+    SemanticObstacleCount(small=40, large=0),
+    SemanticObstacleCount(small=48, large=0),
+    SemanticObstacleCount(small=56, large=0),
+    SemanticObstacleCount(small=64, large=0),
+    SemanticObstacleCount(small=72, large=0),
+    SemanticObstacleCount(small=80, large=0),
+)</code></pre>
+  <p>
+    新 flat-small avoidance 配置只训练 flat；如果保留非 flat 表用于兼容，默认应为
+    <code>SemanticObstacleCount(small=0, large=0)</code>。
+  </p>
+
+  <h3>5.2 Episode 级语义 gate</h3>
+  <p>
+    当前 semantic gate 不再使用每 step 的 flat collision rate 作为升级指标。每个 env 在一个 episode 内维护：
+  </p>
+  <pre><code>episode_had_small_collision[env]</code></pre>
+  <p>
+    每 step 用 IsaacLab 真实碰撞更新它：
+  </p>
+  <pre><code>small_force = semantic_contact_small.data.force_matrix_w  # [N,B,F,3]
+active = norm(small_force, dim=-1) &gt; collision_force_threshold
+episode_had_small_collision |= active.any(dim=(1, 2))</code></pre>
+  <p>
+    episode 结束时，只有完整走到 <code>time_out</code> 且本 episode 没有 small collision 的 flat env 才算成功：
+  </p>
+  <pre><code>success =
+    time_out
+    and not episode_had_small_collision
+    and not base_contact
+    and not bad_orientation</code></pre>
+  <p>
+    curriculum 统计一个窗口内完成的 flat episodes：
+  </p>
+  <pre><code>semantic_success_rate =
+    successful_full_no_collision_episodes / completed_flat_episodes</code></pre>
+  <p>
+    满足 <code>min_completed_episodes</code>、<code>success_rate_threshold</code>，并连续
+    <code>consecutive_success_required</code> 个统计窗口通过后，flat row 才允许 move up。
+    非 flat terrain 的历史逻辑不作为本新配置目标；当前主线如仍保留非 flat，应避免被 flat-small gate 改坏。
+  </p>
+
+  <h2>6. 身体部件采样</h2>
   <p>
     为了并行性和稳定性，第一版直接读取 IsaacLab 的当前 body pose，而不是重复 MPC FK。
   </p>
@@ -213,7 +274,7 @@ cost = deficit ** 2</code></pre>
     这种方式用的是仿真 authoritative body pose，避免 joint order / FK 坐标约定风险，也减少每 step 重复计算。
   </p>
 
-  <h2>6. 并行计算约束</h2>
+  <h2>7. 并行计算约束</h2>
   <ul>
     <li>禁止 <code>for env in range(num_envs)</code> 形式的 per-env Python 循环。</li>
     <li>固定 part 数量允许 3 个分支，但查询和 reduce 必须 batch tensor 化。</li>
@@ -222,8 +283,8 @@ cost = deficit ** 2</code></pre>
     <li>地图 clone 只在 scanner 更新时发生，不做每步全图比较。</li>
   </ul>
 
-  <h2>7. Reward 函数接口</h2>
-  <h3>7.1 <code>semantic_body_part_clearance_reward(...)</code></h3>
+  <h2>8. Reward 函数接口</h2>
+  <h3>8.1 <code>semantic_body_part_clearance_reward(...)</code></h3>
   <p>IsaacLab <code>RewardTerm</code> 入口。</p>
   <pre><code>def semantic_body_part_clearance_reward(
     env,
@@ -246,7 +307,7 @@ cost = deficit ** 2</code></pre>
     penalty_clip=1.0,
 ):</code></pre>
 
-  <h3>7.2 <code>_update_semantic_map_anchor_cache(...)</code></h3>
+  <h3>8.2 <code>_update_semantic_map_anchor_cache(...)</code></h3>
   <p>维护缓存地图和 root 锚点。</p>
   <pre><code>def _update_semantic_map_anchor_cache(
     env,
@@ -260,7 +321,7 @@ cost = deficit ** 2</code></pre>
     不使用每步全图相等比较。
   </p>
 
-  <h3>7.3 <code>_current_body_part_sample_points(...)</code></h3>
+  <h3>8.3 <code>_current_body_part_sample_points(...)</code></h3>
   <p>从 IsaacLab 当前 body pose 生成固定 shape 的采样点。</p>
   <pre><code>def _current_body_part_sample_points(
     robot,
@@ -270,7 +331,7 @@ cost = deficit ** 2</code></pre>
     thigh_sample_count=2,
 ):</code></pre>
 
-  <h3>7.4 <code>_semantic_clearance_penalty_from_points(...)</code></h3>
+  <h3>8.4 <code>_semantic_clearance_penalty_from_points(...)</code></h3>
   <p>一次性查询缓存地图并合成 penalty。</p>
   <pre><code>def _semantic_clearance_penalty_from_points(
     *,
@@ -288,7 +349,7 @@ cost = deficit ** 2</code></pre>
     swing_foot_weight=1.0,
 ):</code></pre>
 
-  <h2>8. Reward 合成</h2>
+  <h2>9. Reward 合成</h2>
   <pre><code>small_mask = semantic_id in small_semantic_ids
 deficit = relu(terrain_z + margin_part - point_z)
 point_cost = small_mask * deficit.square()
@@ -310,7 +371,7 @@ reward = -clip(penalty, 0.0, penalty_clip)</code></pre>
     初始建议：foot 惩罚低，shank/thigh 惩罚高。这样允许脚接近或跨过小障碍，但强烈惩罚腿部扫障碍。
   </p>
 
-  <h2>9. 与现有奖励关系</h2>
+  <h2>10. 与现有奖励关系</h2>
   <table>
     <tr>
       <th>奖励</th>
@@ -334,7 +395,7 @@ reward = -clip(penalty, 0.0, penalty_clip)</code></pre>
     </tr>
   </table>
 
-  <h2>10. RewTerm 示例</h2>
+  <h2>11. RewTerm 示例</h2>
   <pre><code>semantic_body_part_clearance = RewTerm(
     func=semantic_body_part_clearance_reward,
     weight=1.0,
@@ -355,8 +416,8 @@ reward = -clip(penalty, 0.0, penalty_clip)</code></pre>
     },
 )</code></pre>
 
-  <h2>11. 测试设计</h2>
-  <h3>11.1 纯 tensor 单元测试</h3>
+  <h2>12. 测试设计</h2>
+  <h3>12.1 纯 tensor 单元测试</h3>
   <ul>
     <li>无 small semantic cell 时 penalty 为 0。</li>
     <li>foot 点低于 small obstacle height + margin 时有惩罚。</li>
@@ -365,39 +426,52 @@ reward = -clip(penalty, 0.0, penalty_clip)</code></pre>
     <li>旧 map root 锚点下，当前 world point 能投影回缓存 map frame。</li>
   </ul>
 
-  <h3>11.2 cfg 静态测试</h3>
+  <h3>12.2 cfg 静态测试</h3>
   <ul>
     <li>新 cfg 继承当前 MPC semantic cfg。</li>
     <li>新 cfg observation/action shape 不变。</li>
     <li>新 cfg terrain generator 只含 flat。</li>
-    <li>新 cfg semantic curriculum large count 全为 0。</li>
+    <li>新 cfg semantic curriculum flat small count 表为 <code>8..80</code>，large count 全为 0。</li>
     <li>新 reward 只挂到新 cfg，不影响现有 <code>teacher_elevation_trajectory_mpc_semantic</code>。</li>
   </ul>
 
-  <h3>11.3 IsaacLab smoke</h3>
+  <h3>12.3 curriculum 单元测试</h3>
+  <ul>
+    <li>episode 内任意一步 <code>semantic_contact_small</code> 真实 force 超阈值后，<code>episode_had_small_collision</code> 保持 true 到 reset。</li>
+    <li><code>time_out=True</code> 且无 small collision 计入成功 episode。</li>
+    <li><code>base_contact</code> 或 <code>bad_orientation</code> 这类非 timeout termination 不计入成功。</li>
+    <li>不足 <code>min_completed_episodes</code> 时 semantic gate 不通过。</li>
+    <li>连续窗口成功次数达到 <code>consecutive_success_required</code> 后 flat row move-up 才放行。</li>
+  </ul>
+
+  <h3>12.4 IsaacLab smoke</h3>
   <ul>
     <li>小规模 headless env 创建成功，reward 输出 shape 为 <code>[num_envs]</code>。</li>
     <li>reward 无 NaN/Inf。</li>
     <li>scanner 低频更新时，缓存只在更新步 clone map。</li>
+    <li>episode-level curriculum gate 使用 <code>semantic_contact_small.data.force_matrix_w</code> 真实碰撞，而不是 clearance reward 代理指标。</li>
     <li>用已有 checkpoint 跑短步数 play/train smoke，确认 observation/action 兼容。</li>
   </ul>
 
-  <h2>12. 验收指标</h2>
+  <h2>13. 验收指标</h2>
   <ul>
     <li>训练配置能从 <code>2026-06-04_18-16-07</code> checkpoint resume。</li>
-    <li>flat-small 场景中 small obstacle 真实 contact rate 下降。</li>
+    <li>flat-small 场景中 episode 级真实 small collision rate 下降。</li>
+    <li>curriculum 升级指标是完整 episode：不摔倒、不触发非 timeout termination、且无 <code>semantic_contact_small</code> 真实碰撞。</li>
     <li>速度跟踪不明显坍缩，策略不能靠原地不动逃避惩罚。</li>
     <li>reward 计算不引入明显训练吞吐回退；4096 env 下需要记录 step timing。</li>
     <li>现有 MPC semantic 主线配置和 PLAY/VIEWER split 不回归。</li>
   </ul>
 
-  <h2>13. 明确不做</h2>
+  <h2>14. 明确不做</h2>
   <ul>
     <li>不参考 SemLoco 的 foothold target search，不新增另一套落脚点目标。</li>
     <li>不修改 MPC planner loss、command shaping、reference cache ABI。</li>
     <li>不在 reward 中调用 MPC plan_segment。</li>
     <li>不新增 root 位移或 yaw 差 gate；地图更新由 scanner 更新节奏决定。</li>
     <li>第一版不重复 MPC FK；直接读取 IsaacLab 当前 body pose。</li>
+    <li>不新建另一套 curriculum；在当前 row-based semantic curriculum 上改 episode-level gate。</li>
+    <li>curriculum 不使用每 step 碰撞率作为升级指标。</li>
   </ul>
 </main>
 </body>
