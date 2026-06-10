@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flat Small Obstacle Avoidance Reward 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5f6b76;
+      --line: #d7dde3;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --ok: #247047;
+      --warn: #8a5a00;
+      --bad: #9f2f24;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul { margin-top: 8px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--panel);
+      padding: 12px 14px;
+      margin: 16px 0;
+    }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Flat Small Obstacle Avoidance Reward 设计</h1>
+  <div class="meta">
+    日期：2026-06-10 ｜ 阶段：RL 配置 / 奖励设计 ｜ 目标配置：
+    <code>teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance</code>
+  </div>
+
+  <h2>1. 目标</h2>
+  <p>
+    新增一个专门用于平地小障碍物避障的强化学习配置，继承当前
+    <code>TeacherElevationTrajectoryMpcSemanticEnvCfg</code>，保持 observation/action 兼容，
+    以便从已有 checkpoint
+    <code>logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic/2026-06-04_18-16-07</code>
+    继续训练。
+  </p>
+  <p>
+    新增奖励只评价当前 IsaacLab 真实机器人姿态的 foot / shank(calf) / thigh 是否侵入语义小障碍
+    heightfield 风险区，不生成新的 foothold target，不修改 MPC reference，不修改 MPC loss。
+  </p>
+
+  <div class="callout">
+    <strong>核心边界：</strong>
+    MPC 继续负责参考轨迹；新 reward 只负责给当前 policy 动作的腿部几何碰撞风险打分。
+  </div>
+
+  <h2>2. 配置设计</h2>
+  <table>
+    <tr>
+      <th>项目</th>
+      <th>设计</th>
+    </tr>
+    <tr>
+      <td>新训练配置</td>
+      <td><code>TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg</code></td>
+    </tr>
+    <tr>
+      <td>实验名</td>
+      <td><code>teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance</code></td>
+    </tr>
+    <tr>
+      <td>地形</td>
+      <td>只保留 flat terrain；语义课程只生成 small obstacles，large count 默认为 0。</td>
+    </tr>
+    <tr>
+      <td>模型兼容</td>
+      <td>不改变 policy / critic observation shape，不改变 action space，可 resume 现有 checkpoint。</td>
+    </tr>
+    <tr>
+      <td>保留奖励</td>
+      <td>保留速度跟踪、姿态、关节、能耗、feet air time、MPC <code>reference_foot_pos</code>、真实 <code>semantic_contact_collision</code>。</td>
+    </tr>
+    <tr>
+      <td>新增奖励</td>
+      <td><code>semantic_body_part_clearance_reward</code>，只挂在新 flat-small avoidance cfg 上。</td>
+    </tr>
+  </table>
+
+  <h2>3. 奖励思想</h2>
+  <p>
+    奖励参考 MPC 中使用的 heightfield clearance 检测方式：
+  </p>
+  <pre><code>deficit = relu(terrain_z + margin_part - point_z)
+cost = deficit ** 2</code></pre>
+  <p>
+    区别是 MPC 检测的是规划轨迹或 FK 轨迹；新 reward 检测的是 IsaacLab 当前真实物理状态。
+    这样可以在真实 contact 发生前提供连续负反馈，同时避免和 MPC reference 争夺足端目标。
+  </p>
+
+  <h2>4. 地图锚点缓存</h2>
+  <p>
+    <code>semantic_height_scanner</code> 不是每个 policy step 都更新。为避免用旧地图时坐标错位，reward 维护一份地图锚点缓存：
+  </p>
+  <pre><code>{
+  "elevation_map": Tensor [N,H,W],
+  "semantic_map": Tensor [N,H,W],
+  "map_root_pos_w": Tensor [N,3],
+  "map_root_yaw_w": Tensor [N],
+  "last_signature": ...,
+  "static_tensors": {
+    "part_weights": Tensor [P],
+    "part_margins": Tensor [P],
+    "sample_alphas": Tensor [...]
+  }
+}</code></pre>
+  <p>
+    当 scanner map 更新时，缓存最新 elevation / semantic map，并同时记录当前 root position 和 root yaw。
+    当 scanner 没更新时，继续使用上一次 map 和上一次 root 锚点。当前 foot / shank / thigh 世界坐标点会先投影回缓存地图对应的 root frame，再查询缓存地图。
+  </p>
+  <p>
+    本设计不做 root 平移或 yaw 差的衰减门控；旧地图何时替换完全由 scanner 更新决定。
+  </p>
+
+  <h2>5. 身体部件采样</h2>
+  <p>
+    为了并行性和稳定性，第一版直接读取 IsaacLab 的当前 body pose，而不是重复 MPC FK。
+  </p>
+  <table>
+    <tr>
+      <th>部件</th>
+      <th>来源</th>
+      <th>采样</th>
+    </tr>
+    <tr>
+      <td>foot</td>
+      <td><code>robot.data.body_pos_w</code> 中 <code>.*_foot</code></td>
+      <td>每腿 1 点，shape <code>[N,4,3]</code></td>
+    </tr>
+    <tr>
+      <td>shank / calf</td>
+      <td><code>.*_calf</code> body center 和对应 foot body center</td>
+      <td>calf center 到 foot center 之间采样 <code>S</code> 点，shape <code>[N,4,S,3]</code></td>
+    </tr>
+    <tr>
+      <td>thigh</td>
+      <td><code>.*_thigh</code> body center 和对应 calf body center</td>
+      <td>thigh center 到 calf center 之间采样 <code>T</code> 点，shape <code>[N,4,T,3]</code></td>
+    </tr>
+  </table>
+  <p>
+    这种方式用的是仿真 authoritative body pose，避免 joint order / FK 坐标约定风险，也减少每 step 重复计算。
+  </p>
+
+  <h2>6. 并行计算约束</h2>
+  <ul>
+    <li>禁止 <code>for env in range(num_envs)</code> 形式的 per-env Python 循环。</li>
+    <li>固定 part 数量允许 3 个分支，但查询和 reduce 必须 batch tensor 化。</li>
+    <li>所有采样点合并成 <code>all_points [N,P,3]</code> 后一次性查询 height / semantic。</li>
+    <li><code>part_weights</code>、<code>part_margins</code>、采样 alpha、semantic id tensor 按 device/dtype/sample_count 缓存复用。</li>
+    <li>地图 clone 只在 scanner 更新时发生，不做每步全图比较。</li>
+  </ul>
+
+  <h2>7. Reward 函数接口</h2>
+  <h3>7.1 <code>semantic_body_part_clearance_reward(...)</code></h3>
+  <p>IsaacLab <code>RewardTerm</code> 入口。</p>
+  <pre><code>def semantic_body_part_clearance_reward(
+    env,
+    *,
+    asset_cfg,
+    scanner_cfg,
+    contact_sensor_cfg=None,
+    small_semantic_ids=(1,),
+    foot_margin_m=0.015,
+    shank_margin_m=0.04,
+    thigh_margin_m=0.04,
+    foot_weight=0.5,
+    shank_weight=2.0,
+    thigh_weight=2.0,
+    stance_foot_weight=0.5,
+    swing_foot_weight=1.0,
+    contact_force_threshold=1.0,
+    shank_sample_count=2,
+    thigh_sample_count=2,
+    penalty_clip=1.0,
+):</code></pre>
+
+  <h3>7.2 <code>_update_semantic_map_anchor_cache(...)</code></h3>
+  <p>维护缓存地图和 root 锚点。</p>
+  <pre><code>def _update_semantic_map_anchor_cache(
+    env,
+    scanner,
+    robot,
+    *,
+    cache_name="_semantic_body_part_clearance_cache",
+):</code></pre>
+  <p>
+    更新判断优先使用 scanner timestamp / frame counter；如果没有，则用 scanner update period 和 env step counter 推断更新步。
+    不使用每步全图相等比较。
+  </p>
+
+  <h3>7.3 <code>_current_body_part_sample_points(...)</code></h3>
+  <p>从 IsaacLab 当前 body pose 生成固定 shape 的采样点。</p>
+  <pre><code>def _current_body_part_sample_points(
+    robot,
+    *,
+    body_ids,
+    shank_sample_count=2,
+    thigh_sample_count=2,
+):</code></pre>
+
+  <h3>7.4 <code>_semantic_clearance_penalty_from_points(...)</code></h3>
+  <p>一次性查询缓存地图并合成 penalty。</p>
+  <pre><code>def _semantic_clearance_penalty_from_points(
+    *,
+    cached_elevation_map,
+    cached_semantic_map,
+    map_root_pos_w,
+    map_root_yaw_w,
+    points_by_part,
+    small_semantic_ids=(1,),
+    margins,
+    weights,
+    penalty_clip=1.0,
+    foot_contact_mask=None,
+    stance_foot_weight=0.5,
+    swing_foot_weight=1.0,
+):</code></pre>
+
+  <h2>8. Reward 合成</h2>
+  <pre><code>small_mask = semantic_id in small_semantic_ids
+deficit = relu(terrain_z + margin_part - point_z)
+point_cost = small_mask * deficit.square()
+
+foot_cost  = reduce(foot points)
+shank_cost = reduce(shank points)
+thigh_cost = reduce(thigh points)
+worst_cost = max(point_cost)
+
+penalty = (
+    foot_weight * foot_cost
+  + shank_weight * shank_cost
+  + thigh_weight * thigh_cost
+  + worst_weight * worst_cost
+)
+
+reward = -clip(penalty, 0.0, penalty_clip)</code></pre>
+  <p>
+    初始建议：foot 惩罚低，shank/thigh 惩罚高。这样允许脚接近或跨过小障碍，但强烈惩罚腿部扫障碍。
+  </p>
+
+  <h2>9. 与现有奖励关系</h2>
+  <table>
+    <tr>
+      <th>奖励</th>
+      <th>职责</th>
+      <th>是否保留</th>
+    </tr>
+    <tr>
+      <td><code>reference_foot_pos</code></td>
+      <td>MPC reference imitation，保持 gait/足端轨迹主方向。</td>
+      <td class="ok">保留</td>
+    </tr>
+    <tr>
+      <td><code>semantic_contact_collision</code></td>
+      <td>真实 contact 兜底，碰到 small/large semantic object 后强惩罚。</td>
+      <td class="ok">保留并可在新 cfg 加强</td>
+    </tr>
+    <tr>
+      <td><code>semantic_body_part_clearance_reward</code></td>
+      <td>contact 前的连续风险惩罚，只对当前 body part 几何采样点生效。</td>
+      <td class="ok">新增</td>
+    </tr>
+  </table>
+
+  <h2>10. RewTerm 示例</h2>
+  <pre><code>semantic_body_part_clearance = RewTerm(
+    func=semantic_body_part_clearance_reward,
+    weight=1.0,
+    params={
+        "asset_cfg": SceneEntityCfg("robot"),
+        "scanner_cfg": SceneEntityCfg("semantic_height_scanner"),
+        "contact_sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+        "small_semantic_ids": (1,),
+        "foot_margin_m": 0.015,
+        "shank_margin_m": 0.04,
+        "thigh_margin_m": 0.04,
+        "foot_weight": 0.5,
+        "shank_weight": 2.0,
+        "thigh_weight": 2.0,
+        "shank_sample_count": 2,
+        "thigh_sample_count": 2,
+        "penalty_clip": 1.0,
+    },
+)</code></pre>
+
+  <h2>11. 测试设计</h2>
+  <h3>11.1 纯 tensor 单元测试</h3>
+  <ul>
+    <li>无 small semantic cell 时 penalty 为 0。</li>
+    <li>foot 点低于 small obstacle height + margin 时有惩罚。</li>
+    <li>shank/thigh 相同 deficit 的 penalty 高于 foot。</li>
+    <li>semantic id 为 ground 时不惩罚，即使高度接近。</li>
+    <li>旧 map root 锚点下，当前 world point 能投影回缓存 map frame。</li>
+  </ul>
+
+  <h3>11.2 cfg 静态测试</h3>
+  <ul>
+    <li>新 cfg 继承当前 MPC semantic cfg。</li>
+    <li>新 cfg observation/action shape 不变。</li>
+    <li>新 cfg terrain generator 只含 flat。</li>
+    <li>新 cfg semantic curriculum large count 全为 0。</li>
+    <li>新 reward 只挂到新 cfg，不影响现有 <code>teacher_elevation_trajectory_mpc_semantic</code>。</li>
+  </ul>
+
+  <h3>11.3 IsaacLab smoke</h3>
+  <ul>
+    <li>小规模 headless env 创建成功，reward 输出 shape 为 <code>[num_envs]</code>。</li>
+    <li>reward 无 NaN/Inf。</li>
+    <li>scanner 低频更新时，缓存只在更新步 clone map。</li>
+    <li>用已有 checkpoint 跑短步数 play/train smoke，确认 observation/action 兼容。</li>
+  </ul>
+
+  <h2>12. 验收指标</h2>
+  <ul>
+    <li>训练配置能从 <code>2026-06-04_18-16-07</code> checkpoint resume。</li>
+    <li>flat-small 场景中 small obstacle 真实 contact rate 下降。</li>
+    <li>速度跟踪不明显坍缩，策略不能靠原地不动逃避惩罚。</li>
+    <li>reward 计算不引入明显训练吞吐回退；4096 env 下需要记录 step timing。</li>
+    <li>现有 MPC semantic 主线配置和 PLAY/VIEWER split 不回归。</li>
+  </ul>
+
+  <h2>13. 明确不做</h2>
+  <ul>
+    <li>不参考 SemLoco 的 foothold target search，不新增另一套落脚点目标。</li>
+    <li>不修改 MPC planner loss、command shaping、reference cache ABI。</li>
+    <li>不在 reward 中调用 MPC plan_segment。</li>
+    <li>不新增 root 位移或 yaw 差 gate；地图更新由 scanner 更新节奏决定。</li>
+    <li>第一版不重复 MPC FK；直接读取 IsaacLab 当前 body pose。</li>
+  </ul>
+</main>
+</body>
+</html>
