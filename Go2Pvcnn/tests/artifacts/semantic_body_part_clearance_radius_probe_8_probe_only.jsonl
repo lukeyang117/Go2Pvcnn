@@ -1,0 +1,6 @@
+{"margin_scale": 1.0, "num_envs": 8, "radii": [0.12], "scanner_shape": [8, 151, 151], "small_cell_count": 0, "steps": 1, "type": "header"}
+{"event": "before_step", "step": 0, "type": "trace"}
+{"event": "after_step", "step": 0, "type": "trace"}
+{"event": "before_reward", "radius_m": 0.12, "step": 0, "type": "trace"}
+{"elapsed_ms": 23.456748574972153, "max_reward": -0.0, "mean_reward": 0.0, "min_reward": -0.0, "nonzero_env_count": 0, "nonzero_env_rate": 0.0, "radius_m": 0.12, "step": 0}
+{"max_nonzero_env_count": 0, "max_nonzero_env_rate": 0.0, "mean_elapsed_ms": 23.456748574972153, "min_reward": -0.0, "num_envs": 8, "radii": [0.12], "steps": 1, "type": "summary"}

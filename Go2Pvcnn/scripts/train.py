@@ -86,8 +86,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--experiment",
         type=str,
         default="teacher_elevation_trajectory_mpc_semantic",
-        choices=["teacher_elevation_trajectory_mpc_semantic"],
-        help="Experiment: teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward).",
+        choices=[
+            "teacher_elevation_trajectory_mpc_semantic",
+            "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+        ],
+        help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
     )
     parser.add_argument(
         "--verbose-planner",
@@ -333,6 +336,7 @@ def main() -> int:
     from agent import get_train_cfg
     from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
         TeacherElevationTrajectoryMpcSemanticEnvCfg,
+        TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
     )
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
     from isaaclab.envs import ManagerBasedRLEnv
@@ -402,6 +406,10 @@ def main() -> int:
         "teacher_elevation_trajectory_mpc_semantic": (
             TeacherElevationTrajectoryMpcSemanticEnvCfg,
             "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0",
+        ),
+        "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance": (
+            TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
+            "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-v0",
         ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]

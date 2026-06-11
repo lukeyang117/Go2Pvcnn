@@ -8,7 +8,10 @@ import torch
 
 
 VALID_PLANNER_BACKENDS = ("mpc",)
-TRAJECTORY_MANAGER_EXPERIMENTS = ("teacher_elevation_trajectory_mpc_semantic",)
+TRAJECTORY_MANAGER_EXPERIMENTS = (
+    "teacher_elevation_trajectory_mpc_semantic",
+    "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+)
 
 
 def planner_backend_from_cfg(cfg) -> str:

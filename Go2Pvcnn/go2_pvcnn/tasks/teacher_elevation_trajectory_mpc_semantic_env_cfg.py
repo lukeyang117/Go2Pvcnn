@@ -29,6 +29,7 @@ from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.batch_mpc_planner.participation import MpcTerrainDifficultyPair
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from extension.mdp.rewards_reference import reference_foot_pos_reward
+from extension.mdp.semantic_body_part_clearance import semantic_body_part_clearance_reward
 from extension.mdp.semantic_contact_rewards import semantic_global_contact_collision_reward
 from extension.semantic_curriculum import (
     SemanticObstacleCount,
@@ -89,6 +90,23 @@ SEMANTIC_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
         ),
     },
 )
+
+
+def _flat_small_avoidance_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
+    return terrain_gen.TerrainGeneratorCfg(
+        size=SEMANTIC_TERRAIN_CFG.size,
+        border_width=SEMANTIC_TERRAIN_CFG.border_width,
+        num_rows=10,
+        num_cols=20,
+        horizontal_scale=SEMANTIC_TERRAIN_CFG.horizontal_scale,
+        vertical_scale=SEMANTIC_TERRAIN_CFG.vertical_scale,
+        slope_threshold=SEMANTIC_TERRAIN_CFG.slope_threshold,
+        difficulty_range=SEMANTIC_TERRAIN_CFG.difficulty_range,
+        curriculum=True,
+        sub_terrains={
+            "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=1.0),
+        },
+    )
 
 SEMANTIC_CONTACT_BODY_NAMES = (
     "FL_foot",
@@ -156,6 +174,41 @@ def _semantic_contact_collision_reward_term() -> RewTerm:
             "force_clip": 1.0,
             "small_weight": 1.0,
             "large_weight": 2.0,
+        },
+    )
+
+
+def _semantic_body_part_clearance_reward_term() -> RewTerm:
+    return RewTerm(
+        func=semantic_body_part_clearance_reward,
+        weight=1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "scanner_cfg": SceneEntityCfg("semantic_height_scanner"),
+            "contact_sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+            "small_semantic_ids": (1,),
+            "foot_margin_m": 0.20,
+            "calf_margin_m": 0.40,
+            "thigh_margin_m": 0.40,
+            "base_margin_m": 0.20,
+            "foot_weight": 0.5,
+            "calf_weight": 2.0,
+            "thigh_weight": 1.5,
+            "base_weight": 1.0,
+            "foot_sphere_radius_m": 0.022,
+            "foot_query_radius_m": 0.50,
+            "calf_capsule_radius_m": 0.040,
+            "calf_query_radius_m": 0.50,
+            "calf_sections": 7,
+            "thigh_capsule_radius_m": 0.040,
+            "thigh_query_radius_m": 0.50,
+            "thigh_sections": 7,
+            "base_half_extents_m": (0.20, 0.06, 0.07),
+            "base_footprint_grid": (5, 3),
+            "base_query_radius_m": 0.50,
+            "include_base": True,
+            "penalty_clip": 1.0,
+            "clearance_scale": 1000.0,
         },
     )
 
@@ -503,8 +556,6 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
             min_spacing_clearance_m=(0.15,),
             tile_margin_m=(0.50,),
             collision_force_threshold=1.0,
-            plane_collision_rate_threshold=0.03,
-            consecutive_success_required=5,
         )
     )
 
@@ -650,3 +701,77 @@ class TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg(
         super().__post_init__()
         self.small_collision_eval_small_count_per_tile = 80
         self.small_collision_eval_large_count_per_tile = 0
+
+
+@configclass
+class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherElevationTrajectoryMpcSemanticEnvCfg):
+    """Flat-only small-obstacle avoidance training config."""
+
+    experiment_name: str = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
+    scene: TeacherElevationTrajectoryMpcSemanticSceneCfg = TeacherElevationTrajectoryMpcSemanticSceneCfg(
+        num_envs=4096,
+        env_spacing=2.5,
+        replicate_physics=True,
+    )
+    rewards: TeacherElevationTrajectoryMpcSemanticRewardsCfg = TeacherElevationTrajectoryMpcSemanticRewardsCfg()
+    semantic_obstacle_curriculum: SemanticObstacleCurriculumCfg = field(
+        default_factory=lambda: SemanticObstacleCurriculumCfg(
+            enabled=True,
+            plane_terrain_names=("flat",),
+            plane_counts=(
+                SemanticObstacleCount(small=8, large=0),
+                SemanticObstacleCount(small=16, large=0),
+                SemanticObstacleCount(small=24, large=0),
+                SemanticObstacleCount(small=32, large=0),
+                SemanticObstacleCount(small=40, large=0),
+                SemanticObstacleCount(small=48, large=0),
+                SemanticObstacleCount(small=56, large=0),
+                SemanticObstacleCount(small=64, large=0),
+                SemanticObstacleCount(small=72, large=0),
+                SemanticObstacleCount(small=80, large=0),
+            ),
+            non_plane_counts=(SemanticObstacleCount(small=0, large=0),),
+            center_safety_half_extent_m=(0.85,),
+            min_spacing_clearance_m=(0.15,),
+            tile_margin_m=(0.50,),
+            collision_force_threshold=1.0,
+        )
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
+        self.curriculum.lin_vel_cmd_levels = None
+        self.scene.terrain.terrain_generator = _flat_small_avoidance_terrain_cfg()
+        self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
+        self.rewards.semantic_body_part_clearance = _semantic_body_part_clearance_reward_term()
+
+
+@configclass
+class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY(
+    TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg
+):
+    """No-MPC play config for flat-small avoidance policies."""
+
+    scene: TeacherElevationTrajectoryMpcSemanticSceneCfg = TeacherElevationTrajectoryMpcSemanticSceneCfg(
+        num_envs=32,
+        env_spacing=2.5,
+        replicate_physics=True,
+    )
+    planner_owned_reference_cache: bool = False
+    use_batched_reference_trajectory: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.planner_owned_reference_cache = False
+        self.use_batched_reference_trajectory = False
+        self.rewards.reference_foot_pos = None
+        self.rewards.semantic_contact_collision = None
+        self.scene.semantic_contact_small = None
+        self.scene.semantic_contact_large = None
+        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+        self.events.push_robot = None
+        self.observations.policy_elevation_semantic_map.enable_corruption = False
+        self.observations.policy_state.enable_corruption = False
+        self.observations.critic_elevation_semantic_map.enable_corruption = False
+        self.observations.critic_state.enable_corruption = False

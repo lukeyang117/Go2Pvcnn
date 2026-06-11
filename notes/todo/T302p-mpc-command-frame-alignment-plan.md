@@ -564,6 +564,7 @@ what remains unverified
 
 ## Related Logs
 
+- [../log/2026-06-09-2026-current-mpc-ppo-html-overview.md](../log/2026-06-09-2026-current-mpc-ppo-html-overview.md)
 - [../log/2026-06-06-1858-t302p-command-frame-implementation.md](../log/2026-06-06-1858-t302p-command-frame-implementation.md)
 - [../log/2026-06-06-2317-t302p-real-acceptance-failures.md](../log/2026-06-06-2317-t302p-real-acceptance-failures.md)
 - [../log/2026-06-07-1104-t302p-low-small-fk-loss-wiring.md](../log/2026-06-07-1104-t302p-low-small-fk-loss-wiring.md)

@@ -38,8 +38,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--experiment",
         type=str,
         default="teacher_elevation_trajectory_mpc_semantic",
-        choices=["teacher_elevation_trajectory_mpc_semantic"],
-        help="Experiment/task: teacher_elevation_trajectory_mpc_semantic (MPC + semantic grid trajectory reward)",
+        choices=[
+            "teacher_elevation_trajectory_mpc_semantic",
+            "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+        ],
+        help="Experiment/task: semantic MPC teacher or flat-small avoidance continuation",
     )
     parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
     parser.add_argument("--max-steps", type=int, default=0, help="Stop after this many play steps; 0 means run until the app exits.")
@@ -541,6 +544,7 @@ def main() -> int:
 
     from agent import get_train_cfg
     from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY,
         TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
     )
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -556,6 +560,10 @@ def main() -> int:
         "teacher_elevation_trajectory_mpc_semantic": (
             TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
             "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
+        ),
+        "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance": (
+            TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY,
+            "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-Play-v0",
         ),
     }
 

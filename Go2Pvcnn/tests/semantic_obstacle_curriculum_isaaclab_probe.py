@@ -90,12 +90,12 @@ def run_probe(
             _trace("after_curriculum_compute")
             # IsaacLab compute stores state internally and returns None.
             state = getattr(root, "_semantic_obstacle_curriculum_state", None)
+            episode_collision_flags = None
+            if state is not None and state.episode_had_small_collision is not None:
+                episode_collision_flags = int(state.episode_had_small_collision.sum().item())
             curriculum_outputs.append(
                 {
-                    "state_consecutive_success_count": None if state is None else int(state.consecutive_success_count),
-                    "state_last_plane_collision_rate": None
-                    if state is None
-                    else float(state.last_plane_collision_rate),
+                    "episode_had_small_collision_count": episode_collision_flags,
                     "has_runtime_level": hasattr(root, "_semantic_obstacle_curriculum_level")
                     or hasattr(root.scene.terrain.cfg, "semantic_obstacle_curriculum_level"),
                 }

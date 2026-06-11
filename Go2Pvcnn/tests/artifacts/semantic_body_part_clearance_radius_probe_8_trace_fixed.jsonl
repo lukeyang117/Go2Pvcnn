@@ -1,0 +1,3 @@
+{"margin_scale": 1.0, "num_envs": 8, "radii": [0.12], "scanner_shape": [8, 151, 151], "small_cell_count": 111, "steps": 1, "type": "header"}
+{"event": "before_step", "step": 0, "type": "trace"}
+{"error": "planner-owned reference cache requires env.unwrapped._trajectory_manager", "error_type": "RuntimeError", "type": "error"}

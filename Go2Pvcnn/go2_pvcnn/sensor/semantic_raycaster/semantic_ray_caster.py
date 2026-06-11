@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -279,6 +280,16 @@ class SemanticGridRayCaster(RayCaster):
             self._semantic_dbg_remaining = max(0, int(os.environ.get("SEMANTIC_RAYCASTER_DEBUG", "0")))
         except ValueError:
             self._semantic_dbg_remaining = 0
+        try:
+            self._semantic_timing_remaining = max(0, int(os.environ.get("SEMANTIC_RAYCASTER_TIMING", "0")))
+        except ValueError:
+            self._semantic_timing_remaining = 0
+        self._semantic_timing_cuda_sync = os.environ.get("SEMANTIC_RAYCASTER_TIMING_CUDA_SYNC", "1") != "0"
+
+    def _timing_now(self) -> float:
+        if self._semantic_timing_cuda_sync and str(self.device).startswith("cuda") and torch.cuda.is_available():
+            torch.cuda.synchronize(device=torch.device(self.device))
+        return time.perf_counter()
 
     def _initialize_warp_meshes(self):
         """Merge all ``mesh_prim_paths`` into one warp mesh and build per-face semantic ids."""
@@ -381,12 +392,18 @@ class SemanticGridRayCaster(RayCaster):
 
     def _refresh_late_semantic_mesh_if_needed(self) -> None:
         """Rebuild the warp mesh if startup-generated semantic ids 1/2 appeared after sensor init."""
-        if self._late_semantic_mesh_refresh_done or self._has_all_configured_semantic_ids():
+        if self._late_semantic_mesh_refresh_done:
+            return
+        if self._has_all_configured_semantic_ids():
+            self._late_semantic_mesh_refresh_done = True
             return
         if not self._semantic_roots_have_geometry():
             return
         self._initialize_warp_meshes()
-        self._late_semantic_mesh_refresh_done = self._has_all_configured_semantic_ids()
+        # Some configs intentionally have an empty optional semantic root, such as flat-small with
+        # large-obstacle count set to zero. Once a late semantic rebuild succeeds, keep that snapshot
+        # instead of traversing USD and rebuilding the mesh on every sensor update.
+        self._late_semantic_mesh_refresh_done = True
 
     def _initialize_rays_impl(self):
         super()._initialize_rays_impl()
@@ -433,9 +450,14 @@ class SemanticGridRayCaster(RayCaster):
             self.update_env_ids(outdated_env_ids)
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
+        timing_enabled = self._semantic_timing_remaining > 0
+        t_start = self._timing_now() if timing_enabled else 0.0
+        t_refresh = t_start
         if self._combined_wp_mesh is None or self._face_semantic_ids is None:
             raise RuntimeError("SemanticGridRayCaster: combined mesh not initialized.")
         self._refresh_late_semantic_mesh_if_needed()
+        if timing_enabled:
+            t_refresh = self._timing_now()
 
         # Inline pose + world rays (matches pre-``_update_ray_infos`` RayCaster; works with XFormPrim / XformPrimView).
         if isinstance(self._view, physx.ArticulationView):
@@ -454,6 +476,8 @@ class SemanticGridRayCaster(RayCaster):
         pos_w += self.drift[env_ids]
         self._data.pos_w[env_ids] = pos_w
         self._data.quat_w[env_ids] = quat_w
+        if timing_enabled:
+            t_pose = self._timing_now()
 
         if _cfg_use_yaw_only_rays(self.cfg):
             ray_starts_w = quat_apply_yaw(quat_w.repeat(1, self.num_rays), self.ray_starts[env_ids])
@@ -463,6 +487,8 @@ class SemanticGridRayCaster(RayCaster):
             ray_starts_w = quat_apply(quat_w.repeat(1, self.num_rays), self.ray_starts[env_ids])
             ray_starts_w += pos_w.unsqueeze(1)
             ray_directions_w = quat_apply(quat_w.repeat(1, self.num_rays), self.ray_directions[env_ids])
+        if timing_enabled:
+            t_rays = self._timing_now()
 
         ray_hits, _, _, face_ids = raycast_mesh(
             ray_starts_w,
@@ -473,10 +499,14 @@ class SemanticGridRayCaster(RayCaster):
             return_normal=False,
             return_face_id=True,
         )
+        if timing_enabled:
+            t_raycast = self._timing_now()
 
         self._data.ray_hits_w[env_ids] = ray_hits
         if hasattr(self, "ray_cast_drift"):
             self._data.ray_hits_w[env_ids, :, 2] += self.ray_cast_drift[env_ids, 2].unsqueeze(-1)
+        if timing_enabled:
+            t_hits_write = self._timing_now()
 
         ne, nr = face_ids.shape
         fid_flat = face_ids.reshape(-1).to(device=self.device, dtype=torch.long)
@@ -487,6 +517,8 @@ class SemanticGridRayCaster(RayCaster):
 
         pos_z = self._data.pos_w[env_ids, 2].unsqueeze(1)
         elev_ray = pos_z - ray_hits[..., 2] - self.cfg.height_scan_offset
+        if timing_enabled:
+            t_semantic = self._timing_now()
 
         if self._semantic_dbg_remaining > 0:
             n_miss = int((fid_flat < 0).sum().item())
@@ -530,3 +562,25 @@ class SemanticGridRayCaster(RayCaster):
         nx, ny = self._grid_nx, self._grid_ny
         self._data.elevation_map[env_ids] = elev_ray.view(ne, nx, ny)
         self._data.semantic_map[env_ids] = sem_ray.view(ne, nx, ny)
+        if timing_enabled:
+            t_maps = self._timing_now()
+            try:
+                env_count = len(env_ids)
+            except TypeError:
+                env_count = int(torch.as_tensor(env_ids).numel())
+            print(
+                "[SemanticGridRayCaster][TIMING] "
+                f"envs={int(env_count)} rays_per_env={int(self.num_rays)} total_rays={int(env_count) * int(self.num_rays)} "
+                f"faces={int(self._face_semantic_ids.shape[0])} grid={int(nx)}x{int(ny)} "
+                f"refresh={(t_refresh - t_start) * 1000.0:.2f}ms "
+                f"pose={(t_pose - t_refresh) * 1000.0:.2f}ms "
+                f"ray_build={(t_rays - t_pose) * 1000.0:.2f}ms "
+                f"raycast={(t_raycast - t_rays) * 1000.0:.2f}ms "
+                f"hits_write={(t_hits_write - t_raycast) * 1000.0:.2f}ms "
+                f"semantic_elev={(t_semantic - t_hits_write) * 1000.0:.2f}ms "
+                f"map_write={(t_maps - t_semantic) * 1000.0:.2f}ms "
+                f"total={(t_maps - t_start) * 1000.0:.2f}ms "
+                f"cuda_sync={self._semantic_timing_cuda_sync}",
+                flush=True,
+            )
+            self._semantic_timing_remaining -= 1

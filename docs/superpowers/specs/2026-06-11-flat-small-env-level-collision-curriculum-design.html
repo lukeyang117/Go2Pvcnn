@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flat-Small Env-Level 碰撞课程设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5e6b77;
+      --line: #d6dde5;
+      --panel: #f7f9fb;
+      --accent: #1d5f99;
+      --ok: #23704a;
+      --warn: #8a5a00;
+      --bad: #9d2f24;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul { margin-top: 8px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #edf2f7;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #edf2f7;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note {
+      background: var(--panel);
+      border-left: 4px solid var(--accent);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .ok {
+      background: #eef8f1;
+      border-left: 4px solid var(--ok);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .guard {
+      background: #fff8eb;
+      border-left: 4px solid var(--warn);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .danger {
+      background: #fff0ee;
+      border-left: 4px solid var(--bad);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Flat-Small Env-Level 碰撞课程设计</h1>
+  <div class="meta">
+    日期：2026-06-11 ｜ 主线：T302q / T302r ｜ 范围：
+    <code>teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance</code>
+  </div>
+
+  <section>
+    <h2>一句话目标</h2>
+    <p>
+      把 flat-small 避障课程从“全局 semantic gate 放行”改成“每个环境在自己的 episode 结束时独立升降级”，并把 TensorBoard curriculum 指标收敛到一个核心值：<code>mean_terrain_level</code>。
+    </p>
+    <div class="note">
+      新设计不再要求一批 reset 里同时完成足够多 episode，也不再用全局 gate 卡住所有环境。每个 env 自己完成一次 episode，就根据这个 episode 的真实结果决定自己的下一个 terrain level。
+    </div>
+  </section>
+
+  <section>
+    <h2>当前问题</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>问题</th>
+          <th>现象</th>
+          <th>后果</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>全局 gate 卡住升级</td>
+          <td><code>semantic_gate_pass=0</code>，<code>flat_move_up_count=0</code></td>
+          <td>单个 env 即使本 episode 走得够远、没有碰撞，也无法升级。</td>
+        </tr>
+        <tr>
+          <td>单次样本太少</td>
+          <td><code>completed_flat_episodes</code> 大约 1 到 2，低于 <code>min_completed_episodes=8</code></td>
+          <td><code>semantic_success_rate</code> 被压成 0，指标像失败，其实是统计窗口不合理。</td>
+        </tr>
+        <tr>
+          <td>指标过多且误导</td>
+          <td>TensorBoard 有 success/gate/collision/count 多个 curriculum 标量</td>
+          <td>训练判断变复杂，且多个指标来自同一批不稳定统计。</td>
+        </tr>
+        <tr>
+          <td>clearance reward 太弱</td>
+          <td>新 run 中非零但 last-20 mean 约 <code>-2.35e-7</code></td>
+          <td>信号存在，但 PPO 几乎感知不到，需要放大量级。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>新课程原则</h2>
+    <ul>
+      <li>课程升级/降级的基本单位是 <strong>一个 env 的一个完整 episode</strong>。</li>
+      <li>只在这个 env episode 结束 / reset 时判断升降级，不按每个 step 升级。</li>
+      <li>小障碍碰撞使用 sticky episode flag：episode 中任意 step 碰过一次，episode 结束时都算碰过。</li>
+      <li>flat env 的避障课程直接进入 env-level <code>move_up</code> / <code>move_down</code>，不再使用全局 semantic gate。</li>
+      <li>TensorBoard 的 curriculum 只保留 <code>mean_terrain_level</code>，和 IsaacLab 原版 terrain curriculum 风格保持一致。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Episode-End 流程</h2>
+    <div class="math">env_i episode 开始
+  ↓
+每个 step 更新 sticky flags:
+  episode_had_small_collision_i
+  episode_had_base_contact_i
+  episode_had_bad_orientation_i
+  ↓
+env_i episode 结束 / reset
+  ↓
+计算 distance_i 和 terrain_move_up_i / terrain_move_down_i
+  ↓
+计算 episode_success_i
+  ↓
+决定 move_up_i / move_down_i
+  ↓
+terrain.update_env_origins(env_ids, move_up, move_down)
+  ↓
+清空 env_i sticky flags，进入下一个 episode</div>
+  </section>
+
+  <section>
+    <h2>升级逻辑</h2>
+    <h3>基础距离条件</h3>
+    <p>沿用 IsaacLab terrain curriculum 的核心判断：</p>
+    <div class="math">distance_i = norm(root_xy_i - env_origin_xy_i)
+terrain_move_up_i = distance_i &gt; terrain_size / 2</div>
+
+    <h3>flat-small 成功条件</h3>
+    <div class="math">episode_success_i =
+    time_out_i
+    AND NOT episode_had_small_collision_i
+    AND NOT episode_had_base_contact_i
+    AND NOT episode_had_bad_orientation_i</div>
+
+    <h3>flat env 升级</h3>
+    <div class="math">flat_move_up_i =
+    terrain_move_up_i
+    AND episode_success_i</div>
+
+    <p>含义是：这个环境本 episode 走得够远、正常结束、没有小障碍碰撞、没有 base contact、没有坏姿态，才让这个环境进入更高障碍数量的 row。</p>
+  </section>
+
+  <section>
+    <h2>降级逻辑</h2>
+    <h3>基础距离降级</h3>
+    <p>沿用原 terrain curriculum 的“走得太少降级”思想：</p>
+    <div class="math">terrain_move_down_i =
+    distance_i &lt; norm(command_xy_i) * max_episode_length_s * 0.5
+    AND NOT terrain_move_up_i</div>
+
+    <h3>推荐第一版降级</h3>
+    <div class="math">flat_move_down_i =
+    terrain_move_down_i
+    OR episode_had_base_contact_i
+    OR episode_had_bad_orientation_i</div>
+
+    <div class="guard">
+      第一版不建议让 <code>small_collision</code> 直接触发降级。小障碍碰撞应该先阻止升级；如果一碰就降级，早期探索会过于保守，环境容易反复掉回最低难度。
+    </div>
+
+    <h3>小障碍碰撞的第一版处理</h3>
+    <div class="math">if episode_had_small_collision_i:
+    block move_up_i
+    do not force move_down_i</div>
+
+    <h3>后续可选开关</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>推荐初值</th>
+          <th>含义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>semantic_move_down_on_small_collision</code></td>
+          <td><code>false</code></td>
+          <td>小障碍碰撞是否立即降级。第一版关闭。</td>
+        </tr>
+        <tr>
+          <td><code>semantic_move_down_on_base_contact</code></td>
+          <td><code>true</code></td>
+          <td>base contact 是否降级。建议开启，因为这是明显失败。</td>
+        </tr>
+        <tr>
+          <td><code>semantic_move_down_on_bad_orientation</code></td>
+          <td><code>true</code></td>
+          <td>坏姿态 / 摔倒是否降级。建议开启。</td>
+        </tr>
+        <tr>
+          <td><code>semantic_move_up_requires_timeout</code></td>
+          <td><code>true</code></td>
+          <td>是否必须正常 time out 结束才能升级。建议开启。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>TensorBoard 策略</h2>
+    <p>按用户要求，curriculum 只保留一个指标：</p>
+    <div class="math">Curriculum/terrain_levels/mean_terrain_level</div>
+    <p>含义：所有 env 当前 terrain level 的平均值。它直接回答课程是否在推进。</p>
+
+    <div class="danger">
+      不再从 curriculum 返回这些 TensorBoard 标量：
+      <code>plane_collision_rate</code>、
+      <code>completed_flat_episodes</code>、
+      <code>successful_full_no_collision_episodes</code>、
+      <code>semantic_success_rate</code>、
+      <code>consecutive_success_count</code>、
+      <code>semantic_gate_pass</code>、
+      <code>flat_move_up_count</code>、
+      <code>non_flat_move_up_count</code>。
+    </div>
+
+    <p>内部仍然保留必要状态用于判断升降级，但不把它们全部打到 TensorBoard。</p>
+  </section>
+
+  <section>
+    <h2>奖励放大设计</h2>
+    <p>
+      当前 <code>semantic_body_part_clearance</code> 已经非零，但量级太小。新设计添加明确缩放参数：
+    </p>
+    <div class="math">semantic_body_part_clearance_scaled =
+    semantic_body_part_clearance_raw * clearance_scale</div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>推荐初值</th>
+          <th>作用</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>clearance_scale</code></td>
+          <td><code>1000.0</code></td>
+          <td>把 <code>1e-7 ~ 1e-6</code> 量级提升到 PPO 更容易感知的范围。</td>
+        </tr>
+        <tr>
+          <td><code>penalty_clip</code></td>
+          <td>保留当前值</td>
+          <td>防止个别极端几何点导致过大惩罚。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>正向影响</h3>
+    <ul>
+      <li>机器人在真正接触 small obstacle 前就能收到负奖励。</li>
+      <li>鼓励提前抬腿、避免 calf/thigh/base 贴近障碍。</li>
+      <li>减少只靠 <code>semantic_contact_collision</code> 的事后稀疏惩罚学习。</li>
+    </ul>
+
+    <h3>风险</h3>
+    <ul>
+      <li>当前 query radius <code>0.50m</code> 和 margin 是 signal-first 参数，比较激进。</li>
+      <li>scale 太大会让策略过度害怕障碍，可能影响速度跟踪和步态。</li>
+      <li>需要短训后检查 <code>track_lin_vel_xy</code>、<code>mean_episode_length</code>、<code>semantic_contact_collision</code>。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>保留边界</h2>
+    <ul>
+      <li>不改 observation shape。</li>
+      <li>不改 action space。</li>
+      <li>不改 MPC planner loss、reference cache、command shaping。</li>
+      <li>不重新打开速度 curriculum。</li>
+      <li>不把 <code>raw/</code> 或 <code>onlyReference/</code> 当作 active code。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>验收方式</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>验收项</th>
+          <th>期望</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>curriculum TensorBoard</td>
+          <td>只保留 <code>mean_terrain_level</code> 作为课程指标。</td>
+        </tr>
+        <tr>
+          <td>课程推进</td>
+          <td>短训中 <code>mean_terrain_level</code> 不再长期塌在 0，能随 env-level 成功逐步上升。</td>
+        </tr>
+        <tr>
+          <td>稳定性</td>
+          <td><code>mean_episode_length</code> 保持接近上限，base contact / bad orientation 不恶化。</td>
+        </tr>
+        <tr>
+          <td>语义避障</td>
+          <td><code>semantic_contact_collision</code> 不上升，理想情况下随训练下降。</td>
+        </tr>
+        <tr>
+          <td>clearance reward</td>
+          <td>放大后保持稳定非零，但不能压坏速度跟踪。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>实现顺序</h2>
+    <ol>
+      <li>新增/调整测试，覆盖 env-level episode 成功升级、small collision 阻止升级、base/bad 降级。</li>
+      <li>把当前全局 semantic gate 移除出 <code>move_up</code> 路径。</li>
+      <li>在 episode sticky flag 中记录 small collision、base contact、bad orientation。</li>
+      <li>修改 flat env 的 <code>move_up</code> / <code>move_down</code> 公式。</li>
+      <li>精简 curriculum return，只保留 <code>mean_terrain_level</code>。</li>
+      <li>添加 clearance reward scale，并用短训验证量级。</li>
+      <li>更新 notes/todo/log，记录行为变化和验证结果。</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

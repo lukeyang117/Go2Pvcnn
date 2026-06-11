@@ -18,10 +18,19 @@
 - MPC manager：[../../Go2Pvcnn/extension/batch_mpc_planner/manager.py](../../Go2Pvcnn/extension/batch_mpc_planner/manager.py)
 - MPC participation selector：[../../Go2Pvcnn/extension/batch_mpc_planner/participation.py](../../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
 - 真实语义 contact reward：[../../Go2Pvcnn/extension/mdp/semantic_contact_rewards.py](../../Go2Pvcnn/extension/mdp/semantic_contact_rewards.py)
+- 近场腿部避障 reward：[../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py](../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py)
 
 当前主线实验名：
 
 - `teacher_elevation_trajectory_mpc_semantic`
+- `teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance`
+
+当前 Gym id：
+
+- 训练：`Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0`
+- 回放：`Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0`
+- 平地小障碍避障训练：`Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-v0`
+- 平地小障碍避障回放：`Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-Play-v0`
 
 当前任务 cfg：
 
@@ -36,6 +45,8 @@
 | `TeacherElevationTrajectoryMpcSemanticEnvCfg` | `scripts/train.py` / Gym 训练 id | 开启 | 正式 RL 训练；MPC reference cache、world-frame foot reward、semantic contact reward 都参与训练。 |
 | `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` | `scripts/play.py` / Gym Play id | 关闭 | 普通 policy checkpoint 回放；不 attach MPC trajectory manager，不启用 `reference_foot_pos` 和 `semantic_contact_collision` reward。 |
 | `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` | `extension/viz/go2_foostep_planner.py` | 开启 | 交互/诊断 viewer；保留 MPC 规划、marker、runtime diagnostics 和低矮障碍物调试行为。 |
+| `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg` | `scripts/train.py` / flat-small Gym 训练 id | 开启 | 从现有 teacher checkpoint 继续训练平地小障碍避障；保留原 observation/action shape，新增 `semantic_body_part_clearance` reward，并把小障碍 curriculum 改为 episode-level 成功门。 |
+| `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY` | `scripts/play.py` / flat-small Gym Play id | 关闭 | 回放 flat-small 训练出的 policy；不 attach MPC，不启用 reference/contact reward。 |
 
 当前训练 cfg 的关键合同：
 
@@ -49,6 +60,16 @@
 - `mpc_planner_cfg.reference_participation.exclude_pairs` 是黑名单 AND 逻辑：同时满足 terrain name 和 terrain row 的 env 不参与 MPC 抽签，只满足其中一个条件仍可参与。
 - `reference_foot_pos_reward()` 使用 world-frame foot tracking。
 - 语义碰撞 reward 使用两个全局真实 contact sensor：`semantic_contact_small` 和 `semantic_contact_large`。
+
+flat-small avoidance 训练 cfg 额外合同：
+
+- `experiment_name = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"`
+- 只使用 flat terrain。
+- `semantic_obstacle_curriculum.plane_counts` 的 small 数量是 `8,16,24,32,40,48,56,64,72,80`，large 全部是 `0`。
+- 新增 reward `semantic_body_part_clearance`，使用当前 IsaacLab 的 `foot/calf/thigh` body pose 查询 scanner 缓存的 semantic/elevation map。
+- 近场腿部避障 reward 直接读取当前 IsaacLab `semantic_height_scanner.data.elevation_map/semantic_map`，并用和 MPC 一致的 terrain query helper 按当前 scanner pose 查询；不再维护 reward 私有的地图 root anchor 缓存。
+- curriculum 使用真实 `semantic_contact_small.data.force_matrix_w` 做 episode-level 小障碍碰撞记录；只有完整 timeout episode 且没有 small collision、base contact、bad orientation 才算成功。
+- 训练 cfg 仍然需要 MPC trajectory manager，因为继承了 `reference_foot_pos` reward；`trajectory_manager_factory.py` 已允许这个新 experiment attach manager。
 
 当前 PLAY cfg 的关键合同：
 
@@ -161,6 +182,62 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   --experiment teacher_elevation_trajectory_mpc_semantic \
   --planner-backend mpc
 ```
+
+## 平地小障碍避障训练命令
+
+新任务使用这个 experiment：
+
+```text
+teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance
+```
+
+最小 headless smoke：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 16 \
+  --max_iterations 1 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --planner-backend mpc
+```
+
+从已经训练好的 teacher 模型继续训练：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1024 \
+  --max_iterations 5000 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --planner-backend mpc \
+  --resume \
+  --load_run /mnt/mydisk/lhy/testPvcnnWithIsaacsim/logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic/2026-06-04_18-16-07 \
+  --load_checkpoint model_14000.pt
+```
+
+短训 / 调参时可以先用较小 env 数：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 256 \
+  --max_iterations 200 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --planner-backend mpc \
+  --resume \
+  --load_run /mnt/mydisk/lhy/testPvcnnWithIsaacsim/logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic/2026-06-04_18-16-07 \
+  --load_checkpoint model_14000.pt
+```
+
+注意：
+
+- 这里 `--load_run` 用绝对路径，是因为 warm-start checkpoint 在旧 experiment 目录下，而新训练输出会写到 `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/<timestamp>/`。
+- 旧 run 里如果没有 `model_最新.pt`，必须显式写 `--load_checkpoint model_14000.pt` 或其它真实存在的 checkpoint。
+- 这个 warm start 已做过 16 env / 1 iteration smoke，policy/critic/action shape 与旧模型兼容。
 
 分布式训练：
 
@@ -310,6 +387,27 @@ CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 300s \
   --output-dir logs/mpc_policy_eval/small_collision_smoke
 ```
 
+flat-small avoidance 的 small-collision 行为评估：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONUNBUFFERED=1 timeout 600s \
+  /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/mpc_policy_eval.py \
+  --mode small_collision \
+  --headless \
+  --device cuda:0 \
+  --num-envs 100 \
+  --num-rounds 5 \
+  --max-steps 2000 \
+  --run-dir <flat-small-run-dir> \
+  --checkpoint <checkpoint.pt> \
+  --command-mode fixed \
+  --command "1.0 0.0 0.0" \
+  --small-count-per-tile 80 \
+  --output-dir logs/mpc_policy_eval/flat_small_avoidance_smoke
+```
+
+当前 caveat：`mpc_policy_eval.py` 的 checkpoint lookup 仍默认从 `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic/<run-dir>/` 查找。评估 flat-small 新 experiment 训练出的 checkpoint 前，需要先确认 eval 脚本已支持 flat-small experiment 路径，或者临时把目标 checkpoint 放到它当前查找的目录结构下。这个 caveat 只影响 eval 脚本，不影响 `train.py` 和 `play.py`。
+
 可视化 / livestream tracking：
 
 ```bash
@@ -424,12 +522,47 @@ Play Complete - Timesteps: 5
 [Planner] Attached ... trajectory manager
 ```
 
+回放 flat-small avoidance 训练出的模型：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --run_dir <flat-small-run-dir> \
+  --checkpoint <checkpoint.pt> \
+  --max-steps 200 \
+  --debug-livestream
+```
+
+这里 `<flat-small-run-dir>` 是新 experiment 目录下的 timestamp，例如：
+
+```text
+logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/<flat-small-run-dir>/<checkpoint.pt>
+```
+
+如果只是想看旧 teacher 模型本身，仍然用：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1 \
+  --experiment teacher_elevation_trajectory_mpc_semantic \
+  --run_dir 2026-06-04_18-16-07 \
+  --checkpoint model_14000.pt \
+  --max-steps 200
+```
+
 ## 关键参数解释
 
 训练 / play 侧：
 
 - `--experiment teacher_elevation_trajectory_mpc_semantic`
   进入 MPC + semantic grid trajectory reward 训练 / 回放路径。
+- `--experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance`
+  进入平地小障碍避障 continuation 路径；训练时保留 MPC reference reward，并额外启用近场 body-part clearance reward。
 - `--planner-backend mpc`
   训练侧使用 [../../Go2Pvcnn/extension/batch_mpc_planner](../../Go2Pvcnn/extension/batch_mpc_planner)。普通 `play.py` 现在不依赖这个参数启动 MPC。
 - `--num_envs`
@@ -483,6 +616,8 @@ env cfg 侧关键字段：
 - `semantic_contact_collision` reward 使用 `semantic_contact_small` / `semantic_contact_large` 两个全局 sensor。
 - `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` 会关闭 MPC/reference/contact reward。
 - `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` 会重新开启 MPC/reference/contact，并把 viewer 诊断 batch 调到 `4096`。
+- `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg` 继承主训练 cfg，保持 observation/action ABI，额外启用 flat-only terrain、小障碍数量 curriculum、`semantic_body_part_clearance` reward、episode-level small collision gate。
+- `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY` 继承 flat-small cfg 的回放环境，但关闭 MPC/reference/contact reward，用于 policy playback。
 
 这些字段主要在：
 
@@ -490,7 +625,7 @@ env cfg 侧关键字段：
 
 ## 当前已验证证据
 
-截至 `2026-06-02` 的验证：
+截至 `2026-06-10` 的验证：
 
 - focused local tests：`7 passed`
 - backend / parametric tests：`140 passed, 1 warning`
@@ -500,6 +635,10 @@ env cfg 侧关键字段：
 - low-small full matrix：`20` rows，`12` crossing-covered rows，FK semantic collision `0`，max crossing FK error `0.0634m`
 - PLAY / VIEWER split：PLAY headless 使用 `model_14000.pt` 完成 `5` steps，且没有 attach MPC trajectory manager。
 - PLAY / VIEWER split 后 low-small 回归：`5` rows，`2` crossing-covered rows，FK semantic collision `0`，max crossing FK error `0.0416m`
+- flat-small avoidance focused local regression：`31 passed`
+- flat-small avoidance production `py_compile`：exit `0`
+- flat-small avoidance fresh train smoke：16 env / 1 iteration，exit `0`
+- flat-small avoidance 从 `2026-06-04_18-16-07/model_14000.pt` resume smoke：16 env / 1 iteration，exit `0`
 
 记录：
 
@@ -507,6 +646,7 @@ env cfg 侧关键字段：
 - [../log/2026-05-30-2114-t302l-rl-1024-64-performance.md](../log/2026-05-30-2114-t302l-rl-1024-64-performance.md)
 - [../log/2026-05-30-2123-t302l-final-verification.md](../log/2026-05-30-2123-t302l-final-verification.md)
 - [../log/2026-06-02-0006-t302l-play-viewer-cfg-split.md](../log/2026-06-02-0006-t302l-play-viewer-cfg-split.md)
+- [../log/2026-06-10-2035-t302q-flat-small-local-implementation-and-smoke.md](../log/2026-06-10-2035-t302q-flat-small-local-implementation-and-smoke.md)
 
 已知 caveat：
 
@@ -524,6 +664,7 @@ env cfg 侧关键字段：
 - 说明当前路径没有挂上 trajectory manager
 - 对训练 cfg / viewer cfg 来说，这不是允许的正常路径
 - 对 `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` / `scripts/play.py` 来说，普通回放本来就不挂 `_trajectory_manager`
+- 对 `teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance` 训练来说，也应该挂上 trajectory manager；如果报这个错，先检查 `extension/trajectory_manager_factory.py` 的 allowlist 是否包含 flat-small experiment。
 
 `horizon_s must equal the fixed 1.0s contract`
 

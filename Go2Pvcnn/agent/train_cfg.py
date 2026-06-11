@@ -4,7 +4,11 @@
 def get_train_cfg(experiment_name: str) -> dict:
     """Return the RSL-RL config for the active semantic MPC experiment."""
 
-    if experiment_name != "teacher_elevation_trajectory_mpc_semantic":
+    supported = {
+        "teacher_elevation_trajectory_mpc_semantic",
+        "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+    }
+    if experiment_name not in supported:
         raise ValueError(f"Unknown experiment: {experiment_name}")
     return _teacher_elevation_trajectory_mpc_semantic_train_cfg()
 

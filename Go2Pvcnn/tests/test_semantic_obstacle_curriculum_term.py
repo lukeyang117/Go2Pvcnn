@@ -112,6 +112,9 @@ class _Env:
         cfg,
         root_pos_w: torch.Tensor | None = None,
         command: torch.Tensor | None = None,
+        time_out: torch.Tensor | None = None,
+        base_contact: torch.Tensor | None = None,
+        bad_orientation: torch.Tensor | None = None,
     ):
         self.device = "cpu"
         self.num_envs = int(terrain_types.numel())
@@ -125,6 +128,13 @@ class _Env:
         self.unwrapped = self
         self.max_episode_length_s = 20.0
         self.command_manager = types.SimpleNamespace(get_command=lambda _name: command)
+        self.time_out_buf = torch.ones(self.num_envs, dtype=torch.bool) if time_out is None else time_out
+        self.base_contact_buf = (
+            torch.zeros(self.num_envs, dtype=torch.bool) if base_contact is None else base_contact
+        )
+        self.bad_orientation_buf = (
+            torch.zeros(self.num_envs, dtype=torch.bool) if bad_orientation is None else bad_orientation
+        )
 
 
 class _Cfg:
@@ -172,7 +182,21 @@ def test_plane_env_mask_from_terrain(monkeypatch) -> None:
     assert mask.tolist() == [True, False, True, False]
 
 
-def test_terrain_gate_blocks_flat_move_up_but_not_non_flat_when_gate_closed(monkeypatch) -> None:
+def test_plane_env_mask_treats_single_flat_subterrain_columns_as_flat(monkeypatch) -> None:
+    curriculums = _load_curriculums_module(monkeypatch)
+
+    terrain_types = torch.arange(20, dtype=torch.long)
+
+    mask = curriculums.plane_env_mask_from_terrain(
+        terrain_types,
+        ("flat",),
+        ("flat",),
+    )
+
+    assert mask.tolist() == [True] * 20
+
+
+def test_env_level_curriculum_single_successful_flat_episode_moves_up(monkeypatch) -> None:
     from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
 
     curriculums = _load_curriculums_module(monkeypatch)
@@ -183,12 +207,9 @@ def test_terrain_gate_blocks_flat_move_up_but_not_non_flat_when_gate_closed(monk
         center_safety_half_extent_m=(0.8, 0.4),
         min_spacing_clearance_m=(0.2, 0.1),
         tile_margin_m=(0.5, 0.4),
-        plane_collision_rate_threshold=0.25,
-        consecutive_success_required=2,
     )
     small = _force(4)
     large = _force(4)
-    small[1, 0, 0, 0] = 4.0  # non-flat collision must not count
     env = _Env(
         terrain_types=torch.tensor([0, 1, 0, 1]),
         small=small,
@@ -196,18 +217,15 @@ def test_terrain_gate_blocks_flat_move_up_but_not_non_flat_when_gate_closed(monk
         cfg=_Cfg(cfg),
     )
 
-    out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
+    out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0])
 
-    assert out["plane_env_count"].item() == 2.0
-    assert out["plane_collision_rate"].item() == 0.0
-    assert out["consecutive_success_count"].item() == 1.0
-    assert out["semantic_gate_pass"].item() == 0.0
-    assert env.scene.terrain.terrain_levels.tolist() == [0, 1, 0, 1]
+    assert set(out) == {"mean_terrain_level"}
+    assert env.scene.terrain.terrain_levels.tolist() == [1, 0, 0, 0]
     assert not hasattr(env, "_semantic_obstacle_curriculum_level")
     assert not hasattr(env.scene.terrain.cfg, "semantic_obstacle_curriculum_level")
 
 
-def test_terrain_gate_allows_flat_move_up_after_consecutive_success(monkeypatch) -> None:
+def test_env_level_curriculum_small_collision_blocks_flat_move_up_only(monkeypatch) -> None:
     from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
 
     curriculums = _load_curriculums_module(monkeypatch)
@@ -218,23 +236,23 @@ def test_terrain_gate_allows_flat_move_up_after_consecutive_success(monkeypatch)
         center_safety_half_extent_m=(0.8, 0.4),
         min_spacing_clearance_m=(0.2, 0.1),
         tile_margin_m=(0.5, 0.4),
-        plane_collision_rate_threshold=0.25,
-        consecutive_success_required=2,
     )
+    small = _force(4)
+    small[0, 0, 0, 0] = 4.0
     env = _Env(
         terrain_types=torch.tensor([0, 1, 0, 1]),
-        small=_force(4),
+        small=small,
         large=_force(4),
         cfg=_Cfg(cfg),
     )
 
-    curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
 
-    assert out["semantic_gate_pass"].item() == 1.0
-    assert env.scene.terrain.terrain_levels.tolist() == [1, 2, 1, 2]
-    assert out["flat_move_up_count"].item() == 2.0
-    assert out["non_flat_move_up_count"].item() == 2.0
+    assert set(out) == {"mean_terrain_level"}
+    assert env.scene.terrain.terrain_levels.tolist() == [0, 1, 1, 1]
+    _, move_up, move_down = env.scene.terrain.update_calls[-1]
+    assert move_up.tolist() == [False, True, True, True]
+    assert move_down.tolist() == [False, False, False, False]
 
 
 def test_terrain_gate_accepts_slice_env_ids(monkeypatch) -> None:
@@ -248,8 +266,6 @@ def test_terrain_gate_accepts_slice_env_ids(monkeypatch) -> None:
         center_safety_half_extent_m=(0.8, 0.4),
         min_spacing_clearance_m=(0.2, 0.1),
         tile_margin_m=(0.5, 0.4),
-        plane_collision_rate_threshold=0.25,
-        consecutive_success_required=1,
     )
     env = _Env(
         terrain_types=torch.tensor([0, 1, 0, 1]),
@@ -260,11 +276,11 @@ def test_terrain_gate_accepts_slice_env_ids(monkeypatch) -> None:
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, slice(None))
 
-    assert out["semantic_gate_pass"].item() == 1.0
+    assert set(out) == {"mean_terrain_level"}
     assert env.scene.terrain.terrain_levels.tolist() == [1, 1, 1, 1]
 
 
-def test_terrain_gate_flat_collision_resets_success_and_blocks_flat(monkeypatch) -> None:
+def test_env_level_curriculum_base_contact_and_bad_orientation_force_flat_move_down(monkeypatch) -> None:
     from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
 
     curriculums = _load_curriculums_module(monkeypatch)
@@ -275,21 +291,77 @@ def test_terrain_gate_flat_collision_resets_success_and_blocks_flat(monkeypatch)
         center_safety_half_extent_m=(0.8, 0.4),
         min_spacing_clearance_m=(0.2, 0.1),
         tile_margin_m=(0.5, 0.4),
-        plane_collision_rate_threshold=0.25,
-        consecutive_success_required=2,
     )
-    small = _force(4)
-    small[0, 0, 0, 0] = 4.0
+    root_pos_w = torch.zeros(4, 3)
+    root_pos_w[:, 0] = 1.0
     env = _Env(
-        terrain_types=torch.tensor([0, 1, 0, 1]),
-        small=small,
+        terrain_types=torch.tensor([0, 0, 1, 1]),
+        small=_force(4),
         large=_force(4),
         cfg=_Cfg(cfg),
+        root_pos_w=root_pos_w,
+        base_contact=torch.tensor([True, False, False, False]),
+        bad_orientation=torch.tensor([False, True, False, False]),
+    )
+    env.scene.terrain.terrain_levels[:] = 2
+
+    out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
+
+    assert set(out) == {"mean_terrain_level"}
+    _, move_up, move_down = env.scene.terrain.update_calls[-1]
+    assert move_up.tolist() == [False, False, True, True]
+    assert move_down.tolist() == [True, True, False, False]
+
+
+def test_env_level_curriculum_requires_timeout_for_flat_move_up(monkeypatch) -> None:
+    from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+
+    curriculums = _load_curriculums_module(monkeypatch)
+
+    cfg = SemanticObstacleCurriculumCfg(
+        plane_counts=(SemanticObstacleCount(0, 0), SemanticObstacleCount(1, 0)),
+        non_plane_counts=(SemanticObstacleCount(0, 0), SemanticObstacleCount(1, 0)),
+        center_safety_half_extent_m=(0.8, 0.4),
+        min_spacing_clearance_m=(0.2, 0.1),
+        tile_margin_m=(0.5, 0.4),
+    )
+    env = _Env(
+        terrain_types=torch.tensor([0, 0, 1, 1]),
+        small=_force(4),
+        large=_force(4),
+        cfg=_Cfg(cfg),
+        time_out=torch.tensor([True, False, True, True]),
+        base_contact=torch.tensor([False, False, False, False]),
+        bad_orientation=torch.tensor([False, True, False, False]),
     )
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
 
-    assert out["plane_collision_rate"].item() == 0.5
-    assert out["consecutive_success_count"].item() == 0.0
-    assert out["semantic_gate_pass"].item() == 0.0
-    assert env.scene.terrain.terrain_levels.tolist() == [0, 1, 0, 1]
+    assert set(out) == {"mean_terrain_level"}
+    assert env.scene.terrain.terrain_levels.tolist() == [1, 0, 1, 1]
+
+
+def test_terrain_gate_counts_only_passed_env_ids_as_completed_episodes(monkeypatch) -> None:
+    from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+
+    curriculums = _load_curriculums_module(monkeypatch)
+
+    cfg = SemanticObstacleCurriculumCfg(
+        plane_counts=(SemanticObstacleCount(0, 0), SemanticObstacleCount(1, 0)),
+        non_plane_counts=(SemanticObstacleCount(0, 0), SemanticObstacleCount(1, 0)),
+        center_safety_half_extent_m=(0.8, 0.4),
+        min_spacing_clearance_m=(0.2, 0.1),
+        tile_margin_m=(0.5, 0.4),
+    )
+    env = _Env(
+        terrain_types=torch.tensor([0, 0, 0, 1]),
+        small=_force(4),
+        large=_force(4),
+        cfg=_Cfg(cfg),
+        time_out=torch.tensor([True, True, True, True]),
+    )
+
+    out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 2])
+
+    assert set(out) == {"mean_terrain_level"}
+    assert env.scene.terrain.terrain_levels.tolist() == [1, 0, 1, 0]

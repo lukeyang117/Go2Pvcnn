@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go2 几何体语义 clearance reward 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5f6b76;
+      --line: #d7dde3;
+      --panel: #f7f9fb;
+      --accent: #245b9f;
+      --ok: #247047;
+      --warn: #8a5a00;
+      --bad: #9f2f24;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      color: var(--ink);
+      background: #fff;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 28px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul { margin-top: 8px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+      background: #eef2f6;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow: auto;
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .note {
+      background: var(--panel);
+      border-left: 4px solid var(--accent);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .ok {
+      background: #eef8f1;
+      border-left: 4px solid var(--ok);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .guard {
+      background: #fff8eb;
+      border-left: 4px solid var(--warn);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .danger {
+      background: #fff0ee;
+      border-left: 4px solid var(--bad);
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    .math {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      background: #f4f6f8;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Go2 几何体语义 clearance reward 设计</h1>
+  <div class="meta">
+    日期：2026-06-11 ｜ 主线：T302q flat-small avoidance ｜ 范围：
+    <code>semantic_body_part_clearance_reward</code> 的下一版几何体拟合设计
+  </div>
+
+  <section>
+    <h2>1. 背景和问题</h2>
+    <p>
+      当前 flat-small 训练中，<code>semantic_contact_collision</code> 有稀疏碰撞信号，
+      但新增的 <code>semantic_body_part_clearance</code> 在 TensorBoard 中全程为 0。
+      这不是物理接触传感器失效，而是当前 clearance reward 只查询 foot/calf/thigh 的少量中心采样点；
+      如果这些点没有刚好落到 scanner semantic map 的 small cell 上，就不会产生任何惩罚。
+    </p>
+    <div class="note">
+      <strong>目标：</strong>把 clearance reward 从“点命中”改成“几何包络邻域命中”。
+      它仍然只使用当前 IsaacLab 机器人姿态和当前 scanner elevation/semantic map，不修改 MPC reference、MPC loss 或 contact sensor。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. USD 尺寸依据</h2>
+    <p>
+      本设计参考本地 Go2 USD：
+      <code>assets/teacher_object/Robots/Unitree/Go2/go2.usd</code> 和
+      <code>assets/teacher_object/Robots/Unitree/Go2/Props/instanceable_meshes.usd</code>。
+      项目配置中的 Go2 资产入口位于
+      <code>Go2Pvcnn/go2_pvcnn/assets/__init__.py</code>。
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>部件</th>
+          <th>USD 证据</th>
+          <th>设计解释</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>foot</td>
+          <td>collision sphere radius = <code>0.022m</code>；visual size 约 <code>0.045 x 0.040 x 0.039m</code></td>
+          <td>真实 foot 可以直接按 sphere 近似，但 reward 查询半径应略膨胀，用于提前避障。</td>
+        </tr>
+        <tr>
+          <td>thigh</td>
+          <td>collision cube full size 约 <code>0.213 x 0.0245 x 0.034m</code>；visual size 约 <code>0.097 x 0.073 x 0.278m</code></td>
+          <td>collision cube 很瘦；为了训练信号不漏检，reward 几何应取 collision 和 visual 之间的保守半径。</td>
+        </tr>
+        <tr>
+          <td>calf</td>
+          <td>visual size 约 <code>0.058 x 0.040 x 0.267m</code>；未读到有效 collision primitive</td>
+          <td>小腿是小障碍碰撞的主要部位，采用 capsule，半径参考 visual 横截面半对角并稍微膨胀。</td>
+        </tr>
+        <tr>
+          <td>base</td>
+          <td>collision box full size 约 <code>0.376 x 0.0935 x 0.114m</code>；visual size 约 <code>0.460 x 0.194 x 0.186m</code></td>
+          <td>base 用 oriented footprint box 近似，reward 半尺寸略大于 collision box 但小于 visual box。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      关节 / link 原点还给出腿部长度约束：thigh 到 calf 约 <code>0.213m</code>，
+      calf 到 foot 约 <code>0.213m</code>，foot 总 z 约 <code>-0.426m</code>。
+    </p>
+  </section>
+
+  <section>
+    <h2>3. 几何拟合方案</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>部件</th>
+          <th>几何体</th>
+          <th>轴线 / 位置</th>
+          <th>建议参数</th>
+          <th>用途</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>foot</td>
+          <td>sphere</td>
+          <td>每个 foot body center</td>
+          <td><code>physical_radius=0.022m</code>；<code>query_radius=0.035m</code></td>
+          <td>检测足端或足端附近是否接近 small obstacle，避免 swing foot 扫到障碍。</td>
+        </tr>
+        <tr>
+          <td>calf / shank</td>
+          <td>capsule</td>
+          <td><code>calf body center -> foot body center</code></td>
+          <td><code>capsule_radius=0.040m</code>；<code>query_radius=0.045m</code>；<code>sections=7</code></td>
+          <td>主避障对象；小障碍最容易撞到这里。</td>
+        </tr>
+        <tr>
+          <td>thigh</td>
+          <td>capsule</td>
+          <td><code>thigh body center -> calf body center</code></td>
+          <td><code>capsule_radius=0.040m</code>；<code>query_radius=0.045m</code>；<code>sections=7</code></td>
+          <td>辅助避免较高 small obstacle 或腿摆动过低。</td>
+        </tr>
+        <tr>
+          <td>base</td>
+          <td>oriented footprint box</td>
+          <td>root pose 下的 body-frame box footprint</td>
+          <td><code>half_x=0.20m</code>；<code>half_y=0.06m</code>；<code>half_z=0.07m</code>；<code>grid=5x3</code>；<code>query_radius=0.03m</code></td>
+          <td>防止底盘擦碰 small obstacle，权重低于 calf，避免过度抬身。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="guard">
+      <strong>重要解释：</strong>
+      <code>sections=7</code> 不是退回“7 个点检测”。每个 section 是 capsule 轴线上的一个横截面圆盘；
+      每个圆盘再查半径邻域内的 semantic/elevation cells。7 个圆盘的并集近似一条 capsule 的投影覆盖区域。
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 地图查询模型</h2>
+    <p>
+      scanner 提供的是离散二维 map：
+    </p>
+    <pre><code>semantic_map:  [N, H, W]
+elevation_map: [N, H, W]</code></pre>
+    <p>
+      因此 reward 不需要做 USD mesh 与 capsule 的连续相交。每个几何体转换成一组固定数量的 world-frame
+      <code>query_xy</code>，再通过现有 MPC terrain query helper 一次性读取 semantic id 和 height。
+    </p>
+    <div class="math">small_mask = semantic_at(terrain, query_xy) == 1
+obstacle_z = max(height_at(terrain, query_xy) where small_mask)
+body_surface_z = primitive_center_or_section_z - primitive_vertical_radius
+deficit = relu(obstacle_z + margin - body_surface_z)
+penalty = deficit^2</div>
+    <p>
+      如果一个几何体的邻域没有 small semantic cell，则该几何体在该 env 上的 penalty 为 0。
+      如果有 small semantic cell，但 body surface 已经高过障碍高度加 margin，也为 0。
+    </p>
+  </section>
+
+  <section>
+    <h2>5. 并行和速度设计</h2>
+    <p>
+      训练 hot path 必须固定 shape、全 GPU batch，不允许 per-env Python loop，不遍历 USD prim，不做 CPU 几何库。
+      所有 query 先拼成规则张量，再调用一次或少数几次 <code>semantic_at()</code> / <code>height_at()</code>。
+    </p>
+    <pre><code># 概念 shape
+query_xy: [N, total_queries, 2]
+semantic: [N, total_queries]
+height:   [N, total_queries]</code></pre>
+    <table>
+      <thead>
+        <tr>
+          <th>策略</th>
+          <th>做法</th>
+          <th>收益</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>固定查询数量</td>
+          <td>foot / calf / thigh / base 的 section 数、邻域 offset 数都固定</td>
+          <td>避免 ragged tensor 和动态分支，便于 PPO 稳定运行。</td>
+        </tr>
+        <tr>
+          <td>offset 缓存</td>
+          <td>每个半径的圆盘 offset 在第一次调用时缓存到 device 上</td>
+          <td>每步只做中心点加 offset，不重复 meshgrid。</td>
+        </tr>
+        <tr>
+          <td>按部件分组</td>
+          <td>必要时 foot、leg、base 分三组 query</td>
+          <td>控制 <code>grid_sample</code> 临时张量大小，便于 profile。</td>
+        </tr>
+        <tr>
+          <td>GPU reduce</td>
+          <td>使用 <code>any</code>、<code>max</code>、<code>sum</code> 做 per-part / per-env 聚合</td>
+          <td>避免 Python 聚合循环。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>5.1 查询规模估算</h3>
+    <p>
+      第一版建议把圆盘 offset 控制在 <code>K=13</code> 左右：
+    </p>
+    <pre><code>foot:  4 legs * 1 section * 13 = 52 queries/env
+calf:  4 legs * 7 sections * 13 = 364 queries/env
+thigh: 4 legs * 7 sections * 13 = 364 queries/env
+base:  15 footprint samples * 9-13 = 135-195 queries/env
+
+total: 约 915-975 queries/env</code></pre>
+    <p>
+      1024 env 时约 94 万到 100 万 query 点。这个数量比旧的 20 点多很多，
+      但它是固定 shape 的 GPU grid sampling，不应退化成 Python 循环。
+      如果 profile 显示过慢，优先降低 <code>K</code> 或 base footprint 密度，而不是改变数据流。
+    </p>
+  </section>
+
+  <section>
+    <h2>6. Reward 聚合</h2>
+    <p>
+      推荐把各部件 penalty 先分别算成 <code>[N]</code>，再加权聚合：
+    </p>
+    <pre><code>reward = -clip(
+    foot_weight  * foot_penalty
+  + calf_weight  * calf_penalty
+  + thigh_weight * thigh_penalty
+  + base_weight  * base_penalty,
+  0.0,
+  penalty_clip,
+)</code></pre>
+    <table>
+      <thead>
+        <tr>
+          <th>部件</th>
+          <th>初始权重</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>foot</td>
+          <td><code>0.5</code></td>
+          <td>避免过度惩罚正常落脚；swing foot 可以后续加高权重。</td>
+        </tr>
+        <tr>
+          <td>calf</td>
+          <td><code>2.0</code></td>
+          <td>主要避障对象，优先保证小腿绕过 low-small。</td>
+        </tr>
+        <tr>
+          <td>thigh</td>
+          <td><code>1.5</code></td>
+          <td>防止腿部上段低扫障碍，但不要超过 calf。</td>
+        </tr>
+        <tr>
+          <td>base</td>
+          <td><code>1.0</code></td>
+          <td>防止底盘擦碰；若出现过度抬身或保守绕行，优先降低 base 权重。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>7. 验证计划</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>验证内容</th>
+          <th>通过标准</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>纯张量测试</td>
+          <td>构造 semantic/elevation map，验证 sphere、capsule、base footprint 能在邻域覆盖 small cell 时产生 penalty</td>
+          <td>旧点采样漏检的 fixture，新几何 reward 非 0。</td>
+        </tr>
+        <tr>
+          <td>shape / 性能测试</td>
+          <td>1024 env 模拟 map 和 body pose，检查 query tensor shape 和耗时</td>
+          <td>无 per-env loop；输出 shape 为 <code>[N]</code>；无 NaN/Inf。</td>
+        </tr>
+        <tr>
+          <td>真实 IsaacLab probe</td>
+          <td>flat-small 64/1024 env，读取 scanner map、body pose、reward 非零率</td>
+          <td>scanner 有 small id 且几何邻域靠近障碍时 reward 能触发。</td>
+        </tr>
+        <tr>
+          <td>短训练 TensorBoard</td>
+          <td>resume checkpoint 跑短训，观察 <code>semantic_body_part_clearance</code></td>
+          <td>该项不再全程为 0；不显著拖慢 collection。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>8. 风险和边界</h2>
+    <div class="danger">
+      <strong>不要做：</strong>
+      不做真实 mesh-capsule 相交，不遍历每个障碍物 prim，不在 reward hot path 中调用 USD/PhysX 几何查询。
+    </div>
+    <ul>
+      <li>如果 query 半径过大，策略可能过度保守，表现为绕行过度或抬腿过高。</li>
+      <li>如果 base 权重过高，可能诱导机器人抬身或改变正常 gait；base 初始权重应低于 calf。</li>
+      <li>如果 <code>K</code> 太大，<code>grid_sample</code> 会成为新瓶颈；第一版优先用 <code>K=13</code>。</li>
+      <li>该 reward 仍然是 scanner-map 近似，不替代真实 <code>semantic_contact_collision</code>。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. 推荐第一版参数</h2>
+    <pre><code>foot:
+  sphere_radius_m: 0.022
+  query_radius_m: 0.035
+  weight: 0.5
+
+calf:
+  capsule_radius_m: 0.040
+  query_radius_m: 0.045
+  sections: 7
+  weight: 2.0
+
+thigh:
+  capsule_radius_m: 0.040
+  query_radius_m: 0.045
+  sections: 7
+  weight: 1.5
+
+base:
+  half_extents_m: [0.20, 0.06, 0.07]
+  footprint_grid: [5, 3]
+  query_radius_m: 0.03
+  weight: 1.0
+
+global:
+  neighbor_offsets: cached per radius
+  penalty_clip: 1.0
+  no per-env Python loop</code></pre>
+    <div class="ok">
+      <strong>预期效果：</strong>
+      <code>semantic_contact_collision</code> 继续作为真实碰撞惩罚；
+      新几何 clearance reward 在碰撞前的近场阶段提供更密集的训练信号，解决旧版“有真实碰撞但 clearance 全 0”的信号断裂。
+    </div>
+  </section>
+</main>
+</body>
+</html>

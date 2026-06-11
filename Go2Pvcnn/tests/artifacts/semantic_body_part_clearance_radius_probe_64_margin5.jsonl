@@ -1,0 +1,6 @@
+{"margin_scale": 5.0, "num_envs": 64, "radii": [0.5], "scanner_shape": [64, 151, 151], "small_cell_count": 199, "steps": 1, "type": "header"}
+{"event": "before_step", "step": 0, "type": "trace"}
+{"event": "after_step", "small_cell_count": 199, "step": 0, "type": "trace"}
+{"event": "before_reward", "radius_m": 0.5, "step": 0, "type": "trace"}
+{"body_query_count": 311040, "body_small_hit_count": 13, "body_small_positive_deficit_count": 6, "calf_max_deficit_m": 0.22176508605480194, "calf_query_count": 145152, "calf_small_hit_count": 6, "calf_small_positive_deficit_count": 6, "elapsed_ms": 12.917056679725647, "foot_max_deficit_m": 0.022222310304641724, "foot_query_count": 20736, "foot_small_hit_count": 4, "foot_small_positive_deficit_count": 0, "max_reward": -0.0, "mean_reward": -8.067574412962131e-07, "min_reward": -5.163247624295764e-05, "nonzero_env_count": 1, "nonzero_env_rate": 0.015625, "radius_m": 0.5, "step": 0, "thigh_max_deficit_m": 0.07230308651924133, "thigh_query_count": 145152, "thigh_small_hit_count": 3, "thigh_small_positive_deficit_count": 0}
+{"max_nonzero_env_count": 1, "max_nonzero_env_rate": 0.015625, "mean_elapsed_ms": 12.917056679725647, "min_reward": -5.163247624295764e-05, "num_envs": 64, "radii": [0.5], "steps": 1, "type": "summary"}

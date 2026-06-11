@@ -10,6 +10,7 @@ from isaaclab.managers import SceneEntityCfg
 
 from extension.semantic_curriculum import (
     SemanticObstacleCurriculumState,
+    update_episode_small_collision_from_forces,
 )
 
 if TYPE_CHECKING:
@@ -94,6 +95,17 @@ def semantic_collision_mask_from_force_matrices(
     return torch.logical_or(small_hit.any(dim=(1, 2)), large_hit.any(dim=(1, 2)))
 
 
+def small_semantic_collision_mask_from_force_matrix(
+    small_force_matrix_w: torch.Tensor,
+    threshold: float,
+) -> torch.Tensor:
+    """Return per-env small-obstacle collision mask from the real small contact matrix."""
+    small = torch.as_tensor(small_force_matrix_w, dtype=torch.float32)
+    if small.ndim != 4 or int(small.shape[-1]) != 3:
+        raise ValueError("small force matrix must have shape [N, B, O, 3]")
+    return torch.linalg.vector_norm(small, dim=-1).gt(float(threshold)).any(dim=(1, 2))
+
+
 def plane_env_mask_from_terrain(
     terrain_types: torch.Tensor,
     terrain_names: tuple[str, ...] | list[str],
@@ -102,6 +114,8 @@ def plane_env_mask_from_terrain(
     """Return env mask whose terrain column name is in ``plane_terrain_names``."""
     types = torch.as_tensor(terrain_types, dtype=torch.long)
     wanted = {str(name) for name in plane_terrain_names}
+    if len(terrain_names) == 1 and str(terrain_names[0]) in wanted:
+        return torch.ones_like(types, dtype=torch.bool)
     out = torch.zeros_like(types, dtype=torch.bool)
     for col, name in enumerate(terrain_names):
         if str(name) in wanted:
@@ -129,10 +143,11 @@ def _terrain_names_from_env(env) -> tuple[str, ...]:
     return ()
 
 
-def _flat_semantic_gate_info(
+def _flat_episode_curriculum_info(
     env: ManagerBasedRLEnv,
     cfg_name: str = "semantic_obstacle_curriculum",
-) -> tuple[object | None, dict[str, float | int | bool]]:
+    completed_env_ids: torch.Tensor | None = None,
+) -> tuple[object | None, dict[str, torch.Tensor | bool]]:
     device = torch.device(getattr(env, "device", "cpu"))
     cfg = getattr(env.cfg, cfg_name, None)
     root = getattr(env, "unwrapped", env)
@@ -143,10 +158,10 @@ def _flat_semantic_gate_info(
 
     if cfg is None or not bool(getattr(cfg, "enabled", False)):
         return cfg, {
-            "consecutive_success_count": int(state.consecutive_success_count),
-            "plane_collision_rate": 0.0,
-            "plane_env_count": 0,
-            "gate_pass": False,
+            "plane_mask": torch.zeros(int(env.num_envs), dtype=torch.bool, device=device),
+            "episode_success": torch.zeros(int(env.num_envs), dtype=torch.bool, device=device),
+            "base_contact": _env_bool_buffer(env, "base_contact", device=device),
+            "bad_orientation": _env_bool_buffer(env, "bad_orientation", device=device),
             "enabled": False,
         }
 
@@ -162,20 +177,99 @@ def _flat_semantic_gate_info(
             tuple(getattr(cfg, "plane_terrain_names", ("flat",))),
         ).to(device=device)
 
-    plane_env_count = int(plane_mask.sum().item())
-    if plane_env_count == 0:
-        rate = torch.tensor(0.0, dtype=torch.float32, device=device)
-    else:
+    if bool(plane_mask.any().item()):
         small_sensor = _scene_sensor(env, "semantic_contact_small")
-        large_sensor = _scene_sensor(env, "semantic_contact_large")
-        collision = semantic_collision_mask_from_force_matrices(
-            torch.as_tensor(small_sensor.data.force_matrix_w, dtype=torch.float32, device=device),
-            torch.as_tensor(large_sensor.data.force_matrix_w, dtype=torch.float32, device=device),
+        small_force = torch.as_tensor(small_sensor.data.force_matrix_w, dtype=torch.float32, device=device)
+        update_episode_small_collision_from_forces(
+            state,
+            small_force,
             float(cfg.collision_force_threshold),
         )
-        rate = (collision & plane_mask).to(dtype=torch.float32).sum() / float(plane_env_count)
+    else:
+        update_episode_small_collision_from_forces(
+            state,
+            torch.zeros((int(env.num_envs), 1, 1, 3), dtype=torch.float32, device=device),
+            float(cfg.collision_force_threshold),
+        )
 
-    return cfg, state.update_gate_from_plane_collision_rate(rate, cfg, plane_env_count=plane_env_count)
+    reset_env_ids = (
+        torch.as_tensor(completed_env_ids, dtype=torch.long, device=device).reshape(-1)
+        if completed_env_ids is not None
+        else _completed_episode_env_ids(env, device=device)
+    )
+    flags = state.episode_had_small_collision
+    if flags is None or int(flags.numel()) != int(env.num_envs) or flags.device != device:
+        flags = torch.zeros(int(env.num_envs), dtype=torch.bool, device=device)
+        state.episode_had_small_collision = flags
+    time_out = _env_bool_buffer(env, "time_out", device=device)
+    base_contact = _env_bool_buffer(env, "base_contact", device=device)
+    bad_orientation = _env_bool_buffer(env, "bad_orientation", device=device)
+    episode_success = torch.zeros(int(env.num_envs), dtype=torch.bool, device=device)
+    if reset_env_ids.numel() > 0:
+        episode_success[reset_env_ids] = (
+            plane_mask.index_select(0, reset_env_ids)
+            & time_out.index_select(0, reset_env_ids)
+            & torch.logical_not(flags.index_select(0, reset_env_ids))
+            & torch.logical_not(base_contact.index_select(0, reset_env_ids))
+            & torch.logical_not(bad_orientation.index_select(0, reset_env_ids))
+        )
+        flags[reset_env_ids] = False
+
+    return cfg, {
+        "plane_mask": plane_mask,
+        "episode_success": episode_success,
+        "base_contact": base_contact,
+        "bad_orientation": bad_orientation,
+        "enabled": bool(cfg.enabled),
+    }
+
+
+def _completed_episode_env_ids(env, *, device: torch.device) -> torch.Tensor:
+    for name in ("reset_env_ids", "_reset_env_ids", "done_env_ids"):
+        value = getattr(env, name, None)
+        if value is not None:
+            return torch.as_tensor(value, dtype=torch.long, device=device).reshape(-1)
+    value = getattr(env, "reset_buf", None)
+    if value is not None:
+        return torch.nonzero(torch.as_tensor(value, dtype=torch.bool, device=device), as_tuple=False).flatten()
+    value = getattr(env, "terminated_buf", None)
+    truncated = getattr(env, "time_out_buf", None)
+    base_contact = getattr(env, "base_contact_buf", None)
+    bad_orientation = getattr(env, "bad_orientation_buf", None)
+    if value is not None or truncated is not None or base_contact is not None or bad_orientation is not None:
+        done = torch.zeros(int(env.num_envs), dtype=torch.bool, device=device)
+        if value is not None:
+            done |= torch.as_tensor(value, dtype=torch.bool, device=device)
+        if truncated is not None:
+            done |= torch.as_tensor(truncated, dtype=torch.bool, device=device)
+        if base_contact is not None:
+            done |= torch.as_tensor(base_contact, dtype=torch.bool, device=device)
+        if bad_orientation is not None:
+            done |= torch.as_tensor(bad_orientation, dtype=torch.bool, device=device)
+        return torch.nonzero(done, as_tuple=False).flatten()
+    return torch.empty(0, dtype=torch.long, device=device)
+
+
+def _env_bool_buffer(env, kind: str, *, device: torch.device) -> torch.Tensor:
+    names_by_kind = {
+        "time_out": ("time_out_buf", "time_outs", "truncated_buf"),
+        "base_contact": ("base_contact_buf",),
+        "bad_orientation": ("bad_orientation_buf",),
+    }
+    for name in names_by_kind[kind]:
+        value = getattr(env, name, None)
+        if value is not None:
+            return torch.as_tensor(value, dtype=torch.bool, device=device).reshape(-1)
+    termination_manager = getattr(env, "termination_manager", None)
+    if termination_manager is not None:
+        terminations = getattr(termination_manager, "_term_dones", None)
+        if isinstance(terminations, dict):
+            if kind == "time_out" and "time_out" in terminations:
+                return torch.as_tensor(terminations["time_out"], dtype=torch.bool, device=device).reshape(-1)
+            if kind in terminations:
+                return torch.as_tensor(terminations[kind], dtype=torch.bool, device=device).reshape(-1)
+    default = kind == "time_out"
+    return torch.full((int(env.num_envs),), default, dtype=torch.bool, device=device)
 
 
 def terrain_levels_vel_semantic_plane_gate(
@@ -199,7 +293,7 @@ def terrain_levels_vel_semantic_plane_gate(
     terrain_move_down = distance < torch.norm(command[env_ids_t, :2], dim=1) * env.max_episode_length_s * 0.5
     terrain_move_down = torch.logical_and(terrain_move_down, torch.logical_not(terrain_move_up))
 
-    cfg, info = _flat_semantic_gate_info(env, cfg_name=cfg_name)
+    cfg, info = _flat_episode_curriculum_info(env, cfg_name=cfg_name, completed_env_ids=env_ids_t)
     terrain_types = getattr(terrain, "terrain_types", None)
     terrain_names = _terrain_names_from_env(env)
     if cfg is None or terrain_types is None or len(terrain_names) == 0:
@@ -212,21 +306,20 @@ def terrain_levels_vel_semantic_plane_gate(
         ).to(device=device)
         is_plane_env = is_plane_all[env_ids_t]
 
-    semantic_gate_pass = bool(info["gate_pass"])
-    semantic_gate_tensor = torch.full_like(terrain_move_up, semantic_gate_pass, dtype=torch.bool, device=device)
-    move_up = torch.where(is_plane_env, torch.logical_and(terrain_move_up, semantic_gate_tensor), terrain_move_up)
+    episode_success_all = torch.as_tensor(info["episode_success"], dtype=torch.bool, device=device)
+    base_contact_all = torch.as_tensor(info["base_contact"], dtype=torch.bool, device=device)
+    bad_orientation_all = torch.as_tensor(info["bad_orientation"], dtype=torch.bool, device=device)
+    flat_episode_success = episode_success_all.index_select(0, env_ids_t)
+    base_contact = base_contact_all.index_select(0, env_ids_t)
+    bad_orientation = bad_orientation_all.index_select(0, env_ids_t)
 
-    terrain.update_env_origins(env_ids_t, move_up, terrain_move_down)
-    flat_move_up_count = torch.logical_and(is_plane_env, move_up).sum()
-    non_flat_move_up_count = torch.logical_and(torch.logical_not(is_plane_env), move_up).sum()
+    flat_move_up = torch.logical_and(terrain_move_up, flat_episode_success)
+    move_up = torch.where(is_plane_env, flat_move_up, terrain_move_up)
+    flat_failure_move_down = torch.logical_or(base_contact, bad_orientation)
+    move_down = torch.where(is_plane_env, torch.logical_or(terrain_move_down, flat_failure_move_down), terrain_move_down)
+
+    terrain.update_env_origins(env_ids_t, move_up, move_down)
 
     return {
         "mean_terrain_level": torch.mean(terrain.terrain_levels.float()),
-        "plane_collision_rate": torch.tensor(float(info["plane_collision_rate"]), device=device),
-        "plane_env_count": torch.tensor(float(info["plane_env_count"]), device=device),
-        "consecutive_success_count": torch.tensor(float(info["consecutive_success_count"]), device=device),
-        "semantic_gate_pass": torch.tensor(1.0 if semantic_gate_pass else 0.0, device=device),
-        "flat_move_up_count": flat_move_up_count.to(dtype=torch.float32),
-        "non_flat_move_up_count": non_flat_move_up_count.to(dtype=torch.float32),
-        "enabled": torch.tensor(1.0 if bool(info["enabled"]) else 0.0, device=device),
     }

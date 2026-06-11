@@ -4042,6 +4042,8 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
         def __init__(self, *args, **kwargs):
             for index, value in enumerate(args):
                 setattr(self, f"arg{index}", value)
+            if args and "name" not in kwargs:
+                setattr(self, "name", args[0])
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
@@ -4096,6 +4098,7 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
             "go2_pvcnn.sensor.semantic_raycaster",
             "extension.mdp.observations",
             "extension.mdp.rewards_reference",
+            "extension.mdp.semantic_body_part_clearance",
             "extension.mdp.semantic_contact_rewards",
             "extension.semantic_course",
         }:
@@ -4237,6 +4240,14 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
     )
     monkeypatch.setitem(
         sys.modules,
+        "extension.mdp.semantic_body_part_clearance",
+        _module(
+            "extension.mdp.semantic_body_part_clearance",
+            semantic_body_part_clearance_reward=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "extension.mdp.semantic_contact_rewards",
         _module(
             "extension.mdp.semantic_contact_rewards",
@@ -4296,3 +4307,72 @@ def test_mpc_policy_eval_cfgs_enable_reference_without_changing_play(monkeypatch
     assert collision.scene.semantic_contact_large is not None
     assert hasattr(collision, "small_collision_eval_small_count_per_tile")
     assert collision.small_collision_eval_small_count_per_tile > 0
+
+
+def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
+    _install_fake_eval_cfg_import_dependencies(monkeypatch)
+
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        TeacherElevationTrajectoryMpcSemanticEnvCfg,
+        TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
+    )
+
+    base = TeacherElevationTrajectoryMpcSemanticEnvCfg()
+    cfg = TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg()
+
+    assert isinstance(cfg, TeacherElevationTrajectoryMpcSemanticEnvCfg)
+    assert cfg.experiment_name == "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
+    assert base.curriculum.lin_vel_cmd_levels is not None
+    assert cfg.curriculum.lin_vel_cmd_levels is None
+    assert cfg.curriculum.terrain_levels is not None
+    assert getattr(base.rewards, "semantic_body_part_clearance", None) is None
+    assert cfg.rewards.semantic_body_part_clearance is not None
+    assert cfg.rewards.semantic_body_part_clearance.params["asset_cfg"].name == "robot"
+    assert cfg.rewards.semantic_body_part_clearance.params["scanner_cfg"].name == "semantic_height_scanner"
+    assert cfg.rewards.semantic_body_part_clearance.params["small_semantic_ids"] == (1,)
+    assert cfg.rewards.semantic_body_part_clearance.params["calf_sections"] == 7
+    assert cfg.rewards.semantic_body_part_clearance.params["thigh_sections"] == 7
+    assert cfg.rewards.semantic_body_part_clearance.params["include_base"] is True
+    assert cfg.rewards.semantic_body_part_clearance.params["base_footprint_grid"] == (5, 3)
+    assert cfg.rewards.semantic_body_part_clearance.params["clearance_scale"] == 1000.0
+    assert cfg.rewards.semantic_contact_collision is not None
+    assert cfg.rewards.reference_foot_pos is not None
+    assert tuple(count.small for count in cfg.semantic_obstacle_curriculum.plane_counts) == (
+        8,
+        16,
+        24,
+        32,
+        40,
+        48,
+        56,
+        64,
+        72,
+        80,
+    )
+    assert tuple(count.large for count in cfg.semantic_obstacle_curriculum.plane_counts) == (0,) * 10
+    assert tuple(count.small for count in cfg.semantic_obstacle_curriculum.non_plane_counts) == (0,)
+    assert tuple(count.large for count in cfg.semantic_obstacle_curriculum.non_plane_counts) == (0,)
+    assert tuple(cfg.scene.terrain.terrain_generator.sub_terrains.keys()) == ("flat",)
+    assert cfg.scene.terrain.semantic_obstacle_curriculum is cfg.semantic_obstacle_curriculum
+
+
+def test_flat_small_avoidance_entrypoints_are_registered() -> None:
+    train_source = (GO2PVCNN_ROOT / "scripts/train.py").read_text()
+    play_source = (GO2PVCNN_ROOT / "scripts/play.py").read_text()
+    register_source = (GO2PVCNN_ROOT / "go2_pvcnn/tasks/register_envs.py").read_text()
+    agent_source = (GO2PVCNN_ROOT / "agent/train_cfg.py").read_text()
+    factory_source = (GO2PVCNN_ROOT / "extension/trajectory_manager_factory.py").read_text()
+
+    experiment_name = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
+    task_id = "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-v0"
+
+    assert experiment_name in train_source
+    assert experiment_name in play_source
+    assert experiment_name in agent_source
+    assert experiment_name in factory_source
+    assert task_id in register_source
+    assert task_id in train_source
+    assert task_id.replace("-v0", "-Play-v0") in register_source
+    assert task_id.replace("-v0", "-Play-v0") in play_source
+    assert "TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg" in register_source
+    assert "TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY" in register_source

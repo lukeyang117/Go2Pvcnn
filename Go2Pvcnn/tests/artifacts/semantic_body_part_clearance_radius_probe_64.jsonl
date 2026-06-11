@@ -1,0 +1,1 @@
+{"margin_scale": 1.0, "num_envs": 64, "radii": [0.04, 0.08, 0.12, 0.16], "scanner_shape": [64, 151, 151], "small_cell_count": 0, "steps": 6, "type": "header"}

@@ -132,8 +132,8 @@ def test_mpc_semantic_cfg_exposes_semantic_obstacle_curriculum() -> None:
     assert "terrain_levels_vel_semantic_plane_gate" in source
     assert "semantic_obstacle_levels" not in source
     assert "semantic_obstacle_curriculum_level" not in source
-    assert "consecutive_success_required=5" in source
-    assert "plane_collision_rate_threshold=0.03" in source
+    assert "consecutive_success_required" not in source
+    assert "plane_collision_rate_threshold" not in source
     assert "semantic_curriculum_min_plane_episodes" not in source
     assert "semantic_curriculum_eval_window_episodes" not in source
     assert "semantic_curriculum_update_interval_steps" not in source

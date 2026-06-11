@@ -1,0 +1,35 @@
+# Flat-Small Env-Level Collision Curriculum HTML Design
+
+- Purpose: record the Chinese HTML design for replacing the flat-small global semantic gate with env-level episode-end collision curriculum.
+- Stage: RL curriculum design / flat-small semantic avoidance.
+- Related todo: [T302q](../todo/T302q-flat-small-avoidance-reward-plan.md) / [T302r](../todo/T302r-go2-geometry-clearance-reward-plan.md)
+- Procedure:
+  - Wrote [../../docs/superpowers/specs/2026-06-11-flat-small-env-level-collision-curriculum-design.html](../../docs/superpowers/specs/2026-06-11-flat-small-env-level-collision-curriculum-design.html).
+  - Parsed the HTML with Python `HTMLParser`.
+  - Checked for placeholder strings.
+- Input conditions:
+  - Flat-small run `2026-06-11_18-31-19` shows stable locomotion and nonzero but tiny clearance reward.
+  - Curriculum remains closed under the existing global semantic gate.
+  - User requested curriculum TensorBoard metrics keep only terrain difficulty, following IsaacLab terrain curriculum style.
+- Key metrics:
+  - HTML parse: pass.
+  - File size: `13377` bytes.
+  - Sections: `11`.
+  - Placeholder scan: `TODO=0`, `TBD=0`.
+- Result:
+  - Design records env-level episode-end upgrade/downgrade logic.
+  - Flat `move_up` becomes `terrain_move_up AND episode_success`.
+  - `episode_success` requires timeout, no small collision, no base contact, and no bad orientation.
+  - First-version downgrade is `terrain_move_down OR base_contact OR bad_orientation`; small collision blocks upgrade but does not force downgrade.
+  - Curriculum TensorBoard policy keeps only `Curriculum/terrain_levels/mean_terrain_level`.
+  - Clearance reward gets explicit `clearance_scale`, recommended initial value `1000.0`.
+- Conclusion:
+  - The written design is ready for user review before implementation planning.
+- Follow-up:
+  - If approved, create an implementation plan before changing curriculum code.
+- Baseline Ref: `da46138`
+- Candidate Ref: working tree
+- Key Files:
+  - [../../docs/superpowers/specs/2026-06-11-flat-small-env-level-collision-curriculum-design.html](../../docs/superpowers/specs/2026-06-11-flat-small-env-level-collision-curriculum-design.html)
+  - [../todo/T302q-flat-small-avoidance-reward-plan.md](../todo/T302q-flat-small-avoidance-reward-plan.md)
+  - [../todo/T302r-go2-geometry-clearance-reward-plan.md](../todo/T302r-go2-geometry-clearance-reward-plan.md)

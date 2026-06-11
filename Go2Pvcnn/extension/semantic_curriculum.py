@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
-from typing import Any
 
 import torch
 
@@ -56,8 +55,6 @@ class SemanticObstacleCurriculumCfg:
     min_spacing_clearance_m: tuple[float, ...] = field(default_factory=lambda: DEFAULT_MIN_SPACING_CLEARANCE_M)
     tile_margin_m: tuple[float, ...] = field(default_factory=lambda: DEFAULT_TILE_MARGIN_M)
     collision_force_threshold: float = 1.0
-    plane_collision_rate_threshold: float = 0.03
-    consecutive_success_required: int = 5
 
     def __post_init__(self) -> None:
         validate_semantic_obstacle_curriculum_cfg(self)
@@ -95,11 +92,6 @@ def validate_semantic_obstacle_curriculum_cfg(cfg: SemanticObstacleCurriculumCfg
         raise ValueError("plane_terrain_names entries must be non-empty strings")
     if float(cfg.collision_force_threshold) < 0.0 or not math.isfinite(float(cfg.collision_force_threshold)):
         raise ValueError("collision_force_threshold must be finite and non-negative")
-    rate = float(cfg.plane_collision_rate_threshold)
-    if not math.isfinite(rate) or rate < 0.0 or rate > 1.0:
-        raise ValueError("plane_collision_rate_threshold must be in [0, 1]")
-    if int(cfg.consecutive_success_required) < 1:
-        raise ValueError("consecutive_success_required must be >= 1")
 
 
 def clamp_row_index(row: int, count_len: int) -> int:
@@ -143,45 +135,42 @@ def count_to_dict(count: SemanticObstacleCount) -> dict[str, int]:
 
 @dataclass
 class SemanticObstacleCurriculumState:
-    consecutive_success_count: int = 0
-    last_plane_collision_rate: float = 0.0
+    episode_had_small_collision: torch.Tensor | None = None
 
-    def update_gate_from_plane_collision_rate(
-        self,
-        rate: float | torch.Tensor,
-        cfg: SemanticObstacleCurriculumCfg,
-        *,
-        plane_env_count: int | torch.Tensor | None = None,
-    ) -> dict[str, Any]:
-        rate_value = float(rate.detach().item()) if isinstance(rate, torch.Tensor) else float(rate)
-        self.last_plane_collision_rate = rate_value
-        plane_count_value = None
-        if plane_env_count is not None:
-            plane_count_value = (
-                int(plane_env_count.detach().item()) if isinstance(plane_env_count, torch.Tensor) else int(plane_env_count)
-            )
 
-        if not bool(cfg.enabled) or plane_count_value == 0:
-            return {
-                "consecutive_success_count": self.consecutive_success_count,
-                "plane_collision_rate": rate_value,
-                "plane_env_count": 0 if plane_count_value is None else plane_count_value,
-                "gate_pass": False,
-                "enabled": bool(cfg.enabled),
-            }
+def _ensure_episode_collision_state(
+    state: SemanticObstacleCurriculumState,
+    num_envs: int,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    current = state.episode_had_small_collision
+    if current is None or int(current.numel()) != int(num_envs) or current.device != device:
+        current = torch.zeros(int(num_envs), dtype=torch.bool, device=device)
+        state.episode_had_small_collision = current
+    return current
 
-        if rate_value <= float(cfg.plane_collision_rate_threshold):
-            self.consecutive_success_count += 1
-        else:
-            self.consecutive_success_count = 0
 
-        return {
-            "consecutive_success_count": self.consecutive_success_count,
-            "plane_collision_rate": rate_value,
-            "plane_env_count": 0 if plane_count_value is None else plane_count_value,
-            "gate_pass": self.consecutive_success_count >= int(cfg.consecutive_success_required),
-            "enabled": bool(cfg.enabled),
-        }
+def update_episode_small_collision_from_forces(
+    state: SemanticObstacleCurriculumState,
+    small_force_matrix_w: torch.Tensor,
+    threshold: float,
+    *,
+    env_ids: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Update sticky per-episode small-obstacle collision flags from real contact forces."""
+
+    forces = torch.as_tensor(small_force_matrix_w, dtype=torch.float32)
+    if forces.ndim != 4 or int(forces.shape[-1]) != 3:
+        raise ValueError(f"small_force_matrix_w must be [N,B,O,3], got {tuple(forces.shape)}")
+    hit = torch.linalg.vector_norm(forces, dim=-1).gt(float(threshold)).any(dim=(1, 2))
+    flags = _ensure_episode_collision_state(state, int(hit.numel()), device=hit.device)
+    if env_ids is None:
+        flags |= hit
+        return hit
+    ids = torch.as_tensor(env_ids, dtype=torch.long, device=hit.device).reshape(-1)
+    flags[ids] |= hit.index_select(0, ids)
+    return hit
 
 
 __all__ = [
@@ -198,5 +187,6 @@ __all__ = [
     "count_to_dict",
     "layout_index_for_row",
     "layout_values_for_row",
+    "update_episode_small_collision_from_forces",
     "validate_semantic_obstacle_curriculum_cfg",
 ]
