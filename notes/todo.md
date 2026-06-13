@@ -4,10 +4,10 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302s env-level collision curriculum rewrite for flat-small avoidance**.
-- Active branch page: [T302s](todo/T302s-env-level-collision-curriculum-plan.md).
-- Active implementation plan: [T302s env-level collision curriculum plan](todo/T302s-env-level-collision-curriculum-plan.md).
-- Next reward implementation plan: [T302r Go2 geometry clearance reward plan](todo/T302r-go2-geometry-clearance-reward-plan.md).
+- Current focus: **T302t goal-anchored flat-small body velocity command**.
+- Active branch page: [T302t](todo/T302t-goal-anchored-flat-small-command-plan.md).
+- Active implementation plan: [T302t goal-anchored flat-small command plan](todo/T302t-goal-anchored-flat-small-command-plan.md).
+- Background reward implementation plan: [T302r Go2 geometry clearance reward plan](todo/T302r-go2-geometry-clearance-reward-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
   - [Go2Pvcnn/extension/batch_mpc_planner/manager.py](../Go2Pvcnn/extension/batch_mpc_planner/manager.py)
