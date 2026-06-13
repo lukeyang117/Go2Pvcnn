@@ -4124,6 +4124,7 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
     )
     managers_module = _module(
         "isaaclab.managers",
+        CommandTermCfg=_Cfg,
         CurriculumTermCfg=_Cfg,
         EventTermCfg=_Cfg,
         ObservationGroupCfg=object,
@@ -4179,12 +4180,15 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "isaaclab.utils.noise", _module("isaaclab.utils.noise", AdditiveUniformNoiseCfg=_Cfg))
     monkeypatch.setitem(sys.modules, "gymnasium", SimpleNamespace(register=lambda *args, **kwargs: None))
     monkeypatch.setitem(sys.modules, "go2_pvcnn.assets", _module("go2_pvcnn.assets", UNITREE_GO2_CFG=_Cfg()))
+    uniform_level_velocity_cfg = type("UniformLevelVelocityCommandCfg", (_Cfg,), {"Ranges": _Cfg})
+    goal_anchored_velocity_cfg = type("GoalAnchoredVelocityCommandCfg", (_Cfg,), {})
     monkeypatch.setitem(
         sys.modules,
         "go2_pvcnn.mdp",
         _module(
             "go2_pvcnn.mdp",
-            UniformLevelVelocityCommandCfg=type("UniformLevelVelocityCommandCfg", (_Cfg,), {"Ranges": _Cfg}),
+            UniformLevelVelocityCommandCfg=uniform_level_velocity_cfg,
+            GoalAnchoredVelocityCommandCfg=goal_anchored_velocity_cfg,
             JointPositionActionCfg=_Cfg,
             randomize_rigid_body_material=lambda *args, **kwargs: None,
             randomize_rigid_body_mass=lambda *args, **kwargs: None,
@@ -4326,9 +4330,14 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert base.curriculum.lin_vel_cmd_levels is not None
     assert cfg.curriculum.lin_vel_cmd_levels is None
     assert cfg.curriculum.terrain_levels is not None
-    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_x) == (0.6, 1.0)
-    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_y) == (-0.2, 0.2)
-    assert tuple(cfg.commands.base_velocity.ranges.ang_vel_z) == (-0.3, 0.3)
+    assert type(base.commands.base_velocity).__name__ == "UniformLevelVelocityCommandCfg"
+    assert type(cfg.commands.base_velocity).__name__ == "GoalAnchoredVelocityCommandCfg"
+    assert cfg.commands.base_velocity.goal_distance == pytest.approx(10.0)
+    assert cfg.commands.base_velocity.goal_reached_threshold == pytest.approx(1.0)
+    assert tuple(cfg.commands.base_velocity.vx_abs_range) == (0.6, 1.0)
+    assert tuple(cfg.commands.base_velocity.vy_abs_range) == (0.6, 1.0)
+    assert cfg.commands.base_velocity.yaw_stiffness == pytest.approx(0.5)
+    assert tuple(cfg.commands.base_velocity.yaw_range) == (-0.8, 0.8)
     assert getattr(base.rewards, "semantic_body_part_clearance", None) is None
     assert cfg.rewards.semantic_body_part_clearance is not None
     assert cfg.rewards.semantic_body_part_clearance.params["asset_cfg"].name == "robot"

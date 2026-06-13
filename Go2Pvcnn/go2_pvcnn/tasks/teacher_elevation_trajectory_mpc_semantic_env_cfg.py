@@ -766,9 +766,18 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
         super().__post_init__()
         self.experiment_name = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
         self.curriculum.lin_vel_cmd_levels = None
-        self.commands.base_velocity.ranges.lin_vel_x = (0.6, 1.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (-0.2, 0.2)
-        self.commands.base_velocity.ranges.ang_vel_z = (-0.3, 0.3)
+        self.commands.base_velocity = mdp.GoalAnchoredVelocityCommandCfg(
+            asset_name="robot",
+            resampling_time_range=(100.0, 100.0),
+            debug_vis=True,
+            goal_distance=10.0,
+            goal_reached_threshold=1.0,
+            vx_abs_range=(0.6, 1.0),
+            vy_abs_range=(0.6, 1.0),
+            yaw_stiffness=0.5,
+            yaw_range=(-0.8, 0.8),
+            rel_standing_envs=0.0,
+        )
         self.scene.terrain.terrain_generator = _flat_small_avoidance_terrain_cfg()
         self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
         self.rewards.semantic_body_part_clearance = _semantic_body_part_clearance_reward_term()
@@ -799,7 +808,8 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY(
         self.scene.semantic_contact_large = None
         self.terminations.time_out = None
         self.curriculum.terrain_levels = None
-        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+        if hasattr(self.commands.base_velocity, "limit_ranges"):
+            self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
         self.events.push_robot = None
         self.observations.policy_elevation_semantic_map.enable_corruption = False
         self.observations.policy_state.enable_corruption = False

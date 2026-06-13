@@ -40,17 +40,17 @@
 
 ## Task 1: RED Command Unit Tests
 
-- [ ] Add a fake env/robot test module `Go2Pvcnn/tests/test_goal_anchored_velocity_command.py`.
-- [ ] Test reset/resample initializes:
+- [x] Add a fake env/robot test module `Go2Pvcnn/tests/test_goal_anchored_velocity_command.py`.
+- [x] Test reset/resample initializes:
   - `goal_xy` at `goal_distance`.
   - `vx_abs/vy_abs` in configured ranges.
   - command tensor shape `[num_envs, 3]`.
-- [ ] Test per-step quadrant mapping:
+- [x] Test per-step quadrant mapping:
   - with root yaw `0` and goal in world `(+x,+y)`, command x/y are positive.
   - after root yaw changes so the same goal is in another body quadrant, command signs change.
-- [ ] Test yaw clamp:
+- [x] Test yaw clamp:
   - heading error larger than range clamps to `yaw_range`.
-- [ ] Test reached-goal extension:
+- [x] Test reached-goal extension:
   - when root is within `goal_reached_threshold`, new goal is extended by `goal_distance`.
 
 Run:
@@ -63,28 +63,28 @@ Expected before implementation: import or attribute failure for missing `GoalAnc
 
 ## Task 2: GREEN Command Implementation
 
-- [ ] Implement `GoalAnchoredVelocityCommand` using IsaacLab `CommandTerm` pattern.
-- [ ] Buffers:
+- [x] Implement `GoalAnchoredVelocityCommand` using IsaacLab `CommandTerm` pattern.
+- [x] Buffers:
   - `vel_command_b: [num_envs, 3]`
   - `goal_xy_w: [num_envs, 2]`
   - `vx_abs: [num_envs]`
   - `vy_abs: [num_envs]`
   - `is_standing_env: [num_envs]` for compatibility, default probability `0`.
-- [ ] `_resample_command(env_ids)`:
+- [x] `_resample_command(env_ids)`:
   - sample target direction uniformly in `[-pi, pi]`;
   - set `goal_xy_w`;
   - sample `vx_abs/vy_abs`;
   - sample standing envs only if `rel_standing_envs > 0`.
-- [ ] `_update_command()`:
+- [x] `_update_command()`:
   - compute `dir_world`;
   - extend reached goals;
   - compute body-frame signs from current root yaw;
   - set fixed-magnitude x/y signs;
   - set yaw from clamped heading error;
   - zero standing env commands.
-- [ ] `_update_metrics()`:
+- [x] `_update_metrics()`:
   - keep `error_vel_xy` and `error_vel_yaw` like `UniformVelocityCommand`.
-- [ ] Reuse or adapt debug visualization only if needed; default can rely on command property without adding new markers.
+- [x] Reuse or adapt debug visualization only if needed; default can rely on command property without adding new markers.
 
 Run:
 
@@ -96,7 +96,7 @@ Expected: all new command tests pass.
 
 ## Task 3: RED/GREEN Flat-Small Cfg Wiring
 
-- [ ] Update `test_flat_small_avoidance_cfg_static_contract`:
+- [x] Update `test_flat_small_avoidance_cfg_static_contract`:
   - assert baseline `base.commands.base_velocity` is `UniformLevelVelocityCommandCfg`.
   - assert flat-small `cfg.commands.base_velocity` is `GoalAnchoredVelocityCommandCfg`.
   - assert `goal_distance == 10.0`.
@@ -105,8 +105,8 @@ Expected: all new command tests pass.
   - assert `yaw_stiffness == 0.5`.
   - assert `yaw_range == (-0.8, 0.8)`.
   - remove old flat-small `ranges.lin_vel_x/y/ang_vel_z` expectations.
-- [ ] Wire flat-small cfg in `__post_init__`.
-- [ ] Keep `self.curriculum.lin_vel_cmd_levels = None`.
+- [x] Wire flat-small cfg in `__post_init__`.
+- [x] Keep `self.curriculum.lin_vel_cmd_levels = None`.
 
 Run:
 
@@ -118,7 +118,7 @@ Expected: pass after wiring.
 
 ## Task 4: Focused Compatibility Tests
 
-- [ ] Run command/cfg/viewer static tests:
+- [x] Run command/cfg/viewer static tests:
 
 ```bash
 pytest \
@@ -128,7 +128,7 @@ pytest \
   -q
 ```
 
-- [ ] Run pycompile:
+- [x] Run pycompile:
 
 ```bash
 python -m py_compile \
@@ -139,7 +139,7 @@ python -m py_compile \
 
 ## Task 5: Real IsaacLab Smoke
 
-- [ ] Run small flat-small train smoke:
+- [x] Run small flat-small train smoke:
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
@@ -150,37 +150,37 @@ CUDA_VISIBLE_DEVICES=2 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   --device cuda:0
 ```
 
-- [ ] Confirm startup reaches Command Manager and Reward Manager.
-- [ ] If possible, run a tiny command probe to print:
-  - command shape `[8, 3]`;
-  - `abs(vx)` / `abs(vy)` within `[0.6, 1.0]` for non-standing envs;
-  - `yaw` within `[-0.8, 0.8]`.
+- [x] Confirm startup reaches Command Manager and Reward Manager.
+- [x] Confirm saved cfg and runtime command manager evidence:
+  - Command Manager lists `base_velocity | GoalAnchoredVelocityCommand`;
+  - saved `env_cfg.yaml` records `goal_distance=10.0`, `vx_abs_range=(0.6,1.0)`, `vy_abs_range=(0.6,1.0)`, and `yaw_range=(-0.8,0.8)`;
+  - observation/action shapes remain checkpoint-compatible.
 
 ## Task 6: Notes And Logs
 
-- [ ] Create a log under `notes/log/`.
-- [ ] Update `notes/log/index.md`.
-- [ ] Update `notes/todo.md`.
-- [ ] Update this branch page with actual command results.
-- [ ] Commit the implementation after verification.
+- [x] Create a log under `notes/log/`.
+- [x] Update `notes/log/index.md`.
+- [x] Update `notes/todo.md`.
+- [x] Update this branch page with actual command results.
+- [x] Commit the implementation after verification.
 
 ## Current Status
 
-- [ ] Task 1
-- [ ] Task 2
-- [ ] Task 3
-- [ ] Task 4
-- [ ] Task 5
-- [ ] Task 6
+- [x] Task 1
+- [x] Task 2
+- [x] Task 3
+- [x] Task 4
+- [x] Task 5
+- [x] Task 6
 
 ## Related Logs
 
-- Pending.
+- [../log/2026-06-13-2323-t302t-goal-anchored-flat-small-command.md](../log/2026-06-13-2323-t302t-goal-anchored-flat-small-command.md)
 
 ## Git Refs
 
 - Last Feature Commit: `65acd24`
-- Last Verified Commit: `65acd24`
+- Last Verified Commit: working tree verified by [../log/2026-06-13-2323-t302t-goal-anchored-flat-small-command.md](../log/2026-06-13-2323-t302t-goal-anchored-flat-small-command.md)
 - Current Work Ref: working tree
 - Key Files:
   - [../../Go2Pvcnn/go2_pvcnn/mdp/commands/velocity_command.py](../../Go2Pvcnn/go2_pvcnn/mdp/commands/velocity_command.py)
@@ -191,4 +191,4 @@ CUDA_VISIBLE_DEVICES=2 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 
 ## Next Step
 
-- Start Task 1 with failing command unit tests.
+- Commit the verified implementation, then start a resumed flat-small run from the intended old checkpoint and monitor stability/curriculum/semantic contact.

@@ -361,6 +361,7 @@ def test_flat_small_play_cfg_disables_training_curriculum_without_semantic_conta
     assert "self.curriculum.terrain_levels = None" in class_source
     assert "self.scene.semantic_contact_small = None" in class_source
     assert "self.scene.semantic_contact_large = None" in class_source
+    assert 'hasattr(self.commands.base_velocity, "limit_ranges")' in class_source
 
 
 def test_play_cfgs_disable_timeout_refresh_for_visualization() -> None:
