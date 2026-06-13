@@ -77,6 +77,30 @@ def test_semantic_course_curriculum_uses_plane_and_non_plane_counts(monkeypatch)
     ) == {"small": 5, "large": 2}
 
 
+def test_semantic_course_repeats_single_terrain_name_across_all_columns(monkeypatch) -> None:
+    _install_fake_isaaclab(monkeypatch)
+    from extension.semantic_course import SemanticCourseStage, semantic_counts_for_tile
+    from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+
+    cfg = SemanticObstacleCurriculumCfg(
+        plane_counts=(SemanticObstacleCount(8, 0),),
+        non_plane_counts=(SemanticObstacleCount(0, 0),),
+        center_safety_half_extent_m=(0.8,),
+        min_spacing_clearance_m=(0.2,),
+        tile_margin_m=(0.5,),
+        plane_terrain_names=("flat",),
+    )
+
+    for col in (0, 1, 19):
+        assert semantic_counts_for_tile(
+            row=0,
+            col=col,
+            terrain_names=("flat",),
+            curriculum_cfg=cfg,
+            fallback_stage=SemanticCourseStage.S1,
+        ) == {"small": 8, "large": 0}
+
+
 def test_semantic_course_curriculum_layout_row(monkeypatch) -> None:
     _install_fake_isaaclab(monkeypatch)
     from extension.semantic_course import SemanticCourseLayoutCfg, layout_cfg_for_row
@@ -130,3 +154,35 @@ def test_build_course_anchors_curriculum_counts_and_paths(monkeypatch) -> None:
     assert sum(a.semantic_class == "small" for a in non_flat) == 1
     assert sum(a.semantic_class == "large" for a in non_flat) == 0
     assert all("/row_" in a.prim_path and "/col_" in a.prim_path and "/slot_" in a.prim_path for a in anchors)
+
+
+def test_build_course_anchors_single_flat_subterrain_populates_every_column(monkeypatch) -> None:
+    _install_fake_isaaclab(monkeypatch)
+    from extension.semantic_course import build_course_anchors
+    from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+
+    cfg = SemanticObstacleCurriculumCfg(
+        plane_counts=(SemanticObstacleCount(2, 0),),
+        non_plane_counts=(SemanticObstacleCount(0, 0),),
+        center_safety_half_extent_m=(0.8,),
+        min_spacing_clearance_m=(0.2,),
+        tile_margin_m=(0.5,),
+        plane_terrain_names=("flat",),
+    )
+    terrain_origins = [
+        [(float(row) * 8.0, float(col) * 8.0, 0.0) for col in range(20)]
+        for row in range(10)
+    ]
+
+    anchors = build_course_anchors(
+        terrain_origins,
+        tile_size=(8.0, 8.0),
+        terrain_names=("flat",),
+        semantic_curriculum_cfg=cfg,
+    )
+
+    small_counts_by_col = {
+        col: sum(1 for anchor in anchors if anchor.row == 0 and anchor.col == col and anchor.semantic_class == "small")
+        for col in range(20)
+    }
+    assert small_counts_by_col == {col: 2 for col in range(20)}

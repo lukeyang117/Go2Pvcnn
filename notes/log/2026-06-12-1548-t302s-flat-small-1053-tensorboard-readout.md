@@ -1,0 +1,39 @@
+# T302s Flat-Small 10:53 TensorBoard Readout At 22.8k
+
+- Purpose: inspect whether run `2026-06-12_10-53-23` still has training value after the first post-command-range readout.
+- Stage: training metrics / curriculum and semantic reward diagnostics.
+- Related todo: [T302s](../todo/T302s-env-level-collision-curriculum-plan.md) / [T302r](../todo/T302r-go2-geometry-clearance-reward-plan.md)
+- Procedure:
+  - Checked the active train process.
+  - Parsed TensorBoard scalar events with `env_isaacsim` TensorBoard `EventAccumulator`.
+- Input conditions:
+  - Run dir: `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/2026-06-12_10-53-23`
+  - Active process: `Go2Pvcnn/scripts/train.py ... --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance ... --resume ... model_19999.pt`
+  - Latest observed checkpoint at directory scan: `model_22800.pt`.
+- Key metrics:
+  - Latest event step: `22868`.
+  - `mean_terrain_level`: max `7.475`, last `5.849`, last-20 mean `5.794`, last-100 mean `5.805`, last-500 mean `5.884`.
+  - `semantic_contact_collision`: nonzero `2451/2871`, last `-0.000234`, last-20 mean `-0.000726`, last-100 mean `-0.000684`, last-500 mean `-0.000845`.
+  - `semantic_body_part_clearance`: nonzero `2782/2871`, last `-0.000550`, last-20 mean `-0.002612`, last-100 mean `-0.002979`, last-500 mean `-0.003357`.
+  - `Train/mean_episode_length`: last `979.53`, last-20 mean `980.16`, last-100 mean `980.84`, last-500 mean `983.21`.
+  - `Train/mean_reward`: last `26.51`, last-20 mean `26.11`, last-100 mean `26.12`, last-500 mean `24.99`.
+  - `track_lin_vel_xy`: last-100 mean `1.388`.
+  - `error_vel_xy`: last-100 mean `0.194`; `error_vel_yaw`: last-100 mean `0.210`.
+  - Terminations: `base_contact` last-100 mean `0.0045`; `bad_orientation` last-100 mean `0.048`.
+- Result:
+  - Terrain curriculum is still open and stable around level `5.8`, not collapsing.
+  - Semantic contact and clearance are less negative in the recent last-100 window than the earlier `21752` readout, so there is still a useful learning signal.
+  - Episode length remains high enough for continued training, though it has drifted from near `1000` to about `980` recently.
+  - Mean reward is lower than the earlier `~28` window, so this is a watch item rather than a clean win.
+- Conclusion:
+  - Continue briefly; do not stop immediately.
+  - Next decision point should be around `model_23500-24000`.
+  - Stop and retune if episode length keeps dropping below about `950`, or if semantic contact stops improving while terrain level remains high.
+- Follow-up:
+  - Recheck `semantic_contact_collision`, `semantic_body_part_clearance`, `mean_episode_length`, `mean_reward`, and `mean_terrain_level` around `model_23500-24000`.
+- Baseline Ref: `da46138`
+- Candidate Ref: working tree
+- Key Files:
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
+  - [../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py](../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py)
+  - [../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py](../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py)

@@ -79,6 +79,8 @@ flat-small avoidance 训练 cfg 额外合同：
 - `rewards.semantic_contact_collision = None`
 - `scene.semantic_contact_small = None`
 - `scene.semantic_contact_large = None`
+- `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY` 还会关闭训练侧 `curriculum.terrain_levels`，因为 PLAY 场景不挂载 `semantic_contact_small/large`，不能执行依赖真实 contact sensor 的训练 curriculum。
+- `terminations.time_out = None`，所以 PLAY 可视化不会因为 episode 到时自动 reset/刷新；仍保留 `base_contact` 和 `bad_orientation` 这类安全终止。
 
 当前 VIEWER cfg 的关键合同：
 
@@ -542,6 +544,61 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/<flat-small-run-dir>/<checkpoint.pt>
 ```
 
+flat-small PLAY 指定 env0 初始子地形：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --run_dir 2026-06-12_19-05-27 \
+  --checkpoint model_28900.pt \
+  --terrain-row 3 \
+  --terrain-col 0 \
+  --max-steps 200
+```
+
+这个命令会把 env0 的 `terrain_levels[0]` / `terrain_types[0]` / `terrain.env_origins[0]` / `scene.env_origins[0]` 同步到指定 row/col。启动日志应看到：
+
+```text
+[play.py] Initial terrain env0: row=3, col=0
+[INFO] Curriculum Manager:  <CurriculumManager> contains 0 active terms.
+```
+
+flat-small PLAY 键盘速度控制：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/play.py \
+  --livestream 2 \
+  --device cuda:0 \
+  --num_envs 1 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --run_dir 2026-06-12_19-05-27 \
+  --checkpoint model_28900.pt \
+  --terrain-row 3 \
+  --terrain-col 0 \
+  --keyboard-control \
+  --keyboard-linear-speed 0.5 \
+  --keyboard-lateral-speed 0.25 \
+  --keyboard-yaw-speed 0.5
+```
+
+键盘控制语义：
+
+- `W/S`：前进 / 后退 body-frame `lin_vel_x`
+- `A/D`：左 / 右 body-frame `lin_vel_y`
+- `Q/E`：左转 / 右转 `ang_vel_z`
+- `+/-`：同时调大 / 调小线速度、横向速度、转向速度上限
+- `Space` 或 `X`：清零当前按住命令
+- `Esc`：停止终端键盘读取线程
+
+`play.py` 现在不再使用 `pynput`。`--keyboard-control` 会直接从启动命令的终端读取键盘输入：主线程继续跑 policy/env step 和 livestream，后台线程把终端切到 cbreak 模式并用 `select` 非阻塞读取 stdin。
+
+注意：这个功能要求启动 `play.py` 的 stdin 是一个真实 TTY。也就是你需要在 SSH 终端里直接运行命令；如果命令是被非交互工具、管道、后台服务或没有 TTY 的调度器启动，脚本会打印 `stdin is not a TTY` 并自动禁用键盘控制，但不会崩。
+
+terminal 模式没有系统级 key release event，所以实现采用“短时保持”语义：收到一次 `W/A/S/D/Q/E` 后维持约 `0.15s`；你按住键时终端自动重复发键，命令会持续；松开后超过保持时间就自动归零。这适合 livestream：浏览器负责看画面，SSH 终端负责给速度。
+
 如果只是想看旧 teacher 模型本身，仍然用：
 
 ```bash
@@ -614,10 +671,10 @@ env cfg 侧关键字段：
 - `TeacherElevationTrajectoryMpcSemanticEnvCfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64`
 - `reference_height_scanner_name = "semantic_height_scanner"`
 - `semantic_contact_collision` reward 使用 `semantic_contact_small` / `semantic_contact_large` 两个全局 sensor。
-- `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` 会关闭 MPC/reference/contact reward。
+- `TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY` 会关闭 MPC/reference/contact reward，并关闭 timeout 自动刷新。
 - `TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER` 会重新开启 MPC/reference/contact，并把 viewer 诊断 batch 调到 `4096`。
 - `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg` 继承主训练 cfg，保持 observation/action ABI，额外启用 flat-only terrain、小障碍数量 curriculum、`semantic_body_part_clearance` reward、episode-level small collision gate。
-- `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY` 继承 flat-small cfg 的回放环境，但关闭 MPC/reference/contact reward，用于 policy playback。
+- `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY` 继承 flat-small cfg 的回放环境，但关闭 MPC/reference/contact reward、训练 curriculum 和 timeout 自动刷新，用于 policy playback。
 
 这些字段主要在：
 

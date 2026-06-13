@@ -4244,6 +4244,7 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
         _module(
             "extension.mdp.semantic_body_part_clearance",
             semantic_body_part_clearance_reward=lambda *args, **kwargs: None,
+            semantic_foot_over_clearance_bonus=lambda *args, **kwargs: None,
         ),
     )
     monkeypatch.setitem(
@@ -4325,6 +4326,9 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert base.curriculum.lin_vel_cmd_levels is not None
     assert cfg.curriculum.lin_vel_cmd_levels is None
     assert cfg.curriculum.terrain_levels is not None
+    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_x) == (0.6, 1.0)
+    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_y) == (-0.2, 0.2)
+    assert tuple(cfg.commands.base_velocity.ranges.ang_vel_z) == (-0.3, 0.3)
     assert getattr(base.rewards, "semantic_body_part_clearance", None) is None
     assert cfg.rewards.semantic_body_part_clearance is not None
     assert cfg.rewards.semantic_body_part_clearance.params["asset_cfg"].name == "robot"
@@ -4335,21 +4339,34 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert cfg.rewards.semantic_body_part_clearance.params["include_base"] is True
     assert cfg.rewards.semantic_body_part_clearance.params["base_footprint_grid"] == (5, 3)
     assert cfg.rewards.semantic_body_part_clearance.params["clearance_scale"] == 1000.0
+    assert cfg.rewards.semantic_foot_over_clearance is not None
+    assert cfg.rewards.semantic_foot_over_clearance.weight > 0.0
+    assert cfg.rewards.semantic_foot_over_clearance.params["lookahead_m"] == pytest.approx(1.6)
+    assert cfg.rewards.semantic_foot_over_clearance.params["corridor_width_m"] == pytest.approx(0.42)
+    assert cfg.rewards.semantic_foot_over_clearance.params["clearance_margin_m"] == pytest.approx(0.05)
     assert cfg.rewards.semantic_contact_collision is not None
+    assert cfg.rewards.semantic_contact_collision.params["small_weight"] >= 2.0
+    assert cfg.rewards.semantic_contact_collision.params["force_scale"] <= 30.0
     assert cfg.rewards.reference_foot_pos is not None
     assert tuple(count.small for count in cfg.semantic_obstacle_curriculum.plane_counts) == (
         8,
+        12,
         16,
         24,
         32,
         40,
-        48,
-        56,
+        52,
         64,
         72,
         80,
     )
     assert tuple(count.large for count in cfg.semantic_obstacle_curriculum.plane_counts) == (0,) * 10
+    assert cfg.semantic_obstacle_curriculum.center_safety_half_extent_m == pytest.approx(
+        (0.15, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50, 0.65, 0.80, 0.85)
+    )
+    assert cfg.semantic_obstacle_curriculum.min_spacing_clearance_m == pytest.approx(
+        (0.08, 0.08, 0.10, 0.12, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15)
+    )
     assert tuple(count.small for count in cfg.semantic_obstacle_curriculum.non_plane_counts) == (0,)
     assert tuple(count.large for count in cfg.semantic_obstacle_curriculum.non_plane_counts) == (0,)
     assert tuple(cfg.scene.terrain.terrain_generator.sub_terrains.keys()) == ("flat",)

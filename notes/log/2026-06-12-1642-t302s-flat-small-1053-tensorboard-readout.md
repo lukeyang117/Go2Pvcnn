@@ -1,0 +1,38 @@
+# T302s Flat-Small 10:53 TensorBoard Readout At 23.3k
+
+- Purpose: inspect whether run `2026-06-12_10-53-23` still has training value after reaching the `23300` checkpoint range.
+- Stage: training metrics / curriculum and semantic reward diagnostics.
+- Related todo: [T302s](../todo/T302s-env-level-collision-curriculum-plan.md) / [T302r](../todo/T302r-go2-geometry-clearance-reward-plan.md)
+- Procedure:
+  - Checked active train process and latest checkpoint files.
+  - Parsed TensorBoard scalar events with `env_isaacsim` TensorBoard `EventAccumulator`.
+- Input conditions:
+  - Run dir: `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/2026-06-12_10-53-23`
+  - Active process: `Go2Pvcnn/scripts/train.py ... --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance ... --resume ... model_19999.pt`
+  - Latest observed checkpoint at directory scan: `model_23300.pt`.
+- Key metrics:
+  - Latest event step: `23389`.
+  - `mean_terrain_level`: last `5.855`, last-20 mean `5.860`, last-100 mean `5.871`, last-500 mean `5.850`, since step `22868` mean `5.853`.
+  - `semantic_contact_collision`: last `-0.001032`, last-20 mean `-0.000703`, last-100 mean `-0.000858`, last-500 mean `-0.000849`, since step `22868` mean `-0.000843`.
+  - `semantic_body_part_clearance`: last `-0.003048`, last-20 mean `-0.002316`, last-100 mean `-0.003496`, last-500 mean `-0.003643`, since step `22868` mean `-0.003616`.
+  - `Train/mean_episode_length`: last `979.92`, last-20 mean `995.42`, last-100 mean `991.84`, last-500 mean `989.24`.
+  - `Train/mean_reward`: last `27.53`, last-20 mean `28.59`, last-100 mean `28.15`, last-500 mean `26.97`.
+  - `track_lin_vel_xy`: last-100 mean `1.412`.
+  - `error_vel_xy`: last-100 mean `0.188`; `error_vel_yaw`: last-100 mean `0.196`.
+  - Terminations: `base_contact` last-100 mean `0.0045`; `bad_orientation` last-100 mean `0.020`.
+- Result:
+  - Terrain curriculum remains open and stable around level `5.8-5.9`.
+  - Locomotion stability improved compared with the `22868` readout: episode length and reward both recovered.
+  - Semantic contact is not monotonically improving: last-100 worsened from `-0.000684` at step `22868` to `-0.000858`, while last-20 is similar to the previous good window.
+  - Clearance last-100 worsened from `-0.002979` to `-0.003496`, though last-20 is better at `-0.002316`.
+- Conclusion:
+  - Continue only briefly to about `model_24000`, then evaluate or retune.
+  - The run is not collapsing, but the semantic objective is noisy and no longer clearly improving every window.
+- Follow-up:
+  - Around `model_24000`, compare semantic contact/clearance and run a behavior/eval check before deciding to continue long.
+- Baseline Ref: `da46138`
+- Candidate Ref: working tree
+- Key Files:
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
+  - [../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py](../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py)
+  - [../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py](../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py)

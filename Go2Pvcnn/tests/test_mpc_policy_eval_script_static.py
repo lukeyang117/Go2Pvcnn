@@ -27,7 +27,10 @@ def test_mpc_policy_eval_script_exists_and_has_required_cli() -> None:
     ):
         assert flag in source
     assert "AppLauncher.add_app_launcher_args(parser)" in source
-    assert "choices=[\"tracking\", \"small_collision\"]" in source
+    assert "controlled_crossing" in source
+    assert "--crossing-speeds" in source
+    assert "--crossing-lateral-offsets" in source
+    assert "--crossing-obstacles-per-env" in source
 
 
 def test_mpc_policy_eval_script_has_no_shell_wrapper_dependency() -> None:
@@ -63,6 +66,20 @@ def test_mpc_policy_eval_loads_policy_and_uses_eval_cfgs() -> None:
     assert "runner.load" in source
     assert "TeacherElevationTrajectoryMpcSemanticTrackingEvalEnvCfg" in source
     assert "TeacherElevationTrajectoryMpcSemanticSmallCollisionEvalEnvCfg" in source
+    assert "TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg" in source
+
+
+def test_mpc_policy_eval_has_controlled_crossing_metric_helpers() -> None:
+    source = _source()
+    for name in (
+        "ControlledCrossingAccumulator",
+        "build_controlled_crossing_commands",
+        "controlled_crossing_step_metrics",
+        "success_by_speed",
+        "success_by_lateral_offset",
+        "small_overpass_success_rate_over_opportunities",
+    ):
+        assert name in source
 
 
 def test_mpc_policy_eval_collects_tracking_reference_from_runtime_manager() -> None:

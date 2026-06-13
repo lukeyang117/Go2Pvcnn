@@ -30,6 +30,8 @@ make_run_output_dir = eval_module.make_run_output_dir
 parse_command_sweep = eval_module.parse_command_sweep
 tracking_foot_metrics = eval_module.tracking_foot_metrics
 aggregate_small_collision_rounds = eval_module.aggregate_small_collision_rounds
+build_controlled_crossing_commands = eval_module.build_controlled_crossing_commands
+ControlledCrossingAccumulator = eval_module.ControlledCrossingAccumulator
 
 
 def test_tracking_foot_metrics_report_mean_p95_and_per_leg() -> None:
@@ -147,3 +149,48 @@ def test_command_for_step_supports_fixed_and_sweep_modes() -> None:
     assert parse_command_sweep(sweep.command_sweep) == [(0.1, 0.0, 0.0), (0.0, 0.2, 0.0)]
     assert command_for_step(sweep, step=0, env_count=1, device=torch.device("cpu")).tolist() == [[0.1, 0.0, 0.0]]
     assert command_for_step(sweep, step=1, env_count=1, device=torch.device("cpu")).tolist() == [[0.0, 0.2, 0.0]]
+
+
+def test_controlled_crossing_commands_group_speed_and_lateral_offsets() -> None:
+    commands, groups = build_controlled_crossing_commands(
+        env_count=9,
+        speeds=(0.6, 0.8, 1.0),
+        lateral_offsets=(-0.08, 0.0, 0.08),
+        device=torch.device("cpu"),
+    )
+
+    assert commands.shape == (9, 3)
+    assert commands[:, 1].tolist() == pytest.approx([-0.08, 0.0, 0.08, -0.08, 0.0, 0.08, -0.08, 0.0, 0.08])
+    assert commands[:, 0].tolist() == pytest.approx([0.6, 0.6, 0.6, 0.8, 0.8, 0.8, 1.0, 1.0, 1.0])
+    assert groups["speed_by_env"] == pytest.approx([0.6, 0.6, 0.6, 0.8, 0.8, 0.8, 1.0, 1.0, 1.0])
+    assert groups["lateral_offset_by_env"] == pytest.approx([-0.08, 0.0, 0.08, -0.08, 0.0, 0.08, -0.08, 0.0, 0.08])
+
+
+def test_controlled_crossing_accumulator_summarizes_success_by_speed_and_lateral() -> None:
+    acc = ControlledCrossingAccumulator(
+        num_envs=4,
+        speed_by_env=[0.6, 0.6, 0.8, 0.8],
+        lateral_offset_by_env=[0.0, 0.08, 0.0, 0.08],
+        device=torch.device("cpu"),
+    )
+    acc.opportunity_seen[:] = torch.tensor([True, True, True, False])
+    acc.root_crossed[:] = torch.tensor([True, True, True, False])
+    acc.foot_over[:] = torch.tensor([True, False, True, False])
+    acc.touchdown_on_small[:] = torch.tensor([False, False, True, False])
+    acc.done_seen[:] = torch.tensor([False, False, False, False])
+    contact = torch.tensor([False, True, False, False])
+
+    summary = acc.summary(contact_collided=contact)
+
+    assert summary["opportunity_env_count"] == 3
+    assert summary["root_crossed_count"] == 3
+    assert summary["foot_over_count"] == 2
+    assert summary["touchdown_on_small_env_count"] == 1
+    assert summary["small_contact_env_count"] == 1
+    assert summary["small_overpass_success_count"] == 1
+    assert summary["small_overpass_success_rate_over_opportunities"] == pytest.approx(1 / 3)
+    assert summary["success_by_speed"]["0.6"]["success_count"] == 1
+    assert summary["success_by_speed"]["0.6"]["opportunity_count"] == 2
+    assert summary["success_by_speed"]["0.8"]["success_count"] == 0
+    assert summary["success_by_lateral_offset"]["0.0"]["success_count"] == 1
+    assert summary["success_by_lateral_offset"]["0.08"]["success_count"] == 0

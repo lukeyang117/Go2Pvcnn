@@ -21,6 +21,7 @@ from extension.mdp.semantic_body_part_clearance import (
     _current_body_part_sample_points,
     _semantic_clearance_penalty_from_points,
     _semantic_geometry_clearance_penalty,
+    semantic_foot_over_clearance_bonus_from_tensors,
 )
 from extension.batch_mpc_planner.terrain import MpcPlannerTerrain
 
@@ -259,6 +260,43 @@ def test_geometry_reward_hot_path_has_no_per_env_loop() -> None:
     forbidden = ["for env_id in", "for env_idx in", "range(num_envs)", "range(env.num_envs)"]
     for text in forbidden:
         assert text not in source
+
+
+def test_foot_over_bonus_rewards_clear_foot_above_path_small_cell() -> None:
+    terrain = MpcPlannerTerrain(
+        height_map=torch.tensor([[[0.0, 0.0, 0.0], [0.0, 0.12, 0.0], [0.0, 0.0, 0.0]]], dtype=torch.float32),
+        semantic_map=torch.tensor([[[0, 0, 0], [0, 1, 0], [0, 0, 0]]], dtype=torch.long),
+        world_x_range=(-0.2, 0.2),
+        world_y_range=(-0.2, 0.2),
+    )
+    root_pos = torch.tensor([[-0.20, 0.0, 0.30]], dtype=torch.float32)
+    root_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)
+    command = torch.tensor([[0.8, 0.0, 0.0]], dtype=torch.float32)
+    clear_foot = torch.tensor([[[0.0, 0.0, 0.24], [0.15, 0.18, 0.02], [0.15, -0.18, 0.02], [-0.15, 0.0, 0.02]]])
+    low_foot = clear_foot.clone()
+    low_foot[:, 0, 2] = 0.14
+
+    clear_bonus = semantic_foot_over_clearance_bonus_from_tensors(
+        terrain=terrain,
+        foot_pos_w=clear_foot,
+        root_pos_w=root_pos,
+        root_quat_w=root_quat,
+        command=command,
+        small_semantic_ids=(1,),
+        clearance_margin_m=0.05,
+    )
+    low_bonus = semantic_foot_over_clearance_bonus_from_tensors(
+        terrain=terrain,
+        foot_pos_w=low_foot,
+        root_pos_w=root_pos,
+        root_quat_w=root_quat,
+        command=command,
+        small_semantic_ids=(1,),
+        clearance_margin_m=0.05,
+    )
+
+    assert clear_bonus.item() > 0.0
+    assert low_bonus.item() == pytest.approx(0.0)
 
 
 def test_scanner_pose_projects_world_points_into_current_map_frame() -> None:

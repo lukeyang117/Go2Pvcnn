@@ -349,6 +349,64 @@ def _semantic_clearance_penalty_from_points(
     return -torch.clamp(total, min=0.0, max=float(penalty_clip))
 
 
+def semantic_foot_over_clearance_bonus_from_tensors(
+    *,
+    terrain,
+    foot_pos_w: torch.Tensor,
+    root_pos_w: torch.Tensor,
+    root_quat_w: torch.Tensor,
+    command: torch.Tensor,
+    small_semantic_ids=(1,),
+    corridor_width_m=0.42,
+    lookahead_m=1.6,
+    low_small_max_height_m=0.30,
+    obstacle_half_extent_m=0.18,
+    clearance_margin_m=0.05,
+    bonus_clip=1.0,
+) -> torch.Tensor:
+    """Reward feet that pass clearly above low-small semantic cells on the commanded path."""
+
+    from extension.batch_mpc_planner.terrain import height_at, semantic_at
+    from extension.convention import extract_yaw_batch
+
+    foot_pos = torch.as_tensor(foot_pos_w, dtype=torch.float32)
+    device = foot_pos.device
+    root_pos = torch.as_tensor(root_pos_w, dtype=torch.float32, device=device)
+    root_quat = torch.as_tensor(root_quat_w, dtype=torch.float32, device=device)
+    command_t = torch.as_tensor(command, dtype=torch.float32, device=device)
+    if foot_pos.ndim != 3 or int(foot_pos.shape[-1]) != 3:
+        raise ValueError(f"foot_pos_w must be [N,F,3], got {tuple(foot_pos.shape)}")
+    if command_t.ndim != 2 or int(command_t.shape[0]) != int(foot_pos.shape[0]) or int(command_t.shape[1]) < 2:
+        raise ValueError("command must be [N,>=2] and match foot env dimension")
+
+    heading = command_t[:, :2]
+    speed = torch.linalg.vector_norm(heading, dim=-1, keepdim=True)
+    yaw = extract_yaw_batch(root_quat)
+    yaw_heading = torch.stack((torch.cos(yaw), torch.sin(yaw)), dim=-1)
+    heading = torch.where((speed > 1.0e-4).expand_as(heading), heading / speed.clamp_min(1.0e-6), yaw_heading)
+    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+
+    foot_delta = foot_pos[..., :2] - root_pos[:, None, :2]
+    foot_along = (foot_delta * heading[:, None, :]).sum(dim=-1)
+    foot_lateral = (foot_delta * left[:, None, :]).sum(dim=-1)
+    foot_semantic = semantic_at(terrain, foot_pos[..., :2]).to(device=device)
+    foot_ground = height_at(terrain, foot_pos[..., :2]).to(dtype=foot_pos.dtype, device=device)
+    root_ground = height_at(terrain, root_pos[:, None, :2]).reshape(-1, 1).to(dtype=foot_pos.dtype, device=device)
+    small_mask = _semantic_id_mask(foot_semantic.to(dtype=torch.long), small_semantic_ids)
+    obstacle_height = foot_ground - root_ground
+    in_path = (
+        small_mask
+        & (foot_along > 0.0)
+        & (foot_along < float(lookahead_m))
+        & (torch.abs(foot_lateral) < 0.5 * float(corridor_width_m) + float(obstacle_half_extent_m))
+        & (obstacle_height > 0.015)
+        & (obstacle_height <= float(low_small_max_height_m))
+    )
+    clearance = foot_pos[..., 2] - foot_ground
+    over_score = torch.relu(clearance - float(clearance_margin_m))
+    return torch.where(in_path, over_score, torch.zeros_like(over_score)).amax(dim=1).clamp(0.0, float(bonus_clip))
+
+
 def _body_id_tensor(body_ids, *, key: str, device: torch.device) -> torch.Tensor:
     if key not in body_ids:
         raise KeyError(f"body_ids missing required key: {key}")
@@ -456,6 +514,54 @@ def _current_scanner_terrain(scanner, *, device):
         sensor_yaw=None
         if sensor_quat is None
         else extract_yaw_batch(torch.as_tensor(sensor_quat, dtype=torch.float32, device=device)).contiguous(),
+    )
+
+
+def semantic_foot_over_clearance_bonus(
+    env,
+    *,
+    asset_cfg,
+    scanner_cfg,
+    command_name="base_velocity",
+    small_semantic_ids=(1,),
+    corridor_width_m=0.42,
+    lookahead_m=1.6,
+    low_small_max_height_m=0.30,
+    obstacle_half_extent_m=0.18,
+    clearance_margin_m=0.05,
+    bonus_clip=1.0,
+    bonus_scale=1.0,
+):
+    """Return positive reward when feet clear low-small cells on the commanded path."""
+
+    robot = env.scene[asset_cfg.name]
+    scanner = env.scene[scanner_cfg.name]
+    root = getattr(env, "unwrapped", env)
+    foot_ids = getattr(root, "_semantic_foot_over_body_ids", None)
+    if foot_ids is None:
+        foot_ids, _ = robot.find_bodies(".*_foot")
+        root._semantic_foot_over_body_ids = foot_ids
+    ids = torch.as_tensor(foot_ids, dtype=torch.long, device=torch.as_tensor(robot.data.body_pos_w).device)
+    foot_pos = torch.as_tensor(robot.data.body_pos_w, dtype=torch.float32, device=ids.device).index_select(1, ids)
+    command_manager = getattr(env, "command_manager", None)
+    if command_manager is None:
+        command = torch.zeros((foot_pos.shape[0], 3), dtype=foot_pos.dtype, device=foot_pos.device)
+    else:
+        command = torch.as_tensor(command_manager.get_command(command_name), dtype=foot_pos.dtype, device=foot_pos.device)
+    terrain = _current_scanner_terrain(scanner, device=foot_pos.device)
+    return 1000*float(bonus_scale) * semantic_foot_over_clearance_bonus_from_tensors(
+        terrain=terrain,
+        foot_pos_w=foot_pos,
+        root_pos_w=robot.data.root_pos_w,
+        root_quat_w=robot.data.root_quat_w,
+        command=command,
+        small_semantic_ids=small_semantic_ids,
+        corridor_width_m=corridor_width_m,
+        lookahead_m=lookahead_m,
+        low_small_max_height_m=low_small_max_height_m,
+        obstacle_half_extent_m=obstacle_half_extent_m,
+        clearance_margin_m=clearance_margin_m,
+        bonus_clip=bonus_clip,
     )
 
 

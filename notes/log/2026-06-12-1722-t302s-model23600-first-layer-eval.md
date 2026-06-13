@@ -1,0 +1,39 @@
+# T302s Model 23600 First-Layer Eval
+
+- Purpose: run first-layer behavior checks for `model_23600.pt` without modifying runtime code.
+- Stage: checkpoint evaluation / flat-small semantic behavior.
+- Related todo: [T302s](../todo/T302s-env-level-collision-curriculum-plan.md) / [T302r](../todo/T302r-go2-geometry-clearance-reward-plan.md)
+- Commands/procedures:
+  - Ran existing `Go2Pvcnn/scripts/mpc_policy_eval.py --mode small_collision` with `model_23600.pt`, fixed command `0.8 0.0 0.0`, `16` envs, `300` steps, dense small count `48`.
+  - Ran an inline no-code-change probe using `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg` and gym id `Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-v0`, fixed command `0.8 0.0 0.0`, `8` envs, `200` steps.
+- Input conditions:
+  - Checkpoint: `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/2026-06-12_10-53-23/model_23600.pt`
+  - Device/env: `env_isaacsim`, `cuda:0`, headless.
+- Results:
+  - Existing dense `small_collision` eval:
+    - Output: `logs/mpc_policy_eval/flat_small_model23600_quick_16x300/2026-06-12_17-15-24-512954/summary.json`
+    - `collided_env_count=8/16`
+    - `aggregate_small_collision_env_rate=0.5`
+    - First collision steps include `81`, `111`, `116`, `123`, `137`, `217`, `231`, `234`.
+    - Collision body names include `FL_foot`, `FR_foot`, `RL_foot`, `RR_foot`, `FL_calf`, `FR_calf`, `RL_calf`, `RR_calf`, and `FR_thigh`.
+    - Planned direction remained clean: root direction cosine `1.0`, command body match error `0.0`.
+  - Strict flat-small training-scene inline probe:
+    - Output: `logs/mpc_policy_eval/flat_small_model23600_training_scene_probe/summary_8x200.json`
+    - Confirmed active training scene: `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg`, 19 reward terms including `semantic_body_part_clearance`, only `terrain_levels` curriculum.
+    - `collided_env_count=0/8`
+    - `small_collision_env_rate_per_round=0.0`
+    - `round_small_force_max=0.0`
+    - `total_done_count_over_steps=0`
+    - Planned root direction cosine `0.999897`; command body match error `0.0`.
+- Interpretation:
+  - The strict training-scene probe shows the policy can walk stably for this short sample without small contact, but it does not prove crossing because the probe did not confirm obstacles lay in the commanded path and does not compute foot-over or touchdown-over-small metrics.
+  - The dense existing small-collision eval shows the policy is not robust to denser path-relevant small obstacles: half the envs collided within 300 steps, mostly with feet/calves.
+  - Therefore current `model_23600.pt` should not be considered to have learned reliable low-small overpass behavior.
+- Follow-up:
+  - First-layer eval needs a true path-obstacle crossing metric: count path small obstacles, root crossing, foot-over height, touchdown-not-on-small, and body/contact cleanliness.
+  - Do not infer overpass success from no-contact training-scene samples alone.
+- Baseline Ref: `da46138`
+- Candidate Ref: working tree
+- Key Files:
+  - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)

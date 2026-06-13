@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from types import MethodType
 
+import numpy as np
 import torch
 
 
@@ -325,10 +326,87 @@ def _attach_step_timing_probe(env, experiment_name: str) -> None:
     )
 
 
+def _livestream_camera_update_interval(livestream: int) -> int:
+    return 4 if livestream in (1, 2) else 1
+
+
+def _compute_follow_camera_pose(robot_pos: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    camera_direction = np.array([3.0, 0.0, 0.0], dtype=np.float64)
+    camera_position = robot_pos - camera_direction + np.array([0.0, 0.0, 1.5], dtype=np.float64)
+    return camera_position, robot_pos
+
+
+class _SingleEnvLivestreamFollowCamera:
+    """Follow env0 during single-env WebRTC training without touching multi-env runs."""
+
+    def __init__(self, env, *, enabled: bool, livestream: int, num_envs: int):
+        self.env = env
+        self.enabled = bool(enabled)
+        self.livestream = int(livestream)
+        self.num_envs = int(num_envs)
+        self.interval = _livestream_camera_update_interval(self.livestream)
+        self.step_idx = 0
+        self._orig_step = env.step
+
+    def should_update(self) -> bool:
+        if not self.enabled:
+            return False
+        if self.livestream not in (1, 2):
+            return False
+        if self.num_envs != 1:
+            return False
+        return self.step_idx % max(1, self.interval) == 0
+
+    def _update_camera(self, env_self) -> None:
+        try:
+            robot_pos = env_self.scene["robot"].data.root_pos_w[0].detach().cpu().numpy()
+            camera_position, target_position = _compute_follow_camera_pose(robot_pos)
+            env_self.sim.set_camera_view(camera_position, target_position)
+        except Exception as exc:
+            print(f"[WARN][train.py] livestream follow camera update failed once: {exc}", flush=True)
+            self.enabled = False
+
+    def wrap_env_step(self) -> None:
+        if not self.enabled:
+            return
+        if getattr(self.env.step, "_single_env_livestream_follow_camera", False):
+            return
+
+        def followed_step(env_self, action):
+            result = self._orig_step(action)
+            self.step_idx += 1
+            if self.should_update():
+                self._update_camera(env_self)
+            return result
+
+        followed_step._single_env_livestream_follow_camera = True  # type: ignore[attr-defined]
+        self.env.step = MethodType(followed_step, self.env)
+
+
+def _attach_single_env_livestream_follow_camera(env, *, rank: int, livestream: int, num_envs: int) -> None:
+    enabled = rank == 0 and livestream in (1, 2) and num_envs == 1
+    if not enabled:
+        return
+    follow_camera = _SingleEnvLivestreamFollowCamera(
+        env,
+        enabled=enabled,
+        livestream=livestream,
+        num_envs=num_envs,
+    )
+    follow_camera.wrap_env_step()
+    env._single_env_livestream_follow_camera = follow_camera
+    print(
+        "[train.py] Single-env livestream follow camera enabled "
+        f"(interval={follow_camera.interval} env steps, env0 root).",
+        flush=True,
+    )
+
+
 def main() -> int:
     """Main training function."""
 
     args_cli = _prepare_runtime_args(_parse_args())
+    requested_livestream = int(getattr(args_cli, "livestream", 0))
     app_launcher, simulation_app = _launch_app(args_cli)
 
     import gymnasium as gym
@@ -468,6 +546,12 @@ def main() -> int:
     base_env: ManagerBasedRLEnv = env.unwrapped
     _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     _attach_step_timing_probe(base_env, experiment_name)
+    _attach_single_env_livestream_follow_camera(
+        base_env,
+        rank=rank,
+        livestream=requested_livestream,
+        num_envs=int(args_cli.num_envs),
+    )
     
     print(f"[Env] Environment created successfully")
     print(f"  - observation_space: {env.observation_space}")

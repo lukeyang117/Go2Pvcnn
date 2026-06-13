@@ -25,7 +25,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description="Evaluate policy rollout against MPC reference and semantic collisions.")
-    parser.add_argument("--mode", choices=["tracking", "small_collision"], required=True)
+    parser.add_argument("--mode", choices=["tracking", "small_collision", "controlled_crossing"], required=True)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--num-envs", type=int, default=1)
@@ -39,6 +39,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-command-interval", type=int, default=100)
     parser.add_argument("--small-count-per-tile", type=int, default=80)
     parser.add_argument("--collision-force-threshold", type=float, default=1.0)
+    parser.add_argument("--crossing-speeds", type=str, default="0.6,0.8,1.0")
+    parser.add_argument("--crossing-lateral-offsets", type=str, default="-0.08,0.0,0.08")
+    parser.add_argument("--crossing-obstacles-per-env", type=int, default=24)
     parser.add_argument(
         "--debug-follow-camera",
         action="store_true",
@@ -60,6 +63,13 @@ def validate_eval_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-steps 0 is only valid with --livestream 1 or --livestream 2")
     if float(args.collision_force_threshold) < 0.0:
         raise ValueError("--collision-force-threshold must be non-negative")
+    if str(args.mode) == "controlled_crossing":
+        if not _parse_float_list(str(args.crossing_speeds)):
+            raise ValueError("--crossing-speeds must contain at least one float in controlled_crossing mode")
+        if not _parse_float_list(str(args.crossing_lateral_offsets)):
+            raise ValueError("--crossing-lateral-offsets must contain at least one float in controlled_crossing mode")
+        if int(args.crossing_obstacles_per_env) <= 0:
+            raise ValueError("--crossing-obstacles-per-env must be positive in controlled_crossing mode")
 
 
 def _parse_int_list(value: str) -> list[int]:
@@ -69,6 +79,16 @@ def _parse_int_list(value: str) -> list[int]:
         if not chunk:
             continue
         result.append(int(chunk))
+    return result
+
+
+def _parse_float_list(value: str) -> list[float]:
+    result: list[float] = []
+    for chunk in str(value).split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        result.append(float(chunk))
     return result
 
 
@@ -118,6 +138,29 @@ def command_for_step(args: argparse.Namespace, *, step: int, env_count: int, dev
     values = _command_tuple_from_args(args, step=step)
     command = torch.tensor(values, dtype=torch.float64, device=device).repeat(int(env_count), 1)
     return torch.round(command * 1_000_000_000_000) / 1_000_000_000_000
+
+
+def build_controlled_crossing_commands(
+    *,
+    env_count: int,
+    speeds: tuple[float, ...] | list[float],
+    lateral_offsets: tuple[float, ...] | list[float],
+    device: torch.device,
+) -> tuple[torch.Tensor, dict[str, list[float]]]:
+    combos = [(float(speed), float(lat)) for speed in speeds for lat in lateral_offsets]
+    if not combos:
+        raise ValueError("controlled crossing requires at least one speed/lateral command pair")
+    rows: list[list[float]] = []
+    speed_by_env: list[float] = []
+    lateral_by_env: list[float] = []
+    for env_id in range(int(env_count)):
+        speed, lateral = combos[env_id % len(combos)]
+        rows.append([speed, lateral, 0.0])
+        speed_by_env.append(speed)
+        lateral_by_env.append(lateral)
+    command = torch.tensor(rows, dtype=torch.float64, device=device)
+    command = torch.round(command * 1_000_000_000_000) / 1_000_000_000_000
+    return command, {"speed_by_env": speed_by_env, "lateral_offset_by_env": lateral_by_env}
 
 
 def tracking_foot_metrics(actual_foot_pos_w: torch.Tensor, reference_foot_pos_w: torch.Tensor) -> dict[str, object]:
@@ -220,6 +263,96 @@ class SmallCollisionRoundAccumulator:
             "first_collision_step_by_env": {str(k): int(v) for k, v in sorted(self.first_step.items())},
             "collision_body_names_by_env": {str(k): sorted(v) for k, v in sorted(self.body_names_by_env.items())},
             "round_small_force_max": float(self.force_max),
+        }
+
+
+@dataclass
+class ControlledCrossingAccumulator:
+    num_envs: int
+    speed_by_env: list[float]
+    lateral_offset_by_env: list[float]
+    device: torch.device
+    opportunity_seen: torch.Tensor = field(init=False)
+    root_crossed: torch.Tensor = field(init=False)
+    foot_over: torch.Tensor = field(init=False)
+    touchdown_on_small: torch.Tensor = field(init=False)
+    done_seen: torch.Tensor = field(init=False)
+    lock_step: torch.Tensor = field(init=False)
+    path_small_seen_steps: torch.Tensor = field(init=False)
+    foot_over_event_count: torch.Tensor = field(init=False)
+    touchdown_on_small_count: torch.Tensor = field(init=False)
+    min_clearance: torch.Tensor = field(init=False)
+    max_clearance: torch.Tensor = field(init=False)
+
+    def __post_init__(self) -> None:
+        n = int(self.num_envs)
+        if len(self.speed_by_env) != n or len(self.lateral_offset_by_env) != n:
+            raise ValueError("speed_by_env and lateral_offset_by_env must match num_envs")
+        self.opportunity_seen = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.root_crossed = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.foot_over = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.touchdown_on_small = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.done_seen = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.lock_step = torch.full((n,), -1, dtype=torch.long, device=self.device)
+        self.path_small_seen_steps = torch.zeros(n, dtype=torch.long, device=self.device)
+        self.foot_over_event_count = torch.zeros(n, dtype=torch.long, device=self.device)
+        self.touchdown_on_small_count = torch.zeros(n, dtype=torch.long, device=self.device)
+        self.min_clearance = torch.full((n,), 999.0, dtype=torch.float32, device=self.device)
+        self.max_clearance = torch.full((n,), -999.0, dtype=torch.float32, device=self.device)
+
+    @staticmethod
+    def _group_summary(keys: list[float], opportunity: torch.Tensor, success: torch.Tensor) -> dict[str, dict[str, float | int]]:
+        out: dict[str, dict[str, float | int]] = {}
+        for value in sorted({float(v) for v in keys}):
+            ids = torch.tensor([idx for idx, item in enumerate(keys) if float(item) == value], dtype=torch.long, device=opportunity.device)
+            opp_count = int(opportunity.index_select(0, ids).sum().item()) if int(ids.numel()) else 0
+            success_count = int(success.index_select(0, ids).sum().item()) if int(ids.numel()) else 0
+            out[str(float(value))] = {
+                "opportunity_count": opp_count,
+                "success_count": success_count,
+                "success_rate": float(success_count / max(1, opp_count)),
+            }
+        return out
+
+    def summary(self, *, contact_collided: torch.Tensor) -> dict[str, object]:
+        contact = torch.as_tensor(contact_collided, dtype=torch.bool, device=self.device).reshape(-1)
+        if int(contact.numel()) != int(self.num_envs):
+            raise ValueError("contact_collided must match num_envs")
+        opportunity = self.opportunity_seen
+        success = (
+            opportunity
+            & self.root_crossed
+            & self.foot_over
+            & torch.logical_not(self.touchdown_on_small)
+            & torch.logical_not(contact)
+            & torch.logical_not(self.done_seen)
+        )
+        opportunity_count = int(opportunity.sum().item())
+        success_count = int(success.sum().item())
+        min_values = [None if v > 900 else float(v) for v in self.min_clearance.detach().cpu().tolist()]
+        max_values = [None if v < -900 else float(v) for v in self.max_clearance.detach().cpu().tolist()]
+        return {
+            "opportunity_env_count": opportunity_count,
+            "opportunity_env_rate": float(opportunity_count / max(1, int(self.num_envs))),
+            "root_crossed_count": int((opportunity & self.root_crossed).sum().item()),
+            "foot_over_count": int((opportunity & self.foot_over).sum().item()),
+            "touchdown_on_small_env_count": int((opportunity & self.touchdown_on_small).sum().item()),
+            "small_contact_env_count": int((opportunity & contact).sum().item()),
+            "small_overpass_success_count": success_count,
+            "small_overpass_success_rate_over_opportunities": float(success_count / max(1, opportunity_count)),
+            "success_by_speed": self._group_summary(self.speed_by_env, opportunity, success),
+            "success_by_lateral_offset": self._group_summary(self.lateral_offset_by_env, opportunity, success),
+            "speed_by_env": [float(v) for v in self.speed_by_env],
+            "lateral_offset_by_env": [float(v) for v in self.lateral_offset_by_env],
+            "path_small_seen_steps_by_env": [int(v) for v in self.path_small_seen_steps.detach().cpu().tolist()],
+            "lock_step_by_env": [int(v) for v in self.lock_step.detach().cpu().tolist()],
+            "min_clearance_m_by_env": min_values,
+            "max_clearance_m_by_env": max_values,
+            "foot_over_event_count_by_env": [int(v) for v in self.foot_over_event_count.detach().cpu().tolist()],
+            "touchdown_on_small_count_by_env": [int(v) for v in self.touchdown_on_small_count.detach().cpu().tolist()],
+            "root_crossed_by_env": [bool(v) for v in self.root_crossed.detach().cpu().tolist()],
+            "foot_over_by_env": [bool(v) for v in self.foot_over.detach().cpu().tolist()],
+            "overpass_success_by_env": [bool(v) for v in success.detach().cpu().tolist()],
         }
 
 
@@ -334,6 +467,160 @@ def semantic_small_force_matrix_w(env) -> tuple[torch.Tensor, tuple[str, ...]]:
     return matrix, body_names
 
 
+def _robot_foot_ids(robot, *, device: torch.device) -> torch.Tensor:
+    foot_ids, foot_names = robot.find_bodies(".*_foot")
+    ids = torch.as_tensor(foot_ids, dtype=torch.long, device=device)
+    if foot_names:
+        name_to_id = {str(name).split("/")[-1].lower(): int(body_id) for name, body_id in zip(foot_names, foot_ids)}
+        ordered = [name_to_id.get(name) for name in ("fl_foot", "fr_foot", "rl_foot", "rr_foot")]
+        if all(value is not None for value in ordered):
+            ids = torch.as_tensor([int(value) for value in ordered], dtype=torch.long, device=device)
+    if int(ids.numel()) != 4:
+        raise ValueError(f"expected 4 foot bodies for crossing metrics, got {int(ids.numel())}")
+    return ids
+
+
+def _terrain_world_grid_xy(terrain) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    height = torch.as_tensor(terrain.height_map, dtype=torch.float32)
+    if height.ndim != 3:
+        raise ValueError("terrain height map must be [N,H,W]")
+    device = height.device
+    n, h, w = height.shape
+    x0, x1 = terrain.world_x_range
+    y0, y1 = terrain.world_y_range
+    xs = torch.linspace(float(x0), float(x1), w, dtype=torch.float32, device=device)
+    ys = torch.linspace(float(y0), float(y1), h, dtype=torch.float32, device=device)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    local_xy = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
+    if terrain.sensor_pos_w is None:
+        grid_x = local_xy[:, 0].view(1, -1).expand(n, -1)
+        grid_y = local_xy[:, 1].view(1, -1).expand(n, -1)
+    else:
+        sensor_pos = torch.as_tensor(terrain.sensor_pos_w, dtype=torch.float32, device=device)
+        sensor_yaw = torch.zeros(n, dtype=torch.float32, device=device)
+        if terrain.sensor_yaw is not None:
+            sensor_yaw = torch.as_tensor(terrain.sensor_yaw, dtype=torch.float32, device=device).reshape(-1)
+        cy = torch.cos(sensor_yaw).view(n, 1)
+        sy = torch.sin(sensor_yaw).view(n, 1)
+        lx = local_xy[:, 0].view(1, -1)
+        ly = local_xy[:, 1].view(1, -1)
+        grid_x = sensor_pos[:, 0:1] + lx * cy - ly * sy
+        grid_y = sensor_pos[:, 1:2] + lx * sy + ly * cy
+    return torch.stack((grid_x, grid_y), dim=-1), height.reshape(n, -1), torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device).reshape(n, -1)
+
+
+def controlled_crossing_step_metrics(
+    *,
+    env,
+    accumulator: ControlledCrossingAccumulator,
+    command: torch.Tensor,
+    step: int,
+    corridor_width_m: float = 0.36,
+    lookahead_m: float = 1.40,
+    low_small_max_height_m: float = 0.30,
+    obstacle_half_extent_m: float = 0.18,
+    foot_clearance_margin_m: float = 0.05,
+) -> dict[str, object]:
+    from extension.batch_mpc_planner.terrain import height_at, semantic_at
+    from extension.convention import extract_yaw_batch
+
+    base = _base_env(env)
+    manager = getattr(base, "_trajectory_manager", None)
+    if manager is None or not hasattr(manager, "_terrain_from_env"):
+        raise RuntimeError("controlled crossing metrics require an attached MPC trajectory manager")
+    terrain = manager._terrain_from_env(base)
+    robot = base.scene["robot"]
+    device = torch.device(str(getattr(base, "device", "cpu")))
+    root_pos = torch.as_tensor(robot.data.root_pos_w, dtype=torch.float32, device=device)
+    root_quat = torch.as_tensor(robot.data.root_quat_w, dtype=torch.float32, device=device)
+    yaw = extract_yaw_batch(root_quat)
+    heading = torch.as_tensor(command[:, :2], dtype=torch.float32, device=device)
+    heading_norm = torch.linalg.vector_norm(heading, dim=-1, keepdim=True).clamp_min(1.0e-6)
+    heading = heading / heading_norm
+    yaw_heading = torch.stack((torch.cos(yaw), torch.sin(yaw)), dim=-1)
+    heading = torch.where((heading_norm > 1.0e-4).expand_as(heading), heading, yaw_heading)
+    left = torch.stack((-heading[:, 1], heading[:, 0]), dim=-1)
+
+    grid_xy, grid_z, grid_sem = _terrain_world_grid_xy(terrain)
+    root_ground = height_at(terrain, root_pos[:, None, :2]).reshape(-1).to(device=device)
+    delta = grid_xy - root_pos[:, None, :2]
+    along = (delta * heading[:, None, :]).sum(dim=-1)
+    lateral = (delta * left[:, None, :]).sum(dim=-1)
+    rel_h = grid_z - root_ground[:, None]
+    path_mask = (
+        (grid_sem == 1)
+        & (along > 0.10)
+        & (along < float(lookahead_m))
+        & (torch.abs(lateral) < 0.5 * float(corridor_width_m))
+        & (rel_h > 0.015)
+        & (rel_h <= float(low_small_max_height_m))
+    )
+    path_count = path_mask.sum(dim=1)
+    accumulator.path_small_seen_steps += path_count.gt(0).long()
+    newly = torch.logical_not(accumulator.opportunity_seen) & path_count.gt(0)
+    if bool(newly.any()):
+        score = torch.where(path_mask, along + 0.05 * torch.abs(lateral), torch.full_like(along, 1.0e6))
+        idx = torch.argmin(score, dim=1)
+        env_ids = torch.nonzero(newly, as_tuple=False).flatten()
+        chosen = idx.index_select(0, env_ids)
+        if not hasattr(accumulator, "obstacle_xy"):
+            accumulator.obstacle_xy = torch.zeros((int(accumulator.num_envs), 2), dtype=torch.float32, device=device)
+            accumulator.obstacle_top_z = torch.zeros((int(accumulator.num_envs),), dtype=torch.float32, device=device)
+            accumulator.heading = torch.zeros((int(accumulator.num_envs), 2), dtype=torch.float32, device=device)
+            accumulator.left = torch.zeros((int(accumulator.num_envs), 2), dtype=torch.float32, device=device)
+        accumulator.obstacle_xy[env_ids] = grid_xy[env_ids, chosen]
+        accumulator.obstacle_top_z[env_ids] = grid_z[env_ids, chosen]
+        accumulator.heading[env_ids] = heading[env_ids]
+        accumulator.left[env_ids] = left[env_ids]
+        accumulator.opportunity_seen[env_ids] = True
+        accumulator.lock_step[env_ids] = int(step)
+
+    if bool(accumulator.opportunity_seen.any()):
+        obstacle_xy = accumulator.obstacle_xy
+        obstacle_top_z = accumulator.obstacle_top_z
+        locked_heading = accumulator.heading
+        locked_left = accumulator.left
+        root_s = ((root_pos[:, :2] - obstacle_xy) * locked_heading).sum(dim=-1)
+        accumulator.root_crossed |= accumulator.opportunity_seen & (root_s > float(obstacle_half_extent_m))
+
+        foot_ids = _robot_foot_ids(robot, device=device)
+        foot_pos = torch.as_tensor(robot.data.body_pos_w[:, foot_ids, :], dtype=torch.float32, device=device)
+        rel_foot = foot_pos[..., :2] - obstacle_xy[:, None, :]
+        foot_s = (rel_foot * locked_heading[:, None, :]).sum(dim=-1)
+        foot_l = (rel_foot * locked_left[:, None, :]).sum(dim=-1)
+        in_footprint = (
+            accumulator.opportunity_seen[:, None]
+            & (torch.abs(foot_s) < float(obstacle_half_extent_m))
+            & (torch.abs(foot_l) < float(obstacle_half_extent_m))
+        )
+        clearance = foot_pos[..., 2] - obstacle_top_z[:, None]
+        min_candidate = torch.where(in_footprint, clearance, torch.full_like(clearance, 999.0)).amin(dim=1)
+        max_candidate = torch.where(in_footprint, clearance, torch.full_like(clearance, -999.0)).amax(dim=1)
+        accumulator.min_clearance = torch.minimum(accumulator.min_clearance, min_candidate)
+        accumulator.max_clearance = torch.maximum(accumulator.max_clearance, max_candidate)
+        over_now = in_footprint & (clearance > float(foot_clearance_margin_m))
+        accumulator.foot_over_event_count += over_now.any(dim=1).long()
+        accumulator.foot_over |= over_now.any(dim=1)
+
+        foot_height = height_at(terrain, foot_pos[..., :2].reshape(int(accumulator.num_envs), -1, 2)).reshape(
+            int(accumulator.num_envs), -1
+        ).to(device=device)
+        foot_sem = semantic_at(terrain, foot_pos[..., :2].reshape(int(accumulator.num_envs), -1, 2)).reshape(
+            int(accumulator.num_envs), -1
+        ).to(device=device)
+        on_small_now = accumulator.opportunity_seen[:, None] & (foot_sem == 1) & ((foot_pos[..., 2] - foot_height) < 0.04)
+        accumulator.touchdown_on_small_count += on_small_now.any(dim=1).long()
+        accumulator.touchdown_on_small |= on_small_now.any(dim=1)
+
+    return {
+        "path_small_cell_count": int(path_count.sum().item()),
+        "opportunity_env_count": int(accumulator.opportunity_seen.sum().item()),
+        "root_crossed_count": int(accumulator.root_crossed.sum().item()),
+        "foot_over_count": int(accumulator.foot_over.sum().item()),
+        "touchdown_on_small_env_count": int(accumulator.touchdown_on_small.sum().item()),
+    }
+
+
 def aggregate_small_collision_rounds(rounds: list[dict[str, object]]) -> dict[str, object]:
     total_collided = sum(int(row.get("collided_env_count", 0) or 0) for row in rounds)
     total_env_rounds = sum(int(row.get("num_envs", 0) or 0) for row in rounds)
@@ -342,6 +629,18 @@ def aggregate_small_collision_rounds(rounds: list[dict[str, object]]) -> dict[st
         "total_collided_envs": int(total_collided),
         "total_env_rounds": int(total_env_rounds),
         "aggregate_small_collision_env_rate": float(total_collided / max(1, total_env_rounds)),
+    }
+
+
+def aggregate_controlled_crossing_rounds(rounds: list[dict[str, object]]) -> dict[str, object]:
+    total_opportunity = sum(int(row.get("opportunity_env_count", 0) or 0) for row in rounds)
+    total_success = sum(int(row.get("small_overpass_success_count", 0) or 0) for row in rounds)
+    total_contact = sum(int(row.get("small_contact_env_count", 0) or 0) for row in rounds)
+    return {
+        "aggregate_crossing_opportunity_envs": int(total_opportunity),
+        "aggregate_crossing_success_envs": int(total_success),
+        "aggregate_crossing_contact_envs": int(total_contact),
+        "aggregate_small_overpass_success_rate": float(total_success / max(1, total_opportunity)),
     }
 
 
@@ -376,6 +675,25 @@ def build_eval_env_cfg(args: argparse.Namespace):
         env_cfg.semantic_obstacle_curriculum.plane_counts = (dense_flat,)
         env_cfg.semantic_obstacle_curriculum.non_plane_counts = (zero,)
         env_cfg.scene.terrain.semantic_obstacle_curriculum = env_cfg.semantic_obstacle_curriculum
+    elif str(args.mode) == "controlled_crossing":
+        from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+        from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+            TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
+        )
+
+        env_cfg = TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg()
+        controlled_count = max(1, int(args.crossing_obstacles_per_env))
+        env_cfg.semantic_obstacle_curriculum = SemanticObstacleCurriculumCfg(
+            enabled=True,
+            plane_terrain_names=("flat",),
+            plane_counts=(SemanticObstacleCount(small=controlled_count, large=0),),
+            non_plane_counts=(SemanticObstacleCount(small=0, large=0),),
+            center_safety_half_extent_m=(0.0,),
+            min_spacing_clearance_m=(0.05,),
+            tile_margin_m=(0.25,),
+            collision_force_threshold=float(args.collision_force_threshold),
+        )
+        env_cfg.scene.terrain.semantic_obstacle_curriculum = env_cfg.semantic_obstacle_curriculum
     else:
         raise ValueError(f"Unsupported mode: {args.mode}")
 
@@ -385,10 +703,10 @@ def build_eval_env_cfg(args: argparse.Namespace):
     terrain_cols = _parse_int_list(str(args.terrain_cols))
     tg = getattr(env_cfg.scene.terrain, "terrain_generator", None)
     if tg is not None:
-        if str(args.mode) == "small_collision":
+        if str(args.mode) in ("small_collision", "controlled_crossing"):
             sub_terrains = getattr(tg, "sub_terrains", None)
             if not isinstance(sub_terrains, dict) or "flat" not in sub_terrains:
-                raise ValueError("small_collision mode requires a terrain generator with a 'flat' sub-terrain")
+                raise ValueError(f"{args.mode} mode requires a terrain generator with a 'flat' sub-terrain")
             tg.sub_terrains = {"flat": sub_terrains["flat"]}
         if terrain_rows:
             tg.num_rows = len(terrain_rows)
@@ -917,6 +1235,15 @@ def run_eval(args: argparse.Namespace) -> int:
         total_steps = 0
         overall_tracking = TrackingRoundAccumulator() if str(args.mode) == "tracking" else None
         mpc_foot_markers = build_mpc_foot_markers() if livestream_enabled else None
+        controlled_command: torch.Tensor | None = None
+        crossing_groups: dict[str, list[float]] | None = None
+        if str(args.mode) == "controlled_crossing":
+            controlled_command, crossing_groups = build_controlled_crossing_commands(
+                env_count=int(args.num_envs),
+                speeds=tuple(_parse_float_list(str(args.crossing_speeds))),
+                lateral_offsets=tuple(_parse_float_list(str(args.crossing_lateral_offsets))),
+                device=torch.device(str(args.device)),
+            )
         for round_idx in range(int(args.num_rounds)):
             obs, _ = wrapped_env.reset()
             step_limit = int(args.max_steps)
@@ -928,16 +1255,29 @@ def run_eval(args: argparse.Namespace) -> int:
                     threshold=float(args.collision_force_threshold),
                     device=torch.device(str(args.device)),
                 )
-                if str(args.mode) == "small_collision"
+                if str(args.mode) in ("small_collision", "controlled_crossing")
                 else None
             )
-            while (step_limit == 0 and simulation_app.is_running()) or round_steps < step_limit:
-                command = command_for_step(
-                    args,
-                    step=round_steps,
-                    env_count=int(args.num_envs),
+            crossing_acc = None
+            if str(args.mode) == "controlled_crossing":
+                if controlled_command is None or crossing_groups is None:
+                    raise RuntimeError("controlled crossing command setup was not initialized")
+                crossing_acc = ControlledCrossingAccumulator(
+                    num_envs=int(args.num_envs),
+                    speed_by_env=crossing_groups["speed_by_env"],
+                    lateral_offset_by_env=crossing_groups["lateral_offset_by_env"],
                     device=torch.device(str(args.device)),
                 )
+            while (step_limit == 0 and simulation_app.is_running()) or round_steps < step_limit:
+                if controlled_command is not None:
+                    command = controlled_command
+                else:
+                    command = command_for_step(
+                        args,
+                        step=round_steps,
+                        env_count=int(args.num_envs),
+                        device=torch.device(str(args.device)),
+                    )
                 apply_command_to_env(base_env, command)
                 command_diagnostics = command_body_source_diagnostics(base_env, command)
                 with torch.no_grad():
@@ -964,6 +1304,14 @@ def run_eval(args: argparse.Namespace) -> int:
                 if collision_acc is not None:
                     force_matrix, body_names = semantic_small_force_matrix_w(base_env)
                     collision_acc.update(step=round_steps, force_matrix_w=force_matrix, body_names=body_names)
+                if crossing_acc is not None:
+                    crossing_acc.done_seen |= torch.as_tensor(dones, dtype=torch.bool, device=crossing_acc.device)
+                    metric_row["controlled_crossing"] = controlled_crossing_step_metrics(
+                        env=base_env,
+                        accumulator=crossing_acc,
+                        command=command,
+                        step=round_steps,
+                    )
                 if mpc_foot_markers is not None:
                     update_mpc_foot_markers(mpc_foot_markers, base_env)
                 if livestream_enabled and int(args.num_envs) == 1:
@@ -997,6 +1345,10 @@ def run_eval(args: argparse.Namespace) -> int:
                 round_summary["tracking"] = round_tracking.summary()
             if collision_acc is not None:
                 round_summary.update(collision_acc.summary())
+            if crossing_acc is not None:
+                if collision_acc is None:
+                    raise RuntimeError("controlled crossing requires collision accumulator")
+                round_summary.update(crossing_acc.summary(contact_collided=collision_acc.collided))
             write_jsonl(rounds_path, round_summary)
             summaries.append(round_summary)
             if step_limit == 0:
@@ -1018,6 +1370,9 @@ def run_eval(args: argparse.Namespace) -> int:
             summary["tracking"] = overall_tracking.summary()
         if str(args.mode) == "small_collision":
             summary.update(aggregate_small_collision_rounds(summaries))
+        if str(args.mode) == "controlled_crossing":
+            summary.update(aggregate_small_collision_rounds(summaries))
+            summary.update(aggregate_controlled_crossing_rounds(summaries))
         write_summary(summary_path, summary)
     except BaseException as exc:
         print(f"[mpc_policy_eval] abort: {type(exc).__name__}: {exc!r}", flush=True)

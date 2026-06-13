@@ -29,7 +29,10 @@ from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.batch_mpc_planner.participation import MpcTerrainDifficultyPair
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from extension.mdp.rewards_reference import reference_foot_pos_reward
-from extension.mdp.semantic_body_part_clearance import semantic_body_part_clearance_reward
+from extension.mdp.semantic_body_part_clearance import (
+    semantic_body_part_clearance_reward,
+    semantic_foot_over_clearance_bonus,
+)
 from extension.mdp.semantic_contact_rewards import semantic_global_contact_collision_reward
 from extension.semantic_curriculum import (
     SemanticObstacleCount,
@@ -170,9 +173,9 @@ def _semantic_contact_collision_reward_term() -> RewTerm:
             "body_names": SEMANTIC_CONTACT_BODY_NAMES,
             "body_weights": SEMANTIC_CONTACT_BODY_WEIGHTS,
             "force_threshold": 0.5,
-            "force_scale": 50.0,
+            "force_scale": 25.0,
             "force_clip": 1.0,
-            "small_weight": 1.0,
+            "small_weight": 2.5,
             "large_weight": 2.0,
         },
     )
@@ -209,6 +212,26 @@ def _semantic_body_part_clearance_reward_term() -> RewTerm:
             "include_base": True,
             "penalty_clip": 1.0,
             "clearance_scale": 1000.0,
+        },
+    )
+
+
+def _semantic_foot_over_clearance_reward_term() -> RewTerm:
+    return RewTerm(
+        func=semantic_foot_over_clearance_bonus,
+        weight=1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "scanner_cfg": SceneEntityCfg("semantic_height_scanner"),
+            "command_name": "base_velocity",
+            "small_semantic_ids": (1,),
+            "corridor_width_m": 0.42,
+            "lookahead_m": 1.6,
+            "low_small_max_height_m": 0.30,
+            "obstacle_half_extent_m": 0.18,
+            "clearance_margin_m": 0.05,
+            "bonus_clip": 1.0,
+            "bonus_scale": 4.0,
         },
     )
 
@@ -339,7 +362,7 @@ class TeacherElevationTrajectoryMpcSemanticEventCfg:
 class TeacherElevationTrajectoryMpcSemanticCommandsCfg:
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
+        resampling_time_range=(100.0, 100.0),
         rel_standing_envs=0.1,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
@@ -627,6 +650,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY(TeacherElevationTrajector
         self.rewards.semantic_contact_collision = None
         self.scene.semantic_contact_small = None
         self.scene.semantic_contact_large = None
+        self.terminations.time_out = None
         tg = self.scene.terrain.terrain_generator
         if tg is not None:
             tg.num_rows = SEMANTIC_TERRAIN_CFG.num_rows
@@ -720,19 +744,19 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
             plane_terrain_names=("flat",),
             plane_counts=(
                 SemanticObstacleCount(small=8, large=0),
+                SemanticObstacleCount(small=12, large=0),
                 SemanticObstacleCount(small=16, large=0),
                 SemanticObstacleCount(small=24, large=0),
                 SemanticObstacleCount(small=32, large=0),
                 SemanticObstacleCount(small=40, large=0),
-                SemanticObstacleCount(small=48, large=0),
-                SemanticObstacleCount(small=56, large=0),
+                SemanticObstacleCount(small=52, large=0),
                 SemanticObstacleCount(small=64, large=0),
                 SemanticObstacleCount(small=72, large=0),
                 SemanticObstacleCount(small=80, large=0),
             ),
             non_plane_counts=(SemanticObstacleCount(small=0, large=0),),
-            center_safety_half_extent_m=(0.85,),
-            min_spacing_clearance_m=(0.15,),
+            center_safety_half_extent_m=(0.15, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50, 0.65, 0.80, 0.85),
+            min_spacing_clearance_m=(0.08, 0.08, 0.10, 0.12, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15),
             tile_margin_m=(0.50,),
             collision_force_threshold=1.0,
         )
@@ -742,9 +766,13 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
         super().__post_init__()
         self.experiment_name = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
         self.curriculum.lin_vel_cmd_levels = None
+        self.commands.base_velocity.ranges.lin_vel_x = (0.6, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.2, 0.2)
+        self.commands.base_velocity.ranges.ang_vel_z = (-0.3, 0.3)
         self.scene.terrain.terrain_generator = _flat_small_avoidance_terrain_cfg()
         self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
         self.rewards.semantic_body_part_clearance = _semantic_body_part_clearance_reward_term()
+        self.rewards.semantic_foot_over_clearance = _semantic_foot_over_clearance_reward_term()
 
 
 @configclass
@@ -769,6 +797,8 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY(
         self.rewards.semantic_contact_collision = None
         self.scene.semantic_contact_small = None
         self.scene.semantic_contact_large = None
+        self.terminations.time_out = None
+        self.curriculum.terrain_levels = None
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
         self.events.push_robot = None
         self.observations.policy_elevation_semantic_map.enable_corruption = False

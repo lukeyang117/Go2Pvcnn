@@ -179,6 +179,8 @@ def terrain_name_for_col(
 ) -> str | None:
     if terrain_names is None:
         return None
+    if len(terrain_names) == 1:
+        return str(terrain_names[0])
     if col < 0 or col >= len(terrain_names):
         return None
     return str(terrain_names[col])

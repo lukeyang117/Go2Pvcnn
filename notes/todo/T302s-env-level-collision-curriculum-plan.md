@@ -154,6 +154,24 @@ Observed: process exits `0`; Curriculum Manager has only `terrain_levels`; Rewar
 
 - [../log/2026-06-11-2156-flat-small-env-level-collision-curriculum-html-design.md](../log/2026-06-11-2156-flat-small-env-level-collision-curriculum-html-design.md)
 - [../log/2026-06-11-2211-t302s-env-level-collision-curriculum-implementation.md](../log/2026-06-11-2211-t302s-env-level-collision-curriculum-implementation.md)
+- [../log/2026-06-12-1039-t302s-flat-small-2215-tensorboard-readout.md](../log/2026-06-12-1039-t302s-flat-small-2215-tensorboard-readout.md)
+- [../log/2026-06-12-1054-t302s-flat-small-fixed-command-ranges.md](../log/2026-06-12-1054-t302s-flat-small-fixed-command-ranges.md)
+- [../log/2026-06-12-1355-t302s-flat-small-1053-tensorboard-readout.md](../log/2026-06-12-1355-t302s-flat-small-1053-tensorboard-readout.md)
+- [../log/2026-06-12-1548-t302s-flat-small-1053-tensorboard-readout.md](../log/2026-06-12-1548-t302s-flat-small-1053-tensorboard-readout.md)
+- [../log/2026-06-12-1642-t302s-flat-small-1053-tensorboard-readout.md](../log/2026-06-12-1642-t302s-flat-small-1053-tensorboard-readout.md)
+- [../log/2026-06-12-1722-t302s-model23600-first-layer-eval.md](../log/2026-06-12-1722-t302s-model23600-first-layer-eval.md)
+- [../log/2026-06-12-1740-t302s-model23600-crossing-1000step-probe.md](../log/2026-06-12-1740-t302s-model23600-crossing-1000step-probe.md)
+- [../log/2026-06-12-1815-t302s-model23600-controlled-crossing-eval.md](../log/2026-06-12-1815-t302s-model23600-controlled-crossing-eval.md)
+- [../log/2026-06-12-1833-flat-small-foot-over-training-signal.md](../log/2026-06-12-1833-flat-small-foot-over-training-signal.md)
+- [../log/2026-06-13-1505-t302s-model28900-controlled-crossing-eval.md](../log/2026-06-13-1505-t302s-model28900-controlled-crossing-eval.md)
+- [../log/2026-06-13-1510-t302s-flat-small-1120-tensorboard-readout.md](../log/2026-06-13-1510-t302s-flat-small-1120-tensorboard-readout.md)
+- [../log/2026-06-13-1651-train-single-env-livestream-follow-camera.md](../log/2026-06-13-1651-train-single-env-livestream-follow-camera.md)
+- [../log/2026-06-13-1735-play-keyboard-control-terrain-selection.md](../log/2026-06-13-1735-play-keyboard-control-terrain-selection.md)
+- [../log/2026-06-13-1756-play-pynput-install-headless-smoke.md](../log/2026-06-13-1756-play-pynput-install-headless-smoke.md)
+- [../log/2026-06-13-1810-human-12-play-keyboard-command-update.md](../log/2026-06-13-1810-human-12-play-keyboard-command-update.md)
+- [../log/2026-06-13-1839-play-terminal-keyboard-backend.md](../log/2026-06-13-1839-play-terminal-keyboard-backend.md)
+- [../log/2026-06-13-2022-play-disable-timeout-refresh.md](../log/2026-06-13-2022-play-disable-timeout-refresh.md)
+- [../log/2026-06-13-2207-flat-small-semantic-course-column-fix.md](../log/2026-06-13-2207-flat-small-semantic-course-column-fix.md)
 - [../log/2026-06-11-1955-t302q-flat-small-1831-tensorboard-readout.md](../log/2026-06-11-1955-t302q-flat-small-1831-tensorboard-readout.md)
 
 ## Git Refs
@@ -166,7 +184,31 @@ Observed: process exits `0`; Curriculum Manager has only `terrain_levels`; Rewar
   - [../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py](../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py)
   - [../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py](../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py)
   - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
+  - [../../Go2Pvcnn/scripts/mpc_policy_eval.py](../../Go2Pvcnn/scripts/mpc_policy_eval.py)
+  - [../../Go2Pvcnn/scripts/train.py](../../Go2Pvcnn/scripts/train.py)
+  - [../../Go2Pvcnn/scripts/play.py](../../Go2Pvcnn/scripts/play.py)
 
 ## Next Step
 
-- Run a short resumed training/TensorBoard check to confirm `mean_terrain_level` can move and scaled clearance reward is visible without destabilizing locomotion.
+- Start a short warm-start run from the latest useful checkpoint and watch whether `Episode_Reward/semantic_foot_over_clearance` becomes nonzero; then re-run controlled crossing eval and use `foot_over_count` as the first acceptance signal.
+
+## Post-Implementation Finding
+
+- Run `2026-06-11_22-15-56` confirms old curriculum TensorBoard noise is gone and clearance reward is visible, but terrain progression still fails.
+- Saved config shows `lin_vel_x=(-0.1,0.1)` and `lin_vel_y=(-0.1,0.1)` while `lin_vel_cmd_levels` is disabled.
+- Terrain move-up still requires `distance > 4m` because terrain tile size is `8m`.
+- This creates a new immediate fix: flat-small should use fixed useful command ranges once velocity curriculum is disabled.
+- Fixed locally: flat-small training now uses `lin_vel_x=(0.6,1.0)`, `lin_vel_y=(-0.2,0.2)`, `ang_vel_z=(-0.3,0.3)`. Real 8-env smoke generated `2026-06-12_10-53-23` and saved cfg confirms the new ranges.
+- Current run `2026-06-12_10-53-23` confirms the curriculum now opens: `mean_terrain_level` reaches `7.475` and last-100 mean is `5.97`. The remaining question is not curriculum opening but whether semantic contact decreases after more training at high levels.
+- Later readout at event step `22868` still supports continuing briefly: `mean_terrain_level` last-100 is `5.805`, contact last-100 improves to `-0.000684`, clearance last-100 improves to `-0.002979`, and episode length last-100 remains `980.84`; watch mean reward drift and stop for retuning if episode length falls below about `950`.
+- Readout at event step `23389` shows stability recovered but semantic trend is noisy: terrain last-100 `5.871`, episode length last-100 `991.84`, reward last-100 `28.15`, but contact last-100 worsened to `-0.000858` and clearance last-100 worsened to `-0.003496`. Continue only to about `model_24000`, then evaluate behavior or retune.
+- Model `23600` first-layer eval is mixed: strict flat-small training scene short sample has `0/8` collided envs over `200` steps, but existing dense small-collision eval has `8/16` collided envs over `300` steps. Since neither computes true path-obstacle foot-over success, reliable low-small overpass is not proven.
+- Model `23600` 1000-step crossing probe on 16 training-scene envs has zero true small contact but also zero overpass successes: only one env had a path-obstacle opportunity, the root crossed it, but foot-over stayed false and scanner-derived clearance was negative. This rejects a success claim but also shows the random training scene has too few path-obstacle opportunities for a stable success rate.
+- Formal controlled crossing eval for `model_23600.pt` removes that ambiguity: `15/16` envs had a path-small opportunity and `14` crossed with root, but `foot_over_count=0`, true small contact hit `11/16`, and overpass success is `0/15`. The current checkpoint has not learned clean low-small overpass.
+- Flat-small training signal is retuned locally: low-row obstacle layout now uses smaller center safety holes, contact penalty is stronger for small objects, and `semantic_foot_over_clearance` gives positive reward for feet clearing low-small path cells. Real 8-env smoke exits `0`, but one iteration is too short to see nonzero foot-over reward.
+- Latest `2026-06-12_19-05-27/model_28900.pt` controlled crossing eval still rejects the overpass claim: `15/16` opportunities, `14` root crossed, `foot_over_count=0`, true small contact `7/16`, overpass success `0/15`. Contact improved versus `model_23600.pt`, but the intended foot-over behavior did not appear.
+- Run `2026-06-13_11-20-40` with larger foot-over scale shows the scale is active but the trigger is still sparse: `semantic_foot_over_clearance` nonzero `9/2167`, max `0.1018`, last-100 mean `0`; contact remains dense with last-100 `-0.00210`. Larger reward magnitude alone did not create a reliable learning signal.
+- Train single-env livestream now follows env0: `train.py` preserves the requested `--livestream` value before `AppLauncher` can mutate args, then installs a camera update wrapper only for `rank==0`, `num_envs==1`, and livestream `1/2`. Real `env_isaacsim` smoke with the user’s resume checkpoint exits `0` and prints `Single-env livestream follow camera enabled`.
+- Play keyboard visualization now supports terminal-thread hold-to-move body commands and deterministic env0 terrain selection: `--keyboard-control`, `W/S/A/D/Q/E`, `+/-`, `--terrain-row`, and `--terrain-col`. The flat-small PLAY cfg disables training curriculum because it does not mount semantic contact sensors. The old `pynput` route is removed; livestream control now reads from the SSH terminal when stdin is a TTY. Static `32 passed`, pycompile exits `0`, and real `--keyboard-control` smoke exits `0` with expected non-TTY warning in the automated tool runner. [../human/human-12-batched-planner-train-viewer-commands.md](../human/human-12-batched-planner-train-viewer-commands.md) is updated with the terminal-input contract.
+- PLAY timeout refresh is disabled for visualization: both semantic PLAY and flat-small PLAY set `terminations.time_out=None`, while training cfg keeps timeout for curriculum success. Real flat-small PLAY smoke exits `0` and Termination Manager contains only `base_contact` and `bad_orientation`.
+- Flat-small semantic objects appearing in only one visual column was a static semantic-course column-name bug, separate from the earlier curriculum flat-mask bug. Flat-small has `sub_terrains={"flat": ...}` but `num_cols=20`; before the fix, `terrain_name_for_col()` returned `"flat"` only for column 0 and `None` for columns 1-19, so columns 1-19 used zero `non_plane_counts`. The fix repeats the single terrain name for all columns. Real train probe now reports row 0 and row 9 both cover all 20 columns with first/last counts `[8,8]` and `[80,80]`.

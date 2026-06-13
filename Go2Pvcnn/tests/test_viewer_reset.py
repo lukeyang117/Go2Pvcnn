@@ -300,12 +300,164 @@ def test_play_main_unpacks_get_observations_result_for_policy_obs() -> None:
     assert "obs, _ = wrapped_env.get_observations(), None" not in source
 
 
+def test_play_loop_applies_keyboard_command_before_policy_and_step() -> None:
+    source = (GO2PVCNN_ROOT / "scripts/play.py").read_text(encoding="utf-8")
+    loop_source = source[source.index("while _play_loop_should_continue") :]
+
+    first_apply = loop_source.index("_apply_keyboard_velocity_command(base_env, keyboard_controller)")
+    policy_call = loop_source.index("actions = policy(obs)")
+    second_apply = loop_source.index("_apply_keyboard_velocity_command(base_env, keyboard_controller)", first_apply + 1)
+    env_step = loop_source.index("wrapped_env.step(actions)")
+
+    assert first_apply < policy_call
+    assert policy_call < second_apply < env_step
+
+
 def test_play_cli_has_optional_max_steps_exit_for_headless_smoke() -> None:
     source = (GO2PVCNN_ROOT / "scripts/play.py").read_text(encoding="utf-8")
 
     assert '"--max-steps"' in source
     assert "while _play_loop_should_continue(simulation_app, timestep=timestep, max_steps=args_cli.max_steps):" in source
     assert "if args_cli.max_steps > 0 and timestep >= args_cli.max_steps:" in source
+
+
+def test_play_cli_has_keyboard_control_and_terrain_selection_flags() -> None:
+    source = (GO2PVCNN_ROOT / "scripts/play.py").read_text(encoding="utf-8")
+
+    for flag in (
+        '"--keyboard-control"',
+        '"--keyboard-linear-speed"',
+        '"--keyboard-lateral-speed"',
+        '"--keyboard-yaw-speed"',
+        '"--keyboard-speed-step"',
+        '"--terrain-row"',
+        '"--terrain-col"',
+    ):
+        assert flag in source
+    assert "pynput" not in source
+    assert "importlib.import_module" not in source
+    assert "termios.tcgetattr" in source
+    assert "tty.setcbreak" in source
+    assert "_KeyboardVelocityController" in source
+
+
+def test_keyboard_velocity_controller_uses_terminal_reader_thread_not_pynput() -> None:
+    source = (GO2PVCNN_ROOT / "scripts/play.py").read_text(encoding="utf-8")
+
+    assert "threading.Thread(" in source
+    assert "_terminal_read_loop" in source
+    assert "select.select" in source
+    assert "--keyboard-backend" not in source
+
+
+def test_flat_small_play_cfg_disables_training_curriculum_without_semantic_contact_sensors() -> None:
+    source = (GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py").read_text(
+        encoding="utf-8"
+    )
+    class_source = source[
+        source.index("class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY") :
+    ]
+
+    assert "self.curriculum.terrain_levels = None" in class_source
+    assert "self.scene.semantic_contact_small = None" in class_source
+    assert "self.scene.semantic_contact_large = None" in class_source
+
+
+def test_play_cfgs_disable_timeout_refresh_for_visualization() -> None:
+    source = (GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py").read_text(
+        encoding="utf-8"
+    )
+    base_play_source = source[
+        source.index("class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY") :
+        source.index("class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER")
+    ]
+    flat_play_source = source[source.index("class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY") :]
+
+    assert "self.terminations.time_out = None" in base_play_source
+    assert "self.terminations.time_out = None" in flat_play_source
+
+
+def test_keyboard_velocity_controller_maps_pressed_keys_to_body_command() -> None:
+    controller = play._KeyboardVelocityController(
+        enabled=True,
+        linear_speed=0.5,
+        lateral_speed=0.25,
+        yaw_speed=0.4,
+        speed_step=0.1,
+    )
+
+    controller.press("w")
+    controller.press("a")
+    controller.press("q")
+    command = controller.command_tensor(device="cpu", dtype=torch.float32, num_envs=2)
+
+    expected = torch.tensor([[0.5, 0.25, 0.4], [0.5, 0.25, 0.4]], dtype=torch.float32)
+    torch.testing.assert_close(command, expected)
+
+    controller.release("w")
+    controller.release("a")
+    controller.release("q")
+    torch.testing.assert_close(
+        controller.command_tensor(device="cpu", dtype=torch.float32, num_envs=1),
+        torch.zeros((1, 3), dtype=torch.float32),
+    )
+
+
+def test_keyboard_velocity_controller_speed_step_scales_and_clamps() -> None:
+    controller = play._KeyboardVelocityController(
+        enabled=True,
+        linear_speed=0.95,
+        lateral_speed=0.45,
+        yaw_speed=0.95,
+        speed_step=0.2,
+    )
+
+    controller.press("+")
+    controller.press("w")
+    controller.press("d")
+    controller.press("e")
+
+    torch.testing.assert_close(
+        controller.command_tensor(device="cpu", dtype=torch.float32, num_envs=1),
+        torch.tensor([[1.0, -0.5, -1.0]], dtype=torch.float32),
+    )
+
+
+def test_apply_keyboard_command_overwrites_base_velocity_tensor() -> None:
+    command = torch.zeros((2, 3), dtype=torch.float32)
+    base_env, _, _, _ = _fake_base_env(command)
+    controller = play._KeyboardVelocityController(
+        enabled=True,
+        linear_speed=0.4,
+        lateral_speed=0.2,
+        yaw_speed=0.3,
+        speed_step=0.1,
+    )
+    controller.press("s")
+    controller.press("d")
+
+    play._apply_keyboard_velocity_command(base_env, controller)
+
+    torch.testing.assert_close(command, torch.tensor([[-0.4, -0.2, 0.0], [-0.4, -0.2, 0.0]]))
+
+
+def test_apply_initial_terrain_selection_syncs_env0_row_col_and_origins() -> None:
+    terrain_origins = torch.arange(4 * 5 * 3, dtype=torch.float32).reshape(4, 5, 3)
+    terrain = SimpleNamespace(
+        terrain_origins=terrain_origins,
+        terrain_levels=torch.zeros(2, dtype=torch.long),
+        terrain_types=torch.zeros(2, dtype=torch.long),
+        env_origins=torch.zeros((2, 3), dtype=torch.float32),
+    )
+    scene = SimpleNamespace(terrain=terrain, env_origins=torch.zeros((2, 3), dtype=torch.float32))
+    base_env = SimpleNamespace(scene=scene, device="cpu", num_envs=2)
+
+    play._apply_initial_terrain_selection(base_env, terrain_row=3, terrain_col=4, env_id=0)
+
+    assert int(terrain.terrain_levels[0]) == 3
+    assert int(terrain.terrain_types[0]) == 4
+    torch.testing.assert_close(terrain.env_origins[0], terrain_origins[3, 4])
+    torch.testing.assert_close(scene.env_origins[0], terrain_origins[3, 4])
 
 
 def test_play_loop_should_continue_uses_max_steps_without_app_running() -> None:

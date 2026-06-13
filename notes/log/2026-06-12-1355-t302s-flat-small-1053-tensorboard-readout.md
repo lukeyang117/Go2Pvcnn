@@ -1,0 +1,40 @@
+# T302s Flat-Small 10:53 TensorBoard Readout
+
+- Purpose: inspect run `2026-06-12_10-53-23` after fixing flat-small command ranges.
+- Stage: training metrics / curriculum and semantic reward diagnostics.
+- Related todo: [T302s](../todo/T302s-env-level-collision-curriculum-plan.md) / [T302r](../todo/T302r-go2-geometry-clearance-reward-plan.md)
+- Procedure:
+  - Parsed TensorBoard event files with `env_isaacsim` TensorBoard `EventAccumulator`.
+  - Checked the saved `env_cfg.yaml`.
+  - Checked whether the training process is still running.
+- Input conditions:
+  - Run dir: `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/2026-06-12_10-53-23`
+  - Active process: `Go2Pvcnn/scripts/train.py ... --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance ... --resume ... model_19999.pt`
+  - Saved command ranges: `lin_vel_x=(0.6,1.0)`, `lin_vel_y=(-0.2,0.2)`, `ang_vel_z=(-0.3,0.3)`.
+- Key metrics:
+  - Model range at readout: `model_20000.pt` through `model_21700.pt`; event step last observed `21752`.
+  - Curriculum scalar cleanup remains active: only `Curriculum/terrain_levels/mean_terrain_level` under curriculum.
+  - `mean_terrain_level`: first `0.456`, max `7.475`, last `5.821`, last-20 mean `5.85`, last-100 mean `5.97`.
+  - `semantic_body_part_clearance`: nonzero `1689/1752`; mean `-0.00281`; last-100 mean `-0.00395`; last-20 nonzero `20/20`.
+  - `semantic_contact_collision`: nonzero `1425/1752`; mean `-0.000895`; last-100 mean `-0.00118`; last-20 nonzero `17/20`.
+  - `Train/mean_episode_length`: last-100 mean `991.64`; recent points often near `1000`.
+  - `Train/mean_reward`: last-100 mean `28.14`.
+  - `track_lin_vel_xy`: last-100 mean `1.406`.
+  - `error_vel_xy`: last-100 mean `0.196`.
+  - `base_contact`: last-100 mean `0.00275`; `bad_orientation`: last-100 mean `0.02025`.
+  - `Perf/collection time`: last-100 mean `5.63s`.
+- Result:
+  - The fixed command ranges solved the previous terrain-curriculum blocker. Curriculum now reaches high levels and does not collapse to zero.
+  - The run is still behaviorally stable enough to continue: episode length is close to full and base/bad terminations are low recently.
+  - Semantic signals are now dense at high terrain levels: both clearance and contact collision are frequently nonzero. This means the agent is training in meaningful obstacle contact/near-contact regimes, but contact avoidance itself has not improved yet.
+- Conclusion:
+  - Continuing this run is useful for now. The next decision point should be whether `semantic_contact_collision` starts trending downward while `mean_terrain_level` stays high.
+- Follow-up:
+  - Recheck after another `500-1000` iterations or around `model_22500-23000`.
+  - If contact remains flat/high while terrain level stays high, adjust reward pressure or curriculum pacing rather than stopping immediately.
+- Baseline Ref: `da46138`
+- Candidate Ref: working tree
+- Key Files:
+  - [../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py](../../Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py)
+  - [../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py](../../Go2Pvcnn/go2_pvcnn/mdp/curriculums.py)
+  - [../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py](../../Go2Pvcnn/extension/mdp/semantic_body_part_clearance.py)

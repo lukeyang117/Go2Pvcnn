@@ -8,6 +8,9 @@ import os
 import select
 import signal
 import sys
+import termios
+import threading
+import tty
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter, sleep
@@ -65,6 +68,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Pause play loop and advance exactly one env/render step for each Space key press.",
     )
     parser.add_argument(
+        "--keyboard-control",
+        action="store_true",
+        default=False,
+        help="Use terminal hold-to-move keyboard velocity commands.",
+    )
+    parser.add_argument("--keyboard-linear-speed", type=float, default=0.5, help="Keyboard forward/backward speed.")
+    parser.add_argument("--keyboard-lateral-speed", type=float, default=0.25, help="Keyboard left/right speed.")
+    parser.add_argument("--keyboard-yaw-speed", type=float, default=0.5, help="Keyboard yaw-rate speed.")
+    parser.add_argument("--keyboard-speed-step", type=float, default=0.1, help="Keyboard +/- speed increment.")
+    parser.add_argument("--terrain-row", type=int, default=None, help="Initial terrain row for env0; omit for default.")
+    parser.add_argument("--terrain-col", type=int, default=None, help="Initial terrain column for env0; omit for default.")
+    parser.add_argument(
         "--planner-backend",
         type=str,
         default="mpc",
@@ -120,6 +135,201 @@ def _play_loop_should_continue(simulation_app, *, timestep: int, max_steps: int)
     if max_steps > 0:
         return timestep < max_steps
     return bool(simulation_app.is_running())
+
+
+@dataclass
+class _KeyboardVelocityController:
+    enabled: bool
+    linear_speed: float
+    lateral_speed: float
+    yaw_speed: float
+    speed_step: float
+    max_linear_speed: float = 1.0
+    max_lateral_speed: float = 0.5
+    max_yaw_speed: float = 1.0
+    hold_timeout_s: float = 0.15
+    poll_interval_s: float = 0.02
+
+    def __post_init__(self) -> None:
+        self._pressed: set[str] = set()
+        self._last_pressed_at: dict[str, float] = {}
+        self._lock = threading.Lock()
+        self._reader_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._terminal_fd: int | None = None
+        self._terminal_original_attrs = None
+
+    def press(self, key: str) -> None:
+        key = str(key).lower()
+        with self._lock:
+            if key in {"+", "="}:
+                self.linear_speed = min(self.max_linear_speed, self.linear_speed + self.speed_step)
+                self.lateral_speed = min(self.max_lateral_speed, self.lateral_speed + self.speed_step)
+                self.yaw_speed = min(self.max_yaw_speed, self.yaw_speed + self.speed_step)
+                return
+            if key in {"-", "_"}:
+                self.linear_speed = max(0.0, self.linear_speed - self.speed_step)
+                self.lateral_speed = max(0.0, self.lateral_speed - self.speed_step)
+                self.yaw_speed = max(0.0, self.yaw_speed - self.speed_step)
+                return
+            if key in {" ", "space", "x"}:
+                self._pressed.clear()
+                self._last_pressed_at.clear()
+                return
+            self._pressed.add(key)
+            self._last_pressed_at[key] = perf_counter()
+
+    def release(self, key: str) -> None:
+        key = str(key).lower()
+        with self._lock:
+            self._pressed.discard(key)
+
+    def command_values(self) -> tuple[float, float, float]:
+        with self._lock:
+            self._expire_stale_keys_locked(perf_counter())
+            keys = set(self._pressed)
+            linear_speed = float(self.linear_speed)
+            lateral_speed = float(self.lateral_speed)
+            yaw_speed = float(self.yaw_speed)
+
+        vx = (1.0 if "w" in keys else 0.0) + (-1.0 if "s" in keys else 0.0)
+        vy = (1.0 if "a" in keys else 0.0) + (-1.0 if "d" in keys else 0.0)
+        yaw = (1.0 if "q" in keys else 0.0) + (-1.0 if "e" in keys else 0.0)
+        return (
+            float(np.clip(vx * linear_speed, -self.max_linear_speed, self.max_linear_speed)),
+            float(np.clip(vy * lateral_speed, -self.max_lateral_speed, self.max_lateral_speed)),
+            float(np.clip(yaw * yaw_speed, -self.max_yaw_speed, self.max_yaw_speed)),
+        )
+
+    def command_tensor(self, *, device, dtype, num_envs: int) -> torch.Tensor:
+        values = self.command_values()
+        command = torch.tensor(values, device=device, dtype=dtype).view(1, 3)
+        return command.repeat(int(num_envs), 1)
+
+    @staticmethod
+    def _key_to_name(key: str) -> str | None:
+        if key == "\x1b":
+            return "esc"
+        if key in {" ", "\r", "\n"}:
+            return "space"
+        text = str(key).lower()
+        if text == "key.space":
+            return "space"
+        if text == "key.esc":
+            return "esc"
+        if len(text) == 1:
+            return text
+        return None
+
+    def _expire_stale_keys_locked(self, now_s: float) -> None:
+        stale = [
+            key
+            for key in self._pressed
+            if key in {"w", "s", "a", "d", "q", "e"}
+            and now_s - self._last_pressed_at.get(key, 0.0) > self.hold_timeout_s
+        ]
+        for key in stale:
+            self._pressed.discard(key)
+            self._last_pressed_at.pop(key, None)
+
+    def _terminal_read_loop(self) -> None:
+        assert self._terminal_fd is not None
+        while not self._stop_event.is_set():
+            readable, _, _ = select.select([self._terminal_fd], [], [], self.poll_interval_s)
+            if not readable:
+                continue
+            try:
+                char = os.read(self._terminal_fd, 1).decode(errors="ignore")
+            except OSError:
+                break
+            name = self._key_to_name(char)
+            if name == "esc":
+                self._stop_event.set()
+                break
+            if name is not None:
+                self.press(name)
+
+    def __enter__(self) -> "_KeyboardVelocityController":
+        if not self.enabled:
+            return self
+        try:
+            if not sys.stdin.isatty():
+                raise RuntimeError("stdin is not a TTY")
+            self._terminal_fd = sys.stdin.fileno()
+            self._terminal_original_attrs = termios.tcgetattr(self._terminal_fd)
+            tty.setcbreak(self._terminal_fd)
+            self._reader_thread = threading.Thread(target=self._terminal_read_loop, name="play-terminal-keyboard", daemon=True)
+            self._reader_thread.start()
+            print(
+                "[play.py] Terminal keyboard control enabled: hold W/S/A/D/Q/E, +/- speed, Space or X stop, Esc stop.",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - terminal availability varies in headless launchers.
+            print(f"[WARN][play.py] --keyboard-control disabled: failed to start terminal keyboard reader: {exc}", flush=True)
+            self.enabled = False
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._stop_event.set()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=0.5)
+            self._reader_thread = None
+        if self._terminal_fd is not None and self._terminal_original_attrs is not None:
+            try:
+                termios.tcsetattr(self._terminal_fd, termios.TCSADRAIN, self._terminal_original_attrs)
+            except Exception:
+                pass
+        self._terminal_fd = None
+        self._terminal_original_attrs = None
+
+
+def _apply_keyboard_velocity_command(base_env, controller: _KeyboardVelocityController) -> torch.Tensor | None:
+    if not controller.enabled:
+        return None
+    command_manager = getattr(base_env, "command_manager", None)
+    if command_manager is None or not hasattr(command_manager, "get_command"):
+        return None
+    command = command_manager.get_command("base_velocity")
+    if command is None:
+        return None
+    target = controller.command_tensor(device=command.device, dtype=command.dtype, num_envs=int(command.shape[0]))
+    command[:, :3] = target
+    return command
+
+
+def _apply_initial_terrain_selection(base_env, *, terrain_row: int | None, terrain_col: int | None, env_id: int = 0) -> None:
+    if terrain_row is None and terrain_col is None:
+        return
+    terrain = getattr(getattr(base_env, "scene", None), "terrain", None)
+    terrain_origins = getattr(terrain, "terrain_origins", None)
+    if terrain is None or terrain_origins is None:
+        raise RuntimeError("--terrain-row/--terrain-col require curriculum terrain_origins.")
+
+    origins = torch.as_tensor(terrain_origins)
+    if origins.ndim != 3 or int(origins.shape[-1]) != 3:
+        raise RuntimeError(f"Expected terrain_origins shape [rows, cols, 3], got {tuple(origins.shape)}")
+    num_rows, num_cols = int(origins.shape[0]), int(origins.shape[1])
+    row = int(terrain_row) if terrain_row is not None else int(getattr(terrain, "terrain_levels")[env_id])
+    col = int(terrain_col) if terrain_col is not None else int(getattr(terrain, "terrain_types")[env_id])
+    if not (0 <= row < num_rows):
+        raise ValueError(f"--terrain-row must be in [0, {num_rows - 1}], got {row}")
+    if not (0 <= col < num_cols):
+        raise ValueError(f"--terrain-col must be in [0, {num_cols - 1}], got {col}")
+
+    selected_origin = origins[row, col]
+    terrain_levels = getattr(terrain, "terrain_levels", None)
+    if terrain_levels is not None:
+        terrain_levels[env_id] = row
+    terrain_types = getattr(terrain, "terrain_types", None)
+    if terrain_types is not None:
+        terrain_types[env_id] = col
+    env_origins = getattr(terrain, "env_origins", None)
+    if env_origins is not None:
+        env_origins[env_id] = selected_origin.to(device=env_origins.device, dtype=env_origins.dtype)
+    scene_env_origins = getattr(base_env.scene, "env_origins", None)
+    if scene_env_origins is not None:
+        scene_env_origins[env_id] = selected_origin.to(device=scene_env_origins.device, dtype=scene_env_origins.dtype)
+    print(f"[play.py] Initial terrain env{env_id}: row={row}, col={col}", flush=True)
 
 
 @dataclass
@@ -585,6 +795,8 @@ def main() -> int:
     print(f"Livestream mode: {getattr(args_cli, 'livestream', 0)}")
     print(f"Debug livestream: {args_cli.debug_livestream}")
     print(f"Step mode: {args_cli.step_mode}")
+    print(f"Keyboard control: {args_cli.keyboard_control}")
+    print(f"Initial terrain row/col: {args_cli.terrain_row}/{args_cli.terrain_col}")
     print(f"{'=' * 80}\n")
 
     env_cfg = env_cfg_cls()
@@ -623,6 +835,12 @@ def main() -> int:
 
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
+    _apply_initial_terrain_selection(
+        base_env,
+        terrain_row=args_cli.terrain_row,
+        terrain_col=args_cli.terrain_col,
+        env_id=0,
+    )
     _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     step_probe = _install_env_step_probes(base_env, enabled=bool(args_cli.debug_livestream))
 
@@ -677,8 +895,16 @@ def main() -> int:
         print("Step mode enabled: press Space to advance one env/render step.", flush=True)
     print(f"{'=' * 80}\n")
 
+    keyboard_controller = _KeyboardVelocityController(
+        enabled=bool(args_cli.keyboard_control),
+        linear_speed=float(args_cli.keyboard_linear_speed),
+        lateral_speed=float(args_cli.keyboard_lateral_speed),
+        yaw_speed=float(args_cli.keyboard_yaw_speed),
+        speed_step=float(args_cli.keyboard_speed_step),
+    )
+
     try:
-        with _TerminalStepGate(enabled=bool(args_cli.step_mode)) as step_gate:
+        with _TerminalStepGate(enabled=bool(args_cli.step_mode)) as step_gate, keyboard_controller:
             while _play_loop_should_continue(simulation_app, timestep=timestep, max_steps=args_cli.max_steps):
                 if not step_gate.wait_for_step():
                     if args_cli.step_mode:
@@ -686,13 +912,17 @@ def main() -> int:
                     continue
                 step_start = perf_counter()
                 with torch.inference_mode():
+                    _apply_keyboard_velocity_command(base_env, keyboard_controller)
+                    obs, _ = wrapped_env.get_observations()
                     policy_start = perf_counter()
                     actions = policy(obs)
                     policy_s = perf_counter() - policy_start
 
+                    _apply_keyboard_velocity_command(base_env, keyboard_controller)
                     env_start = perf_counter()
                     obs, rewards, dones, extras = wrapped_env.step(actions)
                     env_step_s = perf_counter() - env_start
+                    _apply_keyboard_velocity_command(base_env, keyboard_controller)
 
                 timestep += 1
 
