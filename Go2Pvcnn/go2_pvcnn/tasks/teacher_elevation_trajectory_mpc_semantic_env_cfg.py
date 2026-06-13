@@ -212,6 +212,9 @@ def _semantic_body_part_clearance_reward_term() -> RewTerm:
             "include_base": True,
             "penalty_clip": 1.0,
             "clearance_scale": 1000.0,
+            "contact_collision_scale": 1.0,
+            "contact_force_scale": 25.0,
+            "contact_force_clip": 1.0,
         },
     )
 
@@ -591,6 +594,9 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = self.scene.terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
         self.scene.contact_forces.update_period = self.sim.dt
+        self.rewards.semantic_contact_collision = None
+        self.scene.semantic_contact_small = None
+        self.scene.semantic_contact_large = None
         if getattr(self.curriculum, "terrain_levels", None) is not None:
             if self.scene.terrain.terrain_generator is not None:
                 self.scene.terrain.terrain_generator.curriculum = True
@@ -681,9 +687,9 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER(TeacherElevationTraject
         self.planner_owned_reference_cache = True
         self.use_batched_reference_trajectory = True
         self.rewards.reference_foot_pos = _reference_foot_pos_reward_term()
-        self.rewards.semantic_contact_collision = _semantic_contact_collision_reward_term()
-        self.scene.semantic_contact_small = _semantic_global_contact_sensor(SEMANTIC_COURSE_SMALL_ROOT)
-        self.scene.semantic_contact_large = _semantic_global_contact_sensor(SEMANTIC_COURSE_LARGE_ROOT)
+        self.rewards.semantic_contact_collision = None
+        self.scene.semantic_contact_small = None
+        self.scene.semantic_contact_large = None
         self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096
         self.mpc_planner_cfg.diagnostics.emit_runtime_counters = True
         self.mpc_planner_cfg.diagnostics.profile_cuda_sync = True

@@ -30,3 +30,15 @@ def test_train_preserves_livestream_flag_before_applauncher_mutates_args() -> No
         "app_launcher, simulation_app = _launch_app(args_cli)"
     )
     assert "livestream=requested_livestream" in source
+
+
+def test_train_exposes_mpc_num_envs_cli_override() -> None:
+    source = _source()
+
+    assert '"--mpc_num_envs"' in source
+    assert "default=None" in source
+    assert "args_cli.mpc_num_envs" in source
+    assert "env_cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size" in source
+    assert source.index("env_cfg.scene.num_envs = args_cli.num_envs") < source.index(
+        "env_cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = int(args_cli.mpc_num_envs)"
+    )

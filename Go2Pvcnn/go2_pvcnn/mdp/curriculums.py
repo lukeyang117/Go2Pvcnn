@@ -11,6 +11,7 @@ from isaaclab.managers import SceneEntityCfg
 from extension.semantic_curriculum import (
     SemanticObstacleCurriculumState,
     update_episode_small_collision_from_forces,
+    update_episode_small_collision_from_map_contacts,
 )
 
 if TYPE_CHECKING:
@@ -178,18 +179,34 @@ def _flat_episode_curriculum_info(
         ).to(device=device)
 
     if bool(plane_mask.any().item()):
-        small_sensor = _scene_sensor(env, "semantic_contact_small")
-        small_force = torch.as_tensor(small_sensor.data.force_matrix_w, dtype=torch.float32, device=device)
-        update_episode_small_collision_from_forces(
-            state,
-            small_force,
-            float(cfg.collision_force_threshold),
-        )
+        try:
+            from extension.mdp.semantic_body_part_clearance import infer_current_small_semantic_contact
+
+            small_hit = infer_current_small_semantic_contact(
+                env,
+                asset_cfg=SceneEntityCfg("robot"),
+                scanner_cfg=SceneEntityCfg("semantic_height_scanner"),
+                contact_sensor_cfg=SceneEntityCfg("contact_forces"),
+                small_semantic_ids=(1,),
+                force_threshold=float(cfg.collision_force_threshold),
+            )
+            update_episode_small_collision_from_map_contacts(state, small_hit.to(device=device))
+        except Exception:  # noqa: BLE001 - unit tests may use force-matrix-only fake scenes.
+            try:
+                small_sensor = _scene_sensor(env, "semantic_contact_small")
+            except Exception:
+                raise
+            else:
+                small_force = torch.as_tensor(small_sensor.data.force_matrix_w, dtype=torch.float32, device=device)
+                update_episode_small_collision_from_forces(
+                    state,
+                    small_force,
+                    float(cfg.collision_force_threshold),
+                )
     else:
-        update_episode_small_collision_from_forces(
+        update_episode_small_collision_from_map_contacts(
             state,
-            torch.zeros((int(env.num_envs), 1, 1, 3), dtype=torch.float32, device=device),
-            float(cfg.collision_force_threshold),
+            torch.zeros((int(env.num_envs),), dtype=torch.bool, device=device),
         )
 
     reset_env_ids = (

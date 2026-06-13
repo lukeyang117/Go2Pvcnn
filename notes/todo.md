@@ -4,9 +4,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302t goal-anchored flat-small body velocity command**.
-- Active branch page: [T302t](todo/T302t-goal-anchored-flat-small-command-plan.md).
-- Active implementation plan: [T302t goal-anchored flat-small command plan](todo/T302t-goal-anchored-flat-small-command-plan.md).
+- Current focus: **T302u semantic map contact collision**.
+- Active branch page: [T302u](todo/T302u-semantic-map-contact-collision-plan.md).
+- Active implementation plan: [T302u semantic map contact collision plan](todo/T302u-semantic-map-contact-collision-plan.md).
 - Background reward implementation plan: [T302r Go2 geometry clearance reward plan](todo/T302r-go2-geometry-clearance-reward-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)

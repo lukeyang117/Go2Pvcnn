@@ -1580,7 +1580,9 @@ def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> N
     assert "self.scene.semantic_contact_large = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY"]
     assert "planner_owned_reference_cache: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
     assert "use_batched_reference_trajectory: bool = True" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
-    assert "self.rewards.semantic_contact_collision = _semantic_contact_collision_reward_term()" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "self.rewards.semantic_contact_collision = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "self.scene.semantic_contact_small = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
+    assert "self.scene.semantic_contact_large = None" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
     assert "self.rewards.reference_foot_pos = _reference_foot_pos_reward_term()" in class_sources["TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER"]
     assert "self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096" in source
     assert "mpc_max_dirty_envs_per_step" not in source
@@ -4292,8 +4294,8 @@ def test_mpc_policy_eval_cfgs_enable_reference_without_changing_play(monkeypatch
     assert tracking.use_batched_reference_trajectory is True
     assert tracking.planner_backend == "mpc"
     assert tracking.rewards.reference_foot_pos is not None
-    assert tracking.scene.semantic_contact_small is not None
-    assert tracking.scene.semantic_contact_large is not None
+    assert tracking.scene.semantic_contact_small is None
+    assert tracking.scene.semantic_contact_large is None
     assert tracking.mpc_planner_cfg.runtime.horizon_steps == 25
     assert tracking.mpc_planner_cfg.runtime.replan_interval_steps == 25
     assert tracking.mpc_planner_cfg.losses.progress.weight > MpcPlannerCfg().losses.progress.weight
@@ -4308,8 +4310,8 @@ def test_mpc_policy_eval_cfgs_enable_reference_without_changing_play(monkeypatch
     assert collision.planner_owned_reference_cache is True
     assert collision.use_batched_reference_trajectory is True
     assert collision.planner_backend == "mpc"
-    assert collision.scene.semantic_contact_small is not None
-    assert collision.scene.semantic_contact_large is not None
+    assert collision.scene.semantic_contact_small is None
+    assert collision.scene.semantic_contact_large is None
     assert hasattr(collision, "small_collision_eval_small_count_per_tile")
     assert collision.small_collision_eval_small_count_per_tile > 0
 
@@ -4348,14 +4350,16 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert cfg.rewards.semantic_body_part_clearance.params["include_base"] is True
     assert cfg.rewards.semantic_body_part_clearance.params["base_footprint_grid"] == (5, 3)
     assert cfg.rewards.semantic_body_part_clearance.params["clearance_scale"] == 1000.0
+    assert cfg.rewards.semantic_body_part_clearance.params["contact_collision_scale"] > 0.0
+    assert cfg.rewards.semantic_body_part_clearance.params["contact_force_scale"] > 0.0
     assert cfg.rewards.semantic_foot_over_clearance is not None
     assert cfg.rewards.semantic_foot_over_clearance.weight > 0.0
     assert cfg.rewards.semantic_foot_over_clearance.params["lookahead_m"] == pytest.approx(1.6)
     assert cfg.rewards.semantic_foot_over_clearance.params["corridor_width_m"] == pytest.approx(0.42)
     assert cfg.rewards.semantic_foot_over_clearance.params["clearance_margin_m"] == pytest.approx(0.05)
-    assert cfg.rewards.semantic_contact_collision is not None
-    assert cfg.rewards.semantic_contact_collision.params["small_weight"] >= 2.0
-    assert cfg.rewards.semantic_contact_collision.params["force_scale"] <= 30.0
+    assert cfg.rewards.semantic_contact_collision is None
+    assert cfg.scene.semantic_contact_small is None
+    assert cfg.scene.semantic_contact_large is None
     assert cfg.rewards.reference_foot_pos is not None
     assert tuple(count.small for count in cfg.semantic_obstacle_curriculum.plane_counts) == (
         8,

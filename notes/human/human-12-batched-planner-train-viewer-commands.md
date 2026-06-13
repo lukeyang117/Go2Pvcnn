@@ -56,10 +56,10 @@
 - `mpc_planner_cfg.runtime.horizon_steps = 25`
 - `mpc_planner_cfg.runtime.replan_interval_steps = 25`
 - `mpc_planner_cfg.runtime.dt = 0.02`
-- `mpc_planner_cfg.runtime.parallel_plan_batch_size = 64`
+- `mpc_planner_cfg.runtime.parallel_plan_batch_size = 64`，可由 `train.py --mpc_num_envs <N>` 覆盖。
 - `mpc_planner_cfg.reference_participation.exclude_pairs` 是黑名单 AND 逻辑：同时满足 terrain name 和 terrain row 的 env 不参与 MPC 抽签，只满足其中一个条件仍可参与。
 - `reference_foot_pos_reward()` 使用 world-frame foot tracking。
-- 语义碰撞 reward 使用两个全局真实 contact sensor：`semantic_contact_small` 和 `semantic_contact_large`。
+- 语义碰撞训练默认不再加载全局 `semantic_contact_small/large`，而是由普通 `contact_forces` + 0.01m semantic/elevation map 推断，并合入 `semantic_body_part_clearance`。
 
 flat-small avoidance 训练 cfg 额外合同：
 
@@ -68,7 +68,7 @@ flat-small avoidance 训练 cfg 额外合同：
 - `semantic_obstacle_curriculum.plane_counts` 的 small 数量是 `8,16,24,32,40,48,56,64,72,80`，large 全部是 `0`。
 - 新增 reward `semantic_body_part_clearance`，使用当前 IsaacLab 的 `foot/calf/thigh` body pose 查询 scanner 缓存的 semantic/elevation map。
 - 近场腿部避障 reward 直接读取当前 IsaacLab `semantic_height_scanner.data.elevation_map/semantic_map`，并用和 MPC 一致的 terrain query helper 按当前 scanner pose 查询；不再维护 reward 私有的地图 root anchor 缓存。
-- curriculum 使用真实 `semantic_contact_small.data.force_matrix_w` 做 episode-level 小障碍碰撞记录；只有完整 timeout episode 且没有 small collision、base contact、bad orientation 才算成功。
+- curriculum 使用普通 `contact_forces` + 0.01m semantic/elevation map 推断 episode-level 小障碍碰撞记录；只有完整 timeout episode 且没有 small collision、base contact、bad orientation 才算成功。
 - 训练 cfg 仍然需要 MPC trajectory manager，因为继承了 `reference_foot_pos` reward；`trajectory_manager_factory.py` 已允许这个新 experiment attach manager。
 
 当前 PLAY cfg 的关键合同：
@@ -168,6 +168,7 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   --headless \
   --device cuda:0 \
   --num_envs 1024 \
+  --mpc_num_envs 64 \
   --max_iterations 1 \
   --experiment teacher_elevation_trajectory_mpc_semantic \
   --planner-backend mpc
@@ -180,6 +181,7 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   --headless \
   --device cuda:0 \
   --num_envs 1024 \
+  --mpc_num_envs 64 \
   --max_iterations 5000 \
   --experiment teacher_elevation_trajectory_mpc_semantic \
   --planner-backend mpc

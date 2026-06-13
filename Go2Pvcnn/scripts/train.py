@@ -69,6 +69,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description="Train Go2 robot with Teacher semantic labels using RSL-RL PPO.")
     parser.add_argument("--num_envs", type=int, default=4, help="Number of environments to simulate.")
+    parser.add_argument(
+        "--mpc_num_envs",
+        type=int,
+        default=None,
+        help=(
+            "Number of environments sampled by the MPC planner per replan. "
+            "Defaults to the experiment config value."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42, help="Seed for the environment.")
     parser.add_argument("--max_iterations", type=int, default=5000, help="Maximum training iterations.")
     parser.add_argument("--video", action="store_true", default=False, help="Record training videos.")
@@ -494,6 +503,10 @@ def main() -> int:
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = f"cuda:{app_launcher.device_id}"
+    if args_cli.mpc_num_envs is not None:
+        if int(args_cli.mpc_num_envs) <= 0:
+            raise ValueError(f"--mpc_num_envs must be positive, got {args_cli.mpc_num_envs}.")
+        env_cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = int(args_cli.mpc_num_envs)
 
     if args_cli.distributed:
         env_cfg.seed = args_cli.seed + app_launcher.local_rank
@@ -535,6 +548,7 @@ def main() -> int:
     # ========================================
     print(f"\n[Env] Creating {experiment_name} Environment...")
     print(f"  - num_envs: {env_cfg.scene.num_envs}")
+    print(f"  - mpc_num_envs: {env_cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size}")
     print(f"  - device: {env_cfg.sim.device}")
     print(f"  - seed: {env_cfg.seed}")
     

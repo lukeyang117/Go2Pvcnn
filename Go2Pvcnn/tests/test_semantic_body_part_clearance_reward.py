@@ -19,6 +19,7 @@ from extension.mdp.semantic_body_part_clearance import (
     _body_geometry_query_points,
     _cached_circle_offsets,
     _current_body_part_sample_points,
+    _semantic_contact_penalty_from_points,
     _semantic_clearance_penalty_from_points,
     _semantic_geometry_clearance_penalty,
     semantic_foot_over_clearance_bonus_from_tensors,
@@ -512,3 +513,100 @@ def test_reward_wrapper_applies_clearance_scale() -> None:
 
     assert raw.item() < 0.0
     assert scaled.item() == pytest.approx(raw.item() * 1000.0)
+
+
+def test_map_contact_penalty_requires_force_and_small_semantic() -> None:
+    elevation, semantic = _maps(semantic_id=1)
+    terrain = MpcPlannerTerrain(
+        height_map=elevation,
+        semantic_map=semantic,
+        world_x_range=(-0.2, 0.2),
+        world_y_range=(-0.2, 0.2),
+    )
+    points = _points(0.0, part="foot")
+    strong_force = {"foot": torch.tensor([[2.0]], dtype=torch.float32)}
+    weak_force = {"foot": torch.tensor([[0.2]], dtype=torch.float32)}
+
+    hit, penalty = _semantic_contact_penalty_from_points(
+        terrain=terrain,
+        points_by_part=points,
+        force_norm_by_part=strong_force,
+        semantic_ids=(1,),
+        force_threshold=1.0,
+        force_scale=10.0,
+        force_clip=1.0,
+        weights={"foot": 1.0},
+    )
+    weak_hit, weak_penalty = _semantic_contact_penalty_from_points(
+        terrain=terrain,
+        points_by_part=points,
+        force_norm_by_part=weak_force,
+        semantic_ids=(1,),
+        force_threshold=1.0,
+        force_scale=10.0,
+        force_clip=1.0,
+        weights={"foot": 1.0},
+    )
+    ground_hit, ground_penalty = _semantic_contact_penalty_from_points(
+        terrain=MpcPlannerTerrain(
+            height_map=elevation,
+            semantic_map=torch.zeros_like(semantic),
+            world_x_range=(-0.2, 0.2),
+            world_y_range=(-0.2, 0.2),
+        ),
+        points_by_part=points,
+        force_norm_by_part=strong_force,
+        semantic_ids=(1,),
+        force_threshold=1.0,
+        force_scale=10.0,
+        force_clip=1.0,
+        weights={"foot": 1.0},
+    )
+
+    assert hit.tolist() == [True]
+    assert penalty.item() > 0.0
+    assert weak_hit.tolist() == [False]
+    assert weak_penalty.item() == 0.0
+    assert ground_hit.tolist() == [False]
+    assert ground_penalty.item() == 0.0
+
+
+def test_reward_wrapper_combines_clearance_and_map_contact_penalty() -> None:
+    from extension.mdp.semantic_body_part_clearance import semantic_body_part_clearance_reward
+
+    body_pos = torch.zeros((1, 12, 3), dtype=torch.float32)
+    body_pos[:, [0, 3, 6, 9], 2] = 0.30
+    body_pos[:, [1, 4, 7, 10], 2] = 0.15
+    body_pos[:, [2, 5, 8, 11], 2] = 0.00
+    env = _FakeEnv()
+    contact_sensor = _FakeContactSensor()
+    contact_sensor.data.net_forces_w[:, 0, 0] = 5.0
+    env.scene = _FakeScene(
+        {
+            "robot": _FakeRobot(body_pos),
+            "semantic_height_scanner": _FakeScanner(),
+            "contact_forces": contact_sensor,
+        }
+    )
+    env.scene["semantic_height_scanner"].data.height_map[:, 1, 1] = 0.10
+    env.scene["semantic_height_scanner"].data.semantic_map[:, 1, 1] = 1
+
+    without_contact_penalty = semantic_body_part_clearance_reward(
+        env,
+        asset_cfg=_SceneEntity("robot"),
+        scanner_cfg=_SceneEntity("semantic_height_scanner"),
+        contact_sensor_cfg=_SceneEntity("contact_forces", body_names=".*_foot"),
+        clearance_scale=1.0,
+        contact_collision_scale=0.0,
+    )
+    with_contact_penalty = semantic_body_part_clearance_reward(
+        env,
+        asset_cfg=_SceneEntity("robot"),
+        scanner_cfg=_SceneEntity("semantic_height_scanner"),
+        contact_sensor_cfg=_SceneEntity("contact_forces", body_names=".*_foot"),
+        clearance_scale=1.0,
+        contact_collision_scale=1.0,
+        contact_force_scale=5.0,
+    )
+
+    assert with_contact_penalty.item() < without_contact_penalty.item()

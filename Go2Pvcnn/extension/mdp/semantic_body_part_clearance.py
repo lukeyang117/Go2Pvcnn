@@ -172,6 +172,61 @@ def _geometry_group_penalty(
     return (small_mask * deficit.square()).mean(dim=1)
 
 
+def _semantic_contact_penalty_from_points(
+    *,
+    terrain,
+    points_by_part,
+    force_norm_by_part,
+    semantic_ids=(1,),
+    force_threshold=1.0,
+    force_scale=25.0,
+    force_clip=1.0,
+    weights=None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Infer semantic contact events from body contact force and semantic map hits."""
+
+    from extension.batch_mpc_planner.terrain import TerrainQueryCache, semantic_at
+
+    height_map = torch.as_tensor(terrain.height_map, dtype=torch.float32)
+    if height_map.ndim != 3:
+        raise ValueError("terrain height map must be [N,H,W]")
+    device = height_map.device
+    dtype = height_map.dtype
+    num_envs = int(height_map.shape[0])
+    hit_any = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    penalty = torch.zeros(num_envs, dtype=dtype, device=device)
+    cache = TerrainQueryCache()
+    for part_name, raw_points in points_by_part.items():
+        if part_name not in force_norm_by_part:
+            continue
+        raw = torch.as_tensor(raw_points, dtype=dtype, device=device)
+        sample_count = 1
+        leg_count = None
+        if raw.ndim == 4:
+            leg_count = int(raw.shape[1])
+            sample_count = int(raw.shape[2])
+        points = _part_points_3d(raw, part_name=part_name, num_envs=num_envs, dtype=dtype, device=device)
+        force = torch.as_tensor(force_norm_by_part[part_name], dtype=dtype, device=device).reshape(num_envs, -1)
+        if int(force.shape[1]) != int(points.shape[1]):
+            if leg_count is not None and int(force.shape[1]) == leg_count:
+                force = force.repeat_interleave(sample_count, dim=1)
+            elif int(force.shape[1]) == 1:
+                force = force.expand(-1, int(points.shape[1]))
+            else:
+                raise ValueError(
+                    f"{part_name} force count must match point count or be 1, got {tuple(force.shape)} and {tuple(points.shape)}"
+                )
+        semantic = semantic_at(terrain, points[..., :2], cache=cache).to(dtype=torch.long)
+        semantic_hit = _semantic_id_mask(semantic, semantic_ids)
+        force_excess = torch.relu(force - float(force_threshold))
+        part_hit = torch.logical_and(semantic_hit, force_excess > 0.0)
+        weight = _as_part_value(weights, part_name, 1.0, device=device, dtype=dtype)
+        hit_any |= part_hit.any(dim=1)
+        penalty = penalty + weight * (force_excess * part_hit.to(dtype)).sum(dim=1)
+    penalty = (penalty / max(float(force_scale), 1.0e-6)).clamp(0.0, float(force_clip))
+    return hit_any, penalty
+
+
 def _semantic_geometry_clearance_penalty(
     *,
     terrain,
@@ -461,6 +516,85 @@ def _current_body_part_sample_points(
     }
 
 
+def _force_norm_by_part_from_sensor(contact_sensor, *, body_ids, device: torch.device) -> dict[str, torch.Tensor]:
+    forces = getattr(getattr(contact_sensor, "data", None), "net_forces_w", None)
+    if forces is None:
+        return {}
+    force_norm = torch.linalg.vector_norm(torch.as_tensor(forces, dtype=torch.float32, device=device), dim=-1)
+    out: dict[str, torch.Tensor] = {}
+    sensor_body_ids = getattr(contact_sensor, "body_ids", None)
+    sensor_body_names = tuple(getattr(contact_sensor, "body_names", ()))
+    for key in ("foot", "calf", "thigh"):
+        ids = torch.as_tensor(body_ids[key], dtype=torch.long, device=device).reshape(-1)
+        if sensor_body_ids is not None:
+            sensor_ids = torch.as_tensor(sensor_body_ids, dtype=torch.long, device=device).reshape(-1)
+            cols = []
+            for body_id in ids.tolist():
+                matches = torch.nonzero(sensor_ids == int(body_id), as_tuple=False).flatten()
+                if int(matches.numel()) > 0:
+                    cols.append(int(matches[0].item()))
+            if len(cols) == int(ids.numel()):
+                out[key] = force_norm.index_select(1, torch.as_tensor(cols, dtype=torch.long, device=device))
+                continue
+        if sensor_body_names:
+            suffix = f"_{key}" if key != "foot" else "_foot"
+            cols = [idx for idx, name in enumerate(sensor_body_names) if str(name).endswith(suffix)]
+            if len(cols) == int(ids.numel()):
+                out[key] = force_norm.index_select(1, torch.as_tensor(cols, dtype=torch.long, device=device))
+                continue
+    if not out and int(force_norm.shape[1]) >= 4:
+        out["foot"] = force_norm[:, :4]
+    return out
+
+
+def infer_current_small_semantic_contact(
+    env,
+    *,
+    asset_cfg,
+    scanner_cfg,
+    contact_sensor_cfg,
+    small_semantic_ids=(1,),
+    force_threshold=1.0,
+    force_scale=25.0,
+    force_clip=1.0,
+    calf_sections=7,
+    thigh_sections=7,
+) -> torch.Tensor:
+    """Infer per-env small-obstacle contact from robot contact forces and semantic map."""
+
+    robot = env.scene[asset_cfg.name]
+    scanner = env.scene[scanner_cfg.name]
+    contact_sensor = env.scene[contact_sensor_cfg.name]
+    root = getattr(env, "unwrapped", env)
+    body_ids = getattr(root, "_semantic_body_part_clearance_body_ids", None)
+    if body_ids is None:
+        foot_ids, _ = robot.find_bodies(".*_foot")
+        calf_ids, _ = robot.find_bodies(".*_calf")
+        thigh_ids, _ = robot.find_bodies(".*_thigh")
+        body_ids = {"foot": foot_ids, "calf": calf_ids, "thigh": thigh_ids}
+        root._semantic_body_part_clearance_body_ids = body_ids
+    device = torch.as_tensor(robot.data.body_pos_w).device
+    terrain = _current_scanner_terrain(scanner, device=device)
+    points = _current_body_part_sample_points(
+        robot,
+        body_ids=body_ids,
+        calf_sections=calf_sections,
+        thigh_sections=thigh_sections,
+    )
+    force_norm_by_part = _force_norm_by_part_from_sensor(contact_sensor, body_ids=body_ids, device=device)
+    hit, _ = _semantic_contact_penalty_from_points(
+        terrain=terrain,
+        points_by_part=points,
+        force_norm_by_part=force_norm_by_part,
+        semantic_ids=small_semantic_ids,
+        force_threshold=force_threshold,
+        force_scale=force_scale,
+        force_clip=force_clip,
+        weights={"foot": 1.0, "calf": 2.0, "shank": 2.0, "thigh": 2.0},
+    )
+    return hit
+
+
 def _scanner_value(scanner, name: str):
     data = getattr(scanner, "_data", None)
     if data is not None and hasattr(data, name):
@@ -601,6 +735,9 @@ def semantic_body_part_clearance_reward(
     thigh_sample_count=None,
     penalty_clip=1.0,
     clearance_scale=1.0,
+    contact_collision_scale=0.0,
+    contact_force_scale=25.0,
+    contact_force_clip=1.0,
 ):
     """Return a per-env clearance reward."""
 
@@ -624,13 +761,14 @@ def semantic_body_part_clearance_reward(
         shank_sample_count=shank_sample_count,
         thigh_sample_count=thigh_sample_count,
     )
-    _foot_contact_mask = None
+    force_norm_by_part = {}
     if contact_sensor_cfg is not None:
         contact_sensor = env.scene[contact_sensor_cfg.name]
-        forces = getattr(getattr(contact_sensor, "data", None), "net_forces_w", None)
-        if forces is not None:
-            force_norm = torch.linalg.vector_norm(torch.as_tensor(forces), dim=-1)
-            _foot_contact_mask = force_norm > float(contact_force_threshold)
+        force_norm_by_part = _force_norm_by_part_from_sensor(
+            contact_sensor,
+            body_ids=body_ids,
+            device=torch.as_tensor(robot.data.body_pos_w).device,
+        )
 
     reward = _semantic_geometry_clearance_penalty(
         terrain=terrain,
@@ -658,4 +796,21 @@ def semantic_body_part_clearance_reward(
         base_weight=base_weight,
         penalty_clip=penalty_clip,
     )
+    if float(contact_collision_scale) > 0.0 and force_norm_by_part:
+        _, contact_penalty = _semantic_contact_penalty_from_points(
+            terrain=terrain,
+            points_by_part=points,
+            force_norm_by_part=force_norm_by_part,
+            semantic_ids=small_semantic_ids,
+            force_threshold=contact_force_threshold,
+            force_scale=contact_force_scale,
+            force_clip=contact_force_clip,
+            weights={
+                "foot": foot_weight,
+                "calf": calf_weight if shank_weight is None else shank_weight,
+                "shank": calf_weight if shank_weight is None else shank_weight,
+                "thigh": thigh_weight,
+            },
+        )
+        reward = reward - float(contact_collision_scale) * contact_penalty.to(dtype=reward.dtype, device=reward.device)
     return reward * float(clearance_scale)

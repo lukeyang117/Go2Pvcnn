@@ -173,6 +173,24 @@ def update_episode_small_collision_from_forces(
     return hit
 
 
+def update_episode_small_collision_from_map_contacts(
+    state: SemanticObstacleCurriculumState,
+    small_contact_mask: torch.Tensor,
+    *,
+    env_ids: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Update sticky per-episode small-obstacle collision flags from inferred map contacts."""
+
+    hit = torch.as_tensor(small_contact_mask, dtype=torch.bool)
+    flags = _ensure_episode_collision_state(state, int(hit.numel()), device=hit.device)
+    if env_ids is None:
+        flags |= hit
+        return hit
+    ids = torch.as_tensor(env_ids, dtype=torch.long, device=hit.device).reshape(-1)
+    flags[ids] |= hit.index_select(0, ids)
+    return hit
+
+
 __all__ = [
     "DEFAULT_CENTER_SAFETY_HALF_EXTENT_M",
     "DEFAULT_MIN_SPACING_CLEARANCE_M",
@@ -187,6 +205,7 @@ __all__ = [
     "count_to_dict",
     "layout_index_for_row",
     "layout_values_for_row",
+    "update_episode_small_collision_from_map_contacts",
     "update_episode_small_collision_from_forces",
     "validate_semantic_obstacle_curriculum_cfg",
 ]
