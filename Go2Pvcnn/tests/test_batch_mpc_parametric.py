@@ -21,6 +21,11 @@ from extension.batch_mpc_planner.parametric import (
     init_parametric_variables,
 )
 from extension.batch_mpc_planner.config import MpcPlannerCfg
+from extension.batch_mpc_planner.planner import (
+    _build_semantic_proximity_field,
+    _parametric_semantic_avoidance_loss,
+    _sample_proximity_field_at_world_xy,
+)
 from extension.batch_mpc_planner.semantic_policy import build_parametric_nominal
 from extension.batch_mpc_planner.types import MpcPlannerTerrain, MpcRobotState
 
@@ -34,6 +39,119 @@ def test_command_frame_axes_uses_translation_direction() -> None:
     assert active.tolist() == [True]
     torch.testing.assert_close(forward, torch.tensor([[0.0, 1.0]]))
     torch.testing.assert_close(left, torch.tensor([[-1.0, 0.0]]))
+
+
+def test_semantic_proximity_field_shape_and_zero_obstacle() -> None:
+    height = torch.zeros((2, 8, 8), dtype=torch.float32)
+    semantic = torch.zeros((2, 8, 8), dtype=torch.long)
+    command = torch.tensor([[1.0, 0.0, 0.0], [0.5, 0.0, 0.0]], dtype=torch.float32)
+
+    field = _build_semantic_proximity_field(
+        height_map=height,
+        semantic_map=semantic,
+        root_xy=torch.zeros((2, 2), dtype=torch.float32),
+        root_ground_z=torch.zeros(2, dtype=torch.float32),
+        command=command,
+        root_yaw=torch.zeros(2, dtype=torch.float32),
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+
+    assert field.shape == (2, 1, 8, 8)
+    assert torch.count_nonzero(field).item() == 0
+
+
+def test_semantic_proximity_field_near_obstacle_has_higher_risk() -> None:
+    height = torch.zeros((1, 8, 8), dtype=torch.float32)
+    semantic = torch.zeros((1, 8, 8), dtype=torch.long)
+    semantic[0, 4, 5] = 2
+
+    field = _build_semantic_proximity_field(
+        height_map=height,
+        semantic_map=semantic,
+        root_xy=torch.zeros((1, 2), dtype=torch.float32),
+        root_ground_z=torch.zeros(1, dtype=torch.float32),
+        command=torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
+        root_yaw=torch.zeros(1, dtype=torch.float32),
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+
+    near = _sample_proximity_field_at_world_xy(
+        field,
+        torch.tensor([[[0.10, 0.00]]], dtype=torch.float32),
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+    far = _sample_proximity_field_at_world_xy(
+        field,
+        torch.tensor([[[-0.35, -0.35]]], dtype=torch.float32),
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+
+    assert near.item() > far.item()
+
+
+def test_proximity_sampling_has_gradient_to_query_xy() -> None:
+    field = torch.zeros((1, 1, 8, 8), dtype=torch.float32)
+    field[:, :, :, 4:] = 1.0
+    points = torch.tensor([[[0.05, 0.0]]], dtype=torch.float32, requires_grad=True)
+
+    risk = _sample_proximity_field_at_world_xy(
+        field,
+        points,
+        world_x_range=(-0.4, 0.4),
+        world_y_range=(-0.4, 0.4),
+    )
+    risk.sum().backward()
+
+    assert points.grad is not None
+    assert torch.isfinite(points.grad).all()
+    assert torch.count_nonzero(points.grad).item() > 0
+
+
+def test_parametric_semantic_avoidance_loss_uses_proximity_field_with_gradients() -> None:
+    height = torch.zeros((1, 9, 9), dtype=torch.float32)
+    semantic = torch.zeros((1, 9, 9), dtype=torch.long)
+    semantic[0, 4, 5] = 2
+    terrain = MpcPlannerTerrain(
+        height_map=height,
+        semantic_map=semantic,
+        world_x_range=(-0.8, 0.8),
+        world_y_range=(-0.8, 0.8),
+    )
+    root_pos = torch.zeros((1, 5, 3), dtype=torch.float32, requires_grad=True)
+    root_pos.data[..., 2] = 0.35
+    foot_pos = torch.zeros((1, 5, 4, 3), dtype=torch.float32, requires_grad=True)
+    foot_pos.data[..., 0] = 0.10
+    foot_pos.data[..., 2] = 0.12
+    touchdown_w = torch.tensor([[[0.10, 0.0, 0.0], [0.15, 0.0, 0.0], [0.20, 0.0, 0.0], [0.25, 0.0, 0.0]]])
+
+    loss = _parametric_semantic_avoidance_loss(
+        terrain,
+        root_pos,
+        foot_pos,
+        touchdown_w,
+        torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
+        root_yaw=torch.zeros(1, dtype=torch.float32),
+    )
+    loss.sum().backward()
+
+    assert loss.shape == (1,)
+    assert loss.item() > 0.0
+    assert root_pos.grad is not None
+    assert foot_pos.grad is not None
+    assert torch.isfinite(root_pos.grad).all()
+    assert torch.isfinite(foot_pos.grad).all()
+
+
+def test_parametric_semantic_avoidance_dense_pairwise_pattern_removed() -> None:
+    source = (GO2PVCNN_ROOT / "extension/batch_mpc_planner/planner.py").read_text()
+
+    assert "root_pos[..., None, :2] - grid_xy[:, None, :, :]" not in source
+    assert "foot_pos[..., None, :2] - grid_xy[:, None, None, :, :]" not in source
+    assert "touchdown_w[..., None, :2] - grid_xy[:, None, :, :]" not in source
 
 
 def test_command_frame_axes_rotates_body_command_by_root_yaw() -> None:

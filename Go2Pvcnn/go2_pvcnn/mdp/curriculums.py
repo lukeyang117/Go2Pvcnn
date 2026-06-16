@@ -49,11 +49,13 @@ def lin_vel_cmd_levels(
     """Expand lin_vel command ranges when velocity tracking reward is high enough.
 
     When mean reward > weight * 0.8, expand ranges toward limit_ranges.
-    Requires base_velocity to use UniformLevelVelocityCommandCfg with limit_ranges.
+    Works with UniformLevelVelocityCommandCfg and GoalAnchoredVelocityCommandCfg.
     Aligned with unitree_rl_lab velocity_env_cfg.
     """
     command_term = env.command_manager.get_term("base_velocity")
-    if not hasattr(command_term.cfg, "limit_ranges"):
+    if not hasattr(command_term.cfg, "ranges") or not hasattr(command_term.cfg, "limit_ranges"):
+        return torch.tensor(0.0, device=env.device)
+    if command_term.cfg.ranges is None or command_term.cfg.limit_ranges is None:
         return torch.tensor(0.0, device=env.device)
 
     ranges = command_term.cfg.ranges
@@ -62,7 +64,8 @@ def lin_vel_cmd_levels(
     reward_term = env.reward_manager.get_term_cfg(reward_term_name)
     reward = torch.mean(env.reward_manager._episode_sums[reward_term_name][env_ids]) / env.max_episode_length_s
 
-    if env.common_step_counter % env.max_episode_length == 0:
+    interval = max(int(env.max_episode_length // 50), 1)
+    if env.common_step_counter % interval == 0:
         if reward > reward_term.weight * 0.8:
             delta_command = torch.tensor([-0.1, 0.1], device=env.device)
             ranges.lin_vel_x = torch.clamp(

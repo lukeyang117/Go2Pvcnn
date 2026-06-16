@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from .config import MpcPlannerCfg, validate_mpc_config
@@ -21,6 +22,7 @@ from .parametric_losses import (
     parametric_trajectory_fk_consistency_loss,
 )
 from .profiling import MpcProfile, maybe_print_mpc_profile, should_profile_mpc
+from .semantic_geometry import LowSmallCircles, low_small_component_circles
 from .semantic_policy import build_parametric_nominal
 from .terrain import height_at, semantic_at
 from .types import MPC_HARD_REASON_COUNT, MpcPlannerResult, MpcPlannerStatus, MpcPlannerTerrain, MpcRobotState
@@ -80,6 +82,236 @@ def _terrain_grid_world_xy(terrain: MpcPlannerTerrain, *, dtype: torch.dtype, de
     sy = torch.sin(yaw).view(batch, 1)
     world_xy = torch.stack((cy * local_xy[..., 0] - sy * local_xy[..., 1], sy * local_xy[..., 0] + cy * local_xy[..., 1]), dim=-1)
     return world_xy + sensor_pos[:, None, :2]
+
+
+def _terrain_grid_local_xy(
+    *,
+    batch: int,
+    height_count: int,
+    width_count: int,
+    world_x_range: tuple[float, float],
+    world_y_range: tuple[float, float],
+    dtype: torch.dtype,
+    device: torch.device,
+) -> Tensor:
+    x = torch.linspace(float(world_x_range[0]), float(world_x_range[1]), width_count, dtype=dtype, device=device)
+    y = torch.linspace(float(world_y_range[0]), float(world_y_range[1]), height_count, dtype=dtype, device=device)
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+    return torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1).view(1, height_count * width_count, 2).expand(batch, -1, -1)
+
+
+def _world_xy_to_field_local_xy(
+    points_xy: Tensor,
+    *,
+    sensor_pos_w: Tensor | None,
+    sensor_yaw: Tensor | None,
+) -> Tensor:
+    points = torch.as_tensor(points_xy)
+    batch = int(points.shape[0])
+    if sensor_pos_w is None:
+        return points
+    sensor_pos = torch.as_tensor(sensor_pos_w, dtype=points.dtype, device=points.device)
+    if sensor_pos.ndim == 1:
+        sensor_pos = sensor_pos.view(1, -1).expand(batch, -1)
+    if int(sensor_pos.shape[0]) == 1 and batch > 1:
+        sensor_pos = sensor_pos.expand(batch, -1)
+    yaw = torch.zeros((batch,), dtype=points.dtype, device=points.device)
+    if sensor_yaw is not None:
+        yaw = torch.as_tensor(sensor_yaw, dtype=points.dtype, device=points.device).reshape(-1)
+        if int(yaw.numel()) == 1 and batch > 1:
+            yaw = yaw.expand(batch)
+    delta = points - sensor_pos[:, :2].view(batch, *([1] * (points.ndim - 2)), 2)
+    cy = torch.cos(yaw).view(batch, *([1] * (points.ndim - 2)))
+    sy = torch.sin(yaw).view(batch, *([1] * (points.ndim - 2)))
+    return torch.stack((cy * delta[..., 0] + sy * delta[..., 1], -sy * delta[..., 0] + cy * delta[..., 1]), dim=-1)
+
+
+def _build_semantic_proximity_field(
+    *,
+    height_map: Tensor,
+    semantic_map: Tensor,
+    root_xy: Tensor,
+    root_ground_z: Tensor,
+    command: Tensor,
+    root_yaw: Tensor,
+    world_x_range: tuple[float, float],
+    world_y_range: tuple[float, float],
+    sensor_pos_w: Tensor | None = None,
+    sensor_yaw: Tensor | None = None,
+) -> Tensor:
+    height = torch.as_tensor(height_map, dtype=torch.float32)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    device = height.device
+    dtype = height.dtype
+    batch, height_count, width_count = int(height.shape[0]), int(height.shape[1]), int(height.shape[2])
+    semantic = torch.as_tensor(semantic_map, dtype=torch.long, device=device)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    if int(semantic.shape[0]) == 1 and batch > 1:
+        semantic = semantic.expand(batch, -1, -1)
+    if tuple(semantic.shape) != (batch, height_count, width_count):
+        raise ValueError(
+            "semantic_map must match height_map shape [B,H,W], "
+            f"got semantic={tuple(semantic.shape)} height={tuple(height.shape)}"
+        )
+    root = torch.as_tensor(root_xy, dtype=dtype, device=device).reshape(batch, 2)
+    root_ground = torch.as_tensor(root_ground_z, dtype=dtype, device=device).reshape(batch)
+    cmd = torch.as_tensor(command, dtype=dtype, device=device)
+    if int(cmd.shape[-1]) < 3:
+        pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
+        cmd = torch.cat((cmd, pad), dim=-1)
+    yaw = torch.as_tensor(root_yaw, dtype=dtype, device=device).reshape(-1)
+    if int(yaw.numel()) == 1 and batch > 1:
+        yaw = yaw.expand(batch)
+
+    large_mask = semantic >= 2
+    high_small = torch.logical_and(semantic == 1, (height - root_ground.view(batch, 1, 1)) > 0.30)
+    risky = torch.logical_or(large_mask, high_small).reshape(batch, -1)
+
+    grid_local = _terrain_grid_local_xy(
+        batch=batch,
+        height_count=height_count,
+        width_count=width_count,
+        world_x_range=world_x_range,
+        world_y_range=world_y_range,
+        dtype=dtype,
+        device=device,
+    )
+    if sensor_pos_w is None:
+        grid_xy = grid_local
+    else:
+        sensor_pos = torch.as_tensor(sensor_pos_w, dtype=dtype, device=device)
+        if sensor_pos.ndim == 1:
+            sensor_pos = sensor_pos.view(1, -1).expand(batch, -1)
+        if int(sensor_pos.shape[0]) == 1 and batch > 1:
+            sensor_pos = sensor_pos.expand(batch, -1)
+        syaw = torch.zeros((batch,), dtype=dtype, device=device)
+        if sensor_yaw is not None:
+            syaw = torch.as_tensor(sensor_yaw, dtype=dtype, device=device).reshape(-1)
+            if int(syaw.numel()) == 1 and batch > 1:
+                syaw = syaw.expand(batch)
+        cy = torch.cos(syaw).view(batch, 1)
+        sy = torch.sin(syaw).view(batch, 1)
+        grid_xy = torch.stack(
+            (cy * grid_local[..., 0] - sy * grid_local[..., 1], sy * grid_local[..., 0] + cy * grid_local[..., 1]),
+            dim=-1,
+        ) + sensor_pos[:, None, :2]
+
+    speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
+    yaw_active = torch.abs(cmd[:, 2]) > 1.0e-4
+    active = torch.logical_or(speed > 1.0e-4, yaw_active)
+    heading, left, _linear_active = command_frame_axes(cmd, yaw, linear_eps=1.0e-6)
+    delta = grid_xy - root[:, None, :]
+    along = (delta * heading[:, None, :]).sum(dim=-1)
+    lateral = (delta * left[:, None, :]).sum(dim=-1)
+    linear_candidate = torch.logical_and(
+        torch.logical_and(along >= -0.10, along <= 1.50),
+        torch.abs(lateral) <= 0.45,
+    )
+    yaw_candidate = torch.logical_and(yaw_active[:, None], torch.linalg.vector_norm(delta, dim=-1) <= 0.75)
+    candidate = torch.logical_and(risky, torch.logical_or(linear_candidate, yaw_candidate))
+    candidate = torch.logical_and(candidate, active[:, None]).view(batch, 1, height_count, width_count)
+
+    base = candidate.to(dtype=dtype)
+    near = F.avg_pool2d(F.max_pool2d(base, kernel_size=5, stride=1, padding=2), kernel_size=5, stride=1, padding=2)
+    mid = F.avg_pool2d(F.max_pool2d(base, kernel_size=15, stride=1, padding=7), kernel_size=9, stride=1, padding=4)
+    far = F.avg_pool2d(F.max_pool2d(base, kernel_size=31, stride=1, padding=15), kernel_size=15, stride=1, padding=7)
+    return (near + 0.4 * mid + 0.1 * far).clamp(max=1.0)
+
+
+def _sample_proximity_field_at_world_xy(
+    field: Tensor,
+    points_xy: Tensor,
+    *,
+    world_x_range: tuple[float, float],
+    world_y_range: tuple[float, float],
+    sensor_pos_w: Tensor | None = None,
+    sensor_yaw: Tensor | None = None,
+) -> Tensor:
+    risk_field = torch.as_tensor(field)
+    if risk_field.ndim != 4 or int(risk_field.shape[1]) != 1:
+        raise ValueError(f"field must have shape [B,1,H,W], got {tuple(risk_field.shape)}")
+    points = torch.as_tensor(points_xy, dtype=risk_field.dtype, device=risk_field.device)
+    if points.shape[-1] != 2:
+        raise ValueError(f"points_xy must end in 2, got {tuple(points.shape)}")
+    batch = int(risk_field.shape[0])
+    if int(points.shape[0]) == 1 and batch > 1:
+        points = points.expand(batch, *points.shape[1:])
+    if int(points.shape[0]) != batch:
+        raise ValueError(f"points batch {int(points.shape[0])} must match field batch {batch}")
+    original_shape = tuple(points.shape[:-1])
+    local = _world_xy_to_field_local_xy(points, sensor_pos_w=sensor_pos_w, sensor_yaw=sensor_yaw)
+    x0, x1 = float(world_x_range[0]), float(world_x_range[1])
+    y0, y1 = float(world_y_range[0]), float(world_y_range[1])
+    x_norm = (local[..., 0].clamp(x0, x1) - x0) / max(x1 - x0, 1.0e-6) * 2.0 - 1.0
+    y_norm = (local[..., 1].clamp(y0, y1) - y0) / max(y1 - y0, 1.0e-6) * 2.0 - 1.0
+    grid = torch.stack((x_norm, y_norm), dim=-1).reshape(batch, -1, 1, 2)
+    sampled = F.grid_sample(risk_field, grid, mode="bilinear", padding_mode="border", align_corners=True)
+    return sampled[:, 0, :, 0].reshape(original_shape)
+
+
+def _semantic_avoidance_context(
+    terrain: MpcPlannerTerrain,
+    root_xy: Tensor,
+    command: Tensor,
+    *,
+    root_yaw: Tensor,
+) -> dict[str, Tensor] | None:
+    batch = int(root_xy.shape[0])
+    dtype = root_xy.dtype
+    device = root_xy.device
+    if terrain.semantic_map is None:
+        return None
+    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
+    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
+    if height.ndim == 2:
+        height = height.unsqueeze(0)
+    if semantic.ndim == 2:
+        semantic = semantic.unsqueeze(0)
+    if int(height.shape[0]) == 1 and batch > 1:
+        height = height.expand(batch, -1, -1)
+    if int(semantic.shape[0]) == 1 and batch > 1:
+        semantic = semantic.expand(batch, -1, -1)
+    if int(semantic.shape[0]) != batch or int(height.shape[0]) != batch:
+        return None
+    root_ground = height_at(terrain, root_xy[:, None, :]).reshape(batch).to(dtype=dtype, device=device)
+    cmd = torch.as_tensor(command, dtype=dtype, device=device)
+    if int(cmd.shape[-1]) < 3:
+        pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
+        cmd = torch.cat((cmd, pad), dim=-1)
+    field = _build_semantic_proximity_field(
+        height_map=height,
+        semantic_map=semantic,
+        root_xy=root_xy,
+        root_ground_z=root_ground,
+        command=cmd,
+        root_yaw=root_yaw,
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        sensor_pos_w=terrain.sensor_pos_w,
+        sensor_yaw=terrain.sensor_yaw,
+    ).to(dtype=dtype, device=device)
+    return {
+        "field": field,
+        "active": field.flatten(1).amax(dim=1) > 0.0,
+    }
+
+
+def _low_small_circles_context(
+    terrain: MpcPlannerTerrain,
+    *,
+    max_components: int,
+    device: torch.device,
+) -> LowSmallCircles | None:
+    if terrain.semantic_map is None:
+        return None
+    return low_small_component_circles(
+        torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device),
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        max_components=int(max_components),
+    )
 
 
 def _nearest_low_small_obstacle(
@@ -427,12 +659,19 @@ def _parametric_result_from_state(
     command: Tensor,
     *,
     cfg: MpcPlannerCfg,
+    profile: MpcProfile | None = None,
 ) -> MpcPlannerResult:
     horizon = int(cfg.runtime.horizon_steps)
     command_tensor = torch.as_tensor(command, dtype=torch.as_tensor(state.root_pos).dtype, device=torch.as_tensor(state.root_pos).device)
+    nominal_t0 = profile.now() if profile is not None else 0.0
     nominal = build_parametric_nominal(state, terrain, command_tensor, cfg, horizon=horizon)
+    if profile is not None:
+        profile.add_stage("parametric.nominal", (profile.now() - nominal_t0) * 1000.0)
     planning_command = nominal.command
+    init_t0 = profile.now() if profile is not None else 0.0
     variables = init_parametric_variables(state, planning_command, horizon=horizon)
+    if profile is not None:
+        profile.add_stage("parametric.init_vars", (profile.now() - init_t0) * 1000.0)
     decoded, loss_breakdown = _optimize_parametric_variables(
         terrain,
         state,
@@ -442,7 +681,9 @@ def _parametric_result_from_state(
         nominal=nominal,
         horizon=horizon,
         cfg=cfg,
+        profile=profile,
     )
+    export_t0 = profile.now() if profile is not None else 0.0
     root_pos = decoded.root_pos.detach()
     root_rpy = decoded.root_rpy.detach()
     target_foot_pos = decoded.target_foot_pos.detach()
@@ -507,6 +748,8 @@ def _parametric_result_from_state(
     status = torch.where(finite_ok, status, torch.full_like(status, int(MpcPlannerStatus.ALL_INFEASIBLE)))
     feasible = torch.logical_and(feasible, finite_ok)
     safe_fallback = torch.logical_or(safe_fallback, torch.logical_not(finite_ok))
+    if profile is not None:
+        profile.add_stage("parametric.export", (profile.now() - export_t0) * 1000.0)
     return MpcPlannerResult(
         root_pos=root_pos,
         root_rpy=root_rpy,
@@ -631,10 +874,24 @@ def _optimize_parametric_variables(
     nominal,
     horizon: int,
     cfg: MpcPlannerCfg,
+    profile: MpcProfile | None = None,
 ):
     command = planning_command if loss_command is None else loss_command
     steps = int(cfg.runtime.optimize_steps)
+    root_yaw0 = torch.as_tensor(state.root_rpy, dtype=torch.as_tensor(state.root_pos).dtype, device=torch.as_tensor(state.root_pos).device)[:, 2]
+    semantic_context = _semantic_avoidance_context(
+        terrain,
+        torch.as_tensor(state.root_pos, dtype=torch.as_tensor(state.root_pos).dtype, device=torch.as_tensor(state.root_pos).device)[:, :2],
+        command,
+        root_yaw=root_yaw0,
+    )
+    low_small_circles = _low_small_circles_context(
+        terrain,
+        max_components=int(cfg.losses.touchdown_keepout.low_small_circle_max_components),
+        device=torch.as_tensor(state.root_pos).device,
+    )
     decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=horizon)
+    loss_t0 = profile.now() if profile is not None else 0.0
     losses = _parametric_sampled_frame_losses(
         terrain,
         state,
@@ -644,13 +901,22 @@ def _optimize_parametric_variables(
         target_foot_pos=decoded.target_foot_pos,
         decoded=decoded,
         cfg=cfg,
+        semantic_avoidance_context=semantic_context,
+        low_small_circles=low_small_circles,
+        profile=profile,
     )
+    if profile is not None:
+        profile.add_loss("sampled_frame", (profile.now() - loss_t0) * 1000.0)
     if steps <= 0:
         return decoded, losses
     optimizer = torch.optim.Adam(variables.parameters(), lr=float(cfg.runtime.lr))
+    if profile is not None:
+        profile.optimize_iters = int(steps)
     for _ in range(steps):
+        iter_t0 = profile.now() if profile is not None else 0.0
         optimizer.zero_grad(set_to_none=True)
         decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=horizon)
+        loss_t0 = profile.now() if profile is not None else 0.0
         losses = _parametric_sampled_frame_losses(
             terrain,
             state,
@@ -660,12 +926,20 @@ def _optimize_parametric_variables(
             target_foot_pos=decoded.target_foot_pos,
             decoded=decoded,
             cfg=cfg,
+            semantic_avoidance_context=semantic_context,
+            low_small_circles=low_small_circles,
+            profile=profile,
         )
+        if profile is not None:
+            profile.add_loss("sampled_frame", (profile.now() - loss_t0) * 1000.0)
         total = sum(losses.values(), torch.zeros_like(next(iter(losses.values())))).mean()
         total.backward()
         torch.nn.utils.clip_grad_norm_(variables.parameters(), float(cfg.runtime.grad_clip_norm))
         optimizer.step()
+        if profile is not None:
+            profile.add_stage("opt.iter_total", (profile.now() - iter_t0) * 1000.0)
     decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=horizon)
+    loss_t0 = profile.now() if profile is not None else 0.0
     losses = _parametric_sampled_frame_losses(
         terrain,
         state,
@@ -675,7 +949,13 @@ def _optimize_parametric_variables(
         target_foot_pos=decoded.target_foot_pos,
         decoded=decoded,
         cfg=cfg,
+        semantic_avoidance_context=semantic_context,
+        low_small_circles=low_small_circles,
+        profile=profile,
     )
+    if profile is not None:
+        profile.add_loss("sampled_frame", (profile.now() - loss_t0) * 1000.0)
+        profile.add_loss("total", profile.loss_ms.get("sampled_frame", 0.0))
     return decoded, losses
 
 
@@ -689,10 +969,14 @@ def _parametric_sampled_frame_losses(
     target_foot_pos: Tensor,
     decoded,
     cfg: MpcPlannerCfg,
+    semantic_avoidance_context: dict[str, Tensor] | None = None,
+    low_small_circles: LowSmallCircles | None = None,
+    profile: MpcProfile | None = None,
 ) -> dict[str, Tensor]:
     batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
     dtype = root_pos.dtype
     device = root_pos.device
+    term_t0 = profile.now() if profile is not None else 0.0
     fk_joint = solve_joint_angles_from_trajectory(root_pos, decoded.root_rpy, target_foot_pos)
     if horizon > 0:
         state_joints = torch.as_tensor(state.joint_angles, dtype=dtype, device=device)
@@ -703,12 +987,18 @@ def _parametric_sampled_frame_losses(
         state_foot = torch.as_tensor(state.foot_pos, dtype=dtype, device=device)
         fk_foot = fk_foot.clone()
         fk_foot[:, 0, :, :] = state_foot
+    if profile is not None:
+        profile.add_loss("term.fk_base", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     target_fk_error = torch.linalg.vector_norm(target_foot_pos - foot_pos, dim=-1).mean(dim=(1, 2))
     terrain_z = height_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(dtype=dtype, device=device)
     clearance_deficit = torch.relu(terrain_z + 0.015 - foot_pos[..., 2])
     terrain_clearance = clearance_deficit.square().mean(dim=(1, 2))
     semantic = semantic_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(device=device)
     semantic_contact = (semantic != 0).to(dtype=dtype).mul(decoded.contact_prob.to(dtype=dtype)).mean(dim=(1, 2))
+    if profile is not None:
+        profile.add_loss("term.terrain_contact", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     root_yaw0 = torch.as_tensor(state.root_rpy, dtype=dtype, device=device)[:, 2]
     semantic_avoidance = _parametric_semantic_avoidance_loss(
         terrain,
@@ -717,13 +1007,18 @@ def _parametric_sampled_frame_losses(
         decoded.touchdown_w,
         command,
         root_yaw=root_yaw0,
+        context=semantic_avoidance_context,
     )
+    if profile is not None:
+        profile.add_loss("term.semantic_avoidance", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     if bool(cfg.losses.touchdown_keepout.enabled):
         touchdown_keepout = float(cfg.losses.touchdown_keepout.weight) * parametric_touchdown_keepout_loss(
             terrain,
             decoded.touchdown_w,
             radius_extra_m=float(cfg.losses.touchdown_keepout.touchdown_keepout_radius_extra_m),
             max_components=int(cfg.losses.touchdown_keepout.low_small_circle_max_components),
+            low_small_circles=low_small_circles,
         )
     else:
         touchdown_keepout = torch.zeros((batch,), dtype=dtype, device=device)
@@ -736,6 +1031,9 @@ def _parametric_sampled_frame_losses(
         )
     else:
         swing_foot_clearance = torch.zeros((batch,), dtype=dtype, device=device)
+    if profile is not None:
+        profile.add_loss("term.touchdown_clearance", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     touchdown_endpoint = _parametric_touchdown_endpoint_loss(
         terrain,
         foot_pos,
@@ -750,6 +1048,9 @@ def _parametric_sampled_frame_losses(
     stance_mass = contact_weight.sum(dim=-1, keepdim=True).clamp_min(1.0e-4)
     stance_center_xy = (contact_weight.unsqueeze(-1) * foot_pos[..., :2]).sum(dim=2) / stance_mass
     root_foot_center = 2.0 * (root_pos[..., :2] - stance_center_xy).square().sum(dim=-1).mean(dim=1)
+    if profile is not None:
+        profile.add_loss("term.endpoint_center", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     if bool(cfg.losses.plane_root_z_target.enabled):
         plane_root_z_target = float(cfg.losses.plane_root_z_target.weight) * parametric_plane_root_z_target_loss(
             root_pos,
@@ -781,6 +1082,9 @@ def _parametric_sampled_frame_losses(
         )
     else:
         fk_body_leg_collision = torch.zeros((batch,), dtype=dtype, device=device)
+    if profile is not None:
+        profile.add_loss("term.plane_fk_body", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     trajectory_fk_consistency = float(cfg.losses.ik_fk_residual.weight) * parametric_trajectory_fk_consistency_loss(
         root_pos,
         decoded.root_rpy,
@@ -796,6 +1100,9 @@ def _parametric_sampled_frame_losses(
         )
     else:
         joint_limit = torch.zeros((batch,), dtype=dtype, device=device)
+    if profile is not None:
+        profile.add_loss("term.trajectory_joint", (profile.now() - term_t0) * 1000.0)
+    term_t0 = profile.now() if profile is not None else 0.0
     pair_same = _cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 3])
     pair_same = pair_same + _cyclic_phase_distance(decoded.swing_center[:, 1], decoded.swing_center[:, 2])
     pair_half = torch.abs(_cyclic_phase_distance(decoded.swing_center[:, 0], decoded.swing_center[:, 1]) - 0.5)
@@ -850,6 +1157,8 @@ def _parametric_sampled_frame_losses(
         curve_regularization = root_acc.square().mean(dim=(1, 2)) + foot_acc.square().mean(dim=(1, 2, 3))
     else:
         curve_regularization = torch.zeros((batch,), dtype=dtype, device=device)
+    if profile is not None:
+        profile.add_loss("term.gait_progress_curve", (profile.now() - term_t0) * 1000.0)
     return {
         "parametric_reachability": target_fk_error,
         "parametric_terrain_clearance": terrain_clearance,
@@ -879,70 +1188,56 @@ def _parametric_semantic_avoidance_loss(
     command: Tensor,
     *,
     root_yaw: Tensor,
+    context: dict[str, Tensor] | None = None,
 ) -> Tensor:
-    batch, horizon = int(root_pos.shape[0]), int(root_pos.shape[1])
+    batch = int(root_pos.shape[0])
     dtype = root_pos.dtype
     device = root_pos.device
     zero = torch.zeros((batch,), dtype=dtype, device=device)
+    if context is not None:
+        field = torch.as_tensor(context["field"], dtype=dtype, device=device)
+        active = torch.as_tensor(context["active"], dtype=torch.bool, device=device)
+    else:
+        field = None
+        active = None
     if terrain.semantic_map is None:
         return zero
-    semantic = torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device)
-    height = torch.as_tensor(terrain.height_map, dtype=dtype, device=device)
-    if height.ndim == 2:
-        height = height.unsqueeze(0)
-    if semantic.ndim == 2:
-        semantic = semantic.unsqueeze(0)
-    if int(semantic.shape[0]) == 1 and batch > 1:
-        semantic = semantic.expand(batch, -1, -1)
-    if int(semantic.shape[0]) != batch:
-        return zero
-    grid_xy = _terrain_grid_world_xy(terrain, dtype=dtype, device=device)
-    grid_z = height.reshape(batch, -1)
-    grid_sem = semantic.reshape(batch, -1)
-    root_ground = height_at(terrain, root_pos[:, :1, :2]).reshape(batch).to(dtype=dtype, device=device)
-    high_small = torch.logical_and(grid_sem == 1, (grid_z - root_ground[:, None]) > 0.30)
-    risky = torch.logical_or(grid_sem >= 2, high_small)
+    if field is None or active is None:
+        built_context = _semantic_avoidance_context(terrain, root_pos[:, 0, :2], command, root_yaw=root_yaw)
+        if built_context is None:
+            return zero
+        field = torch.as_tensor(built_context["field"], dtype=dtype, device=device)
+        active = torch.as_tensor(built_context["active"], dtype=torch.bool, device=device)
 
-    cmd = torch.as_tensor(command, dtype=dtype, device=device)
-    if int(cmd.shape[-1]) < 3:
-        pad = torch.zeros((*cmd.shape[:-1], 3 - int(cmd.shape[-1])), dtype=dtype, device=device)
-        cmd = torch.cat((cmd, pad), dim=-1)
-    speed = torch.linalg.vector_norm(cmd[:, :2], dim=-1)
-    heading, left, _linear_active = command_frame_axes(cmd, root_yaw, linear_eps=1.0e-6)
-    delta0 = grid_xy - root_pos[:, :1, :2]
-    along0 = (delta0 * heading[:, None, :]).sum(dim=-1)
-    lateral0 = (delta0 * left[:, None, :]).sum(dim=-1)
-    candidate = torch.logical_and(
-        risky,
-        torch.logical_and(
-            torch.logical_and(along0 >= -0.10, along0 <= 1.50),
-            torch.abs(lateral0) <= 0.45,
-        ),
+    root_risk = _sample_proximity_field_at_world_xy(
+        field,
+        root_pos[..., :2],
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        sensor_pos_w=terrain.sensor_pos_w,
+        sensor_yaw=terrain.sensor_yaw,
     )
-    candidate = torch.logical_and(candidate, speed[:, None] > 1.0e-4)
-    weight = candidate.to(dtype=dtype, device=device)
-    count = weight.sum(dim=-1)
-    obstacle_lateral = (lateral0 * weight).sum(dim=-1) / count.clamp_min(1.0)
-    desired_side = torch.where(obstacle_lateral > 0.0, -torch.ones_like(obstacle_lateral), torch.ones_like(obstacle_lateral))
-
-    root_delta = root_pos[..., None, :2] - grid_xy[:, None, :, :]
-    root_along = (root_delta * heading[:, None, None, :]).sum(dim=-1)
-    root_lateral = (root_delta * left[:, None, None, :]).sum(dim=-1)
-    influence = torch.relu(1.0 - torch.abs(root_along) / 0.45)
-    root_deficit = torch.relu(0.28 - desired_side[:, None, None] * root_lateral).square()
-    root_cost = (weight[:, None, :] * influence * root_deficit).sum(dim=(1, 2)) / (weight[:, None, :] * influence).sum(dim=(1, 2)).clamp_min(1.0)
-
-    foot_delta = foot_pos[..., None, :2] - grid_xy[:, None, None, :, :]
-    foot_dist = torch.linalg.vector_norm(foot_delta, dim=-1)
-    foot_cost = (weight[:, None, None, :] * torch.relu(0.16 - foot_dist).square()).sum(dim=(1, 2, 3))
-    foot_cost = foot_cost / weight.sum(dim=1).mul(float(horizon * 4)).clamp_min(1.0)
-
-    touchdown_delta = touchdown_w[..., None, :2] - grid_xy[:, None, :, :]
-    touchdown_dist = torch.linalg.vector_norm(touchdown_delta, dim=-1)
-    touchdown_cost = (weight[:, None, :] * torch.relu(0.18 - touchdown_dist).square()).sum(dim=(1, 2))
-    touchdown_cost = touchdown_cost / weight.sum(dim=1).mul(4.0).clamp_min(1.0)
+    foot_risk = _sample_proximity_field_at_world_xy(
+        field,
+        foot_pos[..., :2],
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        sensor_pos_w=terrain.sensor_pos_w,
+        sensor_yaw=terrain.sensor_yaw,
+    )
+    touchdown_risk = _sample_proximity_field_at_world_xy(
+        field,
+        touchdown_w[..., :2],
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        sensor_pos_w=terrain.sensor_pos_w,
+        sensor_yaw=terrain.sensor_yaw,
+    )
+    root_cost = root_risk.mean(dim=1)
+    foot_cost = foot_risk.mean(dim=(1, 2))
+    touchdown_cost = touchdown_risk.mean(dim=1)
     loss = 30.0 * root_cost + 20.0 * foot_cost + 25.0 * touchdown_cost
-    return torch.where(count > 0.0, loss, zero)
+    return torch.where(active, loss, zero)
 
 
 def _parametric_touchdown_endpoint_loss(
@@ -1028,14 +1323,15 @@ def plan_segment(
             profile.add_stage("plan.total", (profile.now() - plan_t0) * 1000.0)
             maybe_print_mpc_profile(profile, cfg=cfg)
         return merged
+    with torch.inference_mode(False), torch.enable_grad():
+        result = _parametric_result_from_state(terrain, state, command, cfg=cfg, profile=profile)
     if profile is not None:
         profile.batch_size = batch_for_zero
         profile.horizon = horizon_for_zero
         profile.add_stage("plan.parametric", (profile.now() - plan_t0) * 1000.0)
         profile.add_stage("plan.total", (profile.now() - plan_t0) * 1000.0)
         maybe_print_mpc_profile(profile, cfg=cfg)
-    with torch.inference_mode(False), torch.enable_grad():
-        return _parametric_result_from_state(terrain, state, command, cfg=cfg)
+    return result
 
 
 __all__ = ["plan_segment", "sample_touchdown_positions"]

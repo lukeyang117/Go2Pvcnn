@@ -61,8 +61,9 @@ class GoalAnchoredVelocityCommand(CommandTerm):
         theta = random_values.uniform_(-math.pi, math.pi)
         direction = torch.stack((torch.cos(theta), torch.sin(theta)), dim=-1)
         self.goal_xy_w[ids] = root_xy + float(self.cfg.goal_distance) * direction
-        self.vx_abs[ids] = random_values.uniform_(*self.cfg.vx_abs_range)
-        self.vy_abs[ids] = random_values.uniform_(*self.cfg.vy_abs_range)
+        vx_abs_range, vy_abs_range = self.cfg.abs_velocity_ranges()
+        self.vx_abs[ids] = random_values.uniform_(*vx_abs_range)
+        self.vy_abs[ids] = random_values.uniform_(*vy_abs_range)
         self.is_standing_env[ids] = random_values.uniform_(0.0, 1.0) <= float(self.cfg.rel_standing_envs)
 
     def _update_command(self):
@@ -108,6 +109,18 @@ class GoalAnchoredVelocityCommandCfg(CommandTermCfg):
     goal_reached_threshold: float = 1.0
     vx_abs_range: tuple[float, float] = (0.6, 1.0)
     vy_abs_range: tuple[float, float] = (0.6, 1.0)
+    ranges: UniformVelocityCommandCfg.Ranges | None = None
+    limit_ranges: UniformVelocityCommandCfg.Ranges | None = None
     yaw_stiffness: float = 0.5
     yaw_range: tuple[float, float] = (-0.8, 0.8)
     rel_standing_envs: float = 0.0
+
+    def abs_velocity_ranges(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        if self.ranges is None:
+            return self.vx_abs_range, self.vy_abs_range
+        return _abs_range_from_signed_range(self.ranges.lin_vel_x), _abs_range_from_signed_range(self.ranges.lin_vel_y)
+
+
+def _abs_range_from_signed_range(value: tuple[float, float] | list[float]) -> tuple[float, float]:
+    lo, hi = float(value[0]), float(value[1])
+    return min(abs(lo), abs(hi)), max(abs(lo), abs(hi))

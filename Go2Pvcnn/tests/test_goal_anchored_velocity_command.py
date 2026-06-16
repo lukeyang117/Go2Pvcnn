@@ -165,6 +165,19 @@ def test_goal_anchored_command_resample_initializes_goal_and_speed(monkeypatch) 
     assert torch.all(command.vy_abs <= 1.0)
 
 
+def test_goal_anchored_command_uses_curriculum_ranges_for_abs_speed(monkeypatch) -> None:
+    env, command = _make_command(monkeypatch, num_envs=16)
+    ranges_cls = sys.modules["isaaclab.envs.mdp"].UniformVelocityCommandCfg.Ranges
+    command.cfg.ranges = ranges_cls(lin_vel_x=(-0.2, 0.2), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-0.3, 0.3))
+
+    command._resample_command(torch.arange(16))
+
+    assert torch.all(command.vx_abs >= 0.2)
+    assert torch.all(command.vx_abs <= 0.2)
+    assert torch.all(command.vy_abs >= 0.1)
+    assert torch.all(command.vy_abs <= 0.1)
+
+
 def test_goal_anchored_command_updates_xy_signs_from_body_quadrant(monkeypatch) -> None:
     env, command = _make_command(monkeypatch, num_envs=1)
     robot = env.scene["robot"]

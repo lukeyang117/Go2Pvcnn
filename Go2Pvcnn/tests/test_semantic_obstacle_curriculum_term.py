@@ -196,6 +196,39 @@ def test_plane_env_mask_treats_single_flat_subterrain_columns_as_flat(monkeypatc
     assert mask.tolist() == [True] * 20
 
 
+def test_lin_vel_cmd_levels_updates_goal_anchored_signed_ranges(monkeypatch) -> None:
+    curriculums = _load_curriculums_module(monkeypatch)
+
+    class _Ranges:
+        def __init__(self, lin_vel_x, lin_vel_y):
+            self.lin_vel_x = lin_vel_x
+            self.lin_vel_y = lin_vel_y
+
+    cfg = types.SimpleNamespace(
+        ranges=_Ranges((-0.1, 0.1), (-0.1, 0.1)),
+        limit_ranges=_Ranges((-1.0, 1.0), (-0.5, 0.5)),
+    )
+    command_manager = types.SimpleNamespace(get_term=lambda _name: types.SimpleNamespace(cfg=cfg))
+    reward_manager = types.SimpleNamespace(
+        get_term_cfg=lambda _name: types.SimpleNamespace(weight=1.5),
+        _episode_sums={"track_lin_vel_xy": torch.tensor([20.0, 20.0])},
+    )
+    env = types.SimpleNamespace(
+        device="cpu",
+        command_manager=command_manager,
+        reward_manager=reward_manager,
+        max_episode_length_s=10.0,
+        max_episode_length=100,
+        common_step_counter=100,
+    )
+
+    out = curriculums.lin_vel_cmd_levels(env, torch.tensor([0, 1]))
+
+    assert cfg.ranges.lin_vel_x == [-0.20000000298023224, 0.20000000298023224]
+    assert cfg.ranges.lin_vel_y == [-0.20000000298023224, 0.20000000298023224]
+    assert out.item() == cfg.ranges.lin_vel_x[1]
+
+
 def test_env_level_curriculum_single_successful_flat_episode_moves_up(monkeypatch) -> None:
     from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
 

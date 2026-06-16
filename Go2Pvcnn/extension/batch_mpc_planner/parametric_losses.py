@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 
 from .kinematics import MpcLegPoints
-from .semantic_geometry import low_small_component_circles
+from .semantic_geometry import LowSmallCircles, low_small_component_circles
 from .terrain import height_at, semantic_at
 from .types import MpcPlannerTerrain
 
@@ -147,6 +147,7 @@ def parametric_touchdown_keepout_loss(
     *,
     radius_extra_m: float,
     max_components: int,
+    low_small_circles: LowSmallCircles | None = None,
 ) -> Tensor:
     touchdown = torch.as_tensor(touchdown_w)
     batch = int(touchdown.shape[0])
@@ -159,12 +160,14 @@ def parametric_touchdown_keepout_loss(
     trigger = semantic == 1
     if not bool(torch.any(trigger)):
         return zero
-    circles = low_small_component_circles(
-        torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device),
-        world_x_range=terrain.world_x_range,
-        world_y_range=terrain.world_y_range,
-        max_components=int(max_components),
-    )
+    circles = low_small_circles
+    if circles is None:
+        circles = low_small_component_circles(
+            torch.as_tensor(terrain.semantic_map, dtype=torch.long, device=device),
+            world_x_range=terrain.world_x_range,
+            world_y_range=terrain.world_y_range,
+            max_components=int(max_components),
+        )
     dist = torch.linalg.vector_norm(touchdown[..., None, :2] - circles.center_xy[:, None, :, :].to(dtype=dtype), dim=-1)
     keepout_radius = circles.radius[:, None, :].to(dtype=dtype, device=device) + float(radius_extra_m)
     deficit = torch.relu(keepout_radius - dist)

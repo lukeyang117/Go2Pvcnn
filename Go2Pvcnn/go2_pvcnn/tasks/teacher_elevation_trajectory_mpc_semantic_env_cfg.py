@@ -771,15 +771,24 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
-        self.curriculum.lin_vel_cmd_levels = None
         self.commands.base_velocity = mdp.GoalAnchoredVelocityCommandCfg(
             asset_name="robot",
             resampling_time_range=(100.0, 100.0),
             debug_vis=True,
             goal_distance=10.0,
             goal_reached_threshold=1.0,
-            vx_abs_range=(0.6, 1.0),
-            vy_abs_range=(0.6, 1.0),
+            vx_abs_range=(0.1, 0.1),
+            vy_abs_range=(0.1, 0.1),
+            ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
+                lin_vel_x=(-0.1, 0.1),
+                lin_vel_y=(-0.1, 0.1),
+                ang_vel_z=(-0.8, 0.8),
+            ),
+            limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
+                lin_vel_x=(-1.0, 1.0),
+                lin_vel_y=(-0.5, 0.5),
+                ang_vel_z=(-0.8, 0.8),
+            ),
             yaw_stiffness=0.5,
             yaw_range=(-0.8, 0.8),
             rel_standing_envs=0.0,

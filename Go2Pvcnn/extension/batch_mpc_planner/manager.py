@@ -270,6 +270,9 @@ class MpcTrajectoryManager:
         global_due: bool,
         planner_ms: float,
         cache_ms: float,
+        terrain_ms: float = 0.0,
+        state_command_ms: float = 0.0,
+        result_cache_ms: float = 0.0,
     ) -> None:
         if not bool(cfg.diagnostics.emit_runtime_counters):
             return
@@ -281,6 +284,9 @@ class MpcTrajectoryManager:
             "max_stale_observed": int(max_stale_observed),
             "planner_ms": float(planner_ms),
             "cache_ms": float(cache_ms),
+            "terrain_ms": float(terrain_ms),
+            "state_command_ms": float(state_command_ms),
+            "result_cache_ms": float(result_cache_ms),
         }
 
     def runtime_counters(self) -> dict[str, float | int]:
@@ -349,6 +355,9 @@ class MpcTrajectoryManager:
         timing_sync = counters_enabled and bool(cfg.diagnostics.profile_cuda_sync)
         refresh_t0 = self._profile_now(sync=timing_sync) if counters_enabled else 0.0
         planner_ms = 0.0
+        terrain_ms = 0.0
+        state_command_ms = 0.0
+        result_cache_ms = 0.0
         horizon = int(cfg.runtime.horizon_steps)
         self._manager_step += 1
 
@@ -394,6 +403,7 @@ class MpcTrajectoryManager:
         old_cache = self._cache
         if int(selected_ids.numel()) > 0:
             plan_t0 = self._profile_now(sync=timing_sync) if counters_enabled else 0.0
+            state_t0 = self._profile_now(sync=timing_sync) if counters_enabled else 0.0
             states = self._state_from_env(env)
             command = self._commands_from_env(env)
             sub_states = MpcRobotState(
@@ -404,10 +414,16 @@ class MpcTrajectoryManager:
                 foot_vel=states.foot_vel.index_select(0, selected_ids) if states.foot_vel is not None else None,
             )
             sub_command = command.index_select(0, selected_ids)
+            if counters_enabled:
+                state_command_ms = (self._profile_now(sync=timing_sync) - state_t0) * 1000.0
+            terrain_t0 = self._profile_now(sync=timing_sync) if counters_enabled else 0.0
             sub_terrain = self._terrain_subset_from_env(env, selected_ids)
+            if counters_enabled:
+                terrain_ms = (self._profile_now(sync=timing_sync) - terrain_t0) * 1000.0
             result = plan_segment(sub_terrain, sub_states, sub_command, cfg=cfg)
             self._debug_nonfinite_result(result, selected_ids)
 
+            cache_t0 = self._profile_now(sync=timing_sync) if counters_enabled else 0.0
             sub_new_cache = mpc_result_to_reference_cache(result)
             sub_fallback_cache = standstill_cache_from_state(sub_states, horizon=horizon)
             full_new_cache = clone_reference_cache(old_cache)
@@ -435,6 +451,7 @@ class MpcTrajectoryManager:
                 fallback_mask=fallback_mask,
             )
             if counters_enabled:
+                result_cache_ms = (self._profile_now(sync=timing_sync) - cache_t0) * 1000.0
                 planner_ms = (self._profile_now(sync=timing_sync) - plan_t0) * 1000.0
         else:
             self._cache = old_cache
@@ -474,6 +491,9 @@ class MpcTrajectoryManager:
                 global_due=global_due,
                 planner_ms=planner_ms,
                 cache_ms=cache_ms,
+                terrain_ms=terrain_ms,
+                state_command_ms=state_command_ms,
+                result_cache_ms=result_cache_ms,
             )
         return self._cache
 

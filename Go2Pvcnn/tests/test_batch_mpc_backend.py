@@ -480,6 +480,36 @@ def test_touchdown_keepout_only_triggers_when_touchdown_on_semantic() -> None:
     assert loss.item() > 0.0
 
 
+def test_touchdown_keepout_accepts_precomputed_low_small_circles() -> None:
+    terrain = _terrain_with_low_small_square()
+    touchdown = torch.tensor(
+        [[[0.0, 0.0, 0.1], [0.5, 0.5, 0.0], [0.6, 0.5, 0.0], [0.7, 0.5, 0.0]]],
+        dtype=torch.float32,
+    )
+    circles = low_small_component_circles(
+        terrain.semantic_map,
+        world_x_range=terrain.world_x_range,
+        world_y_range=terrain.world_y_range,
+        max_components=8,
+    )
+
+    direct = parametric_touchdown_keepout_loss(
+        terrain,
+        touchdown,
+        radius_extra_m=0.05,
+        max_components=8,
+    )
+    cached = parametric_touchdown_keepout_loss(
+        terrain,
+        touchdown,
+        radius_extra_m=0.05,
+        max_components=8,
+        low_small_circles=circles,
+    )
+
+    torch.testing.assert_close(cached, direct)
+
+
 def test_touchdown_keepout_is_zero_for_nonsemantic_touchdowns() -> None:
     terrain = _terrain_with_low_small_square()
     touchdown = torch.tensor(
@@ -4330,14 +4360,18 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert isinstance(cfg, TeacherElevationTrajectoryMpcSemanticEnvCfg)
     assert cfg.experiment_name == "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
     assert base.curriculum.lin_vel_cmd_levels is not None
-    assert cfg.curriculum.lin_vel_cmd_levels is None
+    assert cfg.curriculum.lin_vel_cmd_levels is not None
     assert cfg.curriculum.terrain_levels is not None
     assert type(base.commands.base_velocity).__name__ == "UniformLevelVelocityCommandCfg"
     assert type(cfg.commands.base_velocity).__name__ == "GoalAnchoredVelocityCommandCfg"
     assert cfg.commands.base_velocity.goal_distance == pytest.approx(10.0)
     assert cfg.commands.base_velocity.goal_reached_threshold == pytest.approx(1.0)
-    assert tuple(cfg.commands.base_velocity.vx_abs_range) == (0.6, 1.0)
-    assert tuple(cfg.commands.base_velocity.vy_abs_range) == (0.6, 1.0)
+    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_x) == (-0.1, 0.1)
+    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_y) == (-0.1, 0.1)
+    assert tuple(cfg.commands.base_velocity.limit_ranges.lin_vel_x) == (-1.0, 1.0)
+    assert tuple(cfg.commands.base_velocity.limit_ranges.lin_vel_y) == (-0.5, 0.5)
+    assert tuple(cfg.commands.base_velocity.vx_abs_range) == (0.1, 0.1)
+    assert tuple(cfg.commands.base_velocity.vy_abs_range) == (0.1, 0.1)
     assert cfg.commands.base_velocity.yaw_stiffness == pytest.approx(0.5)
     assert tuple(cfg.commands.base_velocity.yaw_range) == (-0.8, 0.8)
     assert getattr(base.rewards, "semantic_body_part_clearance", None) is None
@@ -4406,3 +4440,39 @@ def test_flat_small_avoidance_entrypoints_are_registered() -> None:
     assert task_id.replace("-v0", "-Play-v0") in play_source
     assert "TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg" in register_source
     assert "TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY" in register_source
+
+
+def test_mpc_semantic_avoidance_keeps_existing_loss_key_only() -> None:
+    source = (GO2PVCNN_ROOT / "extension/batch_mpc_planner/planner.py").read_text()
+
+    assert '"parametric_semantic_avoidance"' in source
+    forbidden_keys = (
+        '"parametric_proximity"',
+        '"parametric_distance_field"',
+        '"semantic_proximity"',
+        '"semantic_distance_field"',
+    )
+    for key in forbidden_keys:
+        assert key not in source
+
+
+def test_mpc_cfg_does_not_add_proximity_loss_term() -> None:
+    fields = set(vars(MpcPlannerCfg().losses).keys())
+
+    assert "semantic_proximity" not in fields
+    assert "distance_field" not in fields
+    assert "proximity_field" not in fields
+    assert "semantic_contact_avoid" in fields
+
+
+def test_mpc_rl_epoch_perf_probe_exposes_1024_mpc_acceptance_flags() -> None:
+    source = (GO2PVCNN_ROOT / "tests/mpc_rl_epoch_perf_probe.py").read_text()
+
+    assert "--num-envs" in source
+    assert "--mpc-num-envs" in source
+    assert "--require-replan" in source
+    assert "--print-cuda-memory" in source
+    assert "--summary-path" in source
+    assert "TeacherElevationTrajectoryMpcSemanticEnvCfg" in source
+    assert "cuda_max_memory_allocated" in source
+    assert "cuda_max_memory_reserved" in source
