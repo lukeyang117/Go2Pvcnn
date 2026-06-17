@@ -297,7 +297,12 @@ def reference_contact_reward(
     current_contact = sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2] > 1.0
     ref_contact = _reference_field(env, cache, "contact_state", frame_ids)
     err = contact_state_error(current_contact, ref_contact)
-    return exponential_tracking_reward(err, sigma=sigma)
+    reward = exponential_tracking_reward(err, sigma=sigma)
+    manager = _trajectory_manager(env)
+    if manager is not None and hasattr(manager, "reference_reward_mask"):
+        mask = manager.reference_reward_mask().to(device=reward.device, dtype=reward.dtype)
+        reward = reward * mask
+    return reward
 
 
 def reference_touchdown_reward(

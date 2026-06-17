@@ -28,7 +28,7 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.batch_mpc_planner.participation import MpcTerrainDifficultyPair
 from extension.mdp.observations import downsampled_elevation_semantic_scan
-from extension.mdp.rewards_reference import reference_foot_pos_reward
+from extension.mdp.rewards_reference import reference_contact_reward, reference_foot_pos_reward
 from extension.mdp.semantic_body_part_clearance import (
     semantic_body_part_clearance_reward,
     semantic_foot_over_clearance_bonus,
@@ -160,6 +160,14 @@ def _reference_foot_pos_reward_term() -> RewTerm:
         func=reference_foot_pos_reward,
         weight=0.3,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot")},
+    )
+
+
+def _reference_contact_reward_term() -> RewTerm:
+    return RewTerm(
+        func=reference_contact_reward,
+        weight=0.05,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
     )
 
 
@@ -506,6 +514,7 @@ class TeacherElevationTrajectoryMpcSemanticRewardsCfg:
         },
     )
     reference_foot_pos = _reference_foot_pos_reward_term()
+    reference_contact = _reference_contact_reward_term()
     semantic_contact_collision = _semantic_contact_collision_reward_term()
 
 
@@ -653,6 +662,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY(TeacherElevationTrajector
         self.planner_owned_reference_cache = False
         self.use_batched_reference_trajectory = False
         self.rewards.reference_foot_pos = None
+        self.rewards.reference_contact = None
         self.rewards.semantic_contact_collision = None
         self.scene.semantic_contact_small = None
         self.scene.semantic_contact_large = None
@@ -687,6 +697,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER(TeacherElevationTraject
         self.planner_owned_reference_cache = True
         self.use_batched_reference_trajectory = True
         self.rewards.reference_foot_pos = _reference_foot_pos_reward_term()
+        self.rewards.reference_contact = _reference_contact_reward_term()
         self.rewards.semantic_contact_collision = None
         self.scene.semantic_contact_small = None
         self.scene.semantic_contact_large = None
@@ -780,8 +791,8 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
             vx_abs_range=(0.1, 0.1),
             vy_abs_range=(0.1, 0.1),
             ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-                lin_vel_x=(-0.1, 0.1),
-                lin_vel_y=(-0.1, 0.1),
+                lin_vel_x=(-0.6, 1),
+                lin_vel_y=(0, 0.5),
                 ang_vel_z=(-0.8, 0.8),
             ),
             limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
@@ -797,6 +808,8 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
         self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
         self.rewards.semantic_body_part_clearance = _semantic_body_part_clearance_reward_term()
         self.rewards.semantic_foot_over_clearance = _semantic_foot_over_clearance_reward_term()
+        self.curriculum.lin_vel_cmd_levels = None
+        self.terminations.bad_orientation.params["limit_angle"] = 1.1
 
 
 @configclass
@@ -818,6 +831,7 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY(
         self.planner_owned_reference_cache = False
         self.use_batched_reference_trajectory = False
         self.rewards.reference_foot_pos = None
+        self.rewards.reference_contact = None
         self.rewards.semantic_contact_collision = None
         self.scene.semantic_contact_small = None
         self.scene.semantic_contact_large = None

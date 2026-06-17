@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import torch
 
@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(GO2PVCNN_ROOT) not in sys.path:
     sys.path.insert(0, str(GO2PVCNN_ROOT))
 
-from extension.mdp.rewards_reference import reference_foot_pos_reward
+from extension.mdp.rewards_reference import reference_contact_reward, reference_foot_pos_reward
 from extension.batch_mpc_planner.participation import (
     MpcReferenceParticipationCfg,
     MpcTerrainDifficultyPair,
@@ -168,6 +168,48 @@ def test_reference_foot_pos_reward_uses_world_feet_and_manager_phase() -> None:
     asset_cfg = SimpleNamespace(name="robot", body_ids=[0, 1, 2, 3])
 
     reward = reference_foot_pos_reward(env, sigma=0.5, asset_cfg=asset_cfg)
+
+    torch.testing.assert_close(reward[0], torch.tensor(1.0))
+    torch.testing.assert_close(reward[1], torch.tensor(0.0))
+
+
+def test_reference_contact_reward_uses_current_mpc_frame_and_reward_mask(monkeypatch) -> None:
+    managers_module = ModuleType("isaaclab.managers")
+    managers_module.SceneEntityCfg = lambda *args, **kwargs: SimpleNamespace(*args, **kwargs)
+    sensors_module = ModuleType("isaaclab.sensors")
+    sensors_module.ContactSensor = object
+    monkeypatch.setitem(sys.modules, "isaaclab.managers", managers_module)
+    monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors_module)
+
+    contact_state = torch.tensor(
+        [
+            [[True, False, True, False], [False, True, False, True]],
+            [[True, False, True, False], [False, True, False, True]],
+        ],
+        dtype=torch.bool,
+    )
+    cache = SimpleNamespace(
+        contact_state=contact_state,
+        root_pos_w=torch.zeros((2, 2, 3), dtype=torch.float32),
+        is_ready=lambda: True,
+        horizon_length=lambda: 2,
+    )
+    manager = _FakeManager(cache, torch.tensor([1.0, 0.0]), torch.tensor([1, 1]))
+    net_forces_w = torch.zeros((2, 4, 3), dtype=torch.float32)
+    net_forces_w[:, [1, 3], 2] = 2.0
+    sensor = SimpleNamespace(data=SimpleNamespace(net_forces_w=net_forces_w))
+    scene = SimpleNamespace(sensors={"contact_forces": sensor})
+    env = SimpleNamespace(
+        unwrapped=SimpleNamespace(_trajectory_manager=manager),
+        scene=scene,
+        num_envs=2,
+        device=torch.device("cpu"),
+        episode_length_buf=torch.tensor([1, 1]),
+        cfg=SimpleNamespace(reference_trajectory_horizon=2),
+    )
+    sensor_cfg = SimpleNamespace(name="contact_forces", body_ids=[0, 1, 2, 3])
+
+    reward = reference_contact_reward(env, sigma=0.5, sensor_cfg=sensor_cfg)
 
     torch.testing.assert_close(reward[0], torch.tensor(1.0))
     torch.testing.assert_close(reward[1], torch.tensor(0.0))

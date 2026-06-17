@@ -1633,8 +1633,19 @@ def test_mpc_semantic_trajectory_cfg_defaults_to_mpc_and_semantic_scanner() -> N
     assert "semantic_contact_collision" in source
     assert "reference_root_pose" not in source
     assert "reference_joint_pos" not in source
-    assert "reference_contact" not in source
+    assert "reference_contact" in source
     assert "reference_touchdown" not in source
+
+
+def test_teacher_mpc_semantic_cfg_enables_small_weight_reference_contact_reward() -> None:
+    cfg_path = GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py"
+    source = cfg_path.read_text()
+
+    assert "reference_contact = _reference_contact_reward_term()" in source
+    assert "def _reference_contact_reward_term" in source
+    assert "func=reference_contact_reward" in source
+    assert "weight=0.05" in source
+    assert 'SceneEntityCfg("contact_forces", body_names=".*_foot")' in source
 
 
 def test_semantic_raycaster_refreshes_mesh_after_startup_course_generation() -> None:
@@ -4272,7 +4283,11 @@ def _install_fake_eval_cfg_import_dependencies(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
         "extension.mdp.rewards_reference",
-        _module("extension.mdp.rewards_reference", reference_foot_pos_reward=lambda *args, **kwargs: None),
+        _module(
+            "extension.mdp.rewards_reference",
+            reference_contact_reward=lambda *args, **kwargs: None,
+            reference_foot_pos_reward=lambda *args, **kwargs: None,
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -4360,7 +4375,7 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert isinstance(cfg, TeacherElevationTrajectoryMpcSemanticEnvCfg)
     assert cfg.experiment_name == "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance"
     assert base.curriculum.lin_vel_cmd_levels is not None
-    assert cfg.curriculum.lin_vel_cmd_levels is not None
+    assert cfg.curriculum.lin_vel_cmd_levels is None
     assert cfg.curriculum.terrain_levels is not None
     assert type(base.commands.base_velocity).__name__ == "UniformLevelVelocityCommandCfg"
     assert type(cfg.commands.base_velocity).__name__ == "GoalAnchoredVelocityCommandCfg"

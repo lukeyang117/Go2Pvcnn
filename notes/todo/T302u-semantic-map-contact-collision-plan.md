@@ -19,6 +19,8 @@ Use ordinary robot `contact_forces` plus the 0.01m semantic/elevation scanner ma
 - [x] T302u.6 Run a 1024-env startup check after older stuck jobs are stopped.
 - [x] T302u.8 Replace dense MPC semantic avoidance with proximity-field sampling so 1024 RL envs can use 1024 MPC envs without CUDA OOM.
 - [x] T302u.9 Cache low-small touchdown keepout circles once per replan to remove the 1024/1024 MPC collection long tail.
+- [x] T302u.10 Remove flat-small `lin_vel_cmd_levels` again per user request while preserving `GoalAnchoredVelocityCommand`.
+- [x] T302u.11 Relax flat-small `bad_orientation` termination threshold for small-obstacle crossing.
 
 ## Key Files
 
@@ -42,6 +44,8 @@ Use ordinary robot `contact_forces` plus the 0.01m semantic/elevation scanner ma
 - [../log/2026-06-14-0008-flat-small-1024-simulation-start-stall.md](../log/2026-06-14-0008-flat-small-1024-simulation-start-stall.md)
 - [../log/2026-06-14-0035-semantic-map-contact-collision-implementation.md](../log/2026-06-14-0035-semantic-map-contact-collision-implementation.md)
 - [../log/2026-06-15-1649-flat-small-goal-anchored-speed-curriculum.md](../log/2026-06-15-1649-flat-small-goal-anchored-speed-curriculum.md)
+- [../log/2026-06-17-flat-small-remove-speed-curriculum-again.md](../log/2026-06-17-flat-small-remove-speed-curriculum-again.md)
+- [../log/2026-06-17-flat-small-bad-orientation-threshold.md](../log/2026-06-17-flat-small-bad-orientation-threshold.md)
 - [../log/2026-06-16-mpc-proximity-field-semantic-avoidance.md](../log/2026-06-16-mpc-proximity-field-semantic-avoidance.md)
 - [../log/2026-06-16-mpc-touchdown-keepout-runtime-cache.md](../log/2026-06-16-mpc-touchdown-keepout-runtime-cache.md)
 
@@ -64,3 +68,9 @@ The 1024/1024 memory fix exposed a separate runtime long tail: later replans som
 The root cause was `parametric_touchdown_keepout_loss()` rebuilding `low_small_component_circles()` inside every sampled-frame loss call. Low-small component circles depend on the semantic map and scanner range, not on optimizer variables, so the helper is now built once per replan and passed through the existing sampled loss path. No new loss key or loss weight was added.
 
 Verification used `env_isaacsim`: focused MPC regression `169 passed`, pycompile exit `0`, and a real `TeacherElevationTrajectoryMpcSemanticEnvCfg` `1024` RL / `1024` MPC / `60`-step probe completed with `epoch_seconds=15.2575`, `replan_event_count=3`, `max_sampled_plan_count_seen=1024`, CUDA allocated `7.55GB`, reserved `9.29GB`. The same reproduced slow profile before the cache had `term.touchdown_clearance_ms=33820.227` and `epoch_seconds=45.894`.
+
+### T302u.10 Flat-small Speed Curriculum Removed Again
+
+The flat-small cfg briefly re-enabled `lin_vel_cmd_levels` to make `GoalAnchoredVelocityCommand` compatible with the old velocity curriculum. The user then explicitly requested removing the speed curriculum from `TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg`.
+
+The current contract is now: base semantic MPC cfg keeps `lin_vel_cmd_levels`; flat-small train cfg sets `self.curriculum.lin_vel_cmd_levels = None`; flat-small still uses `GoalAnchoredVelocityCommand`; terrain curriculum remains active. Real 4-env `env_isaacsim` smoke confirms Curriculum Manager has only `terrain_levels`.

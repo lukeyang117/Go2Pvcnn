@@ -378,6 +378,20 @@ def test_play_cfgs_disable_timeout_refresh_for_visualization() -> None:
     assert "self.terminations.time_out = None" in flat_play_source
 
 
+def test_play_cfgs_disable_reference_contact_without_mpc_manager() -> None:
+    source = (GO2PVCNN_ROOT / "go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py").read_text(
+        encoding="utf-8"
+    )
+    base_play_source = source[
+        source.index("class TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY") :
+        source.index("class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER")
+    ]
+    flat_play_source = source[source.index("class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY") :]
+
+    assert "self.rewards.reference_contact = None" in base_play_source
+    assert "self.rewards.reference_contact = None" in flat_play_source
+
+
 def test_keyboard_velocity_controller_maps_pressed_keys_to_body_command() -> None:
     controller = play._KeyboardVelocityController(
         enabled=True,
