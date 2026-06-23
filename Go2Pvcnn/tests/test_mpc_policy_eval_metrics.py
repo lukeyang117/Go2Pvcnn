@@ -194,3 +194,49 @@ def test_controlled_crossing_accumulator_summarizes_success_by_speed_and_lateral
     assert summary["success_by_speed"]["0.8"]["success_count"] == 0
     assert summary["success_by_lateral_offset"]["0.0"]["success_count"] == 1
     assert summary["success_by_lateral_offset"]["0.08"]["success_count"] == 0
+
+
+def test_controlled_crossing_accumulator_records_reset_stage_after_foot_over() -> None:
+    acc = ControlledCrossingAccumulator(
+        num_envs=4,
+        speed_by_env=[0.6, 0.6, 0.8, 0.8],
+        lateral_offset_by_env=[0.0, 0.08, 0.0, 0.08],
+        device=torch.device("cpu"),
+    )
+    acc.opportunity_seen[:] = torch.tensor([True, True, True, False])
+    acc.root_crossed[:] = torch.tensor([False, True, True, False])
+    acc.foot_over[:] = torch.tensor([True, True, False, False])
+    acc.update_reset_diagnostics(
+        step=12,
+        done_mask=torch.tensor([True, True, True, False]),
+        termination_terms={
+            "bad_orientation": torch.tensor([True, False, False, False]),
+            "base_contact": torch.tensor([False, True, False, False]),
+            "time_out": torch.tensor([False, False, True, False]),
+        },
+    )
+
+    summary = acc.summary(contact_collided=torch.zeros(4, dtype=torch.bool))
+
+    assert summary["reset_env_count"] == 3
+    assert summary["reset_after_foot_over_count"] == 2
+    assert summary["reset_after_root_crossed_count"] == 2
+    assert summary["reset_reason_counts"] == {
+        "bad_orientation": 1,
+        "base_contact": 1,
+        "time_out": 1,
+        "unknown": 0,
+    }
+    assert summary["reset_stage_counts"] == {
+        "before_opportunity": 0,
+        "before_foot_over": 1,
+        "after_foot_over_before_root_cross": 1,
+        "after_root_cross": 1,
+    }
+    assert summary["first_reset_step_by_env"] == {"0": 12, "1": 12, "2": 12}
+    assert summary["first_reset_reason_by_env"] == {"0": "bad_orientation", "1": "base_contact", "2": "time_out"}
+    assert summary["first_reset_stage_by_env"] == {
+        "0": "after_foot_over_before_root_cross",
+        "1": "after_root_cross",
+        "2": "before_foot_over",
+    }

@@ -84,6 +84,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video_length", type=int, default=200, help="Length of recorded videos (steps).")
     parser.add_argument("--video_interval", type=int, default=2000, help="Interval between recordings (steps).")
     parser.add_argument("--resume", action="store_true", default=False, help="Resume training from checkpoint.")
+    parser.add_argument(
+        "--keep_std",
+        action="store_true",
+        default=False,
+        help="When resuming, keep the checkpoint policy action std instead of resetting to the current init std.",
+    )
     parser.add_argument("--load_run", type=str, default=None, help="Name of run to load when resuming.")
     parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
     parser.add_argument(
@@ -756,7 +762,7 @@ def main() -> int:
         checkpoint_path = os.path.join(resume_path, checkpoint_file)
         
         if os.path.exists(checkpoint_path):
-            runner.load(checkpoint_path)
+            runner.load(checkpoint_path, keep_std=args_cli.keep_std)
             print(f"[Resume] Checkpoint loaded: {checkpoint_path}")
         else:
             print(f"[Resume] WARNING: Checkpoint not found: {checkpoint_path}")

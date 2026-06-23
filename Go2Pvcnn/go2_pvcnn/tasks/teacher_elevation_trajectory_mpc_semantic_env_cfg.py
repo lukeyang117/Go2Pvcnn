@@ -230,7 +230,7 @@ def _semantic_body_part_clearance_reward_term() -> RewTerm:
 def _semantic_foot_over_clearance_reward_term() -> RewTerm:
     return RewTerm(
         func=semantic_foot_over_clearance_bonus,
-        weight=1.0,
+        weight=0.12,
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "scanner_cfg": SceneEntityCfg("semantic_height_scanner"),
@@ -808,6 +808,9 @@ class TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg(TeacherEleva
         self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
         self.rewards.semantic_body_part_clearance = _semantic_body_part_clearance_reward_term()
         self.rewards.semantic_foot_over_clearance = _semantic_foot_over_clearance_reward_term()
+        self.rewards.flat_orientation_l2.weight = -3.5
+        self.rewards.base_angular_velocity.weight = -0.12
+        self.rewards.feet_slide.weight = -0.18
         self.curriculum.lin_vel_cmd_levels = None
         self.terminations.bad_orientation.params["limit_angle"] = 1.1
 

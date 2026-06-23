@@ -42,3 +42,12 @@ def test_train_exposes_mpc_num_envs_cli_override() -> None:
     assert source.index("env_cfg.scene.num_envs = args_cli.num_envs") < source.index(
         "env_cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = int(args_cli.mpc_num_envs)"
     )
+
+
+def test_train_exposes_keep_std_resume_option() -> None:
+    source = _source()
+
+    assert '"--keep_std"' in source
+    assert "action=\"store_true\"" in source
+    assert "default=False" in source
+    assert "runner.load(checkpoint_path, keep_std=args_cli.keep_std)" in source

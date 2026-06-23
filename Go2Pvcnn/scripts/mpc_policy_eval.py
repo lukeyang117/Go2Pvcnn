@@ -254,6 +254,27 @@ class SmallCollisionRoundAccumulator:
                 if int(body_id) < len(body_names):
                     names.add(str(body_names[int(body_id)]))
 
+    def update_contact_mask(
+        self,
+        *,
+        step: int,
+        collided_env_mask: torch.Tensor,
+        body_name: str = "map_contact",
+        force_max: float | None = None,
+    ) -> None:
+        mask = torch.as_tensor(collided_env_mask, dtype=torch.bool, device=self.device).reshape(-1)
+        if int(mask.numel()) != int(self.num_envs):
+            raise ValueError(f"collided_env_mask must have shape [{self.num_envs}], got {tuple(mask.shape)}")
+        if force_max is not None:
+            self.force_max = max(self.force_max, float(force_max))
+        active_ids = torch.nonzero(mask, as_tuple=False).flatten().tolist()
+        for env_id in active_ids:
+            env_int = int(env_id)
+            if env_int not in self.first_step:
+                self.first_step[env_int] = int(step)
+            self.collided[env_int] = True
+            self.body_names_by_env.setdefault(env_int, set()).add(str(body_name))
+
     def summary(self) -> dict[str, object]:
         count = int(self.collided.sum().item())
         return {
@@ -283,6 +304,14 @@ class ControlledCrossingAccumulator:
     touchdown_on_small_count: torch.Tensor = field(init=False)
     min_clearance: torch.Tensor = field(init=False)
     max_clearance: torch.Tensor = field(init=False)
+    reset_seen: torch.Tensor = field(init=False)
+    reset_after_foot_over: torch.Tensor = field(init=False)
+    reset_after_root_crossed: torch.Tensor = field(init=False)
+    first_reset_step: torch.Tensor = field(init=False)
+    first_reset_reason: list[str | None] = field(init=False)
+    first_reset_stage: list[str | None] = field(init=False)
+    reset_reason_counts: dict[str, int] = field(init=False)
+    reset_stage_counts: dict[str, int] = field(init=False)
 
     def __post_init__(self) -> None:
         n = int(self.num_envs)
@@ -299,6 +328,24 @@ class ControlledCrossingAccumulator:
         self.touchdown_on_small_count = torch.zeros(n, dtype=torch.long, device=self.device)
         self.min_clearance = torch.full((n,), 999.0, dtype=torch.float32, device=self.device)
         self.max_clearance = torch.full((n,), -999.0, dtype=torch.float32, device=self.device)
+        self.reset_seen = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.reset_after_foot_over = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.reset_after_root_crossed = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.first_reset_step = torch.full((n,), -1, dtype=torch.long, device=self.device)
+        self.first_reset_reason = [None for _ in range(n)]
+        self.first_reset_stage = [None for _ in range(n)]
+        self.reset_reason_counts = {
+            "bad_orientation": 0,
+            "base_contact": 0,
+            "time_out": 0,
+            "unknown": 0,
+        }
+        self.reset_stage_counts = {
+            "before_opportunity": 0,
+            "before_foot_over": 0,
+            "after_foot_over_before_root_cross": 0,
+            "after_root_cross": 0,
+        }
 
     @staticmethod
     def _group_summary(keys: list[float], opportunity: torch.Tensor, success: torch.Tensor) -> dict[str, dict[str, float | int]]:
@@ -313,6 +360,44 @@ class ControlledCrossingAccumulator:
                 "success_rate": float(success_count / max(1, opp_count)),
             }
         return out
+
+    def _reset_stage_for_env(self, env_id: int) -> str:
+        if not bool(self.opportunity_seen[env_id].item()):
+            return "before_opportunity"
+        if not bool(self.foot_over[env_id].item()):
+            return "before_foot_over"
+        if bool(self.root_crossed[env_id].item()):
+            return "after_root_cross"
+        return "after_foot_over_before_root_cross"
+
+    def update_reset_diagnostics(
+        self,
+        *,
+        step: int,
+        done_mask: torch.Tensor,
+        termination_terms: dict[str, torch.Tensor],
+    ) -> None:
+        done = torch.as_tensor(done_mask, dtype=torch.bool, device=self.device).reshape(-1)
+        if int(done.numel()) != int(self.num_envs):
+            raise ValueError("done_mask must match num_envs")
+        new_done = done & torch.logical_not(self.reset_seen)
+        for env_id in torch.nonzero(new_done, as_tuple=False).flatten().tolist():
+            env_int = int(env_id)
+            reason = "unknown"
+            for name in ("bad_orientation", "base_contact", "time_out"):
+                term = termination_terms.get(name)
+                if term is not None and bool(torch.as_tensor(term, dtype=torch.bool, device=self.device).reshape(-1)[env_int]):
+                    reason = name
+                    break
+            stage = self._reset_stage_for_env(env_int)
+            self.reset_reason_counts[reason] = int(self.reset_reason_counts.get(reason, 0)) + 1
+            self.reset_stage_counts[stage] = int(self.reset_stage_counts.get(stage, 0)) + 1
+            self.first_reset_step[env_int] = int(step)
+            self.first_reset_reason[env_int] = reason
+            self.first_reset_stage[env_int] = stage
+            self.reset_seen[env_int] = True
+            self.reset_after_foot_over[env_int] = bool(self.foot_over[env_int].item())
+            self.reset_after_root_crossed[env_int] = bool(self.root_crossed[env_int].item())
 
     def summary(self, *, contact_collided: torch.Tensor) -> dict[str, object]:
         contact = torch.as_tensor(contact_collided, dtype=torch.bool, device=self.device).reshape(-1)
@@ -353,6 +438,22 @@ class ControlledCrossingAccumulator:
             "root_crossed_by_env": [bool(v) for v in self.root_crossed.detach().cpu().tolist()],
             "foot_over_by_env": [bool(v) for v in self.foot_over.detach().cpu().tolist()],
             "overpass_success_by_env": [bool(v) for v in success.detach().cpu().tolist()],
+            "reset_env_count": int(self.reset_seen.sum().item()),
+            "reset_after_foot_over_count": int(self.reset_after_foot_over.sum().item()),
+            "reset_after_root_crossed_count": int(self.reset_after_root_crossed.sum().item()),
+            "reset_reason_counts": {str(k): int(v) for k, v in self.reset_reason_counts.items()},
+            "reset_stage_counts": {str(k): int(v) for k, v in self.reset_stage_counts.items()},
+            "first_reset_step_by_env": {
+                str(idx): int(step)
+                for idx, step in enumerate(self.first_reset_step.detach().cpu().tolist())
+                if int(step) >= 0
+            },
+            "first_reset_reason_by_env": {
+                str(idx): str(reason) for idx, reason in enumerate(self.first_reset_reason) if reason is not None
+            },
+            "first_reset_stage_by_env": {
+                str(idx): str(stage) for idx, stage in enumerate(self.first_reset_stage) if stage is not None
+            },
         }
 
 
@@ -465,6 +566,51 @@ def semantic_small_force_matrix_w(env) -> tuple[torch.Tensor, tuple[str, ...]]:
     if not body_names:
         body_names = tuple(f"body_{idx}" for idx in range(int(matrix.shape[1])))
     return matrix, body_names
+
+
+def update_small_collision_accumulator_from_env(
+    env,
+    accumulator: SmallCollisionRoundAccumulator,
+    *,
+    step: int,
+    threshold: float,
+) -> None:
+    base = _base_env(env)
+    if "semantic_contact_small" in getattr(base.scene, "sensors", {}):
+        force_matrix, body_names = semantic_small_force_matrix_w(base)
+        accumulator.update(step=step, force_matrix_w=force_matrix, body_names=body_names)
+        return
+
+    from isaaclab.managers import SceneEntityCfg
+    from extension.mdp.semantic_body_part_clearance import infer_current_small_semantic_contact
+
+    collided = infer_current_small_semantic_contact(
+        base,
+        asset_cfg=SceneEntityCfg("robot"),
+        scanner_cfg=SceneEntityCfg("semantic_height_scanner"),
+        contact_sensor_cfg=SceneEntityCfg("contact_forces"),
+        small_semantic_ids=(1,),
+        force_threshold=float(threshold),
+    )
+    accumulator.update_contact_mask(step=step, collided_env_mask=collided, body_name="map_contact")
+
+
+def termination_terms_from_env(env) -> dict[str, torch.Tensor]:
+    base = _base_env(env)
+    manager = getattr(base, "termination_manager", None)
+    if manager is None:
+        return {}
+    terms: dict[str, torch.Tensor] = {}
+    for name in ("bad_orientation", "base_contact", "time_out"):
+        try:
+            value = manager.get_term(name)
+        except Exception:
+            value = None
+        if value is not None:
+            terms[name] = torch.as_tensor(value)
+    if "time_out" not in terms and getattr(manager, "time_outs", None) is not None:
+        terms["time_out"] = torch.as_tensor(manager.time_outs)
+    return terms
 
 
 def _robot_foot_ids(robot, *, device: torch.device) -> torch.Tensor:
@@ -1302,8 +1448,12 @@ def run_eval(args: argparse.Namespace) -> int:
                     overall_tracking.update(tracking)
                     metric_row["tracking"] = tracking
                 if collision_acc is not None:
-                    force_matrix, body_names = semantic_small_force_matrix_w(base_env)
-                    collision_acc.update(step=round_steps, force_matrix_w=force_matrix, body_names=body_names)
+                    update_small_collision_accumulator_from_env(
+                        base_env,
+                        collision_acc,
+                        step=round_steps,
+                        threshold=float(args.collision_force_threshold),
+                    )
                 if crossing_acc is not None:
                     crossing_acc.done_seen |= torch.as_tensor(dones, dtype=torch.bool, device=crossing_acc.device)
                     metric_row["controlled_crossing"] = controlled_crossing_step_metrics(
@@ -1311,6 +1461,11 @@ def run_eval(args: argparse.Namespace) -> int:
                         accumulator=crossing_acc,
                         command=command,
                         step=round_steps,
+                    )
+                    crossing_acc.update_reset_diagnostics(
+                        step=round_steps,
+                        done_mask=torch.as_tensor(dones, dtype=torch.bool, device=crossing_acc.device),
+                        termination_terms=termination_terms_from_env(base_env),
                     )
                 if mpc_foot_markers is not None:
                     update_mpc_foot_markers(mpc_foot_markers, base_env)

@@ -4381,8 +4381,8 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert type(cfg.commands.base_velocity).__name__ == "GoalAnchoredVelocityCommandCfg"
     assert cfg.commands.base_velocity.goal_distance == pytest.approx(10.0)
     assert cfg.commands.base_velocity.goal_reached_threshold == pytest.approx(1.0)
-    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_x) == (-0.1, 0.1)
-    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_y) == (-0.1, 0.1)
+    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_x) == (-0.6, 1)
+    assert tuple(cfg.commands.base_velocity.ranges.lin_vel_y) == (0, 0.5)
     assert tuple(cfg.commands.base_velocity.limit_ranges.lin_vel_x) == (-1.0, 1.0)
     assert tuple(cfg.commands.base_velocity.limit_ranges.lin_vel_y) == (-0.5, 0.5)
     assert tuple(cfg.commands.base_velocity.vx_abs_range) == (0.1, 0.1)
@@ -4403,9 +4403,14 @@ def test_flat_small_avoidance_cfg_static_contract(monkeypatch) -> None:
     assert cfg.rewards.semantic_body_part_clearance.params["contact_force_scale"] > 0.0
     assert cfg.rewards.semantic_foot_over_clearance is not None
     assert cfg.rewards.semantic_foot_over_clearance.weight > 0.0
+    assert cfg.rewards.semantic_foot_over_clearance.weight <= 0.15
     assert cfg.rewards.semantic_foot_over_clearance.params["lookahead_m"] == pytest.approx(1.6)
     assert cfg.rewards.semantic_foot_over_clearance.params["corridor_width_m"] == pytest.approx(0.42)
     assert cfg.rewards.semantic_foot_over_clearance.params["clearance_margin_m"] == pytest.approx(0.05)
+    assert cfg.rewards.flat_orientation_l2.weight < base.rewards.flat_orientation_l2.weight
+    assert cfg.rewards.base_angular_velocity.weight < base.rewards.base_angular_velocity.weight
+    assert cfg.rewards.feet_slide.weight < base.rewards.feet_slide.weight
+    assert cfg.rewards.action_rate.weight == pytest.approx(base.rewards.action_rate.weight)
     assert cfg.rewards.semantic_contact_collision is None
     assert cfg.scene.semantic_contact_small is None
     assert cfg.scene.semantic_contact_large is None

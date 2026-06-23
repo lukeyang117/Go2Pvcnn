@@ -92,7 +92,7 @@ flat-small avoidance 训练 cfg 额外合同：
 - `mpc_planner_cfg.diagnostics.emit_runtime_counters = True`。
 - `mpc_planner_cfg.diagnostics.profile_cuda_sync = True`。
 
-`train.py` 的 `--planner-backend` 默认是 `None`，不传时会尊重训练 cfg 里的 `planner_backend="mpc"`。实际训练命令仍建议显式写 `--planner-backend mpc`，防止复制到其它 trajectory 实验时走错 backend。
+`train.py` 的 `--planner-backend` 当前只支持 `mpc`，默认也是 `mpc`。实际训练命令仍建议显式写 `--planner-backend mpc`，防止复制到其它 trajectory 实验时语义不清。
 
 `play.py` 现在是普通 policy playback 路线。不要把 `play.py` 当 MPC viewer 用；需要看 MPC 足端规划、marker 或 low-small 诊断时，使用 `go2_foostep_planner.py`。
 
@@ -237,11 +237,30 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   --load_checkpoint model_14000.pt
 ```
 
+继续当前 flat-small run 的 `model_14700.pt`，并让 RL 环境数量和 MPC 数量一致：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/scripts/train.py \
+  --headless \
+  --device cuda:0 \
+  --num_envs 1024 \
+  --mpc_num_envs 1024 \
+  --max_iterations 5000 \
+  --experiment teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance \
+  --planner-backend mpc \
+  --resume \
+  --load_run /mnt/mydisk/lhy/testPvcnnWithIsaacsim/logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/2026-06-17_12-01-10 \
+  --load_checkpoint model_14700.pt \
+  --keep_std
+```
+
 注意：
 
 - 这里 `--load_run` 用绝对路径，是因为 warm-start checkpoint 在旧 experiment 目录下，而新训练输出会写到 `logs/rsl_rl/teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance/<timestamp>/`。
 - 旧 run 里如果没有 `model_最新.pt`，必须显式写 `--load_checkpoint model_14000.pt` 或其它真实存在的 checkpoint。
 - 这个 warm start 已做过 16 env / 1 iteration smoke，policy/critic/action shape 与旧模型兼容。
+- 默认 resume 会丢掉 checkpoint 里的 policy action `std`，回到当前初始化值；如果要继续使用旧 checkpoint 学到的探索噪声，需要显式加 `--keep_std`。
+- `--mpc_num_envs 1024` 会把 MPC 每次 replan 的采样环境数设为 1024；1024 RL env / 1024 MPC env 路径已经通过显存和短步数验证，但长训仍要观察 collection time。
 
 分布式训练：
 
@@ -636,6 +655,10 @@ CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
   IsaacLab / torch device，通常用 `cuda:0`。如果使用 `CUDA_VISIBLE_DEVICES=2`，进程内仍通常写 `--device cuda:0`。
 - `--resume / --load_run / --load_checkpoint`
   恢复已有 run。
+- `--keep_std`
+  只在 `--resume` 时有意义。默认 resume 会移除 checkpoint 里的 actor `std` 并使用当前初始化 action noise；加上 `--keep_std` 后会保留 checkpoint 里的旧 `std`。继续 `2026-06-17_12-01-10/model_14700.pt` 时，如果不希望 std 回到 1，就加这个参数。
+- `--mpc_num_envs`
+  覆盖 `mpc_planner_cfg.runtime.parallel_plan_batch_size`，控制每次 MPC replan 采样多少个环境。希望 RL env 数和 MPC env 数一致时，例如 `--num_envs 1024 --mpc_num_envs 1024`。
 - `--verbose-planner`
   训练侧 planner timing 诊断，默认关闭。
 
