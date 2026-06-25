@@ -10,7 +10,10 @@ def get_train_cfg(experiment_name: str) -> dict:
     }
     if experiment_name not in supported:
         raise ValueError(f"Unknown experiment: {experiment_name}")
-    return _teacher_elevation_trajectory_mpc_semantic_train_cfg()
+    cfg = _teacher_elevation_trajectory_mpc_semantic_train_cfg()
+    if experiment_name == "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance":
+        cfg["algorithm"]["entropy_coef"] = 0.002
+    return cfg
 
 
 def _teacher_elevation_trajectory_mpc_semantic_train_cfg() -> dict:

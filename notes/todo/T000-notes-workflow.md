@@ -24,6 +24,7 @@
 - [2026-05-06-1939-superpowers-plugin-download.md](../log/2026-05-06-1939-superpowers-plugin-download.md)
 - [2026-05-06-1949-superpowers-plugin-marketplace-registration.md](../log/2026-05-06-1949-superpowers-plugin-marketplace-registration.md)
 - [2026-05-06-2026-superpowers-skills-project-install.md](../log/2026-05-06-2026-superpowers-skills-project-install.md)
+- [2026-06-24-codex-logs2-sqlite-trace-write-guard.md](../log/2026-06-24-codex-logs2-sqlite-trace-write-guard.md)
 
 ## Git Refs
 

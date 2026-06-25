@@ -4462,6 +4462,16 @@ def test_flat_small_avoidance_entrypoints_are_registered() -> None:
     assert "TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY" in register_source
 
 
+def test_flat_small_train_cfg_uses_lower_entropy_without_affecting_base() -> None:
+    from agent.train_cfg import get_train_cfg
+
+    base_cfg = get_train_cfg("teacher_elevation_trajectory_mpc_semantic")
+    flat_cfg = get_train_cfg("teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance")
+
+    assert base_cfg["algorithm"]["entropy_coef"] == 0.01
+    assert flat_cfg["algorithm"]["entropy_coef"] == 0.002
+
+
 def test_mpc_semantic_avoidance_keeps_existing_loss_key_only() -> None:
     source = (GO2PVCNN_ROOT / "extension/batch_mpc_planner/planner.py").read_text()
 
