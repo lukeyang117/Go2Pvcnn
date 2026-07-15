@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -131,3 +133,37 @@ def test_manager_refresh_from_env_builds_ready_reference_cache() -> None:
     assert manager._field_sync is not None
     assert scanner._joint_mpc_field_observer is manager._field_sync
     assert torch.equal(manager._field_sync.latest_field().version, torch.zeros(batch, dtype=torch.long))
+    assert manager.latest_trajectory().state.shape == (batch, 17, 18)
+
+
+def test_viewer_cli_accepts_joint_mpc_rti() -> None:
+    path = Path("Go2Pvcnn/extension/viz/go2_foostep_planner.py")
+    spec = importlib.util.spec_from_file_location("go2_footstep_viewer_for_joint_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    args = module._parse_args(["--planner-backend", "joint_mpc_rti"])
+
+    assert args.planner_backend == "joint_mpc_rti"
+    assert module._viewer_playback_frame_index("joint_mpc_rti", playback_frame=9) == 1
+    assert module._viewer_playback_frame_index("mpc", playback_frame=9) == 9
+
+    source = path.read_text()
+    assert "env_cfg.planner_backend = str(args_cli.planner_backend)" in source
+    assert "command_body=command" in source
+    assert "force=True" in source
+
+
+def test_joint_viewer_applies_only_first_future_frame() -> None:
+    from extension.joint_mpc_rti.integration.viewer_adapter import JointMpcRtiViewerAdapter
+
+    trajectory = SimpleNamespace(state=torch.zeros(1, 17, 18))
+    adapter = JointMpcRtiViewerAdapter.for_test(trajectory)
+
+    assert adapter.next_playback_frame().frame_index == 1
+    assert adapter.next_playback_frame().frame_index == 1

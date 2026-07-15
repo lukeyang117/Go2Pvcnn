@@ -20,6 +20,7 @@ class JointMpcRtiManager:
         self._device = device
         self._cfg = getattr(task_cfg, "joint_mpc_rti_cfg", JointMpcRtiCfg())
         self._solver_state: JointMpcRtiSolverState | None = None
+        self._last_result: JointMpcRtiStepResult | None = None
         self._buffer: PendingReferenceBuffer | None = None
         self._cache = None
         self._field_sync: JointMpcRayCasterFieldSync | None = None
@@ -37,6 +38,7 @@ class JointMpcRtiManager:
         instance._device = device
         instance._cfg = cfg
         instance._solver_state = None
+        instance._last_result = None
         instance._buffer = PendingReferenceBuffer(num_envs=num_envs, device=device)
         instance._cache = None
         instance._field_sync = None
@@ -61,6 +63,7 @@ class JointMpcRtiManager:
         if self._buffer is None:
             self._buffer = PendingReferenceBuffer(num_envs=measured_state.batch_size, device=measured_state.device)
         result = planner_step(measured_state, command_body, terrain_field, self._solver_state, self._cfg)
+        self._last_result = result
         self._solver_state = result.solver_state
         self._buffer.update(result.pending_reference)
         self._cache = trajectory_to_reference_cache(result.full_trajectory)
@@ -90,14 +93,22 @@ class JointMpcRtiManager:
 
         return torch.ones_like(self._buffer.valid, dtype=torch.long)
 
-    def refresh_from_env(self, env):
+    def latest_trajectory(self):
+        if self._last_result is None:
+            raise RuntimeError("no joint MPC RTI trajectory is available")
+        return self._last_result.full_trajectory
+
+    def refresh_from_env(self, env, *, command_body=None, force: bool = False):
         root = getattr(env, "unwrapped", env)
         step_token = getattr(root, "common_step_counter", None)
-        if step_token is not None and self._cache is not None and step_token == self._last_step_token:
+        if not force and step_token is not None and self._cache is not None and step_token == self._last_step_token:
             return self._cache
         measured_state = state_from_env(env, device=self._device)
-        command_name = str(getattr(getattr(root, "cfg", None), "reference_command_name", "base_velocity"))
-        command = command_from_env(env, device=self._device, command_name=command_name)
+        if command_body is None:
+            command_name = str(getattr(getattr(root, "cfg", None), "reference_command_name", "base_velocity"))
+            command = command_from_env(env, device=self._device, command_name=command_name)
+        else:
+            command = torch.as_tensor(command_body, dtype=torch.float32, device=measured_state.device)
         scanner_name = str(
             getattr(getattr(root, "cfg", None), "reference_height_scanner_name", "semantic_height_scanner")
         )

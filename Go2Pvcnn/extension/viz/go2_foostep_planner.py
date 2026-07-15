@@ -120,7 +120,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--planner-backend",
         type=str,
         default="mpc",
-        choices=["mpc"],
+        choices=["mpc", "joint_mpc_rti"],
         help="Trajectory manager backend used by the task attachment path.",
     )
     parser.add_argument(
@@ -183,8 +183,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _parse_args() -> argparse.Namespace:
-    return build_arg_parser().parse_args()
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return build_arg_parser().parse_args(argv)
 
 
 def _append_kit_arg(args_cli: argparse.Namespace, kit_arg: str) -> None:
@@ -484,6 +484,12 @@ def _viewer_loop_need_replan(
     return False
 
 
+def _viewer_playback_frame_index(backend: str, *, playback_frame: int) -> int:
+    if str(backend).lower() == "joint_mpc_rti":
+        return 1
+    return int(playback_frame)
+
+
 def _viewer_command_is_zero(command: torch.Tensor, *, atol: float = 1.0e-5) -> bool:
     values = torch.as_tensor(command, dtype=torch.float64)
     if values.ndim != 2 or int(values.shape[-1]) < 3:
@@ -731,7 +737,7 @@ def _launch_app(args_cli: argparse.Namespace):
     return app_launcher, app_launcher.app
 
 
-def _attach_reference_manager_if_enabled(env, env_cfg) -> None:
+def _attach_reference_manager_if_enabled(env, env_cfg):
     from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
 
     manager_device = getattr(env, "device", env_cfg.sim.device)
@@ -741,6 +747,7 @@ def _attach_reference_manager_if_enabled(env, env_cfg) -> None:
             f"[Viewer] Attached {getattr(manager, 'planner_backend', 'mpc')} trajectory manager",
             flush=True,
         )
+    return manager
 
 LEG_COLORS = (
     (1.0, 0.2, 0.2),
@@ -1138,11 +1145,15 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     env_cfg.events.push_robot = None
     env_cfg.commands.base_velocity.debug_vis = False
     env_cfg.commands.base_velocity.ranges = env_cfg.commands.base_velocity.limit_ranges
-    env_cfg.planner_backend = "mpc"
-    env_cfg.mpc_planner_cfg.runtime.horizon_steps = int(args_cli.n_frames)
-    env_cfg.mpc_planner_cfg.runtime.replan_interval_steps = int(args_cli.n_frames)
-    env_cfg.mpc_planner_cfg.runtime.dt = float(args_cli.plan_dt)
-    env_cfg.mpc_planner_cfg.runtime.optimize_steps = 16
+    env_cfg.planner_backend = str(args_cli.planner_backend)
+    if env_cfg.planner_backend == "joint_mpc_rti":
+        env_cfg.joint_mpc_rti_cfg.runtime.horizon_steps = int(args_cli.n_frames)
+        env_cfg.joint_mpc_rti_cfg.runtime.dt = float(args_cli.plan_dt)
+    else:
+        env_cfg.mpc_planner_cfg.runtime.horizon_steps = int(args_cli.n_frames)
+        env_cfg.mpc_planner_cfg.runtime.replan_interval_steps = int(args_cli.n_frames)
+        env_cfg.mpc_planner_cfg.runtime.dt = float(args_cli.plan_dt)
+        env_cfg.mpc_planner_cfg.runtime.optimize_steps = 16
     reset_base = env_cfg.events.reset_base
     reset_base.params["pose_range"]["x"] = (0.0, 0.0)
     reset_base.params["pose_range"]["y"] = (0.0, 0.0)
@@ -1659,6 +1670,44 @@ def _adapt_mpc_result_for_viewer(result) -> ViewerTrajectoryResult:
     )
 
 
+def _adapt_joint_mpc_rti_result_for_viewer(trajectory) -> ViewerTrajectoryResult:
+    from extension.convention import euler_to_quat_batch
+    from extension.joint_mpc_rti.integration.reference_adapter import trajectory_to_reference_cache
+
+    state = torch.as_tensor(trajectory.state).detach().contiguous()
+    root_pos_w = state[..., :3]
+    root_rpy = state[..., 3:6]
+    root_quat_w = euler_to_quat_batch(root_rpy[..., 0], root_rpy[..., 1], root_rpy[..., 2]).contiguous()
+    foot_pos_w = torch.as_tensor(trajectory.foot_pos_w, dtype=state.dtype, device=state.device).detach().contiguous()
+    reference_cache = trajectory_to_reference_cache(trajectory)
+    zeros_vel = torch.zeros_like(root_pos_w)
+    return ViewerTrajectoryResult(
+        num_frames=int(state.shape[1]),
+        root_pos_w=root_pos_w,
+        root_quat_w=root_quat_w,
+        joint_angles=state[..., 6:],
+        foot_pos_w=foot_pos_w,
+        foot_pos_root=reference_cache.foot_pos_root,
+        contact_state=torch.as_tensor(trajectory.contact_state, device=state.device).detach().contiguous(),
+        planned_touchdown_w=foot_pos_w,
+        root_lin_vel_w=zeros_vel,
+        root_ang_vel_w=zeros_vel.clone(),
+        status=torch.as_tensor(trajectory.status, device=state.device).detach(),
+        feasible=torch.as_tensor(trajectory.valid, dtype=torch.bool, device=state.device).detach(),
+        safe_fallback=torch.as_tensor(trajectory.fallback, dtype=torch.bool, device=state.device).detach(),
+        status_names=("SUCCESS", "FALLBACK", "INVALID"),
+        loss_breakdown={
+            str(name): torch.as_tensor(value, device=state.device).detach().contiguous()
+            for name, value in trajectory.loss_breakdown.items()
+        },
+    )
+
+
+def _plan_joint_viewer_trajectory(*, manager, env, command: torch.Tensor) -> ViewerTrajectoryResult:
+    manager.refresh_from_env(env, command_body=command, force=True)
+    return _adapt_joint_mpc_rti_result_for_viewer(manager.latest_trajectory())
+
+
 def _plan_viewer_trajectory(
     *,
     terrain,
@@ -1701,7 +1750,8 @@ def main() -> int:
     from isaaclab.envs import ManagerBasedRLEnv
 
     env_cfg = _build_env_cfg(args_cli)
-    mpc_planner_cfg = _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
+    joint_backend = str(args_cli.planner_backend).lower() == "joint_mpc_rti"
+    mpc_planner_cfg = None if joint_backend else _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
@@ -1710,7 +1760,7 @@ def main() -> int:
     )
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
-    _attach_reference_manager_if_enabled(base_env, env_cfg)
+    trajectory_manager = _attach_reference_manager_if_enabled(base_env, env_cfg)
     zero_actions = _make_zero_actions(base_env)
     foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
     scanner = _reference_height_scanner(base_env, env_cfg)
@@ -1810,7 +1860,7 @@ def main() -> int:
                     last_cmd = None
                     plan_cycle = 0
 
-                need_replan = _viewer_loop_need_replan(
+                need_replan = joint_backend or _viewer_loop_need_replan(
                     result=result,
                     playback_frame=playback_frame,
                     reset_requested=active_cmd.reset_requested,
@@ -1820,7 +1870,7 @@ def main() -> int:
                 )
                 drain_zero_replan = False
                 if need_replan and _viewer_should_drain_before_zero_replan(
-                    backend="mpc",
+                    backend=args_cli.planner_backend,
                     result=result,
                     playback_frame=playback_frame,
                     teleop_values=active_cmd.values,
@@ -1856,15 +1906,24 @@ def main() -> int:
                     continue
 
                 if need_replan:
-                    state = _mpc_state_from_env(base_env, foot_ids)
-                    terrain, ray_hits = _compute_mpc_local_terrain(scanner)
-
-                    result = _plan_viewer_trajectory(
-                        terrain=terrain,
-                        state=state,
-                        command=active_cmd.values,
-                        mpc_cfg=mpc_planner_cfg,
-                    )
+                    if joint_backend:
+                        if trajectory_manager is None:
+                            raise RuntimeError("joint_mpc_rti viewer requires an attached trajectory manager")
+                        result = _plan_joint_viewer_trajectory(
+                            manager=trajectory_manager,
+                            env=base_env,
+                            command=active_cmd.values,
+                        )
+                        ray_hits = torch.as_tensor(scanner.data.ray_hits_w[0], dtype=torch.float32)
+                    else:
+                        state = _mpc_state_from_env(base_env, foot_ids)
+                        terrain, ray_hits = _compute_mpc_local_terrain(scanner)
+                        result = _plan_viewer_trajectory(
+                            terrain=terrain,
+                            state=state,
+                            command=active_cmd.values,
+                            mpc_cfg=mpc_planner_cfg,
+                        )
                     summary = _trajectory_motion_summary(result)
                     semantic_map = _scanner_semantic_map(scanner)
                     height_points_by_class, semantic_diag = _subsample_semantic_height_points(
@@ -1903,7 +1962,11 @@ def main() -> int:
                         scripted_cycles_remaining = max(0, scripted_cycles_remaining - 1)
 
                 if result is not None and playback_frame < result.num_frames and frame_permitted:
-                    playback_path = _viewer_direct_playback_step(base_env, result, frame_idx=playback_frame)
+                    applied_frame = _viewer_playback_frame_index(
+                        args_cli.planner_backend,
+                        playback_frame=playback_frame,
+                    )
+                    playback_path = _viewer_direct_playback_step(base_env, result, frame_idx=applied_frame)
                     if playback_path != last_playback_path:
                         print(
                             f"[Viewer][Playback] path={playback_path}",
@@ -1911,7 +1974,7 @@ def main() -> int:
                         )
                         last_playback_path = playback_path
                     actual = _read_actual_base_state(base_env)
-                    planner_frame = _planner_state_from_reference_result(result, frame_idx=playback_frame)
+                    planner_frame = _planner_state_from_reference_result(result, frame_idx=applied_frame)
                     actual_summary = (
                         _format_xyz(actual["root_pos_w"][0]),
                         _format_quat(actual["root_quat_raw"][0]),
@@ -1967,7 +2030,10 @@ def main() -> int:
                 last_cmd = active_cmd.values.clone()
 
                 if result is not None:
-                    display_frame = min(playback_frame - 1, result.num_frames - 1) if playback_frame > 0 else 0
+                    display_frame = _viewer_playback_frame_index(
+                        args_cli.planner_backend,
+                        playback_frame=(min(playback_frame - 1, result.num_frames - 1) if playback_frame > 0 else 0),
+                    )
                     planner_state = _planner_state_from_reference_result(result, frame_idx=display_frame)
                     root_yaw = planner_state.root_rpy[:, 2]
                     _update_camera(
