@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joint MPC RTI GPU 规划器设计</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5b6874;
+      --line: #d8e0e7;
+      --soft: #f4f7f9;
+      --blue: #1f5f8b;
+      --blue-soft: #eef6fb;
+      --green: #24734a;
+      --green-soft: #eef8f2;
+      --amber: #9a6100;
+      --amber-soft: #fff8e8;
+      --red: #a33a32;
+      --red-soft: #fff2f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.68;
+    }
+    main { max-width: 1160px; margin: 0 auto; padding: 38px 30px 72px; }
+    h1 { margin: 0 0 8px; font-size: 31px; line-height: 1.25; }
+    h2 { margin: 38px 0 0; padding-top: 24px; border-top: 1px solid var(--line); font-size: 22px; line-height: 1.3; }
+    h3 { margin: 25px 0 0; font-size: 18px; line-height: 1.35; }
+    h4 { margin: 18px 0 0; font-size: 16px; }
+    p { margin: 9px 0; }
+    ul, ol { margin: 8px 0 14px 25px; padding: 0; }
+    li { margin: 5px 0; }
+    code {
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.93em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 12px 0 18px;
+      padding: 15px 17px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--soft);
+      line-height: 1.52;
+    }
+    pre code { padding: 0; border: 0; background: transparent; }
+    table { width: 100%; margin: 13px 0 20px; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 9px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    .meta { margin-bottom: 24px; color: var(--muted); }
+    .callout { margin: 16px 0; padding: 13px 15px; border-left: 4px solid var(--blue); background: var(--blue-soft); }
+    .success { border-left-color: var(--green); background: var(--green-soft); }
+    .warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .danger { border-left-color: var(--red); background: var(--red-soft); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+    .card { padding: 13px 15px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+    .card h3, .card h4 { margin-top: 0; }
+    .small { color: var(--muted); font-size: 13px; }
+    @media (max-width: 760px) {
+      main { padding: 26px 18px 50px; }
+      .grid { grid-template-columns: 1fr; }
+      table { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Joint MPC RTI GPU 规划器设计</h1>
+  <p class="meta">日期：2026-07-15 ｜ 目标路径：<code>Go2Pvcnn/extension/joint_mpc_rti/</code> ｜ 后端名：<code>planner_backend="joint_mpc_rti"</code></p>
+
+  <div class="callout success">
+    <strong>最终决策：</strong>新增一套独立的纯 GPU、批量、运动学 rolling MPC。规划器每个 IsaacLab step 都从真实观测重新开始，预测未来 <code>H=16</code> 步，只发布 <code>dt=0.02s</code> 后的第一帧 reference；优化采用 multiple-shooting SQP-RTI、Generalized Gauss-Newton、Primal-Dual iLQR、时间维 associative scan 和并行简化 line search。当前 <code>mpc</code> 后端保持不变，用于 A/B 对照。
+  </div>
+
+  <h2>1. 要解决的问题</h2>
+  <p>当前轨迹规划器一次生成固定长度轨迹，并在一段时间内持续消费同一条轨迹。它可以产生较好的单段运动，但面对不同障碍距离、地形变化、实际动作偏差和 command 变化时，无法像传统 MPC 一样及时把真实状态重新植入预测。</p>
+  <p>新规划器需要同时满足以下行为：</p>
+  <ul>
+    <li>平地和普通地形上稳定跟踪前进、横移与转向 command。</li>
+    <li>通过连续损失形成对低矮小语义物体的抬腿跨越，不依赖大量离散行为 gate。</li>
+    <li>对不可跨的大障碍物形成 root、机身和腿部整体绕行。</li>
+    <li>在粗糙地形、台阶和局部高差上保持运动学可达、足端触地和全身净空。</li>
+    <li>每帧只执行未来第一步，并使用下一帧真实状态继续滚动优化。</li>
+    <li>作为 PPO 的 reference reward 来源，不直接替代 policy action，也不进入 policy/critic observation。</li>
+    <li>在 1024 个独立环境中保持全批量 GPU 并行。</li>
+  </ul>
+
+  <h2>2. 范围与非目标</h2>
+  <table>
+    <thead><tr><th>属于本设计</th><th>不属于本设计</th></tr></thead>
+    <tbody>
+      <tr><td>root pose、joint position/velocity 的运动学预测与优化。</td><td>质心动力学、接触力、力矩、摩擦锥和执行器动力学优化。</td></tr>
+      <tr><td>固定 trot 拓扑下的 stance/swing 轨迹与足端落点。</td><td>v1 不优化 gait phase、per-leg phase offset 或 swing duration。</td></tr>
+      <tr><td>高程图、语义图、small/large 距离场的世界坐标查询。</td><td>不让 planner 在每次 RTI 内重建 RayCaster 地图或距离场。</td></tr>
+      <tr><td>独立的 <code>joint_mpc_rti</code> backend 和现有 viewer/runtime 接口。</td><td>不重写或删除当前 <code>batch_mpc_planner</code>。</td></tr>
+      <tr><td>完整预测 horizon + 第一未来 reference 输出。</td><td>不把整段预测直接作为未来若干步的开环执行命令。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. 成功标准</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>行为目标</h3>
+      <ul>
+        <li>无障碍时跟踪 command，方向不随世界 yaw 错位。</li>
+        <li>小物体场景出现真实足端抬高、越过、落地。</li>
+        <li>大障碍场景不穿越障碍，形成可观察的绕行轨迹。</li>
+        <li>触地足贴合地形，足、膝、小腿和机身不穿地。</li>
+        <li>连续重规划没有明显 root、joint、foot 跳变。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>系统目标</h3>
+      <ul>
+        <li><code>B=1024</code>、<code>H=16</code>、<code>dt=0.02s</code>。</li>
+        <li>每控制步只做一次 RTI 更新。</li>
+        <li>1000 次 planner hot-path 调用总计不超过 3 秒。</li>
+        <li>平均 planner hot-path 不超过 3 ms/次。</li>
+        <li>无 Python per-env 和 per-horizon 主循环。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn">
+    <strong>计时边界：</strong>3 秒目标只统计已经完成编译、已经建立 terrain/SDF cache 后，从 batched state/command/field-ready 输入到第一未来 reference 输出的 planner hot path。Isaac 仿真、渲染、RayCaster 射线计算、首次编译和首次距离场初始化分别计时；距离场更新必须能与 planner 并行，不允许在 planner 热路径中同步重建。
+  </div>
+
+  <h2>4. 总体架构</h2>
+  <pre><code>IsaacLab current observation at time t
+ body-frame command [vx, vy, yaw_rate]
+ latest ready world-queryable terrain field
+ previous RTI solution
+ fixed trot schedule
+-------------------------------+
+                                |
+                                v
+ JointMpcRtiManager
+   1. inject measured x0
+   2. shift previous horizon
+   3. one SQP-RTI update
+   4. store complete new horizon
+   5. publish x1 reference
+                                |
+              +-----------------+-----------------+
+              |                                   |
+              v                                   v
+   PPO reference reward                kinematic viewer playback
+   compare realized x(t+1)             apply only predicted x1
+   with pending ref x_ref(t+1)          show complete horizon
+</code></pre>
+  <p>规划器内部使用完整 horizon 评估未来碰撞、落脚与连续性，但外部闭环始终只有一步。<code>x0</code> 是当前真实状态；真正发布的是 <code>x1</code>，不是当前状态副本。</p>
+
+  <h2>5. 文件结构与模块边界</h2>
+  <pre><code>Go2Pvcnn/extension/joint_mpc_rti/
+├── __init__.py
+├── config.py
+├── types.py
+├── planner.py
+│
+├── model/
+│   ├── __init__.py
+│   ├── dynamics.py
+│   ├── gait_schedule.py
+│   ├── go2_kinematics.py
+│   └── rollout.py
+│
+├── terrain/
+│   ├── __init__.py
+│   ├── field_cache.py
+│   ├── field_builder.py
+│   ├── distance_field.py
+│   └── query.py
+│
+├── losses/
+│   ├── __init__.py
+│   ├── objective.py
+│   ├── barriers.py
+│   ├── command.py
+│   ├── posture.py
+│   ├── contact.py
+│   ├── clearance.py
+│   ├── semantic.py
+│   └── smoothness.py
+│
+├── solver/
+│   ├── __init__.py
+│   ├── sqp_rti.py
+│   ├── linearization.py
+│   ├── gauss_newton.py
+│   ├── primal_dual_ilqr.py
+│   ├── associative_scan.py
+│   └── line_search.py
+│
+├── runtime/
+│   ├── __init__.py
+│   ├── manager.py
+│   ├── warm_start.py
+│   └── reference_buffer.py
+│
+├── integration/
+│   ├── __init__.py
+│   ├── command.py
+│   ├── isaaclab_adapter.py
+│   ├── reference_adapter.py
+│   └── viewer_adapter.py
+│
+└── diagnostics/
+    ├── __init__.py
+    ├── metrics.py
+    ├── profiler.py
+    └── validation.py</code></pre>
+
+  <h3>5.1 顶层稳定 API</h3>
+  <table>
+    <thead><tr><th>文件</th><th>职责</th><th>明确不负责</th></tr></thead>
+    <tbody>
+      <tr><td><code>__init__.py</code></td><td>只暴露 config、planner、runtime manager 和公共数据类型。</td><td>不导出 solver 内部函数。</td></tr>
+      <tr><td><code>config.py</code></td><td>固定形状、dt、loss、barrier、line search、诊断和性能配置。</td><td>不读取 env。</td></tr>
+      <tr><td><code>types.py</code></td><td>定义 state、command、terrain、trajectory、solver state、step result 的 tensor ABI。</td><td>不包含算法逻辑。</td></tr>
+      <tr><td><code>planner.py</code></td><td>组合 model、losses、solver，提供纯 tensor <code>step()</code>。</td><td>不读取 Isaac scene，不计算 PPO reward。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.2 子目录职责</h3>
+  <table>
+    <thead><tr><th>目录</th><th>输入</th><th>输出</th><th>边界</th></tr></thead>
+    <tbody>
+      <tr><td><code>model/</code></td><td>状态、控制、固定 gait。</td><td>rollout、FK link samples、解析 Jacobian。</td><td>不知道 semantic class 和 PPO。</td></tr>
+      <tr><td><code>terrain/</code></td><td>RayCaster 世界命中点、语义、scanner pose/version。</td><td>世界坐标高度/SDF查询。</td><td>不决定跨或绕。</td></tr>
+      <tr><td><code>losses/</code></td><td>rollout、command、gait、terrain query。</td><td>residual、barrier、breakdown。</td><td>不求解优化问题。</td></tr>
+      <tr><td><code>solver/</code></td><td>线性化动力学和二次近似。</td><td>一次 RTI search direction 和接受步长。</td><td>不知道障碍物语义名称。</td></tr>
+      <tr><td><code>runtime/</code></td><td>当前观测、上一帧解。</td><td>新 horizon、pending first reference。</td><td>不实现 FK/SDF。</td></tr>
+      <tr><td><code>integration/</code></td><td>Isaac env、viewer、reference cache。</td><td>内部 ABI 转换。</td><td>不包含优化算法。</td></tr>
+      <tr><td><code>diagnostics/</code></td><td>planner stage tensors。</td><td>指标、计时、非有限值定位。</td><td>关闭时不触发 GPU 同步。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>6. 坐标系和数据契约</h2>
+  <h3>6.1 外部 command</h3>
+  <p>Viewer、IsaacLab <code>CommandManager</code> 和 planner 的统一输入为：</p>
+  <pre><code>command_body = [vx_body, vy_body, yaw_rate]
+
+vx_body  &gt; 0 : 朝机器人自身前方
+vy_body  &gt; 0 : 朝机器人自身左方
+yaw_rate &gt; 0 : 绕世界 +Z 左转</code></pre>
+  <p>外部不提供 world-frame command。世界线速度由预测节点自己的 yaw 转换：</p>
+  <pre><code>v_world(k) = Rz(yaw(k)) @ v_body(k)</code></pre>
+  <p>该转换只发生一次。Viewer 不预旋转 command，避免 double rotation。</p>
+
+  <h3>6.2 状态与控制</h3>
+  <pre><code>x = [root_pos_w(3), root_rpy_w(3), joint_pos(12)]   # nx = 18
+u = [root_lin_vel_body(3), root_ang_vel_body(3), joint_vel(12)]  # nu = 18</code></pre>
+  <p>核心形状：</p>
+  <pre><code>state.x0       [B, 18]
+shooting.X    [B, H+1, 18]
+controls.U    [B, H,   18]
+contact       [B, H+1, 4]
+foot_pos_w    [B, H+1, 4, 3]
+link_samples  [B, H+1, G, 3]</code></pre>
+  <p>数值热路径默认 <code>float32</code>。状态输入可来自其他 dtype，但进入 planner 时统一转换，不能让 viewer 的 <code>float64</code> 传播到 1024 环境求解器。</p>
+
+  <h3>6.3 运动学离散化</h3>
+  <pre><code>p(k+1)     = p(k) + dt * Rz(yaw(k)) * v_body(k)
+rpy(k+1)   = rpy(k) + dt * T(rpy(k)) * omega_body(k)
+q(k+1)     = q(k) + dt * qdot(k)</code></pre>
+  <p>初始状态是严格等式约束：</p>
+  <pre><code>X[:, 0] = measured_state</code></pre>
+  <p>multiple shooting 中其他节点允许暂时存在 defect，但 RTI 子问题会惩罚并校正：</p>
+  <pre><code>defect(k) = X(k+1) - f(X(k), U(k))</code></pre>
+
+  <h2>7. 固定 Trot 与足端轨迹</h2>
+  <p>v1 采用外部固定的 trot 拓扑：</p>
+  <pre><code>diagonal group A: FL + RR
+diagonal group B: FR + RL
+group A / group B 交替 swing</code></pre>
+  <p>固定 trot 只锁定接触拓扑与初始时间表，不意味着足端摆动轨迹长度固定。不同障碍距离通过 rolling horizon、落点变化、root 速度和连续重规划处理；v1 可以接受少量时间误差，但不把 phase offset 作为优化变量。</p>
+  <ul>
+    <li>stance 足端在世界坐标中保持锁定并贴合 height field。</li>
+    <li>swing 足端从当前真实足端出发，以 touchdown 为终点。</li>
+    <li>足端中间高度由 terrain 和 small-object clearance residual 推动。</li>
+    <li>touchdown 必须落在有效地图内，并满足地形、语义和运动学可达性。</li>
+    <li>足端不是独立自由状态；规划足端必须与 root/joint 的解析 FK 一致。</li>
+  </ul>
+
+  <h2>8. 高程图与语义距离场</h2>
+  <h3>8.1 地图尺寸</h3>
+  <pre><code>resolution = 0.01 m
+size       = 1.5 m × 1.5 m
+grid       = 151 × 151
+cells/env  = 22,801</code></pre>
+  <p>每个环境拥有独立地图。地图随 SemanticRayCaster 的实际更新批次刷新，而不是 planner 自己使用另一套定时器。</p>
+
+  <h3>8.2 同步契约</h3>
+  <pre><code>RayCaster updates chunk_ids
+  - ray_hits_w
+  - semantic_map
+  - scanner pose
+  - scanner timestamp/version
+        |
+        v
+field_builder updates exactly the same chunk_ids
+  - height_w
+  - small_sdf
+  - large_sdf
+  - gradients
+  - valid_mask
+        |
+        v
+atomically publish field_ready(version)</code></pre>
+  <p>planner 只读取完整 ready version。新 field 尚未构建完成时，允许继续使用上一个完整 version，但必须携带它自己的旧 origin/yaw/timestamp；禁止用最新 scanner pose 解释旧数组。</p>
+
+  <h3>8.3 Cache ABI</h3>
+  <pre><code>height_w        [B,151,151]
+semantic_id     [B,151,151]
+small_sdf       [B,151,151]
+large_sdf       [B,151,151]
+small_grad_xy   [B,151,151,2]
+large_grad_xy   [B,151,151,2]
+valid_mask      [B,151,151]
+
+field_origin_w  [B,3]
+field_yaw_w     [B]
+field_timestamp [B]
+field_version   [B]</code></pre>
+  <p><code>height_w</code> 使用 <code>ray_hits_w[...,2]</code>，不能使用相对 scanner 的 observation elevation 作为世界 Z。</p>
+
+  <h3>8.4 世界坐标查询</h3>
+  <pre><code>query_world(points_w) -&gt;
+  height_w,
+  small_distance_m,
+  large_distance_m,
+  small_gradient_w,
+  large_gradient_w,
+  valid</code></pre>
+  <p>内部可存为 scanner-yaw 对齐栅格：</p>
+  <pre><code>p_field = Rz(-field_yaw_w) * (p_world - field_origin_w)
+grad_world = Rz(field_yaw_w) * grad_field</code></pre>
+  <p>越界查询返回 <code>valid=false</code> 并进入安全 barrier，不能静默使用 border padding。</p>
+
+  <h2>9. 连续损失设计</h2>
+  <p>总体目标采用 residual + relaxed barrier：</p>
+  <pre><code>min  Σ(k) 0.5 * ||r_k(X,U)||²_W
+     + relaxed_barrier(inequalities)
+     + terminal_cost(X_H)</code></pre>
+  <p>不建立 <code>crossable_small</code> 之类决定整条行为的硬 gate。small/large 分类只负责构造不同风险场；最终跨越还是绕行由轨迹代价共同决定。</p>
+
+  <h3>9.1 Command 与进度</h3>
+  <table>
+    <thead><tr><th>Residual</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td>body-frame linear velocity tracking</td><td>跟踪 <code>vx_body/vy_body</code>。</td></tr>
+      <tr><td>yaw-rate tracking</td><td>跟踪转向 command。</td></tr>
+      <tr><td>world progress</td><td>避免仅靠原地抬腿降低碰撞。</td></tr>
+      <tr><td>direction consistency</td><td>避免向 command 反方向或过度横移。</td></tr>
+      <tr><td>terminal continuation</td><td>避免 horizon 末端突然停止。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.2 Root 和关节</h3>
+  <ul>
+    <li>root 高度相对支撑地形的 nominal clearance。</li>
+    <li>roll/pitch 稳定，但允许随局部地形小幅调整。</li>
+    <li>joint nominal posture。</li>
+    <li>joint position limit relaxed barrier。</li>
+    <li>joint velocity limit relaxed barrier。</li>
+    <li>root/joint acceleration 和输入变化率平滑。</li>
+    <li>第一控制步与上一帧已执行趋势连续。</li>
+  </ul>
+
+  <h3>9.3 Stance、Swing 与 Touchdown</h3>
+  <ul>
+    <li>stance foot world-position locking。</li>
+    <li>stance foot height 与地形高度一致。</li>
+    <li>stance foot slip reduction。</li>
+    <li>swing foot 轨迹平滑与 nominal tracking。</li>
+    <li>swing foot 对普通地形保持净空。</li>
+    <li>touchdown 落在有效、非危险、运动学可达区域。</li>
+    <li>touchdown 后的 stance 延续与 touchdown 一致。</li>
+  </ul>
+
+  <h3>9.4 小语义物体</h3>
+  <p>small SDF 使用以下连续关系：</p>
+  <ul>
+    <li>touchdown 和 stance foot 进入 small footprint 时高代价。</li>
+    <li>swing foot 的 XY 可以穿过 small footprint，只要 Z 高于障碍顶面和 clearance margin。</li>
+    <li>knee、shank 进入 small 安全边界时产生碰撞代价。</li>
+    <li>root 不施加强横向避障项，避免天然把所有小物体都绕开。</li>
+    <li>如果抬腿代价、可达性或净空代价过高，优化器仍可自然选择绕行或减速。</li>
+  </ul>
+  <pre><code>small_swing_violation =
+  proximity_xy(small_sdf)
+  * softplus(obstacle_top_z + foot_margin - swing_foot_z)</code></pre>
+
+  <h3>9.5 大障碍物</h3>
+  <p>large SDF 对 root footprint、body、foot、knee 和 shank 使用高权重 relaxed barrier：</p>
+  <pre><code>large_violation = softplus(safety_margin - large_sdf(sample_xy))</code></pre>
+  <p>由于整个 horizon 都计算世界坐标距离梯度，root 和腿会被连续地推向风险较低方向，形成绕行而非碰撞后的修复。</p>
+
+  <h3>9.6 Loss 分解输出</h3>
+  <pre><code>command_tracking
+progress
+root_posture
+joint_posture
+joint_limits
+input_smoothness
+stance_lock
+stance_ground
+swing_clearance
+touchdown_safety
+small_semantic_clearance
+large_obstacle_barrier
+body_leg_ground_clearance
+fk_consistency
+dynamics_defect
+terminal</code></pre>
+  <p>这些名字用于诊断，不要求 PPO reward 暴露全部分项。</p>
+
+  <h2>10. SQP-RTI 优化过程</h2>
+  <h3>10.1 Warm Start</h3>
+  <pre><code>previous X: [x0, x1, ..., xH]
+previous U: [u0, u1, ..., uH-1]
+
+shifted X guess = [measured_x_now, x2, ..., xH, extrapolated_xH]
+shifted U guess = [u1, ..., uH-1, uH-1]</code></pre>
+  <p>真实状态只替换新 <code>x0</code>。上一帧解的后半段继续提供未来结构，因此一次 RTI 更新不需要从零收敛。</p>
+
+  <h3>10.2 并行线性化</h3>
+  <p>所有环境和 horizon 节点同时计算：</p>
+  <ul>
+    <li>kinematic dynamics 与 Jacobian。</li>
+    <li>Go2 analytic FK 与 link Jacobian。</li>
+    <li>height/SDF bilinear query 与世界梯度。</li>
+    <li>所有 residual 和 barrier 一阶导。</li>
+  </ul>
+  <p>不使用通用 autograd 对整条轨迹做反向传播；核心 FK、动力学和 field query 使用解析或专用 Jacobian。</p>
+
+  <h3>10.3 Generalized Gauss-Newton</h3>
+  <pre><code>gradient ≈ Jᵀ W r
+Hessian  ≈ Jᵀ W J + convex_barrier_curvature + regularization</code></pre>
+  <p>不使用完整二阶 SQP Hessian。完整二阶会引入 residual 二阶导、更多显存和更差的 GPU 批处理稳定性；RTI 每帧只有一次更新，稳定的正定近似比理论上更精确但昂贵的 Hessian 更合适。</p>
+
+  <h3>10.4 Primal-Dual iLQR 与 Associative Scan</h3>
+  <p>线性二次子问题由 primal-dual iLQR 求解。传统 Riccati 在时间维顺序递推；这里把可组合的仿射/二次消息写成 associative operator，在 GPU 上使用 scan：</p>
+  <pre><code>传统时间关键深度: O(H)
+并行 scan 关键深度: O(log H)</code></pre>
+  <p>环境维 <code>B</code>、时间节点 <code>H</code> 和几何采样点 <code>G</code> 同时批处理。算法总工作量仍随 <code>B×H</code> 增长，但 GPU 等待的串行时间明显减少。</p>
+
+  <h3>10.5 并行简化 Line Search</h3>
+  <pre><code>candidate alpha = [1.0, 0.5, 0.25]</code></pre>
+  <p>三个候选同时 rollout 和评估 merit。每个环境独立选择满足有限值、约束改善且 merit 最低的最大可接受步长。没有候选改善时保留 shifted warm start，并提高下一帧正则化。</p>
+
+  <h3>10.6 每帧 RTI</h3>
+  <pre><code>for each control step:
+  inject measured state
+  shift warm start
+  parallel evaluate and linearize
+  build GGN subproblem
+  solve with primal-dual scan
+  parallel line search
+  accept one SQP update
+  publish trajectory[:, 1]
+</code></pre>
+
+  <h2>11. 1024 环境并行与性能设计</h2>
+  <table>
+    <thead><tr><th>原则</th><th>设计</th></tr></thead>
+    <tbody>
+      <tr><td>固定 shape</td><td><code>B=1024</code>、<code>H=16</code>、<code>nx=18</code>、<code>nu=18</code>，主热路径不创建可变长度 tensor。</td></tr>
+      <tr><td>无环境循环</td><td>状态、terrain query、FK、loss、line search 都以 batch tensor 运行。</td></tr>
+      <tr><td>无时间 Python 循环</td><td>rollout/solve 使用编译图和 scan；允许图内固定展开，不允许解释器逐节点调度 kernel。</td></tr>
+      <tr><td>固定 GPU 图</td><td>预分配 workspace，避免每帧 allocator 抖动；稳定后捕获 CUDA Graph 或等价固定执行图。</td></tr>
+      <tr><td>避免同步</td><td>热路径不调用 <code>.item()</code>、CPU logging 或逐 stage synchronize。</td></tr>
+      <tr><td>字段缓存</td><td>SDF、梯度和 field transform 在 RayCaster 更新时构建，优化内只查询。</td></tr>
+      <tr><td>每帧一次 RTI</td><td>不执行 16/25 次 Adam 梯度下降，不做外层多轮 SQP。</td></tr>
+      <tr><td>按环境容错</td><td>失败环境 masked fallback，不让少量坏样本阻塞整个 batch。</td></tr>
+    </tbody>
+  </table>
+  <p>主要计算规模近似：</p>
+  <pre><code>geometry/loss work: O(B * H * G)
+block solver work:  O(B * H * block_cost(nx, nu))
+time critical depth with scan: O(log H)</code></pre>
+  <p>最终性能报告必须同时给出 warm-up 后总耗时、平均值、P50、P95、P99、最大显存和非有限环境数量。</p>
+
+  <h2>12. Rolling Runtime 与 PPO Reference 时序</h2>
+  <h3>12.1 每步运行语义</h3>
+  <pre><code>time t, before action:
+  measured state = x_real(t)
+  planner.step(...) -&gt; x_ref(t+1)
+  reference_buffer stores pending x_ref(t+1)
+  policy outputs action(t)
+
+Isaac sim advances to t+1
+
+reward at t+1:
+  compare x_real(t+1) with pending x_ref(t+1)
+  then plan again from x_real(t+1)</code></pre>
+  <p>这保证 PPO 学的是“跟踪下一步 reference”，而不是奖励当前状态等于当前状态。</p>
+
+  <h3>12.2 Reference ABI</h3>
+  <pre><code>root_pos_w
+root_quat_w
+joint_pos
+foot_pos_w
+foot_pos_root
+contact_state
+planned_touchdown_w
+root_lin_vel_w
+root_ang_vel_w
+reference_timestamp
+reference_valid
+solver_status</code></pre>
+  <p>planner 输出可以继续转成现有 reference reward 所理解的字段，但 rolling manager 不再依赖“整段 cache 播放到 phase 结束”的语义。</p>
+
+  <h3>12.3 Reset 和命令变化</h3>
+  <ul>
+    <li>环境 reset：清空该环境 warm start、dual、pending reference 和 field-ready 消费状态。</li>
+    <li>command 突变：不丢弃全部解；保留几何 warm start，通过新 command residual 在下一次 RTI 修正。</li>
+    <li>command 清零：逐步收敛到稳定站立，不能在 swing 中突然把足端冻结在空中。</li>
+    <li>某环境 solver 失败：该环境使用安全 shifted reference 或站立 reference，其他环境继续正常求解。</li>
+  </ul>
+
+  <h2>13. Viewer 接入</h2>
+  <p>继续使用：</p>
+  <pre><code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code></pre>
+  <p>CLI 扩展：</p>
+  <pre><code>--planner-backend mpc
+--planner-backend joint_mpc_rti</code></pre>
+  <p>建议命令：</p>
+  <pre><code>python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --planner-backend joint_mpc_rti \
+  --num-envs 1 \
+  --n-frames 16 \
+  --plan-dt 0.02 \
+  --terrain-row 0 \
+  --terrain-col 0</code></pre>
+  <p>Viewer 两种模式必须保持独立：</p>
+  <table>
+    <thead><tr><th>后端</th><th>重规划</th><th>实际播放</th><th>可视化</th></tr></thead>
+    <tbody>
+      <tr><td><code>mpc</code></td><td>保持当前 segment 逻辑。</td><td>按当前方式播放轨迹。</td><td>当前整段结果。</td></tr>
+      <tr><td><code>joint_mpc_rti</code></td><td>每个 viewer step。</td><td>只写入未来第一帧 <code>x1</code>。</td><td>显示完整预测 horizon、SDF margin 和第一步 marker。</td></tr>
+    </tbody>
+  </table>
+  <p><code>integration/viewer_adapter.py</code> 负责状态、terrain 和结果转换。Viewer 主文件只做 backend dispatch，不直接 import solver。</p>
+
+  <h2>14. 配置结构</h2>
+  <pre><code>JointMpcRtiCfg
+├── runtime
+│   ├── horizon_steps = 16
+│   ├── dt = 0.02
+│   ├── sqp_iterations_per_step = 1
+│   ├── dtype = float32
+│   └── fallback_mode
+├── gait
+│   ├── topology = trot
+│   ├── contact_schedule
+│   └── nominal_swing_clearance
+├── terrain
+│   ├── resolution = 0.01
+│   ├── grid_size = 151
+│   ├── small_semantic_ids
+│   ├── large_semantic_ids
+│   └── out_of_map_margin
+├── losses
+│   ├── command/progress
+│   ├── posture/limits
+│   ├── contact/touchdown
+│   ├── terrain clearance
+│   ├── small semantic
+│   ├── large obstacle
+│   ├── smoothness
+│   └── terminal
+├── solver
+│   ├── regularization
+│   ├── barrier
+│   ├── line_search_alphas = [1.0, 0.5, 0.25]
+│   └── acceptance thresholds
+└── diagnostics
+    ├── enabled
+    ├── timing_interval
+    └── nonfinite_checks</code></pre>
+  <p>所有影响行为的阈值必须来自 config；不得把 terrain row、特定障碍坐标或测试场景位置写进 planner。</p>
+
+  <h2>15. 失败处理</h2>
+  <table>
+    <thead><tr><th>失败</th><th>该环境处理</th><th>必须记录</th></tr></thead>
+    <tbody>
+      <tr><td>输入 state 非有限</td><td>输出 invalid，不进入求解。</td><td>env id、输入字段。</td></tr>
+      <tr><td>terrain field 不可用</td><td>短时使用绑定正确 pose 的上一 ready version；无历史则站立。</td><td>field age/version。</td></tr>
+      <tr><td>所有 line-search 候选不改善</td><td>保留 shifted warm start，提升正则化。</td><td>merit、alpha、regularization。</td></tr>
+      <tr><td>solver 输出非有限</td><td>回退到安全 shifted reference 或站立。</td><td>首个非有限 stage。</td></tr>
+      <tr><td>未来第一步违反硬安全检查</td><td>不发布该步，输出站立/减速 reference。</td><td>具体安全 margin。</td></tr>
+      <tr><td>部分环境失败</td><td>只 mask 失败行。</td><td>失败数量与原因分布。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>16. 验收测试：只描述必须达到的结果</h2>
+  <div class="callout">
+    <strong>测试原则：</strong>以下验收项是独立、可观测的系统结果。它们不依赖某个旧测试脚本、旧 planner、旧 loss key、旧 probe 或旧设计文档存在。测试文件如何组织属于实现计划；只要输入条件等价、指标定义一致、结果可重复，就可以证明达成。
+  </div>
+
+  <h3>16.1 数学与坐标系结果</h3>
+  <table>
+    <thead><tr><th>输入条件</th><th>必须达到的结果</th></tr></thead>
+    <tbody>
+      <tr><td>相同 body-frame 前进 command，分别令机器人世界 yaw 为 0°、90°、180°。</td><td>预测位移分别沿世界 +X、+Y、-X；body-frame 前进量保持一致。</td></tr>
+      <tr><td>纯左移 command。</td><td>预测运动始终沿机器人自身左方，不随世界坐标固定为某一轴。</td></tr>
+      <tr><td>纯 yaw command。</td><td>root XY 不出现显著平移漂移，yaw 按命令符号连续变化。</td></tr>
+      <tr><td>随机可达 joint pose。</td><td>解析 FK 与可信几何计算的足端位置误差满足数值容差，Jacobian 的方向导数与有限差分一致。</td></tr>
+      <tr><td>已知解析高度平面和已知圆形障碍距离场。</td><td>世界坐标高度、距离和梯度方向正确；旋转 scanner 后查询结果保持世界几何不变。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>16.2 Rolling MPC 结果</h3>
+  <table>
+    <thead><tr><th>场景</th><th>必须达到的结果</th></tr></thead>
+    <tbody>
+      <tr><td>上一帧预测与下一帧真实状态存在人工偏差。</td><td>新 horizon 的 <code>x0</code> 精确等于真实状态；不能继续从旧预测状态开环推进。</td></tr>
+      <tr><td>连续 100 个相同 command step。</td><td>每步只发布 <code>x1</code>；root、joint、foot reference 在重规划边界连续，无周期性整段跳变。</td></tr>
+      <tr><td>前进 command 突然变为横移或转向。</td><td>下一次 RTI 即开始改变预测方向，同时第一步变化受平滑和限速约束。</td></tr>
+      <tr><td>运动中 command 清零。</td><td>root 速度逐步降至零，摆动腿完成安全落地，不出现足端悬空冻结或单腿突跳。</td></tr>
+      <tr><td>不同环境在不同时间 reset。</td><td>只清空对应环境的 warm start/reference；其他环境轨迹和 solver 状态不受影响。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>16.3 平地 Command 跟踪</h3>
+  <p>至少覆盖前进、后退、左/右横移、左/右转向和斜向命令。必须达到：</p>
+  <ul>
+    <li>沿 command 方向的累计进度符号正确。</li>
+    <li>方向 cosine 为正且没有系统性左右镜像。</li>
+    <li>root 高度、roll/pitch、joint 不出现振荡发散。</li>
+    <li>stance 足不滑动，触地足高度误差绝对最大值不超过 <code>0.005m</code>。</li>
+    <li>足端对地最大穿透不超过数值容差，穿透计数为 0。</li>
+  </ul>
+
+  <h3>16.4 小语义物体真实跨越</h3>
+  <p>在平坦地面放置可由 Go2 运动学跨越的低矮小物体，并从多个初始距离、横向偏移和 command 速度接近。成功必须同时满足：</p>
+  <ul>
+    <li>至少一条腿出现明确的 lift → over-object → land 时序。</li>
+    <li>同一条腿在物体 XY footprint 上方时，足底 Z 高于物体顶面和安全 margin。</li>
+    <li>touchdown 不落在小物体 footprint 内。</li>
+    <li>足、膝、小腿和机身与小物体碰撞计数均为 0。</li>
+    <li>root 沿 command 方向通过物体，不允许仅靠远距离横向绕行被判为“跨越成功”。</li>
+    <li>root Z 不通过整体抬升机身来伪造足端 clearance。</li>
+    <li>跨越后恢复稳定 trot 和 command 进度。</li>
+  </ul>
+  <p>还必须覆盖“不适合直接跨”的小物体相对位置；此时允许自然绕行或减速，但仍不得发生碰撞或不可达姿态。</p>
+
+  <h3>16.5 大障碍物绕行</h3>
+  <p>在 command 走廊内放置明显不可跨的大障碍物。成功必须同时满足：</p>
+  <ul>
+    <li>预测 horizon 在接近障碍前产生横向绕行或安全停止趋势。</li>
+    <li>root footprint、机身、足、膝和小腿的 large-SDF margin 不小于配置的硬安全底线。</li>
+    <li>不允许依靠越界地图、穿越障碍或 root 突然跳高通过。</li>
+    <li>障碍离开走廊后，轨迹逐渐恢复 command 方向，不长期保留无意义横向偏置。</li>
+    <li>障碍在左/右侧时，绕行方向能根据连续风险场选择，不固定只向一侧绕。</li>
+  </ul>
+
+  <h3>16.6 粗糙地形与台阶</h3>
+  <p>覆盖上坡、下坡、连续台阶、局部高差和不同起始 offset。必须达到：</p>
+  <ul>
+    <li>所有 touchdown 位于有效地图并贴合对应世界高度。</li>
+    <li>stance foot 与 touchdown 在接触后的误差绝对最大值不超过 <code>0.005m</code>。</li>
+    <li>足、膝、小腿和机身对地穿透计数为 0。</li>
+    <li>joint position/velocity 不超过配置硬限制。</li>
+    <li>规划足端与 FK 足端误差保持在数值容差内。</li>
+    <li>root Z 连续，不出现单帧大幅抬升或下降。</li>
+    <li>连续滚动规划能够前进多个 gait 周期，而不是第一段可行、后续逐段漂移。</li>
+  </ul>
+
+  <h3>16.7 地图同步与环境独立性</h3>
+  <table>
+    <thead><tr><th>输入条件</th><th>必须达到的结果</th></tr></thead>
+    <tbody>
+      <tr><td>RayCaster 只更新一部分 env ids。</td><td>只有相同 env ids 的 field version 更新；其余环境数据、pose 和 version 不变。</td></tr>
+      <tr><td>scanner 移动/旋转后生成新地图。</td><td>新字段绑定新 pose；旧字段仍使用旧 pose 查询，不能发生坐标漂移。</td></tr>
+      <tr><td>查询点超出 151×151 覆盖范围。</td><td>返回 invalid 并触发安全处理，不返回边界复制值。</td></tr>
+      <tr><td>1024 环境拥有不同障碍布局。</td><td>每个环境只响应自己的地图，不发生 batch 行串扰。</td></tr>
+      <tr><td>field 构建和 planner 并行。</td><td>planner 只读取完整 ready version，不读取半更新的 height/SDF 组合。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>16.8 PPO Reference 时序</h3>
+  <ul>
+    <li>时刻 <code>t</code> 生成的 reference 必须带目标时间 <code>t+1</code>。</li>
+    <li>reward 必须用真实 <code>x(t+1)</code> 对比对应的 <code>x_ref(t+1)</code>。</li>
+    <li>reset 后的旧 pending reference 不得参与新 episode reward。</li>
+    <li>reference 不进入 policy/critic observation。</li>
+    <li>planner 关闭或 reference invalid 时，reward 有明确的 neutral/disabled 行为，不产生随机惩罚。</li>
+  </ul>
+
+  <h3>16.9 Solver 容错</h3>
+  <ul>
+    <li>单个环境注入 NaN 时，只有该环境 invalid，其余环境仍产生有限结果。</li>
+    <li>line search 全部失败时，输出有限、安全且连续的 fallback reference。</li>
+    <li>短时 field stale 时使用上一完整版本，并记录 field age；超过配置时限后转安全站立。</li>
+    <li>所有公开输出均携带 status、valid 和 fallback 标志。</li>
+  </ul>
+
+  <h3>16.10 1024 环境性能</h3>
+  <p>在固定 GPU、固定 shape、关闭逐步诊断同步、完成 warm-up 和编译后：</p>
+  <ul>
+    <li><code>1024</code> 环境、<code>H=16</code>、<code>1000</code> 次 rolling planner 调用总耗时不超过 <code>3.0s</code>。</li>
+    <li>平均 planner hot-path 不超过 <code>3.0ms</code>。</li>
+    <li>1000 次调用中不出现非有限输出、显存持续增长或临时 allocator 长尾。</li>
+    <li>输出必须报告 P50、P95、P99、最大值和峰值显存，不能只报告异步 kernel enqueue 时间。</li>
+    <li>计时开始和结束需要正确 GPU 同步，但循环内部不得每步同步。</li>
+    <li>terrain/SDF 构建单独报告，并证明它可与 planner 重叠且不会污染 planner hot-path 数字。</li>
+  </ul>
+
+  <h2>17. 实现阶段顺序</h2>
+  <ol>
+    <li>锁定 types、command frame、world terrain query 和 reference timing ABI。</li>
+    <li>实现并验证 Go2 analytic FK/Jacobian、运动学 dynamics 和固定 gait。</li>
+    <li>实现 RayCaster 同步 field cache、small/large SDF 和 world query。</li>
+    <li>实现无障碍 residual、rollout 和 single-step reference。</li>
+    <li>实现 GGN、primal-dual iLQR、associative scan 和并行 line search。</li>
+    <li>加入 stance/swing/touchdown、普通地形和全身净空 loss。</li>
+    <li>加入 small/large semantic 连续 loss，完成跨越和绕行调参。</li>
+    <li>接入 rolling runtime、PPO reference buffer 和 viewer backend。</li>
+    <li>完成 1024 环境固定图、workspace、编译和性能收口。</li>
+  </ol>
+
+  <h2>18. 风险与降级顺序</h2>
+  <table>
+    <thead><tr><th>风险</th><th>优先处理</th><th>不得采用的掩盖方式</th></tr></thead>
+    <tbody>
+      <tr><td>一次 RTI 改善不足</td><td>改善 warm start、尺度、正则化、line search 和 residual 条件数。</td><td>直接增加大量外层迭代。</td></tr>
+      <tr><td>小物体总被绕开</td><td>降低 root-small 横向排斥，强化 swing-over 与 touchdown-safe 的相对代价。</td><td>写死场景 gate 或指定某条腿跨。</td></tr>
+      <tr><td>足端跨过但 knee/shank 碰撞</td><td>增加 link sample 密度和解析碰撞 Jacobian，调整 swing shape。</td><td>只看 foot clearance。</td></tr>
+      <tr><td>大障碍绕行不足</td><td>提高 large-SDF barrier、terminal risk 和 root/body footprint sampling。</td><td>规划后 snapping 或硬改 root 位置。</td></tr>
+      <tr><td>性能超过 3ms</td><td>剔除同步、固定 workspace、融合 query/Jacobian、scan、CUDA Graph，再做专用 kernel。</td><td>删除关键安全几何或伪造异步计时。</td></tr>
+      <tr><td>地图更新慢</td><td>同 RayCaster chunk 更新并使用独立 stream，planner 消费最近 ready version。</td><td>在 RTI 内同步等待全量 SDF 重建。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>19. 最终接口摘要</h2>
+  <pre><code>planner_backend = "joint_mpc_rti"
+
+input:
+  measured_state_world
+  command_body [vx, vy, yaw_rate]
+  terrain_field_with_pose_and_version
+  fixed_trot_schedule
+  previous_solver_state
+
+internal:
+  multiple-shooting SQP-RTI
+  generalized Gauss-Newton
+  primal-dual iLQR
+  associative scan
+  parallel line search
+
+output:
+  complete predicted horizon
+  first future reference x1
+  updated warm start and dual state
+  solver status / loss / safety / timing diagnostics</code></pre>
+
+  <div class="callout success">
+    <strong>完成定义：</strong>只有当规划器在真实 rolling 语义下同时达到 command 跟踪、小物体真实跨越、大障碍绕行、粗糙地形运动学安全、PPO reference 正确时序、1024 环境独立性和 1000 次 hot-path ≤ 3 秒，才算完成。任何单段轨迹看起来合理、单场景通过或只在少量环境运行，都不足以替代这些结果。
+  </div>
+</main>
+</body>
+</html>
