@@ -110,7 +110,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
-- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): pure behavior and 1024×1000 performance pass; real IsaacLab second-step hard exit remains open.
+- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): pure behavior and accepted 1024×1000 performance pass; real 1/16-env multi-step is fixed, real 1024 startup/timing remains open.
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
@@ -150,7 +150,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
-- T302v.1: isolate the real IsaacLab second-step process exit; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
+- T302v.2: finish real 1024-env initialization and steady-state timing; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
@@ -200,8 +200,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
-| 2026-07-15 23:50 | Joint MPC RTI performance acceptance | pass: 1024×H16×1000 `2896.49ms`, nonfinite `0`, peak `282.58MiB` | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [performance](log/2026-07-15-joint-mpc-rti-performance.md) |
-| 2026-07-15 23:49 | Joint MPC RTI regression | pass: joint `71`, old MPC `193`, pycompile/diff clean | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [regression](log/2026-07-15-joint-mpc-rti-regression.md) |
+| 2026-07-16 00:38 | Joint MPC RTI multi-step Isaac fix | partial pass: 1/16-env three-step stable; real 1024 startup still open | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [multi-step fix](log/2026-07-16-joint-mpc-rti-multistep-isaac-fix.md) |
+| 2026-07-15 23:50 | Joint MPC RTI performance acceptance | pass: 1024×H16×1000 `2885.63ms`, nonfinite `0`, peak `282.58MiB` | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [performance](log/2026-07-15-joint-mpc-rti-performance.md) |
+| 2026-07-15 23:49 | Joint MPC RTI regression | pass: latest joint `72`, old MPC `193`, pycompile/diff clean | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [regression](log/2026-07-15-joint-mpc-rti-regression.md) |
 | 2026-07-15 23:48 | Joint MPC RTI Isaac smoke | partial: 1-step boundary pass; 2-step process exit remains open | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [Isaac smoke](log/2026-07-15-joint-mpc-rti-isaac-smoke.md) |
 
 | Time | Topic | Result | Todo | File |

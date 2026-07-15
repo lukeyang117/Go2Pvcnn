@@ -149,6 +149,7 @@ Evidence: [../log/2026-04-28-1132-together-zero-command-rehome.md](../log/2026-0
 
 - Every refresh injects measured `x0`; no segment phase playback.
 - First call initializes solver state; steady-state calls use `JointMpcCudaGraphRunner` with static state/command storage and stable field-cache addresses.
+- RayCaster callbacks queue updated env ids only; `latest_field()` builds/publishes rows outside the Warp/Isaac sensor callback. A newly captured graph replays once before its first result is returned.
 - Production profile: compiled kernels, diagonal state Riccati, alphas `(1.0,0.25)`, named breakdown off.
 - Acceptance: 1024 env, H16, 1000 calls `2896.49ms`, nonfinite `0`, peak `282.58MiB`.
-- Real Isaac 1-step boundary passes; second-step process exit remains open.
+- Real Isaac 1-env and 16-env three-step probes pass with field version `2`, finite references, and `x0_error_max=0`; real 1024 first-time initialization/timing remains open.

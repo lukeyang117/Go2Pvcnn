@@ -804,6 +804,8 @@ raw CPU 路径现在的主要职责是：
 
 ## Joint MPC RTI rolling runtime（2026-07-15）
 
-显式选择 `planner_backend="joint_mpc_rti"` 后，manager 每次 refresh 都从真实观测重规划，不播放旧 segment。首帧 eager 初始化 solver state；稳态使用 `JointMpcCudaGraphRunner`，更新静态 measured-state/command 后 replay 固定图。RayCaster field cache 地址稳定，地图由独立 stream 原位更新并通过 ready event 对齐。
+显式选择 `planner_backend="joint_mpc_rti"` 后，manager 每次 refresh 都从真实观测重规划，不播放旧 segment。首帧 eager 初始化 solver state；稳态使用 `JointMpcCudaGraphRunner`，更新静态 measured-state/command 后 replay 固定图。RayCaster observer 只登记本批完成更新的 env ids；manager 读取 `latest_field()` 时才在传感器回调栈之外构建并原位发布对应 field rows。新 graph capture 完成后先 replay 一次，再把首次结果暴露给 reference 层。
 
 生产 profile 使用 H16、float32、对角 GGN Riccati、line search `(1.0,0.25)`、named diagnostics 关闭。1024 环境 1000 次 hot path 为 `2896.49ms`，nonfinite `0`；首次 JIT/capture 不计入稳态指标。
+
+真实 IsaacLab 的 1-env 与 16-env 三步 probe 已通过，field version 连续更新到 `2`，`x0_error_max=0`，第三次 refresh 约 `19.9ms`。真实 1024-env 首次初始化在 10 分钟内未完成，仍需在空闲/预热环境中单独验证。

@@ -72,3 +72,10 @@ def test_cuda_graph_runtime_flag_falls_back_cleanly_on_cpu() -> None:
 
     assert result.full_trajectory.state.shape == (2, 17, 18)
     assert manager._graph_runner is None
+
+
+def test_cuda_graph_capture_materializes_the_first_result_before_return() -> None:
+    from pathlib import Path
+
+    source = Path("Go2Pvcnn/extension/joint_mpc_rti/runtime/cuda_graph.py").read_text()
+    assert source.count("self._graph.replay()") == 2

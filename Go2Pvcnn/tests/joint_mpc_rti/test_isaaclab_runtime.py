@@ -13,3 +13,6 @@ def test_isaaclab_probe_declares_real_joint_backend_acceptance_contract() -> Non
     assert '"field_version_min"' in source
     assert '"reference_finite"' in source
     assert '"planner_ms_mean"' in source
+    assert '"--disable-cuda-graph"' in source
+    assert '"--trace-stages"' in source
+    assert '"--detach-field-observer-after-refresh"' in source

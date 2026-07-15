@@ -19,11 +19,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-envs", type=int, default=2)
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--headless", action="store_true", default=False)
+    parser.add_argument("--disable-cuda-graph", action="store_true", default=False)
+    parser.add_argument("--trace-stages", action="store_true", default=False)
+    parser.add_argument("--detach-field-observer-after-refresh", action="store_true", default=False)
     parser.add_argument("--output-json", type=Path, default=None)
     return parser.parse_args()
 
 
-def run_probe(*, num_envs: int, steps: int) -> dict[str, object]:
+def run_probe(
+    *,
+    num_envs: int,
+    steps: int,
+    disable_cuda_graph: bool = False,
+    trace_stages: bool = False,
+    detach_field_observer_after_refresh: bool = False,
+) -> dict[str, object]:
     import gymnasium as gym
     import torch
 
@@ -41,10 +51,18 @@ def run_probe(*, num_envs: int, steps: int) -> dict[str, object]:
     cfg.planner_backend = "joint_mpc_rti"
     cfg.joint_mpc_rti_cfg.runtime.horizon_steps = 16
     cfg.joint_mpc_rti_cfg.runtime.dt = 0.02
+    if disable_cuda_graph:
+        cfg.joint_mpc_rti_cfg.solver.use_cuda_graph = False
     cfg.rewards.reference_foot_pos = None
+    def trace(stage: str) -> None:
+        if trace_stages:
+            print(f"[joint-mpc-probe] {stage}", flush=True)
+
     env = None
     try:
+        trace("before_gym_make")
         env = gym.make("Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0", cfg=cfg)
+        trace("after_gym_make")
         root = env.unwrapped
         manager = attach_trajectory_manager_if_enabled(
             root,
@@ -54,7 +72,9 @@ def run_probe(*, num_envs: int, steps: int) -> dict[str, object]:
         )
         if manager is None:
             raise RuntimeError("joint MPC RTI trajectory manager was not attached")
+        trace("before_reset")
         env.reset()
+        trace("after_reset")
         action = torch.zeros(env.action_space.shape, dtype=torch.float32, device=root.device)
         planner_ms: list[float] = []
         x0_error_max = 0.0
@@ -62,15 +82,25 @@ def run_probe(*, num_envs: int, steps: int) -> dict[str, object]:
         target_step = -1
         completed_steps = 0
         for step_index in range(int(steps)):
+            trace(f"step={step_index}:before_env_step")
             env.step(action)
+            trace(f"step={step_index}:after_env_step")
             measured = state_from_env(root, device=root.device)
             if torch.cuda.is_available() and torch.device(root.device).type == "cuda":
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
                 start_event.record()
+                trace(f"step={step_index}:before_explicit_refresh")
                 manager.refresh_from_env(root, force=True)
+                trace(f"step={step_index}:after_explicit_refresh")
                 end_event.record()
                 end_event.synchronize()
+                trace(f"step={step_index}:after_refresh_sync")
+                if detach_field_observer_after_refresh and step_index == 0:
+                    scanner_name = str(getattr(root.cfg, "reference_height_scanner_name", "semantic_height_scanner"))
+                    scanner = root.scene.sensors[scanner_name]
+                    scanner.set_joint_mpc_field_observer(None)
+                    trace("step=0:field_observer_detached")
                 planner_ms.append(float(start_event.elapsed_time(end_event)))
             else:
                 start = time.perf_counter()
@@ -94,6 +124,7 @@ def run_probe(*, num_envs: int, steps: int) -> dict[str, object]:
             "steps": int(steps),
             "completed_steps": int(completed_steps),
             "planner_backend": manager.planner_backend,
+            "cuda_graph_enabled": bool(cfg.joint_mpc_rti_cfg.solver.use_cuda_graph),
             "target_step": int(target_step),
             "field_version_min": int(field.version.min().item()),
             "field_version_max": int(field.version.max().item()),
@@ -126,7 +157,13 @@ def main() -> None:
     app_launcher = AppLauncher(headless=bool(args.headless))
     simulation_app = app_launcher.app
     try:
-        output = run_probe(num_envs=args.num_envs, steps=args.steps)
+        output = run_probe(
+            num_envs=args.num_envs,
+            steps=args.steps,
+            disable_cuda_graph=bool(args.disable_cuda_graph),
+            trace_stages=bool(args.trace_stages),
+            detach_field_observer_after_refresh=bool(args.detach_field_observer_after_refresh),
+        )
         payload = json.dumps(output, ensure_ascii=False, sort_keys=True)
         if args.output_json is not None:
             args.output_json.parent.mkdir(parents=True, exist_ok=True)

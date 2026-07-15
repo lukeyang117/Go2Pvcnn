@@ -66,6 +66,7 @@ class JointMpcCudaGraphRunner:
             self._solver_state.previous_control.copy_(self._result.solver_state.previous_control)
             if self._solver_state.gait_phase is not None and self._result.solver_state.gait_phase is not None:
                 self._solver_state.gait_phase.copy_(self._result.solver_state.gait_phase)
+        self._graph.replay()
 
     @property
     def solver_state(self) -> JointMpcRtiSolverState:

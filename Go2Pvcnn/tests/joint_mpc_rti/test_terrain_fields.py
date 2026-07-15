@@ -108,6 +108,7 @@ def test_raycaster_field_sync_updates_the_same_env_ids_pose_and_timestamp() -> N
     )
 
     sync.on_raycaster_update(scanner, torch.tensor([0, 2]))
+    assert torch.equal(sync.ready, torch.tensor([False, False, False, False]))
     field = sync.latest_field()
 
     assert torch.equal(field.version, torch.tensor([0, -1, 0, -1]))

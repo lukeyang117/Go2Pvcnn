@@ -24,6 +24,7 @@ class JointMpcRayCasterFieldSync:
         large_ids: tuple[int, ...] = (2,),
     ) -> None:
         self._device = torch.device(device)
+        self._num_envs = int(num_envs)
         self._cache = JointMpcTerrainFieldCache(
             num_envs=num_envs,
             grid_size=grid_size,
@@ -32,23 +33,38 @@ class JointMpcRayCasterFieldSync:
             small_ids=small_ids,
             large_ids=large_ids,
         )
-        if self._device.type == "cuda":
-            self._build_stream: torch.cuda.Stream | None = torch.cuda.Stream(device=self._device)
-            self._source_ready: torch.cuda.Event | None = torch.cuda.Event()
-            self._field_ready: torch.cuda.Event | None = torch.cuda.Event()
-        else:
-            self._build_stream = None
-            self._source_ready = None
-            self._field_ready = None
+        self._scanner = None
+        self._pending_env_ids: list[object] = []
 
     @property
     def ready(self) -> torch.Tensor:
         return self._cache.ready
 
     def on_raycaster_update(self, scanner, env_ids) -> None:
-        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device).reshape(-1)
-        if int(ids.numel()) == 0:
+        """Record completed scanner rows without launching PyTorch kernels in the sensor callback."""
+        self._scanner = scanner
+        self._pending_env_ids.append(env_ids)
+
+    def _flush_pending(self) -> None:
+        if not self._pending_env_ids:
             return
+        scanner = self._scanner
+        if scanner is None:
+            raise RuntimeError("RayCaster field sync has pending rows without an attached scanner")
+        pending = self._pending_env_ids
+        self._pending_env_ids = []
+        id_tensors = []
+        for env_ids in pending:
+            if isinstance(env_ids, slice):
+                start, stop, step = env_ids.indices(self._num_envs)
+                ids = torch.arange(start, stop, step, dtype=torch.long, device=self._device)
+            else:
+                ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device).reshape(-1)
+            if int(ids.numel()) > 0:
+                id_tensors.append(ids)
+        if not id_tensors:
+            return
+        ids = torch.unique(torch.cat(id_tensors), sorted=True)
         data = scanner.data
         ray_hits = torch.as_tensor(data.ray_hits_w, dtype=torch.float32, device=self._device)
         side = int(round(math.sqrt(int(ray_hits.shape[1]))))
@@ -63,33 +79,21 @@ class JointMpcRayCasterFieldSync:
         else:
             timestamp = torch.as_tensor(timestamp_source, dtype=torch.float32, device=self._device).reshape(-1)
 
-        def update() -> None:
-            self._cache.update_rows(
-                env_ids=ids,
-                height_w=ray_hits.index_select(0, ids)[..., 2].reshape(-1, side, side),
-                semantic_id=semantic.index_select(0, ids).reshape(-1, side, side),
-                origin_w=pos_w.index_select(0, ids),
-                yaw_w=extract_yaw_batch(quat_w.index_select(0, ids)),
-                timestamp=timestamp.index_select(0, ids),
-            )
-
-        if self._build_stream is None:
-            update()
-            return
-        current_stream = torch.cuda.current_stream(device=self._device)
-        assert self._source_ready is not None and self._field_ready is not None
-        self._source_ready.record(current_stream)
-        self._build_stream.wait_event(self._source_ready)
-        with torch.cuda.stream(self._build_stream):
-            update()
-            self._field_ready.record(self._build_stream)
+        self._cache.update_rows(
+            env_ids=ids,
+            height_w=ray_hits.index_select(0, ids)[..., 2].reshape(-1, side, side),
+            semantic_id=semantic.index_select(0, ids).reshape(-1, side, side),
+            origin_w=pos_w.index_select(0, ids),
+            yaw_w=extract_yaw_batch(quat_w.index_select(0, ids)),
+            timestamp=timestamp.index_select(0, ids),
+        )
 
     def latest_field(self):
-        if self._field_ready is not None:
-            torch.cuda.current_stream(device=self._device).wait_event(self._field_ready)
+        self._flush_pending()
         return self._cache.as_field()
 
     def attach(self, scanner) -> None:
+        self._scanner = scanner
         if hasattr(scanner, "set_joint_mpc_field_observer"):
             scanner.set_joint_mpc_field_observer(self)
         else:
