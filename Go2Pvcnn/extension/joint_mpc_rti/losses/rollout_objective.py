@@ -19,19 +19,65 @@ from extension.joint_mpc_rti.losses.semantic import large_obstacle_losses, small
 from extension.joint_mpc_rti.losses.smoothness import smoothness_losses
 from extension.joint_mpc_rti.model.go2_kinematics import rpy_to_rotation_matrix
 from extension.joint_mpc_rti.model.rollout import JointMpcRollout
-from extension.joint_mpc_rti.terrain.query import query_world
+from extension.joint_mpc_rti.terrain.query import JointMpcTerrainQuery, query_world, query_world_maybe_compiled
+from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.types import JointMpcTerrainField
 
 
-def _query_geometry(field: JointMpcTerrainField, position_w: torch.Tensor):
-    batch = int(position_w.shape[0])
-    return query_world(field, position_w.reshape(batch, -1, 3))
+def _packed_geometry_queries(
+    field: JointMpcTerrainField,
+    rollout: JointMpcRollout,
+    cfg: JointMpcRtiCfg,
+) -> tuple[JointMpcTerrainQuery, JointMpcTerrainQuery, JointMpcTerrainQuery, JointMpcTerrainQuery, JointMpcTerrainQuery]:
+    batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
+    shank = rollout.shank_samples_w.reshape(batch, nodes, 12, 3)
+    root = rollout.state[..., :3].unsqueeze(2)
+    packed = torch.cat(
+        (rollout.foot_pos_w, rollout.knee_pos_w, shank, rollout.body_samples_w, root),
+        dim=2,
+    )
+    points_per_node = int(packed.shape[2])
+    points = packed.reshape(batch, nodes * points_per_node, 3)
+    queried = (
+        query_world(field, points)
+        if bool(cfg.solver.compile_kernels) and points.is_cuda
+        else query_world_maybe_compiled(field, points, enabled=False)
+    )
+
+    def section(start: int, stop: int) -> JointMpcTerrainQuery:
+        def scalar(value: torch.Tensor) -> torch.Tensor:
+            return value.reshape(batch, nodes, points_per_node)[:, :, start:stop]
+
+        def vector(value: torch.Tensor) -> torch.Tensor:
+            return value.reshape(batch, nodes, points_per_node, 2)[:, :, start:stop]
+
+        return JointMpcTerrainQuery(
+            height_w=scalar(queried.height_w),
+            small_distance_m=scalar(queried.small_distance_m),
+            large_distance_m=scalar(queried.large_distance_m),
+            small_gradient_w=vector(queried.small_gradient_w),
+            large_gradient_w=vector(queried.large_gradient_w),
+            valid=scalar(queried.valid),
+        )
+
+    foot_stop = 4
+    knee_stop = foot_stop + 4
+    shank_stop = knee_stop + 12
+    body_stop = shank_stop + int(rollout.body_samples_w.shape[2])
+    return (
+        section(0, foot_stop),
+        section(foot_stop, knee_stop),
+        section(knee_stop, shank_stop),
+        section(shank_stop, body_stop),
+        section(body_stop, body_stop + 1),
+    )
 
 
 def rollout_loss_breakdown(
     *,
     rollout: JointMpcRollout,
-    nominal_rollout: JointMpcRollout,
+    nominal_rollout: JointMpcRollout | None = None,
+    nominal_foot_pos_w: torch.Tensor | None = None,
     contact_state: torch.Tensor,
     swing_weight: torch.Tensor,
     terrain_field: JointMpcTerrainField,
@@ -42,11 +88,17 @@ def rollout_loss_breakdown(
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
     state = rollout.state
     batch, nodes = int(state.shape[0]), int(state.shape[1])
-    foot_query = _query_geometry(terrain_field, rollout.foot_pos_w)
-    knee_query = _query_geometry(terrain_field, rollout.knee_pos_w)
-    shank_query = _query_geometry(terrain_field, rollout.shank_samples_w)
-    body_query = _query_geometry(terrain_field, rollout.body_samples_w)
-    root_query = query_world(terrain_field, state[..., :3])
+    if nominal_foot_pos_w is None:
+        if nominal_rollout is None:
+            raise ValueError("nominal_rollout or nominal_foot_pos_w is required")
+        nominal_foot = nominal_rollout.foot_pos_w
+    else:
+        nominal_foot = torch.as_tensor(nominal_foot_pos_w, dtype=state.dtype, device=state.device)
+    foot_query, knee_query, shank_query, body_query, root_query = _packed_geometry_queries(
+        terrain_field,
+        rollout,
+        cfg,
+    )
     foot_height = foot_query.height_w.reshape(batch, nodes, 4)
     knee_height = knee_query.height_w.reshape(batch, nodes, 4)
     shank_height = shank_query.height_w.reshape(batch, nodes, 4, 3)
@@ -54,9 +106,9 @@ def rollout_loss_breakdown(
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=state.device)
     swing_weight = torch.as_tensor(swing_weight, dtype=state.dtype, device=state.device)
     support_height = (foot_height * contact.to(state.dtype)).sum(dim=2) / contact.sum(dim=2).clamp_min(1).to(state.dtype)
-    nominal_joint = state.new_tensor(cfg.gait.nominal_joint_pos)
-    joint_lower = state.new_tensor((-1.0472, -0.6632, -2.721) * 4)
-    joint_upper = state.new_tensor((1.0472, 2.966, -0.837) * 4)
+    nominal_joint = constant_like(state, "nominal_joint_pos", cfg.gait.nominal_joint_pos)
+    joint_lower = constant_like(state, "joint_lower", (-1.0472, -0.6632, -2.721) * 4)
+    joint_upper = constant_like(state, "joint_upper", (1.0472, 2.966, -0.837) * 4)
     losses: dict[str, torch.Tensor] = {}
     losses.update(command_losses(state[..., :3], state[..., 3:6], rollout.control, command_body, dt=cfg.runtime.dt))
     losses.update(
@@ -80,7 +132,7 @@ def rollout_loss_breakdown(
     losses.update(
         swing_losses(
             foot_pos_w=rollout.foot_pos_w,
-            nominal_foot_pos_w=nominal_rollout.foot_pos_w,
+            nominal_foot_pos_w=nominal_foot,
             queried_height_w=foot_height,
             swing_mask=torch.logical_not(contact),
             swing_weight=swing_weight,
@@ -151,8 +203,9 @@ def rollout_loss_breakdown(
         )
     )
     root_large = body_query.large_distance_m.reshape(batch, nodes, -1)
-    terminal_distance = root_query.large_distance_m[:, -1]
-    terminal_approach = (terminal_distance - root_query.large_distance_m[:, -2]) / float(cfg.runtime.dt)
+    root_large_distance = root_query.large_distance_m.squeeze(-1)
+    terminal_distance = root_large_distance[:, -1]
+    terminal_approach = (terminal_distance - root_large_distance[:, -2]) / float(cfg.runtime.dt)
     knee_shank_large = torch.cat(
         (
             knee_query.large_distance_m.reshape(batch, nodes, 4),
@@ -189,4 +242,20 @@ def rollout_loss_breakdown(
     return losses, weighted_objective(losses, weights)
 
 
-__all__ = ["rollout_loss_breakdown"]
+_COMPILED_ROLLOUT_LOSS_BREAKDOWN = torch.compile(
+    rollout_loss_breakdown,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+
+
+def rollout_loss_breakdown_maybe_compiled(**kwargs):
+    rollout = kwargs["rollout"]
+    cfg = kwargs["cfg"]
+    if bool(cfg.solver.compile_kernels) and rollout.state.is_cuda:
+        return _COMPILED_ROLLOUT_LOSS_BREAKDOWN(**kwargs)
+    return rollout_loss_breakdown(**kwargs)
+
+
+__all__ = ["rollout_loss_breakdown", "rollout_loss_breakdown_maybe_compiled"]

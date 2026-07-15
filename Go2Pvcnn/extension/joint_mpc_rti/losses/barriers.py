@@ -11,7 +11,7 @@ from torch import Tensor
 def relaxed_barrier(margin: Tensor, *, relaxation: float) -> Tensor:
     """Return a C1 continuation of ``-log(margin)`` below ``relaxation``."""
     value = torch.as_tensor(margin)
-    delta = value.new_tensor(float(relaxation))
+    delta = float(relaxation)
     if float(relaxation) <= 0.0:
         raise ValueError("relaxation must be positive")
     safe = -torch.log(value.clamp_min(delta))
@@ -23,7 +23,7 @@ def relaxed_barrier(margin: Tensor, *, relaxation: float) -> Tensor:
 def relaxed_barrier_derivative(margin: Tensor, *, relaxation: float) -> Tensor:
     """Analytic derivative of :func:`relaxed_barrier` with respect to its margin."""
     value = torch.as_tensor(margin)
-    delta = value.new_tensor(float(relaxation))
+    delta = float(relaxation)
     if float(relaxation) <= 0.0:
         raise ValueError("relaxation must be positive")
     logarithmic = -torch.reciprocal(value.clamp_min(delta))
@@ -39,7 +39,7 @@ def localized_relaxed_barrier(
 ) -> Tensor:
     """C1 penalty that is zero outside a finite relaxed-barrier influence band."""
     value = torch.as_tensor(margin)
-    cutoff = relaxed_barrier(value.new_tensor(float(activation_margin)), relaxation=relaxation)
+    cutoff = relaxed_barrier(value.new_full((), float(activation_margin)), relaxation=relaxation)
     gap = torch.relu(relaxed_barrier(value, relaxation=relaxation) - cutoff)
     return gap * gap
 
@@ -51,7 +51,7 @@ def localized_relaxed_barrier_derivative(
     relaxation: float,
 ) -> Tensor:
     value = torch.as_tensor(margin)
-    cutoff = relaxed_barrier(value.new_tensor(float(activation_margin)), relaxation=relaxation)
+    cutoff = relaxed_barrier(value.new_full((), float(activation_margin)), relaxation=relaxation)
     gap = torch.relu(relaxed_barrier(value, relaxation=relaxation) - cutoff)
     return 2.0 * gap * relaxed_barrier_derivative(value, relaxation=relaxation)
 

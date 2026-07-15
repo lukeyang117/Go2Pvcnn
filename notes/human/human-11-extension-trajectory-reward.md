@@ -153,3 +153,7 @@ Isaac Lab 在 trajectory reward 链路里主要承担两类职责：
 
 - reference runtime 看 [human-10-extension-planner-runtime.md](human-10-extension-planner-runtime.md)
 - raw ↔ batched 模块映射看 [human-09-extension-planner-mapping.md](human-09-extension-planner-mapping.md)
+
+## Joint MPC RTI pending reference（2026-07-15）
+
+新 backend 的 cache 保持完整 `[B,H+1,...]` ABI，但 reward/current-reference 固定读取索引 `1`：索引 `0` 是刚注入 planner 的真实 measured state，索引 `1` 才是 PPO 下一步要跟踪的 reference。reset 会清除对应 env 的 pending-valid，避免读取上一 episode 的 `x1`。

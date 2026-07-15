@@ -76,3 +76,7 @@ Do not treat these as current architecture docs:
 - `reference_replan_interval_s`
 - raw process/thread pool EventTerm replanning
 - `reference_trajectory_events.py` as the default runtime path
+
+## Joint MPC RTI Pending Frame
+
+For `joint_mpc_rti`, the full cache has `H+1` nodes. Frame `0` is measured `x0`; reward and viewer current-reference selection use frame `1` as the pending next-step target. Old `mpc` phase semantics remain unchanged.

@@ -113,6 +113,13 @@ def _make_fake_mpc_env(*, num_envs: int, terrain_types, terrain_levels):
         terrain=terrain,
         sensors={"semantic_height_scanner": scanner},
     )
+    planner_cfg = MpcPlannerCfg()
+    planner_cfg.runtime.horizon_steps = 25
+    planner_cfg.runtime.replan_interval_steps = 25
+    planner_cfg.runtime.dt = 0.02
+    planner_cfg.runtime.max_stale_steps = 25
+    planner_cfg.runtime.parallel_plan_batch_size = 2
+    planner_cfg.runtime.optimize_steps = 0
     cfg = SimpleNamespace(
         planner_backend="mpc",
         reference_command_name="base_velocity",
@@ -124,7 +131,7 @@ def _make_fake_mpc_env(*, num_envs: int, terrain_types, terrain_levels):
         mpc_parallel_plan_batch_size=2,
         mpc_optimize_steps=0,
         mpc_diagnostics_enabled=False,
-        mpc_planner_cfg=MpcPlannerCfg(),
+        mpc_planner_cfg=planner_cfg,
     )
     env = SimpleNamespace(
         scene=scene,

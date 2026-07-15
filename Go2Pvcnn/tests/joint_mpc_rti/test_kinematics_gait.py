@@ -21,6 +21,19 @@ def test_go2_fk_returns_planner_leg_order_and_link_samples() -> None:
     assert geometry.foot_pos_w[0, 2, 1] > geometry.foot_pos_w[0, 3, 1]
 
 
+def test_go2_foot_only_fk_matches_full_geometry() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk, go2_foot_pos
+
+    root_pos = torch.tensor([[0.1, -0.2, 0.35], [-0.3, 0.4, 0.31]])
+    root_rpy = torch.tensor([[0.05, -0.1, 0.3], [-0.03, 0.08, -0.4]])
+    joint = torch.tensor([[0.05, 0.7, -1.4] * 4, [-0.04, 0.9, -1.7] * 4])
+
+    torch.testing.assert_close(
+        go2_foot_pos(root_pos, root_rpy, joint),
+        go2_fk(root_pos, root_rpy, joint).foot_pos_w,
+    )
+
+
 def test_go2_analytic_foot_jacobian_matches_central_difference() -> None:
     from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_joint, go2_fk
 

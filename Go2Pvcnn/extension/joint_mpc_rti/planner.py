@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import torch
 from torch import Tensor
@@ -12,15 +12,16 @@ from extension.joint_mpc_rti.losses.barriers import (
     localized_relaxed_barrier_derivative,
     relaxed_barrier_derivative,
 )
-from extension.joint_mpc_rti.losses.rollout_objective import rollout_loss_breakdown
+from extension.joint_mpc_rti.losses.rollout_objective import rollout_loss_breakdown_maybe_compiled
 from extension.joint_mpc_rti.model.dynamics import kinematic_step
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
-from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_joint
-from extension.joint_mpc_rti.model.rollout import JointMpcRollout, rollout_controls
+from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_joint, go2_foot_pos
+from extension.joint_mpc_rti.model.rollout import JointMpcRollout, rollout_controls, rollout_state_sequence
 from extension.joint_mpc_rti.solver.linearization import dynamics_jacobians
 from extension.joint_mpc_rti.solver.primal_dual_ilqr import LqProblem
 from extension.joint_mpc_rti.solver.sqp_rti import sqp_rti_update
-from extension.joint_mpc_rti.terrain.query import query_world
+from extension.joint_mpc_rti.terrain.query import JointMpcTerrainQuery, query_world_maybe_compiled
+from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.types import (
     JointMpcPendingReference,
     JointMpcRtiSolverState,
@@ -29,6 +30,67 @@ from extension.joint_mpc_rti.types import (
     JointMpcRtiTrajectory,
     JointMpcTerrainField,
 )
+
+
+def _query_world(field: JointMpcTerrainField, points_w: Tensor, cfg: JointMpcRtiCfg):
+    return query_world_maybe_compiled(
+        field,
+        points_w,
+        enabled=bool(cfg.solver.compile_kernels),
+    )
+
+
+@dataclass(frozen=True)
+class _LinearizationQueries:
+    body: JointMpcTerrainQuery
+    foot: JointMpcTerrainQuery
+    knee: JointMpcTerrainQuery
+    shank: JointMpcTerrainQuery
+    root: JointMpcTerrainQuery
+
+
+def _query_linearization_geometry(
+    rollout: JointMpcRollout,
+    terrain_field: JointMpcTerrainField,
+    cfg: JointMpcRtiCfg,
+) -> _LinearizationQueries:
+    batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
+    shank = rollout.shank_samples_w.reshape(batch, nodes, 12, 3)
+    root = rollout.state[..., :3].unsqueeze(2)
+    packed = torch.cat(
+        (rollout.body_samples_w, rollout.foot_pos_w, rollout.knee_pos_w, shank, root),
+        dim=2,
+    )
+    points_per_node = int(packed.shape[2])
+    queried = _query_world(terrain_field, packed.reshape(batch, nodes * points_per_node, 3), cfg)
+
+    def section(start: int, stop: int) -> JointMpcTerrainQuery:
+        def scalar(value: Tensor) -> Tensor:
+            return value.reshape(batch, nodes, points_per_node)[:, :, start:stop]
+
+        def vector(value: Tensor) -> Tensor:
+            return value.reshape(batch, nodes, points_per_node, 2)[:, :, start:stop]
+
+        return JointMpcTerrainQuery(
+            height_w=scalar(queried.height_w),
+            small_distance_m=scalar(queried.small_distance_m),
+            large_distance_m=scalar(queried.large_distance_m),
+            small_gradient_w=vector(queried.small_gradient_w),
+            large_gradient_w=vector(queried.large_gradient_w),
+            valid=scalar(queried.valid),
+        )
+
+    body_stop = int(rollout.body_samples_w.shape[2])
+    foot_stop = body_stop + 4
+    knee_stop = foot_stop + 4
+    shank_stop = knee_stop + 12
+    return _LinearizationQueries(
+        body=section(0, body_stop),
+        foot=section(body_stop, foot_stop),
+        knee=section(foot_stop, knee_stop),
+        shank=section(knee_stop, shank_stop),
+        root=section(shank_stop, shank_stop + 1),
+    )
 
 
 def _repeat_state(state: JointMpcRtiState, repeats: int) -> JointMpcRtiState:
@@ -69,19 +131,33 @@ def _repeat_field(field: JointMpcTerrainField, repeats: int) -> JointMpcTerrainF
     )
 
 
-def _repeat_rollout(rollout: JointMpcRollout, repeats: int) -> JointMpcRollout:
-    def repeat(tensor: Tensor) -> Tensor:
-        return tensor[:, None].expand(-1, repeats, *tensor.shape[1:]).reshape(
-            tensor.shape[0] * repeats, *tensor.shape[1:]
+def _select_candidate_rollout(
+    candidate_rollout: JointMpcRollout,
+    base_rollout: JointMpcRollout,
+    selected_index: Tensor,
+    used_base: Tensor,
+    candidate_count: int,
+) -> JointMpcRollout:
+    batch = int(base_rollout.state.shape[0])
+
+    def select(candidate: Tensor, base: Tensor) -> Tensor:
+        shaped = candidate.reshape(batch, candidate_count, *candidate.shape[1:])
+        index = selected_index.view(batch, 1, *([1] * (candidate.ndim - 1))).expand(
+            batch,
+            1,
+            *candidate.shape[1:],
         )
+        chosen = torch.gather(shaped, 1, index).squeeze(1)
+        mask = used_base.view(batch, *([1] * (base.ndim - 1)))
+        return torch.where(mask, base, chosen)
 
     return JointMpcRollout(
-        state=repeat(rollout.state),
-        control=repeat(rollout.control),
-        foot_pos_w=repeat(rollout.foot_pos_w),
-        knee_pos_w=repeat(rollout.knee_pos_w),
-        shank_samples_w=repeat(rollout.shank_samples_w),
-        body_samples_w=repeat(rollout.body_samples_w),
+        state=select(candidate_rollout.state, base_rollout.state),
+        control=select(candidate_rollout.control, base_rollout.control),
+        foot_pos_w=select(candidate_rollout.foot_pos_w, base_rollout.foot_pos_w),
+        knee_pos_w=select(candidate_rollout.knee_pos_w, base_rollout.knee_pos_w),
+        shank_samples_w=select(candidate_rollout.shank_samples_w, base_rollout.shank_samples_w),
+        body_samples_w=select(candidate_rollout.body_samples_w, base_rollout.body_samples_w),
     )
 
 
@@ -93,7 +169,8 @@ def _nominal_joint_target(
     dtype: torch.dtype,
 ) -> Tensor:
     batch, nodes = int(contact.shape[0]), int(contact.shape[1])
-    nominal = torch.tensor(cfg.gait.nominal_joint_pos, dtype=dtype, device=contact.device).view(1, 1, 4, 3)
+    reference = contact.new_empty((), dtype=dtype)
+    nominal = constant_like(reference, "nominal_joint_pos", cfg.gait.nominal_joint_pos).view(1, 1, 4, 3)
     target = nominal.expand(batch, nodes, 4, 3).clone()
     swing = torch.logical_not(contact)
     half_cycle = int(cfg.gait.half_cycle_steps)
@@ -198,7 +275,7 @@ def _build_lq_problem(
 def _add_large_obstacle_linearization(
     problem: LqProblem,
     rollout: JointMpcRollout,
-    terrain_field: JointMpcTerrainField,
+    queries: _LinearizationQueries,
     cfg: JointMpcRtiCfg,
 ) -> LqProblem:
     batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
@@ -209,9 +286,8 @@ def _add_large_obstacle_linearization(
     relaxation = float(cfg.solver.barrier_relaxation)
     trust_scale = float(cfg.solver.root_xy_trust_scale)
 
-    def add_geometry_gradient(position_w: Tensor, *, margin: float, weight: float) -> None:
-        query = query_world(terrain_field, position_w.reshape(batch, -1, 3))
-        point_count = int(position_w.reshape(batch, nodes, -1, 3).shape[2])
+    def add_geometry_gradient(query: JointMpcTerrainQuery, *, margin: float, weight: float) -> None:
+        point_count = int(query.large_distance_m.shape[2])
         distance = query.large_distance_m.reshape(batch, nodes, point_count)
         gradient = query.large_gradient_w.reshape(batch, nodes, point_count, 2)
         derivative = relaxed_barrier_derivative(distance - float(margin), relaxation=relaxation)
@@ -224,38 +300,43 @@ def _add_large_obstacle_linearization(
         terminal_q[..., 1, 1].add_(root_gradient[:, -1, 1].abs() / trust_scale)
 
     add_geometry_gradient(
-        rollout.body_samples_w,
+        queries.body,
         margin=0.12,
         weight=float(cfg.losses.large_root_footprint_barrier),
     )
     add_geometry_gradient(
-        rollout.body_samples_w,
+        queries.body,
         margin=0.08,
         weight=float(cfg.losses.large_body_collision),
     )
     add_geometry_gradient(
-        rollout.foot_pos_w,
+        queries.foot,
         margin=0.03,
         weight=float(cfg.losses.large_foot_collision),
     )
-    link_position = torch.cat(
-        (rollout.knee_pos_w, rollout.shank_samples_w.reshape(batch, nodes, -1, 3)),
-        dim=2,
+    link_query = JointMpcTerrainQuery(
+        height_w=torch.cat((queries.knee.height_w, queries.shank.height_w), dim=2),
+        small_distance_m=torch.cat((queries.knee.small_distance_m, queries.shank.small_distance_m), dim=2),
+        large_distance_m=torch.cat((queries.knee.large_distance_m, queries.shank.large_distance_m), dim=2),
+        small_gradient_w=torch.cat((queries.knee.small_gradient_w, queries.shank.small_gradient_w), dim=2),
+        large_gradient_w=torch.cat((queries.knee.large_gradient_w, queries.shank.large_gradient_w), dim=2),
+        valid=torch.cat((queries.knee.valid, queries.shank.valid), dim=2),
     )
     add_geometry_gradient(
-        link_position,
+        link_query,
         margin=0.04,
         weight=float(cfg.losses.large_knee_shank_collision),
     )
-    root_query = query_world(terrain_field, rollout.state[..., :3])
+    root_large_distance = queries.root.large_distance_m.squeeze(-1)
+    root_large_gradient = queries.root.large_gradient_w.squeeze(-2)
     terminal_derivative = relaxed_barrier_derivative(
-        root_query.large_distance_m[:, -1] - 0.16,
+        root_large_distance[:, -1] - 0.16,
         relaxation=relaxation,
     )
     terminal_gradient = (
         float(cfg.losses.large_terminal_risk)
         * terminal_derivative.unsqueeze(-1)
-        * root_query.large_gradient_w[:, -1]
+        * root_large_gradient[:, -1]
     )
     terminal_vector[:, :2].add_(terminal_gradient)
     terminal_q[..., 0, 0].add_(terminal_gradient[:, 0].abs() / trust_scale)
@@ -274,17 +355,16 @@ def _add_foot_terrain_linearization(
     rollout: JointMpcRollout,
     contact_state: Tensor,
     swing_weight: Tensor,
-    terrain_field: JointMpcTerrainField,
+    foot_query: JointMpcTerrainQuery,
     cfg: JointMpcRtiCfg,
 ) -> LqProblem:
     batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
     foot = rollout.foot_pos_w
-    query = query_world(terrain_field, foot.reshape(batch, -1, 3))
-    height = query.height_w.reshape(batch, nodes, 4)
-    small_distance = query.small_distance_m.reshape(batch, nodes, 4)
-    small_gradient = query.small_gradient_w.reshape(batch, nodes, 4, 2)
-    large_distance = query.large_distance_m.reshape(batch, nodes, 4)
-    large_gradient = query.large_gradient_w.reshape(batch, nodes, 4, 2)
+    height = foot_query.height_w.reshape(batch, nodes, 4)
+    small_distance = foot_query.small_distance_m.reshape(batch, nodes, 4)
+    small_gradient = foot_query.small_gradient_w.reshape(batch, nodes, 4, 2)
+    large_distance = foot_query.large_distance_m.reshape(batch, nodes, 4)
+    large_gradient = foot_query.large_gradient_w.reshape(batch, nodes, 4, 2)
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=foot.device)
     swing = torch.logical_not(contact)
     swing_weight = torch.as_tensor(swing_weight, dtype=foot.dtype, device=foot.device)
@@ -374,11 +454,10 @@ def _add_root_support_linearization(
     problem: LqProblem,
     rollout: JointMpcRollout,
     contact_state: Tensor,
-    terrain_field: JointMpcTerrainField,
+    foot_query: JointMpcTerrainQuery,
     cfg: JointMpcRtiCfg,
 ) -> LqProblem:
     batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
-    foot_query = query_world(terrain_field, rollout.foot_pos_w.reshape(batch, -1, 3))
     foot_height = foot_query.height_w.reshape(batch, nodes, 4)
     contact = torch.as_tensor(contact_state, dtype=rollout.state.dtype, device=rollout.state.device)
     support_height = (foot_height * contact).sum(dim=2) / contact.sum(dim=2).clamp_min(1.0)
@@ -418,38 +497,59 @@ def step(
     swing_weight = _swing_phase_weight(contact, phase_step, cfg, dtype=measured_state.root_pos_w.dtype)
     desired_control, joint_target = _desired_control(measured_state, command, contact, phase_step, cfg)
     base_control = _initial_control(desired_control, solver_state)
-    base_rollout = rollout_controls(measured_state, base_control, dt=float(cfg.runtime.dt))
-    nominal_rollout = rollout_controls(measured_state, desired_control, dt=float(cfg.runtime.dt))
+    base_rollout = rollout_controls(
+        measured_state,
+        base_control,
+        dt=float(cfg.runtime.dt),
+        compile_kernels=bool(cfg.solver.compile_kernels),
+    )
+    nominal_state = rollout_state_sequence(
+        measured_state,
+        desired_control,
+        dt=float(cfg.runtime.dt),
+        compile_kernels=bool(cfg.solver.compile_kernels),
+    )
+    batch, nodes = int(nominal_state.shape[0]), int(nominal_state.shape[1])
+    nominal_foot_pos_w = go2_foot_pos(
+        nominal_state[..., :3].reshape(batch * nodes, 3),
+        nominal_state[..., 3:6].reshape(batch * nodes, 3),
+        nominal_state[..., 6:].reshape(batch * nodes, 12),
+    ).reshape(batch, nodes, 4, 3)
     lq_problem = _build_lq_problem(base_rollout, desired_control, joint_target, measured_state, cfg)
-    lq_problem = _add_large_obstacle_linearization(lq_problem, base_rollout, terrain_field, cfg)
+    linearization_queries = _query_linearization_geometry(base_rollout, terrain_field, cfg)
+    lq_problem = _add_large_obstacle_linearization(lq_problem, base_rollout, linearization_queries, cfg)
     lq_problem = _add_foot_terrain_linearization(
         lq_problem,
         base_rollout,
         contact,
         swing_weight,
-        terrain_field,
+        linearization_queries.foot,
         cfg,
     )
-    lq_problem = _add_root_support_linearization(lq_problem, base_rollout, contact, terrain_field, cfg)
+    lq_problem = _add_root_support_linearization(lq_problem, base_rollout, contact, linearization_queries.foot, cfg)
     previous_control = (
         measured_state.joint_vel.new_zeros((measured_state.batch_size, 18))
         if solver_state is None
         else solver_state.previous_control
     )
 
-    def merit_fn(candidate_control: Tensor) -> Tensor:
-        repeats = int(candidate_control.shape[0]) // measured_state.batch_size
-        repeated_state = _repeat_state(measured_state, repeats)
+    candidate_rollout_cache: list[JointMpcRollout] = []
+
+    def evaluate_rollout(candidate_rollout: JointMpcRollout, repeats: int) -> Tensor:
         repeated_command = command[:, None].expand(-1, repeats, -1).reshape(-1, 3)
         repeated_field = _repeat_field(terrain_field, repeats)
-        repeated_nominal = _repeat_rollout(nominal_rollout, repeats)
+        repeated_nominal_foot = nominal_foot_pos_w[:, None].expand(-1, repeats, -1, -1, -1).reshape(
+            measured_state.batch_size * repeats,
+            nominal_foot_pos_w.shape[1],
+            4,
+            3,
+        )
         repeated_target = joint_target[:, None].expand(-1, repeats, -1, -1).reshape(
             measured_state.batch_size * repeats, joint_target.shape[1], 12
         )
-        candidate_rollout = rollout_controls(repeated_state, candidate_control, dt=float(cfg.runtime.dt))
-        _, total = rollout_loss_breakdown(
+        _, total = rollout_loss_breakdown_maybe_compiled(
             rollout=candidate_rollout,
-            nominal_rollout=repeated_nominal,
+            nominal_foot_pos_w=repeated_nominal_foot,
             contact_state=contact[:, None].expand(-1, repeats, -1, -1).reshape(
                 measured_state.batch_size * repeats, *contact.shape[1:]
             ),
@@ -464,25 +564,49 @@ def step(
         )
         return total
 
+    base_merit = evaluate_rollout(base_rollout, 1)
+
+    def merit_fn(candidate_control: Tensor) -> Tensor:
+        repeats = int(candidate_control.shape[0]) // measured_state.batch_size
+        repeated_state = _repeat_state(measured_state, repeats)
+        candidate_rollout = rollout_controls(
+            repeated_state,
+            candidate_control,
+            dt=float(cfg.runtime.dt),
+            compile_kernels=bool(cfg.solver.compile_kernels),
+        )
+        candidate_rollout_cache.append(candidate_rollout)
+        return evaluate_rollout(candidate_rollout, repeats)
+
     update = sqp_rti_update(
         base_control=base_control,
         lq_problem=lq_problem,
         merit_fn=merit_fn,
         regularization=float(cfg.solver.regularization),
         alphas=tuple(cfg.solver.line_search_alphas),
+        diagonal_state_riccati=bool(cfg.solver.diagonal_state_riccati),
+        base_merit=base_merit,
     )
-    rollout = rollout_controls(measured_state, update.control, dt=float(cfg.runtime.dt))
-    final_losses, _ = rollout_loss_breakdown(
-        rollout=rollout,
-        nominal_rollout=nominal_rollout,
-        contact_state=contact,
-        swing_weight=swing_weight,
-        terrain_field=terrain_field,
-        command_body=command,
-        joint_target=joint_target,
-        previous_control=previous_control,
-        cfg=cfg,
+    rollout = _select_candidate_rollout(
+        candidate_rollout_cache[0],
+        base_rollout,
+        update.selected_index,
+        update.used_base,
+        len(cfg.solver.line_search_alphas),
     )
+    final_losses = {}
+    if bool(cfg.solver.emit_loss_breakdown):
+        final_losses, _ = rollout_loss_breakdown_maybe_compiled(
+            rollout=rollout,
+            nominal_foot_pos_w=nominal_foot_pos_w,
+            contact_state=contact,
+            swing_weight=swing_weight,
+            terrain_field=terrain_field,
+            command_body=command,
+            joint_target=joint_target,
+            previous_control=previous_control,
+            cfg=cfg,
+        )
     finite = torch.isfinite(rollout.state).all(dim=(1, 2)) & torch.isfinite(rollout.control).all(dim=(1, 2))
     status = torch.where(finite, torch.zeros_like(finite, dtype=torch.long), torch.ones_like(finite, dtype=torch.long))
     trajectory = JointMpcRtiTrajectory(

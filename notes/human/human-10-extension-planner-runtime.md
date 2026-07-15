@@ -801,3 +801,9 @@ raw CPU 路径现在的主要职责是：
 - raw ↔ batched 模块映射看 [human-09-extension-planner-mapping.md](human-09-extension-planner-mapping.md)
 - reward 消费与指标解释看 [human-11-extension-trajectory-reward.md](human-11-extension-trajectory-reward.md)
 - swing/stance 语义与 IK 时间复杂度（单环境、带代码锚点）看 [human-13-batched-planner-swing-stance-ik-complexity.md](human-13-batched-planner-swing-stance-ik-complexity.md)
+
+## Joint MPC RTI rolling runtime（2026-07-15）
+
+显式选择 `planner_backend="joint_mpc_rti"` 后，manager 每次 refresh 都从真实观测重规划，不播放旧 segment。首帧 eager 初始化 solver state；稳态使用 `JointMpcCudaGraphRunner`，更新静态 measured-state/command 后 replay 固定图。RayCaster field cache 地址稳定，地图由独立 stream 原位更新并通过 ready event 对齐。
+
+生产 profile 使用 H16、float32、对角 GGN Riccati、line search `(1.0,0.25)`、named diagnostics 关闭。1024 环境 1000 次 hot path 为 `2896.49ms`，nonfinite `0`；首次 JIT/capture 不计入稳态指标。

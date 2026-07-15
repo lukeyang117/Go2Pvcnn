@@ -174,3 +174,9 @@ graph LR
 - raw 行为变化：先更新本篇映射，再更新 `extension/batched_planner/*`
 - `TrajectoryResult` / 状态字段变化：同时更新 `types.py`、`convention.py`、reward 消费路径
 - runtime 行为变化：同步更新 [human-10](human-10-extension-planner-runtime.md) 和 [human-11](human-11-extension-trajectory-reward.md)
+
+## Joint MPC RTI 独立后端（2026-07-15）
+
+新增 `Go2Pvcnn/extension/joint_mpc_rti/`，backend 名为 `joint_mpc_rti`。它不替换默认 `mpc`，也不复用 `batch_mpc_planner` 内部算法；只复用 task/factory/reference-cache/reward/viewer 边界。
+
+算法主链是：真实 root/joint 状态 + body-frame command + 世界坐标单高程场/SDF -> fixed-trot H16 kinematic rollout -> 连续 terrain/semantic/full-body loss -> 单次 GGN RTI -> 第一未来帧 `x1`。`raw/mpx` 仅作为 GPU SQP 固定程序参考，不是运行依赖。

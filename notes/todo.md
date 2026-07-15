@@ -4,9 +4,9 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Current focus: **T302u semantic map contact collision**.
-- Active branch page: [T302u](todo/T302u-semantic-map-contact-collision-plan.md).
-- Active implementation plan: [T302u semantic map contact collision plan](todo/T302u-semantic-map-contact-collision-plan.md).
+- Current focus: **T302v joint MPC RTI GPU**.
+- Active branch page: [T302v](todo/T302v-joint-mpc-rti-gpu.md).
+- Active implementation plan: [Joint MPC RTI GPU plan](../docs/superpowers/plans/2026-07-15-joint-mpc-rti-gpu-implementation-plan.md).
 - Background reward implementation plan: [T302r Go2 geometry clearance reward plan](todo/T302r-go2-geometry-clearance-reward-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
@@ -110,6 +110,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
+- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): pure behavior and 1024×1000 performance pass; real IsaacLab second-step hard exit remains open.
+
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
 | T302q | active | Flat-small run `2026-06-11_18-31-19` has stable locomotion and signal-first clearance is nonzero, but curriculum never opens and the semantic signal is tiny. | Redesign curriculum metrics/gate aggregation before another long run; optionally eval `model_20700.pt` only as behavior sanity. |
@@ -148,6 +150,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
+- T302v.1: isolate the real IsaacLab second-step process exit; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
+
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
 | T302w.11 | T302w | verify | P0 | Root forward correction is still smooth and zero-preserving, but now limits the unchanged `0.25m` nominal endpoint to approximately `0.05-0.50m`; CPU parametric tests pass, runtime behavior unverified. | [bound-change log](log/2026-07-15-mpc-root-forward-bound-005-050.md) |
@@ -171,6 +175,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Branch Pages
 
+- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md)
+
 - [todo/README.md](todo/README.md)
 - [T302s-env-level-collision-curriculum-plan.md](todo/T302s-env-level-collision-curriculum-plan.md)
 - [T302q-flat-small-avoidance-reward-plan.md](todo/T302q-flat-small-avoidance-reward-plan.md)
@@ -193,6 +199,10 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 - [T200-semantic-static-course-viewer.md](todo/T200-semantic-static-course-viewer.md)
 
 ## Recent Logs
+
+| 2026-07-15 23:50 | Joint MPC RTI performance acceptance | pass: 1024×H16×1000 `2896.49ms`, nonfinite `0`, peak `282.58MiB` | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [performance](log/2026-07-15-joint-mpc-rti-performance.md) |
+| 2026-07-15 23:49 | Joint MPC RTI regression | pass: joint `71`, old MPC `193`, pycompile/diff clean | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [regression](log/2026-07-15-joint-mpc-rti-regression.md) |
+| 2026-07-15 23:48 | Joint MPC RTI Isaac smoke | partial: 1-step boundary pass; 2-step process exit remains open | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [Isaac smoke](log/2026-07-15-joint-mpc-rti-isaac-smoke.md) |
 
 | Time | Topic | Result | Todo | File |
 | --- | --- | --- | --- | --- |

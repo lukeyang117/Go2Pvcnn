@@ -144,3 +144,11 @@ Evidence: [../log/2026-04-28-1132-together-zero-command-rehome.md](../log/2026-0
 ## Related deep-dive
 
 - swing/stance semantics and IK time complexity (single env, code anchors): [ai-13-batched-planner-swing-stance-ik-complexity.md](ai-13-batched-planner-swing-stance-ik-complexity.md)
+
+## Joint MPC RTI Runtime (2026-07-15)
+
+- Every refresh injects measured `x0`; no segment phase playback.
+- First call initializes solver state; steady-state calls use `JointMpcCudaGraphRunner` with static state/command storage and stable field-cache addresses.
+- Production profile: compiled kernels, diagonal state Riccati, alphas `(1.0,0.25)`, named breakdown off.
+- Acceptance: 1024 env, H16, 1000 calls `2896.49ms`, nonfinite `0`, peak `282.58MiB`.
+- Real Isaac 1-step boundary passes; second-step process exit remains open.

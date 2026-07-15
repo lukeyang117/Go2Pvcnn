@@ -110,3 +110,10 @@ Treat these as deleted historical paths:
 - `Go2Pvcnn/extension/tasks/teacher_elevation_trajectory_env_cfg.py`
 
 Do not route new planner work there. Use `extension/reference/*` and `extension/batched_planner/*` instead.
+
+## Joint MPC RTI Backend (2026-07-15)
+
+- Optional backend: `Go2Pvcnn/extension/joint_mpc_rti/`, key `joint_mpc_rti`.
+- Independent H16 rolling kinematic SQP-RTI with fixed trot, analytic FK/Jacobians, one world height field and semantic SDF.
+- Shared boundaries only: task cfg, manager factory, `ReferenceTrajectoryCache`, reward and viewer adapters.
+- `raw/mpx` informed fixed-program GPU structure but is not a dependency.

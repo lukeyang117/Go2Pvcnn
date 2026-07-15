@@ -6,6 +6,14 @@ import pytest
 from .helpers import make_command, make_flat_field, make_state
 
 
+def _realtime_cfg():
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+
+    cfg = JointMpcRtiCfg()
+    cfg.solver.line_search_alphas = (1.0, 0.25)
+    return cfg
+
+
 def _field_with_box(*, semantic_id: int, height_m: float, x_range: tuple[float, float], y_range: tuple[float, float]):
     from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
 
@@ -45,7 +53,7 @@ def test_flat_commands_track_direction_with_grounded_stance(
         make_command(1, vx=vx, vy=vy, yaw=yaw_rate),
         make_flat_field(1),
         None,
-        JointMpcRtiCfg(),
+        _realtime_cfg(),
     ).full_trajectory
 
     assert torch.isfinite(trajectory.state).all()
@@ -73,14 +81,14 @@ def test_large_obstacle_continuous_loss_changes_route_away_from_risk(
 
     state = make_state(1)
     command = make_command(1, vx=0.2)
-    flat = step(state, command, make_flat_field(1), None, JointMpcRtiCfg()).full_trajectory
+    flat = step(state, command, make_flat_field(1), None, _realtime_cfg()).full_trajectory
     obstacle = _field_with_box(
         semantic_id=2,
         height_m=0.30,
         x_range=(0.35, 0.48),
         y_range=y_range,
     )
-    avoided = step(state, command, obstacle, None, JointMpcRtiCfg()).full_trajectory
+    avoided = step(state, command, obstacle, None, _realtime_cfg()).full_trajectory
 
     assert "large_root_footprint_barrier" in avoided.loss_breakdown
     assert avoided.loss_breakdown["large_root_footprint_barrier"] > flat.loss_breakdown[
@@ -104,7 +112,7 @@ def test_small_object_is_crossed_by_swing_clearance_without_lifting_root(
         x_range=(0.20, 0.32),
         y_range=y_range,
     )
-    trajectory = step(make_state(1), make_command(1, vx=0.2), field, None, JointMpcRtiCfg()).full_trajectory
+    trajectory = step(make_state(1), make_command(1, vx=0.2), field, None, _realtime_cfg()).full_trajectory
     foot_query = query_world(field, trajectory.foot_pos_w.reshape(1, -1, 3))
     small_distance = foot_query.small_distance_m.reshape(1, 17, 4)
     surface_height = foot_query.height_w.reshape(1, 17, 4)
@@ -136,7 +144,7 @@ def test_step_height_field_lifts_supporting_root_without_penetration() -> None:
         small_ids=(1,),
         large_ids=(2,),
     )
-    trajectory = step(make_state(1), make_command(1, vx=0.2), field, None, JointMpcRtiCfg()).full_trajectory
+    trajectory = step(make_state(1), make_command(1, vx=0.2), field, None, _realtime_cfg()).full_trajectory
     query = query_world(field, trajectory.foot_pos_w.reshape(1, -1, 3))
     foot_height = query.height_w.reshape(1, 17, 4)
     foot_gap = trajectory.foot_pos_w[..., 2] - foot_height
@@ -167,7 +175,7 @@ def test_down_step_lowers_root_continuously_without_penetration() -> None:
     )
     state = make_state(1)
     state.root_pos_w[:, 2] = 0.38
-    trajectory = step(state, make_command(1, vx=0.2), field, None, JointMpcRtiCfg()).full_trajectory
+    trajectory = step(state, make_command(1, vx=0.2), field, None, _realtime_cfg()).full_trajectory
     query = query_world(field, trajectory.foot_pos_w.reshape(1, -1, 3))
     foot_gap = trajectory.foot_pos_w[..., 2] - query.height_w.reshape(1, 17, 4)
 

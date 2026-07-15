@@ -93,6 +93,75 @@ def test_ilqr_matches_dense_scalar_integrator_solution() -> None:
     torch.testing.assert_close(result.delta_control, expected, atol=3.0e-4, rtol=3.0e-4)
 
 
+def test_go2_block_ilqr_matches_generic_structured_solution() -> None:
+    from extension.joint_mpc_rti.solver.primal_dual_ilqr import (
+        LqProblem,
+        solve_go2_block_lq_subproblem,
+        solve_lq_subproblem,
+    )
+
+    generator = torch.Generator().manual_seed(19)
+    batch, horizon = 2, 16
+    matrix_a = torch.eye(18).view(1, 1, 18, 18).expand(batch, horizon, -1, -1).clone()
+    matrix_b = 0.02 * torch.eye(18).view(1, 1, 18, 18).expand(batch, horizon, -1, -1).clone()
+    matrix_a[:, :, :6, :6] += 0.01 * torch.randn(batch, horizon, 6, 6, generator=generator)
+    matrix_b[:, :, :6, :6] += 0.01 * torch.randn(batch, horizon, 6, 6, generator=generator)
+    matrix_q = torch.diag_embed(0.1 + torch.rand(batch, horizon, 18, generator=generator))
+    matrix_r = torch.diag_embed(0.2 + torch.rand(batch, horizon, 18, generator=generator))
+    terminal_q = torch.diag_embed(0.1 + torch.rand(batch, 18, generator=generator))
+    problem = LqProblem(
+        matrix_a=matrix_a,
+        matrix_b=matrix_b,
+        matrix_q=matrix_q,
+        matrix_r=matrix_r,
+        vector_q=torch.randn(batch, horizon, 18, generator=generator),
+        vector_r=torch.randn(batch, horizon, 18, generator=generator),
+        terminal_q=terminal_q,
+        terminal_vector=torch.randn(batch, 18, generator=generator),
+        initial_state=torch.randn(batch, 18, generator=generator),
+        affine_dynamics=0.01 * torch.randn(batch, horizon, 18, generator=generator),
+        matrix_s=torch.zeros(batch, horizon, 18, 18),
+    )
+
+    generic = solve_lq_subproblem(problem, regularization=1.0e-4)
+    blocked = solve_go2_block_lq_subproblem(problem, regularization=1.0e-4)
+
+    torch.testing.assert_close(blocked.delta_state, generic.delta_state, atol=2.0e-5, rtol=2.0e-5)
+    torch.testing.assert_close(blocked.delta_control, generic.delta_control, atol=2.0e-5, rtol=2.0e-5)
+    torch.testing.assert_close(blocked.dual, generic.dual, atol=2.0e-5, rtol=2.0e-5)
+
+
+def test_diagonal_ilqr_matches_generic_diagonal_solution() -> None:
+    from extension.joint_mpc_rti.solver.primal_dual_ilqr import (
+        LqProblem,
+        solve_diagonal_lq_subproblem,
+        solve_lq_subproblem,
+    )
+
+    generator = torch.Generator().manual_seed(23)
+    batch, horizon, dimension = 3, 16, 18
+    problem = LqProblem(
+        matrix_a=torch.diag_embed(0.9 + 0.1 * torch.rand(batch, horizon, dimension, generator=generator)),
+        matrix_b=torch.diag_embed(0.01 + 0.02 * torch.rand(batch, horizon, dimension, generator=generator)),
+        matrix_q=torch.diag_embed(0.1 + torch.rand(batch, horizon, dimension, generator=generator)),
+        matrix_r=torch.diag_embed(0.2 + torch.rand(batch, horizon, dimension, generator=generator)),
+        vector_q=torch.randn(batch, horizon, dimension, generator=generator),
+        vector_r=torch.randn(batch, horizon, dimension, generator=generator),
+        terminal_q=torch.diag_embed(0.1 + torch.rand(batch, dimension, generator=generator)),
+        terminal_vector=torch.randn(batch, dimension, generator=generator),
+        initial_state=torch.randn(batch, dimension, generator=generator),
+        affine_dynamics=0.01 * torch.randn(batch, horizon, dimension, generator=generator),
+        matrix_s=torch.zeros(batch, horizon, dimension, dimension),
+    )
+
+    generic = solve_lq_subproblem(problem, regularization=1.0e-4)
+    diagonal = solve_diagonal_lq_subproblem(problem, regularization=1.0e-4)
+
+    torch.testing.assert_close(diagonal.delta_state, generic.delta_state, atol=2.0e-5, rtol=2.0e-5)
+    torch.testing.assert_close(diagonal.delta_control, generic.delta_control, atol=2.0e-5, rtol=2.0e-5)
+    torch.testing.assert_close(diagonal.dual, generic.dual, atol=2.0e-5, rtol=2.0e-5)
+
+
 def test_analytic_dynamics_jacobian_matches_central_difference() -> None:
     from extension.joint_mpc_rti.model.dynamics import kinematic_step
     from extension.joint_mpc_rti.solver.linearization import dynamics_jacobians
@@ -160,6 +229,23 @@ def test_parallel_line_search_selects_lowest_improving_candidate() -> None:
     torch.testing.assert_close(result.control, torch.full_like(base, 0.5))
 
 
+def test_parallel_line_search_evaluates_base_merit_once() -> None:
+    from extension.joint_mpc_rti.solver.line_search import parallel_line_search
+
+    calls: list[int] = []
+
+    def merit(control: torch.Tensor) -> torch.Tensor:
+        calls.append(int(control.shape[0]))
+        return control.square().sum(dim=(1, 2))
+
+    base = torch.zeros(2, 16, 18)
+    delta = torch.ones_like(base)
+    result = parallel_line_search(base, delta, merit, alphas=(1.0, 0.5, 0.25))
+
+    assert calls == [8]
+    torch.testing.assert_close(result.base_merit, torch.zeros(2))
+
+
 def test_sqp_rti_update_reduces_merit_with_one_lq_solve() -> None:
     from extension.joint_mpc_rti.solver.primal_dual_ilqr import LqProblem
     from extension.joint_mpc_rti.solver.sqp_rti import sqp_rti_update
@@ -194,3 +280,46 @@ def test_sqp_rti_update_reduces_merit_with_one_lq_solve() -> None:
 
     assert torch.all(result.merit_after < result.merit_before)
     torch.testing.assert_close(result.alpha, torch.full((batch,), 0.5))
+
+
+def test_planner_packs_linearization_geometry_into_one_world_query(monkeypatch) -> None:
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from .helpers import make_command, make_flat_field
+
+    calls: list[tuple[int, ...]] = []
+    original = planner.query_world_maybe_compiled
+
+    def counted_query(field, points_w, *, enabled):
+        calls.append(tuple(points_w.shape))
+        return original(field, points_w, enabled=enabled)
+
+    monkeypatch.setattr(planner, "query_world_maybe_compiled", counted_query)
+    planner.step(make_state(1), make_command(1), make_flat_field(1), None, JointMpcRtiCfg())
+
+    assert calls == [(1, 17 * (9 + 4 + 4 + 12 + 1), 3)]
+
+
+def test_planner_skips_final_named_diagnostics_when_disabled(monkeypatch) -> None:
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from .helpers import make_command, make_flat_field
+
+    calls: list[int] = []
+    original = planner.rollout_loss_breakdown_maybe_compiled
+
+    def counted_objective(**kwargs):
+        calls.append(int(kwargs["rollout"].state.shape[0]))
+        return original(**kwargs)
+
+    cfg = JointMpcRtiCfg()
+    cfg.solver.emit_loss_breakdown = False
+    monkeypatch.setattr(planner, "rollout_loss_breakdown_maybe_compiled", counted_objective)
+    result = planner.step(make_state(1), make_command(1), make_flat_field(1), None, cfg)
+
+    assert calls == [1, 3]
+    assert set(result.full_trajectory.loss_breakdown) == {
+        "merit_before",
+        "merit_after",
+        "line_search_alpha",
+    }

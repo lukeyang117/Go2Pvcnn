@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.tensor_constants import constant_like
+
 
 HIP_OFFSETS = (
     (0.1934, 0.0465, 0.0),
@@ -67,10 +69,10 @@ def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor]:
     abad = angles[..., 0]
     thigh_angle = angles[..., 1]
     calf_angle = angles[..., 2]
-    side = joint_pos.new_tensor(LEG_SIDE_SIGNS).view(1, 4)
-    lateral = joint_pos.new_tensor(HIP_OFFSET_Y) * side
-    thigh = joint_pos.new_tensor(THIGH_LENGTH)
-    calf = joint_pos.new_tensor(CALF_LENGTH)
+    side = constant_like(joint_pos, "leg_side_signs", LEG_SIDE_SIGNS).view(1, 4)
+    lateral = HIP_OFFSET_Y * side
+    thigh = THIGH_LENGTH
+    calf = CALF_LENGTH
     knee_x = -thigh * torch.sin(thigh_angle)
     knee_z = -thigh * torch.cos(thigh_angle)
     calf_absolute = thigh_angle + calf_angle
@@ -78,7 +80,7 @@ def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor]:
     foot_z = knee_z - calf * torch.cos(calf_absolute)
     cosine = torch.cos(abad)
     sine = torch.sin(abad)
-    hip = joint_pos.new_tensor(HIP_OFFSETS).view(1, 4, 3)
+    hip = constant_like(joint_pos, "hip_offsets", HIP_OFFSETS).view(1, 4, 3)
     knee_body = torch.stack(
         (
             hip[..., 0] + knee_x,
@@ -102,7 +104,10 @@ def _body_collision_samples(dtype: torch.dtype, device: torch.device) -> Tensor:
     x = 0.32
     y = 0.09
     z_bottom = -0.08
-    return torch.tensor(
+    reference = torch.empty((), dtype=dtype, device=device)
+    return constant_like(
+        reference,
+        "body_collision_samples",
         (
             (x, y, z_bottom),
             (x, -y, z_bottom),
@@ -114,8 +119,6 @@ def _body_collision_samples(dtype: torch.dtype, device: torch.device) -> Tensor:
             (-x, 0.0, z_bottom),
             (0.0, 0.0, z_bottom),
         ),
-        dtype=dtype,
-        device=device,
     )
 
 
@@ -123,7 +126,7 @@ def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geom
     """Compute planner-order foot, knee, shank, and body samples in world coordinates."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
     knee_body, foot_body = _leg_points_body(joint)
-    alpha = joint.new_tensor((0.25, 0.5, 0.75)).view(1, 1, 3, 1)
+    alpha = constant_like(joint, "shank_sample_alpha", (0.25, 0.5, 0.75)).view(1, 1, 3, 1)
     shank_body = knee_body.unsqueeze(2) * (1.0 - alpha) + foot_body.unsqueeze(2) * alpha
     body_samples = _body_collision_samples(joint.dtype, joint.device).unsqueeze(0).expand(joint.shape[0], -1, -1)
     rotation = rpy_to_rotation_matrix(root_rpy)
@@ -139,6 +142,14 @@ def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geom
     )
 
 
+def go2_foot_pos(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
+    """Compute only planner-order foot positions for nominal-shape references."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    _, foot_body = _leg_points_body(joint)
+    rotation = rpy_to_rotation_matrix(root_rpy)
+    return torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
+
+
 def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
     """Return analytic world-foot Jacobians with respect to all 12 joint positions."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
@@ -148,10 +159,10 @@ def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tenso
     abad = angles[..., 0]
     thigh_angle = angles[..., 1]
     calf_angle = angles[..., 2]
-    side = joint.new_tensor(LEG_SIDE_SIGNS).view(1, 4)
-    lateral = joint.new_tensor(HIP_OFFSET_Y) * side
-    thigh = joint.new_tensor(THIGH_LENGTH)
-    calf = joint.new_tensor(CALF_LENGTH)
+    side = constant_like(joint, "leg_side_signs", LEG_SIDE_SIGNS).view(1, 4)
+    lateral = HIP_OFFSET_Y * side
+    thigh = THIGH_LENGTH
+    calf = CALF_LENGTH
     absolute = thigh_angle + calf_angle
     foot_z = -thigh * torch.cos(thigh_angle) - calf * torch.cos(absolute)
     cosine = torch.cos(abad)
@@ -188,5 +199,6 @@ __all__ = [
     "Go2Geometry",
     "foot_jacobian_joint",
     "go2_fk",
+    "go2_foot_pos",
     "rpy_to_rotation_matrix",
 ]

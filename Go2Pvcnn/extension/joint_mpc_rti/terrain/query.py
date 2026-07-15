@@ -91,4 +91,23 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
     )
 
 
-__all__ = ["JointMpcTerrainQuery", "query_world"]
+_COMPILED_QUERY_WORLD = torch.compile(
+    query_world,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+
+
+def query_world_maybe_compiled(
+    field: JointMpcTerrainField,
+    points_w: Tensor,
+    *,
+    enabled: bool,
+) -> JointMpcTerrainQuery:
+    if enabled and torch.as_tensor(points_w).is_cuda:
+        return _COMPILED_QUERY_WORLD(field, points_w)
+    return query_world(field, points_w)
+
+
+__all__ = ["JointMpcTerrainQuery", "query_world", "query_world_maybe_compiled"]

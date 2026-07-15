@@ -612,6 +612,11 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
         self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 64
         self.mpc_planner_cfg.diagnostics.emit_runtime_counters = False
         self.mpc_planner_cfg.diagnostics.profile_cuda_sync = False
+        self.joint_mpc_rti_cfg.solver.compile_kernels = True
+        self.joint_mpc_rti_cfg.solver.emit_loss_breakdown = False
+        self.joint_mpc_rti_cfg.solver.diagonal_state_riccati = True
+        self.joint_mpc_rti_cfg.solver.line_search_alphas = (1.0, 0.25)
+        self.joint_mpc_rti_cfg.solver.use_cuda_graph = True
         self.mpc_planner_cfg.reference_participation.exclude_pairs = (
             MpcTerrainDifficultyPair(
                 terrain_names=(
@@ -695,6 +700,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER(TeacherElevationTraject
         self.mpc_planner_cfg.runtime.parallel_plan_batch_size = 4096
         self.mpc_planner_cfg.diagnostics.emit_runtime_counters = True
         self.mpc_planner_cfg.diagnostics.profile_cuda_sync = True
+        self.joint_mpc_rti_cfg.solver.emit_loss_breakdown = True
 
 
 @configclass

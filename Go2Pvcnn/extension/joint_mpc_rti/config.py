@@ -23,6 +23,10 @@ class JointMpcRtiSolverCfg:
     line_search_alphas: tuple[float, ...] = (1.0, 0.5, 0.25)
     root_xy_trust_scale: float = 0.05
     joint_trust_scale: float = 0.25
+    compile_kernels: bool = False
+    emit_loss_breakdown: bool = True
+    diagonal_state_riccati: bool = True
+    use_cuda_graph: bool = False
 
 
 @dataclass

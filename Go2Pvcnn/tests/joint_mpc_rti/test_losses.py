@@ -305,3 +305,37 @@ def test_terminal_losses_penalize_stopping_at_obstacle_in_extreme_posture() -> N
 
     for name in ("terminal_command_velocity", "terminal_obstacle_safety", "terminal_posture", "terminal_contact_viability"):
         assert bad[name] > good[name]
+
+
+def test_rollout_objective_packs_geometry_into_one_world_query(monkeypatch) -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.losses import rollout_objective
+    from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
+    from extension.joint_mpc_rti.model.rollout import rollout_controls
+    from .helpers import make_command, make_flat_field, make_state
+
+    state = make_state(2)
+    control = torch.zeros(2, 16, 18)
+    rollout = rollout_controls(state, control, dt=0.02)
+    contact = fixed_trot_schedule(2, 16, "cpu")
+    calls: list[tuple[int, ...]] = []
+    original = rollout_objective.query_world_maybe_compiled
+
+    def counted_query(field, points_w, *, enabled):
+        calls.append(tuple(points_w.shape))
+        return original(field, points_w, enabled=enabled)
+
+    monkeypatch.setattr(rollout_objective, "query_world_maybe_compiled", counted_query)
+    rollout_objective.rollout_loss_breakdown(
+        rollout=rollout,
+        nominal_rollout=rollout,
+        contact_state=contact,
+        swing_weight=torch.logical_not(contact).to(torch.float32),
+        terrain_field=make_flat_field(2),
+        command_body=make_command(2),
+        joint_target=rollout.state[..., 6:],
+        previous_control=torch.zeros(2, 18),
+        cfg=JointMpcRtiCfg(),
+    )
+
+    assert calls == [(2, 17 * (4 + 4 + 12 + 9 + 1), 3)]

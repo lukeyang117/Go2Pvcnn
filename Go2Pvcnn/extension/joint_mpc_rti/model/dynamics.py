@@ -45,7 +45,7 @@ def kinematic_step(state: Tensor, control: Tensor, *, dt: float) -> Tensor:
     linear_velocity_w_xy = body_linear_velocity_to_world(linear_velocity_b[:, :2], root_rpy[:, 2])
     linear_velocity_w = torch.cat((linear_velocity_w_xy, linear_velocity_b[:, 2:3]), dim=-1)
     rpy_rate = _body_angular_velocity_to_rpy_rate(root_rpy, angular_velocity_b)
-    step = state_tensor.new_tensor(float(dt))
+    step = float(dt)
     return torch.cat(
         (
             root_pos + step * linear_velocity_w,

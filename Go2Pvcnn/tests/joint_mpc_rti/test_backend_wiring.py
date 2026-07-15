@@ -16,6 +16,16 @@ def test_task_cfg_declares_joint_backend_config_without_changing_default() -> No
     assert "JointMpcRtiCfg" in source
 
 
+def test_task_joint_backend_uses_verified_realtime_solver_profile() -> None:
+    source = Path("Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py").read_text()
+
+    assert "self.joint_mpc_rti_cfg.solver.compile_kernels = True" in source
+    assert "self.joint_mpc_rti_cfg.solver.emit_loss_breakdown = False" in source
+    assert "self.joint_mpc_rti_cfg.solver.diagonal_state_riccati = True" in source
+    assert "self.joint_mpc_rti_cfg.solver.line_search_alphas = (1.0, 0.25)" in source
+    assert "self.joint_mpc_rti_cfg.solver.use_cuda_graph = True" in source
+
+
 def test_factory_creates_joint_mpc_rti_manager() -> None:
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
     from extension.trajectory_manager_factory import create_trajectory_manager

@@ -10,6 +10,7 @@ from extension.joint_mpc_rti.integration.reference_adapter import trajectory_to_
 from extension.joint_mpc_rti.integration.isaaclab_adapter import command_from_env, scanner_from_env, state_from_env
 from extension.joint_mpc_rti.planner import step as planner_step
 from extension.joint_mpc_rti.runtime.reference_buffer import PendingReferenceBuffer
+from extension.joint_mpc_rti.runtime.cuda_graph import JointMpcCudaGraphRunner
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState, JointMpcRtiState, JointMpcRtiStepResult, JointMpcTerrainField
 
 
@@ -25,6 +26,7 @@ class JointMpcRtiManager:
         self._cache = None
         self._field_sync: JointMpcRayCasterFieldSync | None = None
         self._last_step_token = None
+        self._graph_runner: JointMpcCudaGraphRunner | None = None
 
     @classmethod
     def from_config(
@@ -43,6 +45,7 @@ class JointMpcRtiManager:
         instance._cache = None
         instance._field_sync = None
         instance._last_step_token = None
+        instance._graph_runner = None
         return instance
 
     def horizon_steps(self) -> int:
@@ -62,9 +65,36 @@ class JointMpcRtiManager:
     ) -> JointMpcRtiStepResult:
         if self._buffer is None:
             self._buffer = PendingReferenceBuffer(num_envs=measured_state.batch_size, device=measured_state.device)
-        result = planner_step(measured_state, command_body, terrain_field, self._solver_state, self._cfg)
+        use_graph = (
+            bool(self._cfg.solver.use_cuda_graph)
+            and measured_state.device.type == "cuda"
+            and self._solver_state is not None
+        )
+        if use_graph and self._graph_runner is None:
+            self._graph_runner = JointMpcCudaGraphRunner(
+                measured_state,
+                command_body,
+                terrain_field,
+                self._solver_state,
+                self._cfg,
+            )
+            result = self._graph_runner.captured_result
+        elif use_graph and self._graph_runner is not None:
+            if not self._graph_runner.matches_field(terrain_field):
+                self._graph_runner = JointMpcCudaGraphRunner(
+                    measured_state,
+                    command_body,
+                    terrain_field,
+                    self._solver_state,
+                    self._cfg,
+                )
+                result = self._graph_runner.captured_result
+            else:
+                result = self._graph_runner.run(measured_state, command_body, terrain_field)
+        else:
+            result = planner_step(measured_state, command_body, terrain_field, self._solver_state, self._cfg)
         self._last_result = result
-        self._solver_state = result.solver_state
+        self._solver_state = self._graph_runner.solver_state if use_graph and self._graph_runner is not None else result.solver_state
         self._buffer.update(result.pending_reference)
         self._cache = trajectory_to_reference_cache(result.full_trajectory)
         return result
