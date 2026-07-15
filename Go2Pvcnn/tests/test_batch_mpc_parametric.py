@@ -305,7 +305,7 @@ def test_decode_parametric_root_forward_correction_is_smooth_asymmetric_and_zero
 
     torch.testing.assert_close(terminal_x(0.0), torch.tensor([0.25]), atol=1.0e-6, rtol=0.0)
     torch.testing.assert_close(terminal_x(-20.0), torch.tensor([0.05]), atol=1.0e-6, rtol=0.0)
-    torch.testing.assert_close(terminal_x(20.0), torch.tensor([1.00]), atol=1.0e-6, rtol=0.0)
+    torch.testing.assert_close(terminal_x(20.0), torch.tensor([0.50]), atol=1.0e-6, rtol=0.0)
 
     variables = init_parametric_variables(state, nominal.command, horizon=50)
     decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=50)

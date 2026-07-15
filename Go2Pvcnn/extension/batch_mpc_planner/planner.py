@@ -990,7 +990,6 @@ def _parametric_sampled_frame_losses(
     if profile is not None:
         profile.add_loss("term.fk_base", (profile.now() - term_t0) * 1000.0)
     term_t0 = profile.now() if profile is not None else 0.0
-    target_fk_error = torch.linalg.vector_norm(target_foot_pos - foot_pos, dim=-1).mean(dim=(1, 2))
     terrain_z = height_at(terrain, foot_pos[..., :2].reshape(batch, horizon * 4, 2)).reshape(batch, horizon, 4).to(dtype=dtype, device=device)
     clearance_deficit = torch.relu(terrain_z + 0.015 - foot_pos[..., 2])
     terrain_clearance = clearance_deficit.square().mean(dim=(1, 2))
@@ -1160,7 +1159,6 @@ def _parametric_sampled_frame_losses(
     if profile is not None:
         profile.add_loss("term.gait_progress_curve", (profile.now() - term_t0) * 1000.0)
     return {
-        "parametric_reachability": target_fk_error,
         "parametric_terrain_clearance": terrain_clearance,
         "parametric_semantic_contact": semantic_contact,
         "parametric_semantic_avoidance": semantic_avoidance,

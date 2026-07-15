@@ -208,7 +208,7 @@ def decode_parametric_trajectory(
             _smooth_asymmetric_zero_offset(
                 variables.root_goal_delta_raw[:, 0],
                 low=-0.20,
-                high=0.75,
+                high=0.25,
             ),
             0.25 * torch.tanh(variables.root_goal_delta_raw[:, 1]),
         ),

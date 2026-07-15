@@ -106,7 +106,6 @@ from extension.viz.go2_foostep_planner import _adapt_mpc_result_for_viewer
 
 
 PARAMETRIC_LOSS_KEYS = {
-    "parametric_reachability",
     "parametric_terrain_clearance",
     "parametric_semantic_contact",
     "parametric_semantic_avoidance",
@@ -828,8 +827,10 @@ def test_parametric_plan_exposes_sampled_frame_losses() -> None:
     result = plan_segment(terrain, state, command, cfg=cfg)
 
     assert PARAMETRIC_LOSS_KEYS.issubset(result.cost_breakdown)
+    assert "parametric_reachability" not in result.cost_breakdown
     assert result.loss_breakdown is not None
     assert PARAMETRIC_LOSS_KEYS.issubset(result.loss_breakdown)
+    assert "parametric_reachability" not in result.loss_breakdown
     for name in PARAMETRIC_LOSS_KEYS:
         assert result.cost_breakdown[name].shape == (1,)
         assert torch.isfinite(result.cost_breakdown[name]).all()

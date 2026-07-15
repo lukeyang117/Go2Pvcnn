@@ -29,6 +29,8 @@ CUDA_VISIBLE_DEVICES=2 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go
 | T302w.7 | verify | P0 | Reproduce row8/col12 planned root/foot, analytic FK, Isaac readback, touchdown/current-foot, and terrain-clearance metrics at `optimize_steps=16`. | `Go2Pvcnn/tests/mpc_row8_col12_loss_probe.py`, `notes/log/2026-07-15-mpc-row8-col12-opt16-position-repro.md` |
 | T302w.8 | open | P0 | Compare row8/col12 step `16` with `24/25` under the same current runtime and separate optimizer convergence from analytic FK convention mismatch. | `Go2Pvcnn/tests/mpc_row8_col12_loss_probe.py` |
 | T302w.9 | open | P1 | Repair stale row8/col12 probe fixture calls (`compact_semantic_grid`, `move_env0_to_terrain_tile`) before its documented command is directly runnable again. | `Go2Pvcnn/tests/mpc_row8_col12_loss_probe.py`, `Go2Pvcnn/tests/fixtures/viewer_runtime_diagnostics.py` |
+| T302w.10 | verify | P0 | Remove the identically-zero `parametric_reachability` loss and enforce its absence with CPU-only MPC tests. | `Go2Pvcnn/extension/batch_mpc_planner/planner.py`, `Go2Pvcnn/tests/test_batch_mpc_backend.py` |
+| T302w.11 | verify | P0 | Reduce the existing smooth root forward correction to `[-0.20,+0.25]m`, giving approximately `0.05-0.50m` around the unchanged `0.25m` nominal endpoint. | `Go2Pvcnn/extension/batch_mpc_planner/parametric.py`, `Go2Pvcnn/tests/test_batch_mpc_parametric.py` |
 
 ## Scope Guard
 
@@ -68,6 +70,8 @@ Additional row `8`, col `12` focus:
 - [../log/2026-07-13-mpc-row8-col11-col12-body-shank-clearance-fix.md](../log/2026-07-13-mpc-row8-col11-col12-body-shank-clearance-fix.md)
 - [../log/2026-07-15-mpc-low-small-optimize-steps-sweep.md](../log/2026-07-15-mpc-low-small-optimize-steps-sweep.md)
 - [../log/2026-07-15-mpc-row8-col12-opt16-position-repro.md](../log/2026-07-15-mpc-row8-col12-opt16-position-repro.md)
+- [../log/2026-07-15-remove-zero-parametric-reachability-loss.md](../log/2026-07-15-remove-zero-parametric-reachability-loss.md)
+- [../log/2026-07-15-mpc-root-forward-bound-005-050.md](../log/2026-07-15-mpc-root-forward-bound-005-050.md)
 
 ## Git Refs
 
@@ -86,11 +90,30 @@ Additional row `8`, col `12` focus:
 
 Latest verification ref on 2026-07-13: `8168b15` plus dirty working tree; see [../log/2026-07-13-mpc-row8-col11-col12-body-shank-clearance-fix.md](../log/2026-07-13-mpc-row8-col11-col12-body-shank-clearance-fix.md).
 
+Latest parametric root-bound verification ref on 2026-07-15: `56b9ae6` plus dirty working tree; see [../log/2026-07-15-mpc-root-forward-bound-005-050.md](../log/2026-07-15-mpc-root-forward-bound-005-050.md).
+
 ## Next Step
 
 - If user accepts the current weight-only improvement, keep this branch in verify state. If the remaining visual issue is specifically the current-foot-to-future-touchdown marker distance, clarify marker semantics because that is not a pure FK/IK mismatch.
 
 ## Node Details
+
+### T302w.11 Root Forward Smooth Bound 0.05-0.50m
+
+- why-created: with `25` frames at `0.02s`, the user requested a root endpoint range up to `0.50m` while keeping the existing correction smooth.
+- change: kept nominal forward endpoint `0.25m`; changed only the shifted-sigmoid positive correction bound from `+0.75m` to `+0.25m`; negative bound remains `-0.20m`.
+- contract: large negative / zero / large positive raw values produce approximately `0.05/0.25/0.50m`, and the zero-input gradient remains finite and positive.
+- unchanged: no loss weights, progress-loss target, optimizer steps, or MPC-QP files changed.
+- verification: CPU parametric suite `22 passed`; diff check pass; no IsaacLab or viewer startup.
+- evidence: [2026-07-15 root forward bound](../log/2026-07-15-mpc-root-forward-bound-005-050.md).
+
+### T302w.10 Remove Zero Parametric Reachability Loss
+
+- why-created: user requested deletion after confirming the loss compared `target_foot_pos` against the same tensor passed as `foot_pos` and was always zero.
+- result: removed the calculation and `parametric_reachability` breakdown key; no dedicated config weight existed.
+- preserved contract: the separate `parametric_trajectory_fk_consistency` still compares target foot against actual analytic FK foot using `ik_fk_residual.weight`.
+- verification: CPU-only RED caught the old key; GREEN focused `1 passed`; backend + parametric `170 passed`; pycompile/diff check pass; no IsaacLab startup.
+- evidence: [2026-07-15 dead reachability loss removal](../log/2026-07-15-remove-zero-parametric-reachability-loss.md).
 
 ### T302w.7 Row8/Col12 Optimize-16 Position Reproduction
 
