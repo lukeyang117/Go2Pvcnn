@@ -106,6 +106,22 @@
     </tbody>
   </table>
 
+  <h3>2.1 修改约束：唯一允许的结构性硬约束</h3>
+  <p>行为选择不得通过硬 gate 决定。允许存在的硬约束只用于定义系统和数据的一致性，并集中限定如下：</p>
+  <ul>
+    <li><code>X[:,0] = measured_state</code>：每次 RTI 的起点严格等于当前真实 IsaacLab 状态。</li>
+    <li>状态节点满足离散运动学转移；multiple-shooting defect 属于求解器等式约束，不是可随意调权重的行为 loss。</li>
+    <li>足、膝、小腿和机身采样点严格由 root/joint 的解析 FK 生成，不引入另一套独立足端状态。</li>
+    <li>v1 的 trot contact/swing mask 由外部 scheduler 给定，优化器不改变 gait topology、phase offset 或 swing duration。</li>
+    <li>terrain field 必须按同一 env id、scanner pose、timestamp 和 version 原子发布；不能读取半更新字段。</li>
+    <li>外部 command 固定为 body frame；内部世界坐标转换只能执行一次。</li>
+    <li>规划器发布的第一参考严格是未来 <code>x1</code>，不能用当前 <code>x0</code> 代替。</li>
+    <li>非有限输入、失效 field 或非有限解必须标记 invalid；这是数据有效性约束，不是语义行为 gate。</li>
+  </ul>
+  <div class="callout danger">
+    <strong>禁止的硬 gate：</strong>不得使用 <code>if small then cross</code>、<code>if large then turn left/right</code>、<code>crossable_small</code>、指定某条腿跨越、固定避障侧、根据 terrain row/col 切换行为、优化后 snapping、hard projection 或 optimize-then-repair。small/large 语义只构造连续代价场，跨越、绕行、减速或停止由总目标自然竞争得到。
+  </div>
+
   <h2>3. 成功标准</h2>
   <div class="grid">
     <div class="card">
@@ -346,82 +362,217 @@ grad_world = Rz(field_yaw_w) * grad_field</code></pre>
   <p>越界查询返回 <code>valid=false</code> 并进入安全 barrier，不能静默使用 border padding。</p>
 
   <h2>9. 连续损失设计</h2>
-  <p>总体目标采用 residual + relaxed barrier：</p>
+  <p>Loss 分为任务、步态、地形、语义、可行性、平滑和终端七组。等式关系只放在第 2.1 节的修改约束中；行为层只使用连续 residual 和 relaxed barrier。</p>
   <pre><code>min  Σ(k) 0.5 * ||r_k(X,U)||²_W
      + relaxed_barrier(inequalities)
      + terminal_cost(X_H)</code></pre>
   <p>不建立 <code>crossable_small</code> 之类决定整条行为的硬 gate。small/large 分类只负责构造不同风险场；最终跨越还是绕行由轨迹代价共同决定。</p>
 
-  <h3>9.1 Command 与进度</h3>
+  <h3>9.1 Loss 的三种数学角色</h3>
   <table>
-    <thead><tr><th>Residual</th><th>作用</th></tr></thead>
+    <thead><tr><th>类型</th><th>适用内容</th><th>实际作用</th></tr></thead>
     <tbody>
-      <tr><td>body-frame linear velocity tracking</td><td>跟踪 <code>vx_body/vy_body</code>。</td></tr>
-      <tr><td>yaw-rate tracking</td><td>跟踪转向 command。</td></tr>
-      <tr><td>world progress</td><td>避免仅靠原地抬腿降低碰撞。</td></tr>
-      <tr><td>direction consistency</td><td>避免向 command 反方向或过度横移。</td></tr>
-      <tr><td>terminal continuation</td><td>避免 horizon 末端突然停止。</td></tr>
+      <tr><td>平方 residual</td><td>command、姿态、落脚形状、平滑。</td><td>表达“希望接近什么”，允许和其他目标折中。</td></tr>
+      <tr><td>Relaxed barrier</td><td>关节限位、地形穿透、障碍距离、地图边界。</td><td>远离边界时影响小，接近边界时快速增加；轻微越界仍保持有限梯度。</td></tr>
+      <tr><td>求解器等式</td><td>真实 <code>x0</code>、运动学转移。</td><td>定义问题本身，不放进普通行为 Loss 调权重。</td></tr>
+    </tbody>
+  </table>
+  <p>所有按 horizon、腿或几何采样点累计的项都必须按有效元素数量归一化，避免修改 <code>H</code> 或 link sample 数量后等效权重改变。</p>
+
+  <h3>9.2 Command 与运动任务</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>作用范围</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>command_linear_velocity</code></td><td>全部 horizon 节点。</td><td>比较预测 body-frame <code>vx/vy</code> 与外部 command，决定机器人希望走多快、朝机身哪个方向走。</td></tr>
+      <tr><td><code>command_yaw_rate</code></td><td>全部 horizon 节点。</td><td>跟踪 yaw rate；纯转向 command 下配合零线速度目标，避免边转边漂移。</td></tr>
+      <tr><td><code>command_progress</code></td><td>horizon 起点到终点。</td><td>比较实际世界位移和 command 期望位移，防止通过原地抬腿、长期停车或过度绕行逃避障碍。</td></tr>
+      <tr><td><code>command_direction</code></td><td>非零平移 command。</td><td>惩罚最终位移与 command 方向相反或横向偏离过大；零 command 时连续关闭。</td></tr>
+    </tbody>
+  </table>
+  <pre><code>L_command_velocity = mean_k ||v_body(k) - v_command||²
+L_command_progress = ||p(H)-p(0)-T_horizon*Rz(yaw(0))*v_command||²</code></pre>
+  <p>逐节点速度和整体 progress 同时存在：前者管局部速度，后者防止 horizon 末端没有真正完成运动任务。</p>
+
+  <h3>9.3 Root 姿态与高度</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th><th>注意事项</th></tr></thead>
+    <tbody>
+      <tr><td><code>root_support_height</code></td><td>让 root Z 跟随 stance 支撑位置的高程加 nominal body clearance。</td><td>防止上台阶不抬机身，也防止为了跨小物体整体抬高 root。</td></tr>
+      <tr><td><code>root_roll_pitch</code></td><td>平地趋近零姿态；粗糙地形允许跟随局部支撑面小幅倾斜。</td><td>权重不能压过腿部可达性。</td></tr>
+      <tr><td><code>root_vertical_velocity</code></td><td>抑制单帧 root Z 跳变。</td><td>不能替代 support-height tracking。</td></tr>
+      <tr><td><code>root_roll_pitch_rate</code></td><td>抑制机身快速摇晃。</td><td>只约束 roll/pitch rate，不抑制 command yaw。</td></tr>
     </tbody>
   </table>
 
-  <h3>9.2 Root 和关节</h3>
-  <ul>
-    <li>root 高度相对支撑地形的 nominal clearance。</li>
-    <li>roll/pitch 稳定，但允许随局部地形小幅调整。</li>
-    <li>joint nominal posture。</li>
-    <li>joint position limit relaxed barrier。</li>
-    <li>joint velocity limit relaxed barrier。</li>
-    <li>root/joint acceleration 和输入变化率平滑。</li>
-    <li>第一控制步与上一帧已执行趋势连续。</li>
-  </ul>
+  <h3>9.4 Joint 可行性与自然姿态</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>数学形式</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>joint_nominal_posture</code></td><td>低权重平方 residual。</td><td>在多个可行关节姿态中选择自然姿态，避免膝盖翻转；swing 腿可降低该权重，避免妨碍抬腿。</td></tr>
+      <tr><td><code>joint_position_limit_barrier</code></td><td>上下限 relaxed barrier。</td><td>接近关节角边界时快速增加代价。</td></tr>
+      <tr><td><code>joint_velocity_limit_barrier</code></td><td><code>qdot_max-|qdot|</code> 的 relaxed barrier。</td><td>防止第一步或跨越时产生不可接受的关节速度。</td></tr>
+      <tr><td><code>touchdown_reach_margin</code></td><td>腿工作空间内外边界 relaxed barrier。</td><td>让 touchdown 远离腿完全伸直、完全收缩和运动学奇异区域。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <strong>FK 一致性不作为 Loss：</strong>foot、knee、shank 和 body samples 全部由 root/joint 的解析 FK 直接产生，因此不存在另一条“规划足端”需要用 loss 拉回。FK 只保留有限值、Jacobian 和几何误差诊断。
+  </div>
 
-  <h3>9.3 Stance、Swing 与 Touchdown</h3>
-  <ul>
-    <li>stance foot world-position locking。</li>
-    <li>stance foot height 与地形高度一致。</li>
-    <li>stance foot slip reduction。</li>
-    <li>swing foot 轨迹平滑与 nominal tracking。</li>
-    <li>swing foot 对普通地形保持净空。</li>
-    <li>touchdown 落在有效、非危险、运动学可达区域。</li>
-    <li>touchdown 后的 stance 延续与 touchdown 一致。</li>
-  </ul>
+  <h3>9.5 Stance Loss</h3>
+  <p>以下项只乘固定 gait scheduler 给出的 <code>stance_mask</code>，mask 不是语义行为 gate。</p>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th><th>与其他项的区别</th></tr></thead>
+    <tbody>
+      <tr><td><code>stance_xy_lock</code></td><td>让 stance foot 的世界 XY 保持在接触 anchor，防止随 root 滑动。</td><td>控制累计位置漂移。</td></tr>
+      <tr><td><code>stance_ground_contact</code></td><td>让 stance foot Z 等于同一张 <code>height_w</code> 在足端 XY 的表面高度。</td><td>负责贴地，不负责禁止踩语义物体。</td></tr>
+      <tr><td><code>stance_slip_velocity</code></td><td>惩罚 stance foot 世界速度。</td><td>控制瞬时滑动，权重低于位置锁定。</td></tr>
+    </tbody>
+  </table>
+  <p>如果 stance/touchdown 位于 small 或 large 物体上，语义 avoidance barrier 会与贴表面 residual 竞争并把落点推离物体；不需要第二张地面高度图。</p>
 
-  <h3>9.4 小语义物体</h3>
-  <p>small SDF 使用以下连续关系：</p>
-  <ul>
-    <li>touchdown 和 stance foot 进入 small footprint 时高代价。</li>
-    <li>swing foot 的 XY 可以穿过 small footprint，只要 Z 高于障碍顶面和 clearance margin。</li>
-    <li>knee、shank 进入 small 安全边界时产生碰撞代价。</li>
-    <li>root 不施加强横向避障项，避免天然把所有小物体都绕开。</li>
-    <li>如果抬腿代价、可达性或净空代价过高，优化器仍可自然选择绕行或减速。</li>
-  </ul>
-  <pre><code>small_swing_violation =
-  proximity_xy(small_sdf)
-  * softplus(obstacle_top_z + foot_margin - swing_foot_z)</code></pre>
+  <h3>9.6 Swing Loss</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th><th>激活范围</th></tr></thead>
+    <tbody>
+      <tr><td><code>swing_nominal_shape</code></td><td>提供无障碍时自然前摆的弱参考，避免 joint optimizer 生成绕圈或折返轨迹。</td><td>固定 <code>swing_mask</code>；权重低于安全 clearance。</td></tr>
+      <tr><td><code>terrain_swing_clearance</code></td><td>要求 swing foot 高于唯一高程图 <code>height_w(x,y)</code> 加基础 margin，防止擦坡面、台阶或任何可见表面。</td><td>全部 swing 节点。</td></tr>
+      <tr><td><code>swing_velocity_smoothness</code></td><td>限制 FK 足端速度变化，避免摆动曲线折角。</td><td>相邻 swing 节点。</td></tr>
+      <tr><td><code>touchdown_velocity</code></td><td>降低 touchdown 时的足端水平和垂直速度，避免扫地或砸地。</td><td>swing 结束附近。</td></tr>
+    </tbody>
+  </table>
+  <pre><code>terrain_clearance = foot_z - height_w(foot_xy) - terrain_margin
+L_terrain_swing = relaxed_barrier(terrain_clearance)</code></pre>
 
-  <h3>9.5 大障碍物</h3>
-  <p>large SDF 对 root footprint、body、foot、knee 和 shank 使用高权重 relaxed barrier：</p>
-  <pre><code>large_violation = softplus(safety_margin - large_sdf(sample_xy))</code></pre>
-  <p>由于整个 horizon 都计算世界坐标距离梯度，root 和腿会被连续地推向风险较低方向，形成绕行而非碰撞后的修复。</p>
+  <h3>9.7 Touchdown Loss</h3>
+  <p>touchdown 定义为固定 swing 结束时刻的 FK 足端，不增加独立 touchdown 优化变量。</p>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>touchdown_ground_height</code></td><td>让 touchdown Z 贴合唯一高程图的表面高度。</td></tr>
+      <tr><td><code>touchdown_valid_map</code></td><td>对靠近或超出 151×151 有效范围的 touchdown 施加连续边界 barrier；实际越界查询仍返回 invalid。</td></tr>
+      <tr><td><code>touchdown_reach_margin</code></td><td>让 touchdown 对应 joint pose 保持足够运动学余量。</td></tr>
+      <tr><td><code>touchdown_foot_separation</code></td><td>约束必要腿对之间的最小距离，防止左右腿交叉、前后腿过度拥挤。</td></tr>
+    </tbody>
+  </table>
 
-  <h3>9.6 Loss 分解输出</h3>
-  <pre><code>command_tracking
-progress
-root_posture
-joint_posture
-joint_limits
-input_smoothness
-stance_lock
-stance_ground
-swing_clearance
-touchdown_safety
-small_semantic_clearance
-large_obstacle_barrier
-body_leg_ground_clearance
-fk_consistency
-dynamics_defect
-terminal</code></pre>
-  <p>这些名字用于诊断，不要求 PPO reward 暴露全部分项。</p>
+  <h3>9.8 普通高程图碰撞与净空</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>采样对象</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>foot_ground_penetration</code></td><td>全部 foot。</td><td>所有 gait phase 都不允许足端低于 <code>height_w</code>；与 stance 贴地、swing 额外净空分开。</td></tr>
+      <tr><td><code>knee_ground_clearance</code></td><td>四个 knee。</td><td>避免膝盖撞坡面或台阶。</td></tr>
+      <tr><td><code>shank_ground_clearance</code></td><td>每条小腿多个插值采样点。</td><td>避免只检查 knee/foot 两端而漏掉中间连杆穿地。</td></tr>
+      <tr><td><code>body_ground_clearance</code></td><td>机身底面、边缘和角点。</td><td>避免 root 点安全但倾斜机身角落撞地。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.9 Small Semantic Loss</h3>
+  <p>small 语义不触发跨越模式，只提供三个连续 loss。由于 <code>height_w</code> 已包含小物体顶部，语义项只增加额外安全语义和禁止落脚，不建立第二高度场。</p>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th><th>为什么不会形成硬 gate</th></tr></thead>
+    <tbody>
+      <tr><td><code>small_object_foot_over</code></td><td>当 swing foot XY 接近 small footprint 时，在基础 <code>terrain_swing_clearance</code> 上增加连续的额外 clearance margin。</td><td>影响权重由 small SDF 连续衰减；脚横向远离后自然趋近 0。</td></tr>
+      <tr><td><code>small_object_touchdown_avoidance</code></td><td>对 touchdown 和 stance foot 到 small footprint 的距离施加 relaxed barrier，防止落在或站在小物体顶部。</td><td>只表达落脚风险，不指定必须跨越还是绕行。</td></tr>
+      <tr><td><code>small_object_link_clearance</code></td><td>约束 foot、knee、shank 与小物体的三维净空；link 高于物体顶部时 XY-SDF 影响连续减弱。</td><td>通过连续水平距离和垂直权重计算，不使用碰撞布尔分支选择轨迹。</td></tr>
+    </tbody>
+  </table>
+  <pre><code>small_influence = smooth_kernel(small_sdf_xy)
+extra_over_margin = small_influence * small_extra_margin
+small_foot_over = relaxed_barrier(
+  foot_z - height_w(foot_xy) - terrain_margin - extra_over_margin
+)
+
+small_vertical_influence = sigmoid(
+  (height_w(link_xy) + link_margin_z - link_z) / temperature
+)</code></pre>
+  <p>root 不设置 <code>small_object_root_avoidance</code>。保持 command/progress 目标，同时让 foot-over、touchdown 和 link clearance 竞争，才能让可跨场景自然出现抬腿；不适合跨时仍允许自然减速或绕行。</p>
+
+  <h3>9.10 Large Obstacle Loss</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>large_root_footprint_barrier</code></td><td>对机身平面 footprint 多点查询 large SDF，形成 root 绕行的主要梯度。</td></tr>
+      <tr><td><code>large_body_collision</code></td><td>结合障碍表面高度和 body 采样点，避免机身与大障碍发生三维碰撞。</td></tr>
+      <tr><td><code>large_foot_collision</code></td><td>对 swing、stance 和 touchdown 足端使用保守 large-SDF barrier。</td></tr>
+      <tr><td><code>large_knee_shank_collision</code></td><td>避免膝和小腿在 root 绕行时切过障碍边缘。</td></tr>
+      <tr><td><code>large_terminal_risk</code></td><td>同时惩罚 horizon 末端过小距离和继续朝障碍接近的速度，避免短 horizon 拖延绕行。</td></tr>
+    </tbody>
+  </table>
+  <pre><code>large_margin = large_sdf(sample_xy) - configured_margin
+L_large = relaxed_barrier(large_margin)</code></pre>
+  <p>所有方向选择都来自连续 SDF 梯度和总目标；不固定向左或向右绕。</p>
+
+  <h3>9.11 平滑与 RTI 连续性</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>control_rate</code></td><td>限制 horizon 内相邻 root/joint velocity 控制变化。</td></tr>
+      <tr><td><code>first_control_continuity</code></td><td>限制新 <code>u0</code> 与上一帧已执行控制趋势的差异，减少 rolling replan 第一帧跳变。</td></tr>
+      <tr><td><code>joint_acceleration</code></td><td>减少 joint velocity 的快速变化和关节抖动。</td></tr>
+      <tr><td><code>root_acceleration</code></td><td>减少 root linear/angular velocity 的突变。</td></tr>
+    </tbody>
+  </table>
+  <p>不增加整条轨迹的 <code>warm_start_tracking</code> loss。上一帧解只是初值，不应该阻止新观测和新 command 修正未来轨迹。</p>
+
+  <h3>9.12 Terminal Loss</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>terminal_command_velocity</code></td><td>避免 horizon 末端无理由减速到零。</td></tr>
+      <tr><td><code>terminal_obstacle_safety</code></td><td>避免末端停在障碍边缘或仍高速接近障碍。</td></tr>
+      <tr><td><code>terminal_posture</code></td><td>避免末端 root/joint 处在极端、不利于下一帧 warm start 的状态。</td></tr>
+      <tr><td><code>terminal_contact_viability</code></td><td>horizon 在 swing 中结束时，保证足端仍朝安全 touchdown 延续，不在最高点突然截断。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.13 Solver 约束诊断与 Loss Breakdown</h3>
+  <p><code>dynamics_defect</code> 是 multiple-shooting 等式约束的诊断，不和行为 Loss 混合调权重：</p>
+  <pre><code>dynamics_defect_mean
+dynamics_defect_max
+fk_finite
+fk_jacobian_error
+
+command_linear_velocity
+command_yaw_rate
+command_progress
+command_direction
+root_support_height
+root_roll_pitch
+joint_nominal_posture
+joint_position_limit_barrier
+joint_velocity_limit_barrier
+stance_xy_lock
+stance_ground_contact
+stance_slip_velocity
+swing_nominal_shape
+terrain_swing_clearance
+swing_velocity_smoothness
+touchdown_velocity
+touchdown_ground_height
+touchdown_valid_map
+touchdown_reach_margin
+touchdown_foot_separation
+foot_ground_penetration
+knee_ground_clearance
+shank_ground_clearance
+body_ground_clearance
+small_object_foot_over
+small_object_touchdown_avoidance
+small_object_link_clearance
+large_root_footprint_barrier
+large_body_collision
+large_foot_collision
+large_knee_shank_collision
+large_terminal_risk
+control_rate
+first_control_continuity
+joint_acceleration
+root_acceleration
+terminal_command_velocity
+terminal_obstacle_safety
+terminal_posture
+terminal_contact_viability</code></pre>
+  <p>这些名字用于 planner 诊断和调参，不要求 PPO reward 暴露全部分项。</p>
 
   <h2>10. SQP-RTI 优化过程</h2>
   <h3>10.1 Warm Start</h3>
@@ -597,7 +748,7 @@ solver_status</code></pre>
       <tr><td>terrain field 不可用</td><td>短时使用绑定正确 pose 的上一 ready version；无历史则站立。</td><td>field age/version。</td></tr>
       <tr><td>所有 line-search 候选不改善</td><td>保留 shifted warm start，提升正则化。</td><td>merit、alpha、regularization。</td></tr>
       <tr><td>solver 输出非有限</td><td>回退到安全 shifted reference 或站立。</td><td>首个非有限 stage。</td></tr>
-      <tr><td>未来第一步违反硬安全检查</td><td>不发布该步，输出站立/减速 reference。</td><td>具体安全 margin。</td></tr>
+      <tr><td>未来第一步出现非有限值、无效地图查询或违反第 2.1 节的数据有效性约束</td><td>不发布该步，输出站立/减速 reference。</td><td>具体无效字段与 safety margin。</td></tr>
       <tr><td>部分环境失败</td><td>只 mask 失败行。</td><td>失败数量与原因分布。</td></tr>
     </tbody>
   </table>
@@ -658,7 +809,7 @@ solver_status</code></pre>
   <p>在 command 走廊内放置明显不可跨的大障碍物。成功必须同时满足：</p>
   <ul>
     <li>预测 horizon 在接近障碍前产生横向绕行或安全停止趋势。</li>
-    <li>root footprint、机身、足、膝和小腿的 large-SDF margin 不小于配置的硬安全底线。</li>
+    <li>root footprint、机身、足、膝和小腿的 large-SDF margin 不小于配置的验收安全余量。</li>
     <li>不允许依靠越界地图、穿越障碍或 root 突然跳高通过。</li>
     <li>障碍离开走廊后，轨迹逐渐恢复 command 方向，不长期保留无意义横向偏置。</li>
     <li>障碍在左/右侧时，绕行方向能根据连续风险场选择，不固定只向一侧绕。</li>
