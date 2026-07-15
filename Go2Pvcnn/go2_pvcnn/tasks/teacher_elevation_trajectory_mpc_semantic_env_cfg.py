@@ -27,6 +27,7 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.batch_mpc_planner.participation import MpcTerrainDifficultyPair
+from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from extension.mdp.rewards_reference import reference_foot_pos_reward
 from extension.mdp.semantic_body_part_clearance import (
@@ -550,6 +551,7 @@ class TeacherElevationTrajectoryMpcSemanticEnvCfg(ManagerBasedRLEnvCfg):
     planner_backend: str = "mpc"
     reference_height_scanner_name: str = "semantic_height_scanner"
     mpc_planner_cfg: MpcPlannerCfg = field(default_factory=MpcPlannerCfg)
+    joint_mpc_rti_cfg: JointMpcRtiCfg = field(default_factory=JointMpcRtiCfg)
     semantic_obstacle_curriculum: SemanticObstacleCurriculumCfg = field(
         default_factory=lambda: SemanticObstacleCurriculumCfg(
             enabled=True,

@@ -109,6 +109,11 @@ def compare_reference_tensors(
 
 
 def _reference_horizon_steps(env) -> int:
+    if str(getattr(env.cfg, "planner_backend", "mpc")).lower() == "joint_mpc_rti":
+        joint_cfg = getattr(env.cfg, "joint_mpc_rti_cfg", None)
+        runtime = getattr(joint_cfg, "runtime", None)
+        if runtime is not None:
+            return int(getattr(runtime, "horizon_steps", 16)) + 1
     mpc_cfg = getattr(env.cfg, "mpc_planner_cfg", None)
     runtime = getattr(mpc_cfg, "runtime", None)
     if runtime is not None:
