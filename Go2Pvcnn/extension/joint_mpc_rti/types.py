@@ -75,8 +75,25 @@ class JointMpcRtiStepResult:
     solver_state: object | None
 
 
+@dataclass(frozen=True)
+class JointMpcTerrainField:
+    height_w: Tensor
+    semantic_id: Tensor
+    small_distance_m: Tensor
+    large_distance_m: Tensor
+    small_gradient_xy: Tensor
+    large_gradient_xy: Tensor
+    valid_mask: Tensor
+    origin_w: Tensor
+    yaw_w: Tensor
+    timestamp: Tensor
+    version: Tensor
+    resolution: float
+
+
 __all__ = [
     "JointMpcRtiState",
     "JointMpcRtiStepResult",
     "JointMpcRtiTrajectory",
+    "JointMpcTerrainField",
 ]
