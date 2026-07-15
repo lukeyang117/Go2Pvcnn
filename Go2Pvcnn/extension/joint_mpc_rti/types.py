@@ -76,6 +76,25 @@ class JointMpcRtiStepResult:
 
 
 @dataclass(frozen=True)
+class JointMpcRtiSolverState:
+    state: Tensor
+    control: Tensor
+    dual: Tensor | None
+    previous_control: Tensor
+
+
+@dataclass(frozen=True)
+class JointMpcPendingReference:
+    root_pos_w: Tensor
+    root_rpy_w: Tensor
+    joint_angles: Tensor
+    foot_pos_w: Tensor
+    contact_state: Tensor
+    valid: Tensor
+    target_step: int = 1
+
+
+@dataclass(frozen=True)
 class JointMpcTerrainField:
     height_w: Tensor
     semantic_id: Tensor
@@ -93,7 +112,9 @@ class JointMpcTerrainField:
 
 __all__ = [
     "JointMpcRtiState",
+    "JointMpcRtiSolverState",
     "JointMpcRtiStepResult",
     "JointMpcRtiTrajectory",
+    "JointMpcPendingReference",
     "JointMpcTerrainField",
 ]

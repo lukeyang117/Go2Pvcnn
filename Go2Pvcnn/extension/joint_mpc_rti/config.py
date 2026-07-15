@@ -24,13 +24,35 @@ class JointMpcRtiSolverCfg:
 
 
 @dataclass
+class JointMpcRtiGaitCfg:
+    half_cycle_steps: int = 4
+    nominal_joint_pos: tuple[float, ...] = (0.0, 0.8, -1.5) * 4
+    swing_thigh_angle: float = 0.55
+    swing_calf_angle: float = -1.75
+    max_nominal_joint_velocity: float = 5.0
+
+
+@dataclass
+class JointMpcRtiCoreLossCfg:
+    command_control_weight: float = 4.0
+    joint_velocity_weight: float = 0.4
+    joint_posture_weight: float = 0.25
+    terminal_joint_posture_weight: float = 0.5
+    smoothness_weight: float = 0.01
+
+
+@dataclass
 class JointMpcRtiCfg:
     runtime: JointMpcRtiRuntimeCfg = field(default_factory=JointMpcRtiRuntimeCfg)
     solver: JointMpcRtiSolverCfg = field(default_factory=JointMpcRtiSolverCfg)
+    gait: JointMpcRtiGaitCfg = field(default_factory=JointMpcRtiGaitCfg)
+    core_losses: JointMpcRtiCoreLossCfg = field(default_factory=JointMpcRtiCoreLossCfg)
 
 
 __all__ = [
     "JointMpcRtiCfg",
+    "JointMpcRtiCoreLossCfg",
+    "JointMpcRtiGaitCfg",
     "JointMpcRtiRuntimeCfg",
     "JointMpcRtiSolverCfg",
 ]
