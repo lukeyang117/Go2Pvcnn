@@ -10,7 +10,7 @@ from .participation import MpcReferenceParticipationCfg, MpcTerrainDifficultyPai
 
 @dataclass
 class MpcRuntimeCfg:
-    horizon_steps: int = 25
+    horizon_steps: int = 16
     dt: float = 0.02
     optimize_steps: int = 24
     lr: float = 2e-2

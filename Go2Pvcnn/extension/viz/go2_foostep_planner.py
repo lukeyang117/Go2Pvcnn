@@ -1142,6 +1142,7 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     env_cfg.mpc_planner_cfg.runtime.horizon_steps = int(args_cli.n_frames)
     env_cfg.mpc_planner_cfg.runtime.replan_interval_steps = int(args_cli.n_frames)
     env_cfg.mpc_planner_cfg.runtime.dt = float(args_cli.plan_dt)
+    env_cfg.mpc_planner_cfg.runtime.optimize_steps = 16
     reset_base = env_cfg.events.reset_base
     reset_base.params["pose_range"]["x"] = (0.0, 0.0)
     reset_base.params["pose_range"]["y"] = (0.0, 0.0)

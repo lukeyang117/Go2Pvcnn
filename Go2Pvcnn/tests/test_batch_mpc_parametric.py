@@ -290,6 +290,32 @@ def test_decode_parametric_consumes_nominal_without_command_shaping() -> None:
     assert decoded.target_foot_pos.shape == (1, 25, 4, 3)
 
 
+def test_decode_parametric_root_forward_correction_is_smooth_asymmetric_and_zero_initialized() -> None:
+    state = _state()
+    terrain = _flat_terrain()
+    command = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+    nominal = _nominal(state, terrain, command, horizon=50)
+
+    def terminal_x(raw_value: float) -> torch.Tensor:
+        variables = init_parametric_variables(state, nominal.command, horizon=50)
+        with torch.no_grad():
+            variables.root_goal_delta_raw[:, 0] = raw_value
+        decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=50)
+        return decoded.root_pos[:, -1, 0]
+
+    torch.testing.assert_close(terminal_x(0.0), torch.tensor([0.25]), atol=1.0e-6, rtol=0.0)
+    torch.testing.assert_close(terminal_x(-20.0), torch.tensor([0.05]), atol=1.0e-6, rtol=0.0)
+    torch.testing.assert_close(terminal_x(20.0), torch.tensor([1.00]), atol=1.0e-6, rtol=0.0)
+
+    variables = init_parametric_variables(state, nominal.command, horizon=50)
+    decoded = decode_parametric_trajectory(state, terrain, nominal, variables, horizon=50)
+    decoded.root_pos[:, -1, 0].sum().backward()
+
+    gradient = variables.root_goal_delta_raw.grad[:, 0]
+    assert torch.isfinite(gradient).all()
+    assert torch.all(gradient > 0.0)
+
+
 def test_init_parametric_variables_has_expected_shapes() -> None:
     variables = init_parametric_variables(_state(), torch.tensor([[0.5, 0.0, 0.0]]), horizon=25)
 

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2026-07-08 MPC-QP Fixed-Shape Least-Squares Design</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5d6878;
+      --line: #d9e0ea;
+      --panel: #f7f9fc;
+      --code: #eef3f8;
+      --accent: #176b87;
+      --danger: #9b1c31;
+      --ok: #1f7a3f;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #fff;
+      line-height: 1.58;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 72px;
+    }
+    h1, h2, h3 {
+      line-height: 1.22;
+      margin: 0;
+    }
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin-top: 34px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+    h3 {
+      margin-top: 22px;
+      font-size: 18px;
+    }
+    p {
+      margin: 10px 0;
+    }
+    ul, ol {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+    li {
+      margin: 5px 0;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      background: var(--code);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      background: var(--code);
+      padding: 14px 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--panel);
+    }
+    .lead {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    .banner {
+      margin-top: 20px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--accent);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+    .danger {
+      border-left-color: var(--danger);
+    }
+    .ok {
+      border-left-color: var(--ok);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC-QP Fixed-Shape Least-Squares 设计</h1>
+  <p class="lead">日期：2026-07-08。目标是在保留 <code>mpc</code> 与 <code>mpc_qp</code> 隔离的前提下，把 <code>mpc_qp</code> 从“联合 loss + 多个条件 gate / decode 硬修正”改成固定形状的 batched least-squares / QP-style 求解器。</p>
+
+  <div class="banner danger">
+    <strong>核心合同：</strong>除 <code>plane_row</code> 锁 <code>root z</code> 和 <code>P3.z = height_at(P3.xy)</code> 外，不允许通过 gate、repair、candidate search、readback replacement 或 decode projection 修轨迹。轨迹质量问题必须通过 residual、权重、damping、变量缩放、采样密度和不超过 3 次的 QP iteration 解决。
+  </div>
+
+  <h2>1. 背景与问题</h2>
+  <p>当前 <code>mpc_qp</code> 已经有联合 loss：foot control、root、rpy 一起进 loss 并通过 autograd 求梯度。但在梯度应用和 decode 阶段，又加入了许多条件逻辑，例如 semantic / low-small / risky terrain gate、low-small arc 手工更新、root z readback、high semantic root lift、foot z terrain clamp、FK foot 替换 planned foot。</p>
+  <p>这些逻辑会带来两个问题：第一，轨迹看起来通过了某些测试，但并不是 QP 真正优化出来；第二，语义图或小障碍一出现，root、foot、joint 可能发生条件切换式抖动。新设计要求把这些行为全部收回到统一 residual 里。</p>
+
+  <h2>2. 保留与禁止</h2>
+  <h3>2.1 唯一允许的硬规则</h3>
+  <table>
+    <thead>
+      <tr><th>规则</th><th>原因</th><th>边界</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>plane_row=True</code> 时锁 <code>root z</code></td>
+        <td>平地上 root 高度必须对齐老 <code>mpc</code>，避免 semantic small obstacle 把 root 当成地形抬高。</td>
+        <td><code>plane_row</code> 只能影响 <code>root z</code>，不能锁 <code>root xy</code>，不能改变 foot 更新。</td>
+      </tr>
+      <tr>
+        <td><code>P3.z = height_at(terrain, P3.xy)</code></td>
+        <td>touchdown 的 z 是地形几何边界，不应作为自由变量漂浮。</td>
+        <td>只绑定 touchdown endpoint P3.z；不能顺手把整条 foot trajectory clamp 到地形上方。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>2.2 明确禁止的逻辑</h3>
+  <ul>
+    <li>禁止 candidate endpoint search、ring search、nearby-cell lookup、fixed-offset touchdown selection。</li>
+    <li>禁止 repair main path，包括 touchdown semantic repair、FK body-leg repair、contact suppress 作为主路径修正。</li>
+    <li>禁止 semantic / low-small / risky row gate 改变 delta、清零 delta、放大 delta 或替换 delta。</li>
+    <li>禁止 <code>foot_pos.z = max(foot_pos.z, terrain_z)</code> 这类 decode 硬抬足端。</li>
+    <li>禁止 low-small swing z lower/upper hard cap。</li>
+    <li>禁止 root z readback 和 high semantic obstacle <code>root z += 0.06</code>。</li>
+    <li>禁止用 <code>foot_pos = fk_foot</code> 条件覆盖 planned foot 来掩盖 IK/FK 不一致。</li>
+    <li>禁止为了过测试把 <code>qp_iterations</code> 增加到 4 或更多。</li>
+  </ul>
+
+  <h2>3. 求解器总体方案</h2>
+  <p>新 <code>mpc_qp</code> 采用固定形状 batched least-squares / QP-style step。每轮 iteration 在当前轨迹附近构造 residual 和局部 Jacobian，解一个阻尼最小二乘问题：</p>
+  <pre><code>min_delta || W * (J delta + r) ||^2 + ||lambda * delta||^2
+
+A = J^T W^T W J + lambda I
+b = -J^T W^T W r
+delta = solve(A, b)
+x_new = x_old + delta</code></pre>
+  <p>这相当于 Gauss-Newton / Levenberg-Marquardt 风格的 SQP/RTI 单步近似。所有 env 使用相同变量结构、相同 residual 结构、相同采样数量，避免动态分支和大规模 pairwise tensor。</p>
+
+  <h2>4. 优化变量</h2>
+  <h3>4.1 Foot Bezier 控制变量</h3>
+  <pre><code>foot_control_w: [B, 4 legs, 4 control points, 3]
+
+P0: 当前足端边界，不优化
+P1: 优化 xyz
+P2: 优化 xyz
+P3: 优化 xy，z 由 height_at(P3.xy) 绑定</code></pre>
+  <p>foot 仍使用 Bezier，因为用户关心“优化整条轨迹，然后从轨迹里面取点”，而不是离散修点。</p>
+
+  <h3>4.2 MPC-style 低维 root 参数</h3>
+  <p>root 不再使用每一帧完全自由的 <code>[H, 3]</code> 变量。新方案参考老 <code>mpc</code>：先生成 nominal root 轨迹，再用低维 smooth basis 优化 correction。</p>
+  <pre><code>root_xy(t)  = nominal_root_xy(t)  + basis(t) @ root_xy_delta
+root_z(t)   = mpc_root_z(t)       + basis(t) @ root_z_delta
+root_rpy(t) = nominal_root_rpy(t) + basis(t) @ root_rpy_delta</code></pre>
+  <p>平地时只保留唯一 gate：</p>
+  <pre><code>if plane_row:
+    root_z(t) = mpc_plane_root_z</code></pre>
+  <p>非平地时 root z 可通过低维 correction 与 foot、IK/FK、reachability residual 联合优化。不能再按 semantic、low-small 或 risky terrain 切换 root 行为。</p>
+
+  <h2>5. Residual 设计</h2>
+  <p>所有安全和质量要求都进入 residual。任何测试失败都必须从这里调，不允许新增硬约束。</p>
+  <table>
+    <thead>
+      <tr><th>Residual</th><th>作用</th><th>依赖变量</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>semantic touchdown</td>
+        <td>惩罚 P3 落在语义物体或 footprint 语义风险区域。</td>
+        <td>P3.xy</td>
+      </tr>
+      <tr>
+        <td>touchdown roughness</td>
+        <td>惩罚 P3 footprint 高程变化过大，避免踩坡度突变处。</td>
+        <td>P3.xy</td>
+      </tr>
+      <tr>
+        <td>swing terrain clearance</td>
+        <td>惩罚 swing 采样点低于地形和安全 margin。删除 decode clamp 后由该项保证不穿地。</td>
+        <td>P1/P2/root/rpy</td>
+      </tr>
+      <tr>
+        <td>semantic swing / low-small crossing</td>
+        <td>在轨迹附近存在小障碍时，通过 residual 鼓励 FK/planned foot 具备足够 clearance，不能手工改 P1/P2/P3。</td>
+        <td>P1/P2/P3/root/rpy</td>
+      </tr>
+      <tr>
+        <td>FK readback</td>
+        <td>惩罚 <code>fk_foot_w - planned_foot_w</code>，保证可视化和真实执行足端与规划轨迹一致。</td>
+        <td>foot controls、root、rpy</td>
+      </tr>
+      <tr>
+        <td>joint limit</td>
+        <td>使用 unclamped IK 检查关节上下界，不能靠 IK clamp 隐藏不可达。</td>
+        <td>foot controls、root、rpy</td>
+      </tr>
+      <tr>
+        <td>reachability</td>
+        <td>约束 hip-to-foot 距离在可达范围内，让 root 和 foot 联合移动，而不是 foot 独自追语义目标。</td>
+        <td>foot controls、root、rpy</td>
+      </tr>
+      <tr>
+        <td>joint smooth</td>
+        <td>惩罚关节一阶、二阶差分，避免足端可达但关节快速抖动。</td>
+        <td>foot controls、root、rpy</td>
+      </tr>
+      <tr>
+        <td>root smooth / root height</td>
+        <td>非平地控制 root 高度和加速度；平地 root z 直接锁 MPC 高度。</td>
+        <td>root low-dim params</td>
+      </tr>
+      <tr>
+        <td>nominal / progress</td>
+        <td>弱约束，不要离 nominal 过远；速度跟踪优先级低于语义、高程、FK、连续性。</td>
+        <td>foot controls、root、rpy</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>6. FK 可视化合同</h2>
+  <p>viewer 显示的足端轨迹应是 FK 后的实际足端轨迹，因为这是机器人关节执行后真正会到达的位置。</p>
+  <p>但禁止用 FK foot 条件覆盖 planned foot 来掩盖优化误差。正确合同是：</p>
+  <pre><code>planned_foot_w = Bezier(root, foot_controls) 采样得到
+joint_angles   = IK(root, planned_foot_w)
+fk_foot_w      = FK(root, joint_angles)
+
+loss/residual += ||fk_foot_w - planned_foot_w||^2
+viewer foot    = fk_foot_w
+metrics        = ||fk_foot_w - planned_foot_w||</code></pre>
+  <p>不增加 planned-vs-FK overlay。planned 和 FK 的重合只通过测试指标覆盖。</p>
+
+  <h2>7. QP iteration 预算</h2>
+  <div class="banner">
+    <strong>固定预算：</strong><code>qp_iterations</code> 默认是 3，且 3 是质量预算上限。后续调参只能减少到 2 或 1，不能为了通过测试增加到 4、5 或更多。
+  </div>
+  <ul>
+    <li>验收主配置：<code>qp_iterations = 3</code>。</li>
+    <li>速度 sweep 可测试 <code>2</code> 和 <code>1</code>。</li>
+    <li>代码应对 <code>qp_iterations &gt; 3</code> 报错，而不是静默 clamp。</li>
+    <li>如果 3 次不通过，说明 residual、权重、damping、变量缩放、采样或 conditioning 不对。</li>
+  </ul>
+
+  <h2>8. 性能与显存策略</h2>
+  <ul>
+    <li>所有变量和 residual 固定形状，初始化时准备固定采样基、offset、索引、权重模板。</li>
+    <li>优化过程中只查询 height / semantic / risk fields，不构建动态候选集。</li>
+    <li>禁止构建 <code>[B, K, 22500, ...]</code> 这类 dense semantic pairwise tensor。</li>
+    <li>第一版使用 batched dense least-squares，小变量维度优先；如果 1024 env 压力过大，再做 block / Schur / diagonal LM 近似，但不能加 gate。</li>
+    <li>viewer 和训练使用同一 iteration 上限，避免 viewer 靠更多迭代调出训练里不可复现的轨迹。</li>
+  </ul>
+
+  <h2>9. 测试指标</h2>
+  <h3>9.1 结构指标</h3>
+  <ul>
+    <li>源码/行为测试确认没有 candidate、search、repair main path。</li>
+    <li>源码/行为测试确认没有 semantic / low-small / risky gate 改 delta。</li>
+    <li>确认 <code>plane_row</code> 只影响 <code>root z</code>，不影响 <code>root xy</code> 和 foot update。</li>
+    <li>确认 <code>P3.z</code> 绑定 <code>height_at(P3.xy)</code>。</li>
+    <li>确认不存在 foot z terrain clamp、low-small z hard cap、root readback、high semantic root lift、conditional FK replacement。</li>
+    <li><code>qp_iterations &gt; 3</code> 必须报错。</li>
+  </ul>
+
+  <h3>9.2 FK / planned-foot 重合指标</h3>
+  <ul>
+    <li><code>max_fk_planned_foot_error_m &lt;= 0.03</code>。</li>
+    <li><code>mean_fk_planned_foot_error_m &lt;= 0.01</code>。</li>
+    <li><code>terminal_fk_planned_foot_error_m &lt;= 0.02</code>。</li>
+    <li>small obstacle crossing 可设置 <code>crossing_max_fk_planned_foot_error_m &lt;= 0.05</code>。</li>
+  </ul>
+
+  <h3>9.3 语义与高程安全指标</h3>
+  <ul>
+    <li><code>touchdown_on_semantic_count == 0</code>。</li>
+    <li><code>touchdown_on_small_count == 0</code>。</li>
+    <li><code>stance_on_semantic_count == 0</code>。</li>
+    <li><code>fk_foot_semantic_collision_count == 0</code>。</li>
+    <li><code>fk_knee_semantic_collision_count == 0</code>。</li>
+    <li><code>fk_shank_semantic_collision_count == 0</code>。</li>
+    <li><code>root_underbody_semantic_collision_count == 0</code>。</li>
+    <li><code>planned_foot_terrain_penetration_max_m &lt;= 0.005</code>。</li>
+    <li><code>fk_foot_terrain_penetration_max_m &lt;= 0.005</code>。</li>
+    <li><code>touchdown_footprint_height_variation_max_m &lt;= 0.04</code>。</li>
+  </ul>
+
+  <h3>9.4 平地稳定与 small obstacles</h3>
+  <ul>
+    <li>flat no obstacle：<code>root z</code> range、step、accel 对齐老 <code>mpc</code>。</li>
+    <li>flat root xy 不硬锁，但 <code>root_xy_step_max</code> 和 <code>root_xy_accel_max</code> 应接近 MPC baseline。</li>
+    <li>flat small obstacle：至少出现 required crossing leg，语义碰撞和 touchdown-on-small 均为 0。</li>
+    <li>flat small obstacle：root z 不能因为小障碍抬升；foot clearance 不能过低也不能飞太高。</li>
+    <li>off-path semantic：语义物体不在路径上时，root/foot/joint 连续性应接近 no-semantic baseline。</li>
+  </ul>
+
+  <h3>9.5 row 8 col 12 与性能</h3>
+  <ul>
+    <li><code>--terrain-row 8 --terrain-col 12</code> 用 <code>qp_iterations=3</code> 作为 hard terrain acceptance。</li>
+    <li>该场景要求无语义碰撞、无 touchdown-on-semantic、FK/planned 重合达标、root/joint/foot 连续。</li>
+    <li>1024 env smoke 不 OOM，记录 CUDA memory、<code>qp_solve_ms</code>、<code>qp_total_ms</code> 的 p50/p95/max。</li>
+    <li>性能目标先按当前 <code>mpc_qp</code> baseline 附近验收；若 fixed-shape LS-QP 更快，再收紧。</li>
+  </ul>
+
+  <h2>10. 失败处理规则</h2>
+  <p>任何指标失败时，只允许以下处理：</p>
+  <ul>
+    <li>调整 residual 定义、权重和归一化。</li>
+    <li>调整 damping、变量 scaling、trust region 的统一数值稳定参数。</li>
+    <li>调整固定采样密度和 field 查询精度。</li>
+    <li>减少不合理的变量自由度，例如 root basis 维度，而不是加场景 gate。</li>
+    <li>在质量已达标后减少 <code>qp_iterations</code> 到 2 或 1 以优化速度。</li>
+  </ul>
+  <p>明确禁止以下处理：</p>
+  <ul>
+    <li>新增硬约束、repair、candidate search。</li>
+    <li>新增 semantic / low-small / risky terrain 条件 gate。</li>
+    <li>通过 decode 覆盖 planned foot 或 root 高度。</li>
+    <li>增加 <code>qp_iterations</code> 超过 3。</li>
+  </ul>
+
+  <h2>11. 与当前实现的迁移边界</h2>
+  <ul>
+    <li>保留 <code>mpc_qp</code> package 与 backend selection，不修改默认 <code>mpc</code>。</li>
+    <li>保留 viewer/manager 的 backend ABI 和 cache 输出 ABI。</li>
+    <li>替换 <code>continuous_qp_update()</code> 当前 autograd-gradient step 为 fixed-shape least-squares step。</li>
+    <li>重写 decode，使其只做 Bezier 采样、P3.z 地形绑定、IK/FK 输出和 result 组装。</li>
+    <li>新增 planned-vs-FK 指标，但不增加 viewer overlay。</li>
+  </ul>
+
+  <div class="banner ok">
+    <strong>验收一句话：</strong>在 <code>qp_iterations=3</code> 内，<code>mpc_qp</code> 必须通过 flat small obstacles、flat root stability、FK/planned 重合、语义/高程安全和 row 8 col 12 基础验收；所有失败都回到 residual 和数值求解器本身解决。
+  </div>
+</main>
+</body>
+</html>

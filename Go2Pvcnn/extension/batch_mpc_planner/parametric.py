@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import Tensor
@@ -10,6 +11,13 @@ from torch import Tensor
 
 def bounded_unit_interval(raw: Tensor, *, low: float, high: float) -> Tensor:
     return float(low) + (float(high) - float(low)) * torch.sigmoid(raw)
+
+
+def _smooth_asymmetric_zero_offset(raw: Tensor, *, low: float, high: float) -> Tensor:
+    if not float(low) < 0.0 < float(high):
+        raise ValueError(f"Expected low < 0 < high, got low={low}, high={high}")
+    zero_bias = math.log((-float(low)) / float(high))
+    return float(low) + (float(high) - float(low)) * torch.sigmoid(raw + zero_bias)
 
 
 def command_frame_axes(command: Tensor, root_yaw: Tensor, *, linear_eps: float) -> tuple[Tensor, Tensor, Tensor]:
@@ -197,7 +205,11 @@ def decode_parametric_trajectory(
 
     root_goal_delta_offset = torch.stack(
         (
-            0.20 * torch.tanh(variables.root_goal_delta_raw[:, 0]),
+            _smooth_asymmetric_zero_offset(
+                variables.root_goal_delta_raw[:, 0],
+                low=-0.20,
+                high=0.75,
+            ),
             0.25 * torch.tanh(variables.root_goal_delta_raw[:, 1]),
         ),
         dim=-1,

@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2026-07-13 MPC-QP 真正 QP 联合优化设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5d6878;
+      --line: #d9e0ea;
+      --panel: #f7f9fc;
+      --code: #eef3f8;
+      --accent: #176b87;
+      --danger: #9b1c31;
+      --ok: #1f7a3f;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #fff;
+      line-height: 1.58;
+    }
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 24px 72px;
+    }
+    h1, h2, h3 {
+      line-height: 1.2;
+      margin: 0;
+    }
+    h1 { font-size: 34px; letter-spacing: 0; }
+    h2 {
+      margin-top: 34px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+    h3 { margin-top: 20px; font-size: 18px; }
+    p { margin: 10px 0; }
+    ul, ol { margin: 10px 0 0 22px; padding: 0; }
+    li { margin: 5px 0; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      background: var(--code);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      background: var(--code);
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: var(--panel); }
+    .lead {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    .banner {
+      margin-top: 20px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--accent);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+    .danger { border-left-color: var(--danger); }
+    .ok { border-left-color: var(--ok); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC-QP 真正 QP 联合优化设计</h1>
+  <p class="lead">日期：2026-07-13。目标是在不新建 solver 文件、不改老 <code>mpc</code> 的前提下，把 <code>mpc_qp</code> 从“联合 loss + autograd 梯度步”改成真正的 batched dense QP / least-squares 联合求解；同时冻结指标定义、冻结 loss key，只允许后续调整 loss 权重与 QP 求解超参。</p>
+
+  <div class="banner danger">
+    <strong>绝对边界：</strong>不允许任何梯度下降方法，不允许 <code>torch.autograd.grad()</code> 作为主路径，不允许候选搜索、repair、snapping、decode projection，不允许新增或删除 loss key。本设计写定后，不允许再新增、删除或重定义验收指标。若结果不理想，只能调 loss 权重、damping、step clamp、采样密度，并且 QP iteration 只允许维持或低于默认上限 3。
+  </div>
+
+  <div class="banner ok">
+    <strong>本设计的核心约束：</strong>所有 loss 在每次 QP iteration 中必须同时进入同一个 QP/LS 系统联合求解；运行时禁止 lossA -> lossB 的顺序修变量；规划 horizon 保持 25 帧，验收统计采用多个 25 帧片段拼接成 500 帧 rollout。
+  </div>
+
+  <h2>1. 目标</h2>
+  <div class="grid">
+    <div class="card">
+      <strong>轨迹质量</strong>
+      <p>root z 不乱抬、不瞬移，foot / FK 贴合到 0.005m 级，小障碍可跨越，semantic / ground / body / knee / shank 碰撞为 0。</p>
+    </div>
+    <div class="card">
+      <strong>求解方式</strong>
+      <p>真正的 QP / least-squares 联合求解，不使用梯度下降，不使用 autograd 反传做主更新。</p>
+    </div>
+    <div class="card">
+      <strong>长期验收</strong>
+      <p>Row8/Col12 使用 25 帧 receding horizon，但将 25 帧片段拼接到 500 帧长 rollout 上做统计，检查长期稳定性。</p>
+    </div>
+  </div>
+
+  <h2>2. 设计边界</h2>
+  <ul>
+    <li>只修改 <code>Go2Pvcnn/extension/batch_mpc_qp_planner/</code> 里现有代码文件，不新建 solver 模块文件。</li>
+    <li>不改老 <code>mpc</code> 的实现、loss、指标或测试逻辑。</li>
+    <li><code>mpc_qp</code> 主路径必须是联合 QP / LS solve，不能退回 autograd 梯度步。</li>
+    <li>loss key 冻结，不新增、不删除、不重命名。</li>
+    <li>本设计列出的指标定义冻结，不改公式、不改语义，只能按本设计给出的阈值做验收。</li>
+    <li>后续仅允许调整 loss 权重、damping、步长、变量缩放、采样密度；QP iteration 默认上限为 3，只能维持或减少，不能为了过指标继续加次数。</li>
+  </ul>
+
+  <h2>3. 决策变量</h2>
+  <p>本设计不把 <code>joint_angles</code> 作为优化变量。joint 由 IK/FK 派生，但 joint 相关 loss 会通过解析或近似 Jacobian 进入同一个 QP。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>变量</th>
+        <th>形式</th>
+        <th>说明</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>root</td>
+        <td>单段 cubic Bezier</td>
+        <td>仅优化 <code>xyz + yaw</code>。不优化 roll/pitch。<code>P0</code> 固定为当前 root，<code>P1/P2/P3</code> 为控制点。</td>
+      </tr>
+      <tr>
+        <td>foot</td>
+        <td>每条腿单段 cubic Bezier</td>
+        <td><code>P0</code> 固定为当前足端；优化 <code>P1/P2 xyz + P3 xy</code>；<code>P3 z</code> 绑定地形高度图，不作为自由变量。</td>
+      </tr>
+      <tr>
+        <td>joint_angles</td>
+        <td>派生变量</td>
+        <td>由 root 曲线采样与 foot 曲线采样经 IK/FK 派生，不直接优化，但 joint limit / joint smooth / joint jump residual 会进入 QP。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>推荐的总变量仍为固定形状 batched dense 向量，单环境约 44 维左右；具体 pack/unpack 可在现有 <code>coupled_solver.py</code> 内部完成，不新建文件。</p>
+
+  <h2>4. 真正 QP/LS 形式</h2>
+  <p>每次 QP iteration 必须把所有已定义 residual 一次性装配进同一个线性化系统：</p>
+  <pre><code>min_dx  ||J_1 dx + r_1||^2 + ||J_2 dx + r_2||^2 + ... + damping ||dx||^2</code></pre>
+  <p>然后解出同一个 <code>dx</code>，统一更新 root / foot 控制点。禁止先优化 semantic 再优化 clearance，再优化 FK 的顺序修变量模式。</p>
+
+  <h2>5. Loss 设计</h2>
+  <p>下面这些 loss key 维持现有名字，不增不减。当前实现可以仍然记录到 <code>loss_breakdown</code> / <code>cost_breakdown</code>，但求解主路径必须改成 residual block + Jacobian + QP/LS solve。</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Loss key</th>
+        <th>是什么</th>
+        <th>主要作用变量</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>qp_coupled_touchdown_semantic_loss</code></td><td>落脚点不能踩语义物体。</td><td>foot P3 xy</td></tr>
+      <tr><td><code>qp_coupled_touchdown_quality_loss</code></td><td>落脚点附近地形质量要好，偏向平整/可落脚区域。</td><td>foot P3 xy</td></tr>
+      <tr><td><code>qp_coupled_swing_loss</code></td><td>摆腿阶段要有 clearance，不能刮地。</td><td>foot P1/P2 z 与部分 xy</td></tr>
+      <tr><td><code>qp_coupled_terrain_clearance_loss</code></td><td>足端不能穿地，净空要足够。</td><td>foot 曲线</td></tr>
+      <tr><td><code>qp_coupled_crossing_loss</code></td><td>小障碍跨越的整体形态约束。</td><td>foot P1/P2/P3 + root</td></tr>
+      <tr><td><code>qp_coupled_low_small_arc_height_loss</code></td><td>跨小障碍时弧线高度不够的惩罚。</td><td>foot P1/P2 z</td></tr>
+      <tr><td><code>qp_coupled_low_small_arc_lane_loss</code></td><td>跨越 lane 横向不对。</td><td>foot P1/P2 xy</td></tr>
+      <tr><td><code>qp_coupled_low_small_arc_along_loss</code></td><td>跨越 along 方向位置不对。</td><td>foot P1/P2/P3 xy</td></tr>
+      <tr><td><code>qp_coupled_low_small_progress_loss</code></td><td>root 需要真正前进，不允许原地抖。</td><td>root 曲线前进方向</td></tr>
+      <tr><td><code>qp_coupled_low_small_root_lift_loss</code></td><td>跨小障碍时 root 不能被小物体抬高。</td><td>root z 曲线</td></tr>
+      <tr><td><code>qp_coupled_low_small_endpoint_progress_loss</code></td><td>终点需要越过障碍，不要停在障碍前。</td><td>foot P3 xy</td></tr>
+      <tr><td><code>qp_coupled_low_small_sample_crossing_loss</code></td><td>整条 foot 曲线采样点都要跨越安全。</td><td>foot 曲线整体</td></tr>
+      <tr><td><code>qp_coupled_readback_loss</code></td><td>规划足端与 FK 回读足端一致。</td><td>root + foot + IK/FK 耦合</td></tr>
+      <tr><td><code>qp_coupled_body_loss</code></td><td>膝、胫、身体底部采样点不能碰地形或语义物体。</td><td>root + foot 联动</td></tr>
+      <tr><td><code>qp_coupled_root_loss</code></td><td>root 高度范围要合理，不能过低或过高。</td><td>root z 曲线</td></tr>
+      <tr><td><code>qp_coupled_root_z_jump_loss</code></td><td>root z 相邻帧跳变不能过大。</td><td>root z 曲线</td></tr>
+      <tr><td><code>qp_coupled_continuity_loss</code></td><td>foot 和 joint 的时间连续性，抑制抖动。</td><td>root / foot 连续曲线</td></tr>
+      <tr><td><code>qp_coupled_loss_total</code></td><td>以上所有 loss 的总和，只用于记录。</td><td>汇总项</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>Joint 相关的要求：</strong>joint 不作为变量，但 joint limit、joint smooth、joint jump 必须通过解析/近似 IK Jacobian 一起进入 QP。禁止把 joint loss 退化成 autograd 梯度下降。</p>
+
+  <h2>6. 指标设计</h2>
+  <p>以下指标在本设计中一次性固定，后续不改公式，只能用于验收和调权重。规划 horizon 仍是 25 帧；Row8/Col12 验收使用多个 25 帧片段拼接到 500 帧长 rollout。</p>
+
+  <h3>6.1 旧硬指标</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>含义</th>
+        <th>目标</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>max_touchdown_to_second_stance_foot_error_m</code></td><td>planned touchdown 到 second stance foot 的最大距离。</td><td>&le; 0.005m</td></tr>
+      <tr><td><code>max_touchdown_to_contact_frame_foot_error_m</code></td><td>planned touchdown 到 contact rising frame foot 的最大距离。</td><td>&le; 0.005m</td></tr>
+      <tr><td><code>min_touchdown_second_stance_leg_count</code></td><td>25 帧内能找到 second stance 的腿数。</td><td>4</td></tr>
+      <tr><td><code>max_terminal_planned_vs_fk_foot_error_m</code></td><td>末端 planned foot 与 FK 回读 foot 的误差。</td><td>维持极小，按 0.005m 级要求</td></tr>
+      <tr><td><code>fk_semantic_collision_count / rate</code></td><td>FK 后是否碰语义物体。</td><td>0</td></tr>
+      <tr><td><code>planned_vs_fk_foot_error_crossing_leg_max_m</code></td><td>low-small crossing leg 的 planned vs FK 误差。</td><td>不退化</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.2 Row8/Col12 地面碰撞指标</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>含义</th>
+        <th>目标</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>fk_foot_ground_penetration_count</code></td><td>FK foot 是否低于地形安全边界。</td><td>0</td></tr>
+      <tr><td><code>fk_knee_ground_penetration_count</code></td><td>FK knee 是否低于地形安全边界。</td><td>0</td></tr>
+      <tr><td><code>fk_shank_ground_penetration_count</code></td><td>FK shank samples 是否低于地形安全边界。</td><td>0</td></tr>
+      <tr><td><code>fk_body_ground_penetration_count</code></td><td>FK body/base footprint samples 是否低于地形安全边界。</td><td>0</td></tr>
+      <tr><td><code>max_fk_ground_penetration_m</code></td><td>所有采样点中的最大地面穿透深度。</td><td>&le; 0</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.3 Low-Small 语义碰撞指标</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>含义</th>
+        <th>目标</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>max_fk_touchdown_on_small_rate</code></td><td>FK touchdown 落在 small semantic 上的比例。</td><td>0</td></tr>
+      <tr><td><code>max_fk_stance_on_small_rate</code></td><td>FK stance foot 落在 small semantic 上的比例。</td><td>0</td></tr>
+      <tr><td><code>max_fk_foot_small_penetration_rate</code></td><td>FK foot 对 small semantic 高程区域的穿透比例。</td><td>0</td></tr>
+      <tr><td><code>fk_foot_small_collision_count</code></td><td>foot sample 碰 small 的次数。</td><td>0</td></tr>
+      <tr><td><code>fk_knee_small_collision_count</code></td><td>knee sample 碰 small 的次数。</td><td>0</td></tr>
+      <tr><td><code>fk_shank_small_collision_count</code></td><td>shank sample 碰 small 的次数。</td><td>0</td></tr>
+      <tr><td><code>fk_body_small_collision_count</code></td><td>body sample 碰 small 的次数。</td><td>0</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.4 Footprint / Touchdown 一致性指标</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>定义</th>
+        <th>解释</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>terminal_front_row_x_error_m</code></td><td><code>abs(FL.x - FR.x)</code></td><td>前两脚 touchdown 是否在 body x 方向成排。</td></tr>
+      <tr><td><code>terminal_rear_row_x_error_m</code></td><td><code>abs(RL.x - RR.x)</code></td><td>后两脚 touchdown 是否在 body x 方向成排。</td></tr>
+      <tr><td><code>terminal_span_balance_error_m</code></td><td><code>abs((FL.x - RL.x) - (FR.x - RR.x))</code></td><td>左右两侧前后跨度是否一致。</td></tr>
+      <tr><td><code>terminal_width_balance_error_m</code></td><td><code>abs((FL.y - FR.y) - (RL.y - RR.y))</code></td><td>前后宽度是否一致。</td></tr>
+      <tr><td><code>terminal_min_side_span_m</code></td><td><code>min(FL.x - RL.x, FR.x - RR.x)</code></td><td>防止某一侧前后脚过近。</td></tr>
+      <tr><td><code>terminal_min_width_m</code></td><td><code>min(FL.y - FR.y, RL.y - RR.y)</code></td><td>防止左右脚过近或交叉。</td></tr>
+      <tr><td><code>terminal_touchdown_relation_cost</code></td><td>以上 row/span/width/order 项的组合分数。</td><td>用于总体对比和调权重。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.5 All-Stance Footprint 指标</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>all_stance_frame_count</code></td><td>四足都 stance 的帧数。</td></tr>
+      <tr><td><code>all_stance_span_balance_error_m</code></td><td>四足 stance 帧中前后跨度不一致的误差。</td></tr>
+      <tr><td><code>all_stance_width_balance_error_m</code></td><td>四足 stance 帧中前后宽度不一致的误差。</td></tr>
+      <tr><td><code>all_stance_relation_cost</code></td><td>四足 stance 帧上的整体 footprint 关系分数。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.6 Dense Small Obstacle Strict Probe</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>目标</th>
+        <th>解释</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>dense_small_swing_over_opportunity_count</code></td><td>&gt; 0</td><td>swing foot 的 XY 真的经过 small semantic footprint。</td></tr>
+      <tr><td><code>dense_small_swing_over_success_count</code></td><td>&gt; 0</td><td>经过时真的成功跨过去。</td></tr>
+      <tr><td><code>dense_small_swing_over_clearance_min_m</code></td><td>&ge; 0.04</td><td>跨越时最小 clearance。</td></tr>
+      <tr><td><code>dense_small_touchdown_on_small_rate</code></td><td>0</td><td>planned touchdown 不允许落在 small semantic 上。</td></tr>
+      <tr><td><code>dense_small_stance_on_small_rate</code></td><td>0</td><td>stance foot 不允许踩在 small semantic 上。</td></tr>
+      <tr><td><code>dense_small_foot_semantic_penetration_rate</code></td><td>0</td><td>foot 不允许穿入 small semantic 高程。</td></tr>
+      <tr><td><code>dense_small_root_over_small_z_delta_max_m</code></td><td>&le; 0.02</td><td>root 过 small footprint 时不应明显抬高或瞬移。</td></tr>
+      <tr><td><code>dense_small_root_over_small_z_step_max_m</code></td><td>记录</td><td>root z 相邻帧跳变，用于定位瞬移。</td></tr>
+      <tr><td><code>dense_small_root_over_small_z_accel_max_m</code></td><td>记录</td><td>root z 二阶跳变，用于区分慢变化和突刺。</td></tr>
+      <tr><td><code>dense_small_root_z_range_all_m</code></td><td>记录</td><td>整段 root z 范围。</td></tr>
+      <tr><td><code>semantic_elevation_foot/knee/shank/body_collision_count</code></td><td>0</td><td>四类采样点对 small semantic 高程的碰撞数。</td></tr>
+      <tr><td><code>dense_small_acceptance</code></td><td>1</td><td>旧 strict gate 合成通过位。</td></tr>
+      <tr><td><code>dense_small_root_crossed_obstacle_count</code></td><td>&gt; 0</td><td>root 真的从障碍前方穿过到后方。</td></tr>
+      <tr><td><code>dense_small_same_leg_lift_then_land_count</code></td><td>&gt; 0</td><td>同一条腿完成抬起 -> 跨过 -> 落下。</td></tr>
+      <tr><td><code>dense_small_true_overpass_acceptance</code></td><td>1</td><td>真正跨越成功的合成验收位。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>7. Row8/Col12 长轨迹协议</h2>
+  <p>Row8/Col12 的评测不是短程起步验证，而是长轨迹稳定性验证：</p>
+  <ul>
+    <li>规划 horizon 保持 <code>25</code>。</li>
+    <li>验收窗口固定为 <code>500</code> 帧。</li>
+    <li>500 帧由 <code>20</code> 个 25 帧 receding horizon 片段拼接得到。</li>
+    <li>每个片段的第 0 帧状态来自上一片段实际播放后的末帧，而不是重新从初始状态启动。</li>
+    <li>每个片段仍调用同一个 <code>mpc_qp</code> 真 QP 求解器，不能为长轨迹测试引入额外 repair、候选或后处理投影。</li>
+    <li>重点看长期累计误差，而不是前几帧“看起来过了”。</li>
+  </ul>
+  <p>拼接后的 500 帧轨迹需要保留每帧的 root、planned foot、FK foot、joint、contact、touchdown、terrain/semantic collision 诊断。单段 25 帧指标继续保留，用于定位是哪一个片段出问题；最终验收以 500 帧聚合指标为准。</p>
+  <p>Row8/Col12 的长期验收关注：</p>
+  <ul>
+    <li>root z 是否始终稳定。</li>
+    <li>FK / planned 是否长期贴合。</li>
+    <li>地面穿透、semantic 碰撞是否始终为 0。</li>
+    <li>跨越后是否还能继续稳步前进，不在中途退化。</li>
+  </ul>
+
+  <h2>8. 实现边界</h2>
+  <ul>
+    <li>不新增 solver 文件；若需要辅助函数，只能放在现有 <code>coupled_solver.py</code> / <code>planner.py</code> 的内部 helper 中。</li>
+    <li>不新增 loss key；不删除 loss key；不重命名 loss key。</li>
+    <li>本设计确定后不再新增 metric 定义；不修改 metric 公式；只允许调权重和阈值解释。</li>
+    <li>不允许任何梯度下降路径成为主求解方式。</li>
+    <li>所有已实现 loss 必须在同一 QP iteration 中联合 solve。</li>
+    <li>只保留 25 帧 planning horizon；500 帧仅用于评测拼接。</li>
+  </ul>
+
+  <h2>9. 验收标准</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>场景</th>
+        <th>通过标准</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>平地 / 无 semantic</td>
+        <td>root z 平稳，footprint 规整，FK / planned foot 贴合，旧硬指标不退化。</td>
+      </tr>
+      <tr>
+        <td>dense small obstacle</td>
+        <td>必须出现 swing-over opportunity 且 success；small 语义碰撞为 0；root z 不乱抬；true overpass acceptance = 1。</td>
+      </tr>
+      <tr>
+        <td>Row8/Col12</td>
+        <td>500 帧 stitched rollout 中，ground/semantic/body/fk 指标持续为 0 或不退化；long-horizon stability 通过。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>10. 非目标</h2>
+  <ul>
+    <li>不做候选落脚点搜索。</li>
+    <li>不做 optimize-then-repair。</li>
+    <li>不做 decode-time hard projection。</li>
+    <li>不把 joint_angles 变成主变量。</li>
+    <li>不把 root 变成逐帧离散变量。</li>
+    <li>不修改老 <code>mpc</code> 指标定义。</li>
+  </ul>
+
+  <h2>11. 备注</h2>
+  <p>本设计最终目标是把 <code>mpc_qp</code> 变成一个真正的、联合的、固定形状的 dense QP / LS 求解器：root 连续、foot 连续、joint 受控、semantic / terrain / collision / continuity / footprint 一起优化。只要结果不够好，后续只能调权重，不允许回到梯度下降或候选/repair 路线。</p>
+</main>
+</body>
+</html>

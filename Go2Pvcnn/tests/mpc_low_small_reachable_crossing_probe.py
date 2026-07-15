@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 import torch
@@ -1346,6 +1347,9 @@ def run_probe(
     semantic_small_height_m: float | None,
     semantic_small_diameter_m: float | None,
     trace_touchdown_chain: bool,
+    shape_kinds: tuple[str, ...] = (),
+    optimize_steps: tuple[int, ...] = (),
+    anchors_per_shape: int = 1,
 ) -> int:
     runtime = RealViewerRuntimeFixture(
         num_envs=1,
@@ -1377,100 +1381,148 @@ def run_probe(
                     "warmup_steps": int(warmup_steps),
                     "semantic_small_height_m": None if semantic_small_height_m is None else float(semantic_small_height_m),
                     "semantic_small_diameter_m": None if semantic_small_diameter_m is None else float(semantic_small_diameter_m),
+                    "shape_kinds": list(shape_kinds),
+                    "optimize_steps": list(optimize_steps),
+                    "anchors_per_shape": int(anchors_per_shape),
                 },
                 sort_keys=True,
             ),
             flush=True,
         )
-        anchor = runtime.s4_semantic_course_anchor("small")
-        obstacle_xy = torch.tensor(anchor.world_xy, dtype=torch.float32, device=runtime.base_env.device)
-        for command_text in commands:
-            command_name, command_tuple = _parse_command(command_text)
-            for variant in variants:
-                runtime.reset()
-                start_xy = _command_relative_xy(
-                    anchor.world_xy,
-                    command_tuple,
-                    longitudinal_offset_m=longitudinal_offset_m,
-                    lateral_offset_m=lateral_offset_m,
-                    device=runtime.base_env.device,
+        anchors = [
+            anchor
+            for anchor in runtime._semantic_course_anchors()
+            if anchor.semantic_class == "small" and str(anchor.stage.value) == "S4"
+        ]
+        if shape_kinds:
+            selected_anchors = []
+            for shape_kind in shape_kinds:
+                matches = [anchor for anchor in anchors if str(anchor.shape_kind) == shape_kind]
+                if not matches:
+                    raise RuntimeError(f"semantic runtime fixture found no small {shape_kind} anchor")
+                selected_anchors.extend(
+                    sorted(matches, key=lambda anchor: (anchor.row, anchor.col, anchor.slot_index))[
+                        : max(1, int(anchors_per_shape))
+                    ]
                 )
-                runtime._write_env0_root_xy(start_xy)
-                _set_env0_yaw(runtime, _command_heading_yaw(command_tuple))
-                runtime._sync_targeted_scan_pose()
-                state = runtime._single_env_state()
-                for cycle in range(int(cycles)):
-                    terrain = runtime._single_env_terrain()
-                    planning_command = torch.tensor([command_tuple], dtype=torch.float64, device=runtime.base_env.device)
-                    candidate_cfg = reachable_cfg_for_variant(runtime.mpc_planner_cfg, variant, command=command_tuple)
-                    probe_seed = _semantic_probe_seed(
-                        semantic_class="small",
-                        command_name=command_name,
-                        cycle=cycle,
-                        effective_candidate=variant,
-                    )
-                    torch.manual_seed(probe_seed)
-                    if torch.cuda.is_available():
-                        torch.cuda.manual_seed_all(probe_seed)
-                    if trace_touchdown_chain:
-                        trace_row = reachable_touchdown_chain_trace(
-                            terrain,
-                            state,
-                            planning_command,
-                            candidate_cfg,
-                            obstacle_xy,
+            anchors = selected_anchors
+        else:
+            anchors = [runtime.s4_semantic_course_anchor("small")]
+        step_values: tuple[int | None, ...] = tuple(optimize_steps) if optimize_steps else (None,)
+        for anchor in anchors:
+            obstacle_xy = torch.tensor(anchor.world_xy, dtype=torch.float32, device=runtime.base_env.device)
+            for command_text in commands:
+                command_name, command_tuple = _parse_command(command_text)
+                for variant in variants:
+                    for optimize_step_count in step_values:
+                        runtime.reset()
+                        start_xy = _command_relative_xy(
+                            anchor.world_xy,
                             command_tuple,
+                            longitudinal_offset_m=longitudinal_offset_m,
+                            lateral_offset_m=lateral_offset_m,
+                            device=runtime.base_env.device,
                         )
-                        trace_row.update(
-                            {
+                        runtime._write_env0_root_xy(start_xy)
+                        _set_env0_yaw(runtime, _command_heading_yaw(command_tuple))
+                        runtime._sync_targeted_scan_pose()
+                        state = runtime._single_env_state()
+                        for cycle in range(int(cycles)):
+                            terrain = runtime._single_env_terrain()
+                            planning_command = torch.tensor(
+                                [command_tuple], dtype=torch.float64, device=runtime.base_env.device
+                            )
+                            candidate_cfg = reachable_cfg_for_variant(runtime.mpc_planner_cfg, variant, command=command_tuple)
+                            if optimize_step_count is not None:
+                                candidate_cfg.runtime.optimize_steps = int(optimize_step_count)
+                            probe_seed = _semantic_probe_seed(
+                                semantic_class="small",
+                                command_name=command_name,
+                                cycle=cycle,
+                                effective_candidate=variant,
+                            )
+                            torch.manual_seed(probe_seed)
+                            if torch.cuda.is_available():
+                                torch.cuda.manual_seed_all(probe_seed)
+                            if trace_touchdown_chain:
+                                trace_row = reachable_touchdown_chain_trace(
+                                    terrain,
+                                    state,
+                                    planning_command,
+                                    candidate_cfg,
+                                    obstacle_xy,
+                                    command_tuple,
+                                )
+                                trace_row.update(
+                                    {
+                                        "command": command_name,
+                                        "variant": variant,
+                                        "cycle": int(cycle),
+                                        "semantic_probe_seed": int(probe_seed),
+                                    }
+                                )
+                                print(json.dumps(trace_row, sort_keys=True), flush=True)
+                            if torch.cuda.is_available():
+                                torch.cuda.synchronize()
+                            plan_started = time.perf_counter()
+                            with _patched_reachable_loss_for_variant(
+                                variant,
+                                command=planning_command,
+                                obstacle_xy=obstacle_xy.unsqueeze(0),
+                                obstacle_height=float(anchor.target_height),
+                            ):
+                                result = _plan_rolling_viewer_trajectory(
+                                    runtime,
+                                    terrain=terrain,
+                                    state=state,
+                                    command=planning_command,
+                                    total_frames=runtime.requested_n_frames,
+                                    candidate_cfg=candidate_cfg,
+                                    effective_candidate_variant=variant,
+                                    trace_terminal=False,
+                                )
+                            if torch.cuda.is_available():
+                                torch.cuda.synchronize()
+                            plan_time_ms = 1000.0 * (time.perf_counter() - plan_started)
+                            row = {
+                                "type": "reachable_crossing_cycle",
+                                "cuda_visible_devices": cuda_visible_devices,
+                                "device": device,
                                 "command": command_name,
+                                "command_vx": float(command_tuple[0]),
+                                "command_vy": float(command_tuple[1]),
+                                "command_wz": float(command_tuple[2]),
                                 "variant": variant,
                                 "cycle": int(cycle),
+                                "replan_count": int(cycle + 1),
+                                "requested_n_frames": int(runtime.requested_n_frames),
+                                "horizon": int(getattr(result, "root_pos_w").shape[1]),
+                                "semantic_shape_kind": str(anchor.shape_kind),
+                                "semantic_anchor_row": int(anchor.row),
+                                "semantic_anchor_col": int(anchor.col),
+                                "semantic_anchor_slot": int(anchor.slot_index),
+                                "semantic_anchor_x": float(anchor.world_xy[0]),
+                                "semantic_anchor_y": float(anchor.world_xy[1]),
+                                "semantic_target_diameter": float(anchor.target_diameter),
+                                "semantic_target_height": float(anchor.target_height),
                                 "semantic_probe_seed": int(probe_seed),
+                                "optimize_steps": int(candidate_cfg.runtime.optimize_steps),
+                                "plan_time_ms": float(plan_time_ms),
                             }
-                        )
-                        print(json.dumps(trace_row, sort_keys=True), flush=True)
-                    with _patched_reachable_loss_for_variant(
-                        variant,
-                        command=planning_command,
-                        obstacle_xy=obstacle_xy.unsqueeze(0),
-                        obstacle_height=float(anchor.target_height),
-                    ):
-                        result = _plan_rolling_viewer_trajectory(
-                            runtime,
-                            terrain=terrain,
-                            state=state,
-                            command=planning_command,
-                            total_frames=runtime.requested_n_frames,
-                            candidate_cfg=candidate_cfg,
-                            effective_candidate_variant=variant,
-                            trace_terminal=False,
-                        )
-                    row = {
-                        "type": "reachable_crossing_cycle",
-                        "cuda_visible_devices": cuda_visible_devices,
-                        "device": device,
-                        "command": command_name,
-                        "command_vx": float(command_tuple[0]),
-                        "command_vy": float(command_tuple[1]),
-                        "command_wz": float(command_tuple[2]),
-                        "variant": variant,
-                        "cycle": int(cycle),
-                        "replan_count": int(cycle + 1),
-                        "requested_n_frames": int(runtime.requested_n_frames),
-                        "horizon": int(getattr(result, "root_pos_w").shape[1]),
-                        "semantic_anchor_x": float(anchor.world_xy[0]),
-                        "semantic_anchor_y": float(anchor.world_xy[1]),
-                        "semantic_target_diameter": float(anchor.target_diameter),
-                        "semantic_target_height": float(anchor.target_height),
-                        "semantic_probe_seed": int(probe_seed),
-                    }
-                    row.update(_result_metrics(result, terrain, obstacle_xy, command_tuple, obstacle_height=float(anchor.target_height)))
-                    row["terrain_is_plane"] = int(row.get("plane_env_count", 0) > 0)
-                    rows.append(row)
-                    print(json.dumps(row, sort_keys=True), flush=True)
-                    refresh_targeted_scanner_pose(runtime.base_env, runtime.scanner, minimum_steps=1, extra_steps=2)
-                    state = runtime._single_env_state()
+                            row.update(
+                                _result_metrics(
+                                    result,
+                                    terrain,
+                                    obstacle_xy,
+                                    command_tuple,
+                                    obstacle_height=float(anchor.target_height),
+                                )
+                            )
+                            row["terrain_is_plane"] = int(row.get("plane_env_count", 0) > 0)
+                            rows.append(row)
+                            print(json.dumps(row, sort_keys=True), flush=True)
+                            refresh_targeted_scanner_pose(runtime.base_env, runtime.scanner, minimum_steps=1, extra_steps=2)
+                            state = runtime._single_env_state()
         if rows:
             print(
                 json.dumps(
@@ -1516,9 +1568,23 @@ def main() -> int:
     parser.add_argument("--semantic-small-height-m", type=float, default=None)
     parser.add_argument("--semantic-small-diameter-m", type=float, default=None)
     parser.add_argument("--trace-touchdown-chain", action="store_true")
+    parser.add_argument("--shape-kinds", default="", help="Comma-separated small-obstacle shape kinds.")
+    parser.add_argument(
+        "--optimize-steps",
+        default="",
+        help="Comma-separated counts or an inclusive range such as 0-25.",
+    )
+    parser.add_argument("--anchors-per-shape", type=int, default=1)
     args = parser.parse_args()
     commands = tuple(item.strip() for item in str(args.commands).split(",") if item.strip())
     variants = tuple(item.strip() for item in str(args.variants).split(",") if item.strip())
+    shape_kinds = tuple(item.strip() for item in str(args.shape_kinds).split(",") if item.strip())
+    optimize_steps_text = str(args.optimize_steps).strip()
+    if "-" in optimize_steps_text and "," not in optimize_steps_text:
+        start_text, end_text = optimize_steps_text.split("-", 1)
+        optimize_steps = tuple(range(int(start_text), int(end_text) + 1))
+    else:
+        optimize_steps = tuple(int(item.strip()) for item in optimize_steps_text.split(",") if item.strip())
     return run_probe(
         device=str(args.device),
         commands=commands,
@@ -1531,6 +1597,9 @@ def main() -> int:
         semantic_small_height_m=args.semantic_small_height_m,
         semantic_small_diameter_m=args.semantic_small_diameter_m,
         trace_touchdown_chain=bool(args.trace_touchdown_chain),
+        shape_kinds=shape_kinds,
+        optimize_steps=optimize_steps,
+        anchors_per_shape=int(args.anchors_per_shape),
     )
 
 

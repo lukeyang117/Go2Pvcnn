@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2026-07-06 MPC-QP Continuous Bezier Trajectory Design</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5f6b7a;
+      --line: #d8dee8;
+      --panel: #f7f9fc;
+      --accent: #176b87;
+      --accent-2: #7a4b00;
+      --danger: #9b1c31;
+      --ok: #1f7a3f;
+      --code: #eef3f8;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #ffffff;
+      line-height: 1.55;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 72px;
+    }
+    h1, h2, h3 {
+      line-height: 1.2;
+      margin: 0;
+    }
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin-top: 34px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+    h3 {
+      margin-top: 22px;
+      font-size: 18px;
+    }
+    p {
+      margin: 10px 0;
+    }
+    ul {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+    li {
+      margin: 5px 0;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      background: var(--code);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      background: var(--code);
+      padding: 14px 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: var(--panel);
+    }
+    .meta, .callout {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--accent);
+      padding: 14px 16px;
+      border-radius: 8px;
+      margin-top: 18px;
+    }
+    .warning {
+      border-left-color: var(--danger);
+    }
+    .decision {
+      border-left-color: var(--ok);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .tag {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #e8f3f6;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .small {
+      color: var(--muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC-QP Full SQP/QP Trajectory Design</h1>
+  <div class="meta">
+    <p><strong>Date:</strong> 2026-07-06</p>
+    <p><strong>Scope:</strong> Redesign the opt-in <code>mpc_qp</code> backend so a fixed-shape SQP/RTI-style QP directly optimizes root, foot-control, and touchdown variables over differentiable terrain/semantic fields, then samples the resulting trajectory.</p>
+    <p><strong>Non-goal:</strong> Do not change the default <code>planner_backend="mpc"</code>. This design only applies to the isolated <code>planner_backend="mpc_qp"</code> path.</p>
+  </div>
+
+  <h2>1. Core Decision</h2>
+  <div class="callout decision">
+    <p>The new <code>mpc_qp</code> must be a full QP/SQP trajectory optimizer. Touchdowns and trajectory controls are decision variables solved by the QP; they must not be selected by search, candidate enumeration, ring repair, nearby safe-point lookup, or post-hoc snapping.</p>
+  </div>
+  <pre><code>old mpc_qp shape:
+  nominal discrete frames
+  -> detect unsafe frame
+  -> hard replace / lift / reland individual points
+  -> IK / viewer playback may become discontinuous
+
+new mpc_qp shape:
+  nominal warm start
+  -> build differentiable height / semantic / roughness fields
+  -> build fixed gait/contact schedule and fixed QP variable layout
+  -> linearize field, reachability, clearance, and support residuals
+  -> solve one batched local QP by default
+  -> optimize four-leg/root/touchdown variables jointly
+  -> sample fixed frames from the optimized continuous trajectory
+  -> IK / cache / viewer consume sampled trajectory</code></pre>
+
+  <p>The key requirement is that viewer, cache, reward, and downstream consumers read points sampled from a single optimized continuous curve. They should not receive a trajectory assembled from frame-wise safety fixes.</p>
+
+  <h2>2. Hard Constraints</h2>
+  <ul>
+    <li><code>mpc_qp</code> remains explicit opt-in and isolated from the current <code>mpc</code> backend.</li>
+    <li>The current <code>mpc</code> package is reference-only for this redesign. Do not edit <code>Go2Pvcnn/extension/batch_mpc_planner/</code> to make <code>mpc_qp</code> pass unless the change is a separately justified shared-interface bug fix.</li>
+    <li>New continuous-QP code must live under <code>Go2Pvcnn/extension/batch_mpc_qp_planner/</code> and must not change the default planner selection, current <code>MpcTrajectoryManager</code>, or current <code>plan_segment()</code> behavior.</li>
+    <li>Trajectory variables are optimized jointly for all four legs and root/base motion.</li>
+    <li>Each swing leg uses Bezier/B-spline control points; the horizon frames are sampled from the curve.</li>
+    <li><code>touchdown_xy</code> is an optimization variable. It must be solved by the QP/SQP step, not found by scanning nearby cells or evaluating fixed candidates.</li>
+    <li><code>touchdown_z</code> is not a free variable. It is always bound to the differentiable height field: <code>touchdown_z = h(touchdown_xy)</code>; inside a local QP, use <code>h0 + grad_h^T delta_xy</code>.</li>
+    <li>Stance feet are world anchors. They should not be moved by per-frame repair.</li>
+    <li>Gait/contact phase is explicit. Alternating diagonal gait must be encoded in the variable mask/constraints rather than expected to emerge from soft losses.</li>
+    <li>Velocity tracking is low priority. Semantic safety, terrain crossing, foothold quality, height clearance, reachability, and continuity dominate.</li>
+    <li>If tests look bad, do not add new hard repair layers, candidate search, or touchdown lookup. Tune field construction, QP weights, constraints, fixed sampling density, QP iterations, or warm-start quality.</li>
+  </ul>
+
+  <h2>3. Memory And Runtime Contract</h2>
+  <div class="callout warning">
+    <p>RL high-concurrency use is a first-class requirement. The optimizer must use fixed shapes and preallocated buffers.</p>
+  </div>
+  <ul>
+    <li>Terrain maps are prepared once per planner refresh. Optimization iterations only query them.</li>
+    <li>Semantic maps are prepared once per planner refresh. Optimization iterations only query them.</li>
+    <li>Height, semantic-risk, roughness, clearance, and optional signed-distance vector fields are prepared once per planner refresh or deterministic resize. QP iterations only query values and gradients at fixed sample points.</li>
+    <li>Bezier basis matrices, sample phases, gait masks, stance/swing masks, footprint offsets, body samples, shank/knee samples, residual buffers, diagnostics buffers, and QP work buffers are allocated during planner/backend initialization or deterministic resize.</li>
+    <li>Do not build Python constraint lists inside the QP loop.</li>
+    <li>Do not scan the full map inside every QP iteration to create obstacle-specific constraints.</li>
+    <li>Do not allocate dense global pairwise tensors such as <code>[B, K, H*W, ...]</code>.</li>
+    <li>All obstacle, semantic, clearance, reachability, and stability residuals use fixed-shape masks and buffers.</li>
+    <li>Do not use <code>K</code>-candidate endpoint line-search, fixed offset foothold selection, ring search, nearby safe-point search, or any other candidate-selection method as the main path.</li>
+  </ul>
+
+  <pre><code>allowed inside optimize loop:
+  fill preallocated variables
+  sample fixed Bezier points
+  query differentiable fields and gradients through fixed buffers
+  compute fixed-shape residuals
+  assemble/fill fixed-size QP matrices
+  solve fixed-iteration SQP/RTI local QP updates
+
+forbidden inside optimize loop:
+  create new obstacle list
+  create variable-size constraints
+  append tensors
+  rebuild semantic geometry
+  evaluate candidate footholds/endpoints and choose the best one
+  add hard per-frame repair for new failures</code></pre>
+
+  <h2>4. Trajectory Parameterization</h2>
+  <h3>4.1 Swing Leg Curve</h3>
+  <p>Each swing segment is represented as a cubic Bezier curve:</p>
+  <pre><code>B(s) = Bezier(P0, P1, P2, P3), s in [0, 1]</code></pre>
+  <table>
+    <thead>
+      <tr><th>Control Point</th><th>Role</th><th>QP Behavior</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>P0</code></td><td>Swing start foot position</td><td>Fixed from current/nominal state</td></tr>
+      <tr><td><code>P1</code></td><td>Early swing shape</td><td>Optimized <code>xyz</code></td></tr>
+      <tr><td><code>P2</code></td><td>Late swing shape / obstacle crossing</td><td>Optimized <code>xyz</code></td></tr>
+      <tr><td><code>P3</code></td><td>Touchdown</td><td>Optimized <code>xy</code> by QP; <code>z = h(P3.xy)</code> via height-field binding</td></tr>
+    </tbody>
+  </table>
+  <p>User decision: do not add explicit penalties that keep <code>P1/P2</code> close to nominal control points, and do not add direct <code>P1/P2.z</code> bounds. Their behavior is controlled by semantic/clearance/reachability/smoothness losses.</p>
+
+  <h3>4.2 Stance Foot</h3>
+  <p>Stance feet are anchored in world coordinates. The optimizer may evaluate stance safety and stance slip loss, but it must not use stance repair as the main behavior. After touchdown, the new stance anchor is the terrain-bound touchdown point.</p>
+
+  <h3>4.3 Root/Base Trajectory</h3>
+  <p>The QP must jointly consider root/base and all four feet. The exact root parameterization can use fixed horizon samples or spline/control points, but it must be optimized together with the four-leg variables so one leg cannot satisfy its local objective while degrading the other legs or the body path.</p>
+
+  <h3>4.4 Fixed Gait Schedule</h3>
+  <p>The optimizer must encode an alternating diagonal gait schedule. The first implementation can use a fixed two-phase schedule aligned to the horizon:</p>
+  <pre><code>phase A:
+  swing:  FL + RR
+  stance: FR + RL
+
+phase B:
+  swing:  FR + RL
+  stance: FL + RR</code></pre>
+  <p>For stance legs, foot motion is constrained or heavily penalized through fixed masks. For swing legs, <code>P1/P2/P3</code> are optimized under clearance, semantic, roughness, reachability, smoothness, and trust-region constraints. This prevents all four legs from drifting together or a single leg chasing velocity while degrading support for the others.</p>
+
+  <h3>4.5 QP Variables</h3>
+  <pre><code>delta_x =
+  root_delta_xy[t]
+  root_delta_z_or_height[t]
+  optional_yaw_delta[t]
+  foot_control_delta_xyz[leg, P1/P2]
+  touchdown_delta_xy[leg]
+  semantic_slack
+  roughness_slack
+  clearance_slack
+  reachability_slack
+  stability_slack</code></pre>
+  <p>Touchdown variables are part of <code>delta_x</code>. They are not lookup results. Slack variables keep the local QP feasible while making semantic, roughness, clearance, reachability, and stability violations expensive.</p>
+
+  <h2>5. Semantic And Terrain Representation</h2>
+  <p>The design converts discrete maps into fixed-shape differentiable fields before optimization. The QP loop must query field values and gradients, not perform cell search.</p>
+  <ul>
+    <li><code>height field h(x,y)</code> with <code>grad_h(x,y)</code>, built from the height map.</li>
+    <li><code>semantic risk field s(x,y)</code> with <code>grad_s(x,y)</code>, built from semantic classes and smoothed risk or distance transforms.</li>
+    <li><code>roughness field r(x,y)</code> with <code>grad_r(x,y)</code>, built from local height variation, slope, edge, stair/box boundary cues, and support quality.</li>
+    <li><code>clearance field c(x,y,z)</code> or equivalent fixed sampled residuals for swing/body/knee/shank clearance.</li>
+    <li>Fixed footprint and body stencils for center-plus-offset checks, evaluated through fields.</li>
+  </ul>
+  <pre><code>local QP linearization:
+  h(xy + dxy) ~= h0 + grad_h^T dxy
+  s(xy + dxy) ~= s0 + grad_s^T dxy
+  r(xy + dxy) ~= r0 + grad_r^T dxy</code></pre>
+
+  <table>
+    <thead>
+      <tr><th>Semantic Type</th><th>Swing Rule</th><th>Touchdown/Stance Rule</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>ground</code></td>
+        <td>Allowed with normal terrain clearance</td>
+        <td>Allowed if foothold quality is good</td>
+      </tr>
+      <tr>
+        <td><code>low_small</code></td>
+        <td>May pass over in <code>xy</code> if <code>z</code> clearance exceeds obstacle height plus margin</td>
+        <td>Forbidden for touchdown and stance footprint</td>
+      </tr>
+      <tr>
+        <td><code>large/object</code></td>
+        <td>Prefer keepout; if crossing is allowed, require stronger clearance</td>
+        <td>Forbidden</td>
+      </tr>
+      <tr>
+        <td>High variation / stair / box edge</td>
+        <td>Require robust clearance and bounded curve shape</td>
+        <td>Penalize height variance, slope, edge proximity, and invalid support</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>6. Loss Design</h2>
+  <p>The loss must be evaluated on fixed samples from the optimized continuous trajectories:</p>
+  <pre><code>sampled_foot = bezier_sample(control_points, fixed_sample_s)
+touchdown_xy = P3.xy
+touchdown_z = h(touchdown_xy)
+stance_anchor = fixed world anchor</code></pre>
+
+  <h3>6.1 Touchdown Semantic And Keepout Loss</h3>
+  <p>Touchdown safety is optimized through differentiable fields and QP slack, not by searching for nearby safe cells or circles.</p>
+  <pre><code>L_touchdown =
+  w_touchdown_semantic * ||s0 + grad_s^T delta_xy - safe_threshold + semantic_slack||_+^2
++ w_touchdown_footprint * fixed_footprint_field_residuals
++ w_touchdown_surface   * field_surface_bad(P3.xy)</code></pre>
+  <p>The touchdown center and footprint must avoid low-small and large/object semantic regions. <code>P3.xy</code> is a QP variable. Touchdown height is bound to <code>h(P3.xy)</code> and does not float.</p>
+
+  <h3>6.2 Stance Semantic And Slip Loss</h3>
+  <pre><code>L_stance =
+  w_stance_semantic * stance_footprint_bad(anchor_xy)
++ w_stance_slip     * ||stance_foot_sample - stance_anchor||^2</code></pre>
+  <p>Stance anchor quality is high priority. Stance feet should not slide to satisfy velocity tracking.</p>
+
+  <h3>6.3 Swing Clearance And Crossing Loss</h3>
+  <pre><code>L_swing_clearance =
+  w_clearance * relu(required_clearance(xy, semantic, height) - foot_z)^2</code></pre>
+  <p>Low-small objects may be crossed by the swing curve, but sampled foot height must clear the obstacle. Large/object regions use keepout or stronger clearance. This replaces frame-wise low-small lift repair.</p>
+
+  <h3>6.4 Foothold Terrain Quality Loss</h3>
+  <p>This loss prevents touchdown on obvious bad terrain such as high slope, stair edges, box edges, or high local height variation.</p>
+  <pre><code>L_foothold =
+  w_height_var * roughness_field_residual
++ w_slope      * slope_field_residual
++ w_edge       * edge_field_residual
++ w_support    * invalid_support_residual
++ w_boundary   * boundary_risk_residual</code></pre>
+  <p>Footprint checks must use fixed offsets and differentiable field gradients. Center-only touchdown checks are insufficient. Bad footholds must push QP touchdown variables through gradients, not through candidate selection.</p>
+
+  <h3>6.5 Body, Knee, Shank, And Root Safety Loss</h3>
+  <p>Sample root/body/knee/shank points using fixed stencils and the optimized/sampled trajectory.</p>
+  <pre><code>L_body_leg =
+  w_body_semantic  * body_semantic_bad
++ w_knee_semantic  * knee_semantic_bad
++ w_shank_semantic * shank_semantic_bad
++ w_body_clearance * body_leg_clearance_violation</code></pre>
+  <p>This prevents a foot trajectory that crosses successfully while the knee, shank, or body hits the object.</p>
+
+  <h3>6.6 Reachability And IK/FK Readback Loss</h3>
+  <pre><code>L_reach =
+  w_reachability * reachability_violation
++ w_fk_readback  * ||FK(IK(sampled_foot)) - sampled_foot||^2</code></pre>
+  <p>If full FK readback is too costly in every iteration, use fixed-shape reachability residuals in the QP loop and run FK readback as a diagnostic or lower-frequency term. The design goal is to avoid trajectories that look safe in target space but become invalid after IK clamp.</p>
+
+  <h3>6.6.1 Shared Coupled Readback Loss</h3>
+  <div class="callout decision">
+    <p>The readback/reachability family must be a shared coupled loss, not a foot-only correction. If planned feet are terrain-bound but IK/FK feet float above them because the root is too high or the target is outside leg reach, the QP must be allowed to move root height and foot controls together.</p>
+  </div>
+  <pre><code>shared decision block:
+  delta_root_xy[t]
+  delta_root_z[t]
+  delta_P1_xyz[leg]
+  delta_P2_xyz[leg]
+  delta_P3_xy[leg]
+
+coupled residual:
+  e_fk = FK(IK(root + sampled_foot_controls)) - sampled_foot_controls
+  L_shared_readback = w_fk * ||e_fk||^2
+                    + w_reach * reachability_violation(root, foot)
+                    + w_joint * joint_limit_violation(root, foot)</code></pre>
+  <p>Adding losses into one scalar is not enough if each loss only sees its own private variable. The important geometric losses must directly depend on the shared root and foot-control variables. Local losses can stay local, but FK/readback, reachability, joint limits, body/knee/shank clearance, and FK terrain clearance must couple root and feet so the optimizer can negotiate a physically reachable trajectory instead of making the swing arc higher or the touchdown farther.</p>
+  <table>
+    <thead>
+      <tr><th>Loss Group</th><th>Variables It Must See</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>FK/readback</td><td><code>root_z</code>, <code>root_xy</code>, <code>P1/P2/P3</code></td><td>Allows root to lower when FK feet float above terrain-bound planned feet.</td></tr>
+      <tr><td>Reachability and joint limits</td><td><code>root</code> and sampled foot controls</td><td>Prevents unreachable feet from being hidden by IK clamp.</td></tr>
+      <tr><td>Body/knee/shank clearance</td><td><code>root</code>, sampled foot controls, fixed body/leg samples</td><td>Prevents a safe-looking foot path from colliding with object geometry through the leg or body.</td></tr>
+      <tr><td>Touchdown semantic/roughness</td><td>Mostly <code>P3.xy</code> plus fixed footprint samples</td><td>Can remain local because touchdown quality is a foothold-field query.</td></tr>
+      <tr><td>Foot/root smoothness</td><td>Corresponding trajectory samples</td><td>Can remain local unless used to damp a coupled update.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.9 QP Form</h3>
+  <pre><code>minimize:
+  1/2 delta_x^T H delta_x + g^T delta_x
+
+subject to:
+  A delta_x <= b
+  E delta_x  = e
+  lower <= delta_x <= upper</code></pre>
+  <p>The default solve is one SQP/RTI local QP iteration: linearize fields and reachability around the warm-start trajectory, solve a fixed-shape batched QP, update variables, then decode and sample the continuous trajectory. <code>qp_iterations</code> remains configurable for manual sweeps.</p>
+
+  <h3>6.7 Smoothness And Continuity Loss</h3>
+  <pre><code>L_smooth =
+  w_vel * sum ||B(s[k+1]) - B(s[k])||^2
++ w_acc * sum ||B(s[k+1]) - 2B(s[k]) + B(s[k-1])||^2
++ w_root_acc * root_acceleration_cost</code></pre>
+  <p>This is not velocity tracking. It prevents Bezier control freedom from producing visually unstable or dynamically hostile foot paths.</p>
+
+  <h3>6.8 Tracking And Nominal Guidance Loss</h3>
+  <pre><code>L_tracking =
+  w_progress * root_progress_error^2
++ w_yaw      * yaw_error^2
++ w_nominal  * weak_nominal_guidance</code></pre>
+  <p>Tracking weights must remain low. On hard terrain, the optimizer should prefer safe terrain crossing and foothold quality over command speed.</p>
+
+  <h2>7. Weight Priority</h2>
+  <table>
+    <thead>
+      <tr><th>Priority</th><th>Loss Group</th><th>Intent</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Highest</td><td>Touchdown/stance semantic, object keepout</td><td>Do not step on semantic objects or low-small obstacles</td></tr>
+      <tr><td>Highest</td><td>Foothold terrain quality</td><td>Avoid bad slopes, stair edges, box edges, and high variation landing zones</td></tr>
+      <tr><td>High</td><td>Swing/body clearance</td><td>Cross low obstacles safely and avoid knee/shank/body collision</td></tr>
+      <tr><td>High</td><td>Reachability / IK consistency</td><td>Prevent IK clamp and FK readback mismatch</td></tr>
+      <tr><td>Medium-high</td><td>Smoothness / continuity</td><td>Prevent foot trajectory discontinuity or curve whipping</td></tr>
+      <tr><td>Low</td><td>Velocity / progress / nominal tracking</td><td>Guide motion without overriding safety or terrain quality</td></tr>
+    </tbody>
+  </table>
+
+  <h2>8. QP Iteration And Tuning Policy</h2>
+  <div class="callout decision">
+    <p>When tests fail, tune fields, QP weights, constraints, sampling, warm start, or QP iterations. Do not add hard repair, candidate search, or touchdown lookup to hide the failure.</p>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Observed Failure</th><th>Allowed Response</th><th>Forbidden Response</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Semantic collision or touchdown on object</td>
+        <td>Improve semantic risk field and gradients, increase semantic/footprint weight, adjust slack penalty, increase QP iterations</td>
+        <td>Add a post-QP per-frame point replacement, ring search, nearby safe touchdown lookup, or candidate touchdown selection</td>
+      </tr>
+      <tr>
+        <td>Foot trajectory discontinuity</td>
+        <td>Increase smoothness/reachability/readback weights, adjust Bezier sampling, reduce tracking dominance</td>
+        <td>Add a local lift/reland repair</td>
+      </tr>
+      <tr>
+        <td>Fails to cross low-small obstacle</td>
+        <td>Tune low-small clearance and crossing loss, touchdown keepout radius, foothold scoring, QP iterations</td>
+        <td>Force swing frames over obstacle with hard blend or choose a hand-picked crossing endpoint</td>
+      </tr>
+      <tr>
+        <td>Lands on stair/box edge</td>
+        <td>Improve roughness/edge/support fields and gradients; increase roughness/edge/support slack penalties</td>
+        <td>After touchdown, snap to a nearby point or scan fixed offsets for a lower-risk touchdown</td>
+      </tr>
+      <tr>
+        <td>Velocity tracking poor</td>
+        <td>Only after safety is clean, slightly raise progress/tracking weights</td>
+        <td>Reduce safety/foothold losses to chase speed</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>9. Diagnostics And Acceptance Metrics</h2>
+  <p>The design must expose diagnostics for both hard safety and trajectory quality.</p>
+  <div class="grid">
+    <div class="card">
+      <span class="tag">Safety</span>
+      <ul>
+        <li><code>semantic_pass_rate</code></li>
+        <li><code>semantic_object_collision_rate</code></li>
+        <li><code>touchdown_semantic_violation_count</code></li>
+        <li><code>stance_semantic_violation_count</code></li>
+        <li><code>body_leg_semantic_collision_count</code></li>
+        <li><code>clearance_violation_max</code></li>
+        <li><code>touchdown_on_low_small_count</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="tag">Terrain</span>
+      <ul>
+        <li><code>foothold_height_variation_max</code></li>
+        <li><code>foothold_slope_max</code></li>
+        <li><code>foothold_edge_score_max</code></li>
+        <li><code>invalid_support_count</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="tag">Quality</span>
+      <ul>
+        <li><code>foot_frame_jump_max</code></li>
+        <li><code>joint_frame_jump_max</code></li>
+        <li><code>foot_acceleration_max</code></li>
+        <li><code>fk_target_error_max</code></li>
+        <li><code>planned_vs_fk_foot_overlap_rate</code></li>
+        <li><code>playback_readback_error_max_m</code></li>
+        <li><code>stance_slip_max</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="tag">Runtime</span>
+      <ul>
+        <li><code>qp_iterations_executed</code></li>
+        <li><code>qp_solve_ms</code></li>
+        <li><code>qp_total_ms</code></li>
+        <li><code>cuda_allocated_gb</code></li>
+        <li><code>preallocated_buffer_bytes</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>9.1 Fixed Viewer Acceptance Terrain</h3>
+  <p>The following IsaacLab viewer terrain is a required acceptance target for <code>mpc_qp</code>. Do not hard-code <code>CUDA_VISIBLE_DEVICES</code> for this command; the user selects the visible device externally.</p>
+  <pre><code>/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --headless \
+  --livestream 2 \
+  --webrtc-public-ip 172.31.179.75 \
+  --device cuda:0 \
+  --num_envs 1 \
+  --terrain task \
+  --planner-backend mpc_qp \
+  --n-frames 25 \
+  --plan-dt 0.02 \
+  --terrain-row 8 \
+  --terrain-col 12</code></pre>
+  <p>Acceptance on this terrain must prioritize semantic/object avoidance, roughness/high-variation footholds, low-small crossing clearance, trajectory continuity, alternating gait, and FK/readback consistency over velocity tracking.</p>
+
+  <h3>9.2 Required Probe Gates</h3>
+  <p>Do not judge the redesign only by whether semantic objects are avoided. The test suite and real probes must also report collision rate and FK/planned foot overlap.</p>
+  <ul>
+    <li>Semantic/object pass rate: no touchdown or stance on low-small/semantic objects, and no FK foot/knee/shank/body semantic collision.</li>
+    <li>Collision rate: FK terrain/object penetration rate must stay within the probe tolerance; row <code>8</code>, col <code>12</code> must be included.</li>
+    <li>FK/planned overlap: <code>FK(IK(planned_foot))</code> should overlap the planned foot trajectory under the strict readback gate; high overlap is required even when the planned touchdown itself is on the terrain.</li>
+    <li>Low-small crossing: use the old MPC low-small probe metrics from <code>2026-05-28-parametric-low-small-loss-redesign.html</code> as reference, but implement them as QP loss/diagnostics rather than repair.</li>
+    <li>Trajectory quality: foot jumps, joint jumps, and swing height over terrain must stay bounded so small obstacles are crossed without excessive arcs.</li>
+  </ul>
+
+  <h2>10. Implementation Shape</h2>
+  <p>The implementation should introduce a new internal path under <code>Go2Pvcnn/extension/batch_mpc_qp_planner/</code>. The old <code>mpc</code> code is used as semantic/loss reference, not as a mutable target.</p>
+  <pre><code>batch_mpc_qp_planner/
+  bezier.py             # fixed Bezier basis and sampling
+  buffers.py            # preallocated work buffers
+  fields.py             # differentiable height/semantic/roughness/clearance fields and gradients
+  gait.py               # fixed alternating gait/contact masks
+  variables.py          # fixed QP variable layout for root, foot controls, touchdowns, slacks
+  qp_assembly.py        # fixed-shape H/g/A/b/E/e fill from linearized residuals
+  solver.py             # fixed-shape batched SQP/RTI QP solve
+  losses.py             # diagnostics from sampled trajectory and QP residuals
+  planner.py            # mpc_qp orchestration and cache-compatible output</code></pre>
+
+  <h2>11. Open Design Checks Before Coding</h2>
+  <ul>
+    <li>Remove or bypass current candidate/search/repair-style continuous solver paths from the <code>mpc_qp</code> main path.</li>
+    <li>Choose differentiable field construction for semantic risk, roughness, edge, clearance, and height gradients.</li>
+    <li>Choose fixed Bezier sample count per swing segment.</li>
+    <li>Choose fixed footprint sample offsets and body/knee/shank samples.</li>
+    <li>Define fixed QP variable ordering and gait masks for alternating diagonal gait.</li>
+    <li>Define the first batched QP solve method: fixed KKT solve, projected active-set, or differentiable box-constrained solve.</li>
+    <li>Define memory budget for target RL concurrency and enforce it in tests.</li>
+    <li>Add automated probe coverage for <code>terrain-row=8</code>, <code>terrain-col=12</code> in addition to interactive viewer acceptance.</li>
+  </ul>
+
+  <h2>12. Self-Review</h2>
+  <ul>
+    <li>No placeholder implementation claims are made.</li>
+    <li>The design preserves the default <code>mpc</code> backend.</li>
+    <li>The design removes repair-dominant, candidate-selection, and nearby touchdown lookup behavior from the future <code>mpc_qp</code> main path.</li>
+    <li>The loss design replaces discrete map search with differentiable height, semantic-risk, roughness, edge, support, and clearance fields.</li>
+    <li>The memory contract explicitly forbids dynamic constraint construction and large per-iteration allocations.</li>
+    <li>The fixed <code>terrain-row=8</code>, <code>terrain-col=12</code> viewer command is documented as required acceptance evidence.</li>
+  </ul>
+
+  <p class="small">Prepared for the T302v <code>mpc_qp</code> continuation after the 2026-07-06 viewer trajectory discontinuity discussion.</p>
+</main>
+</body>
+</html>
