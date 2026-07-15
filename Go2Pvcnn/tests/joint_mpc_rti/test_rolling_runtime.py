@@ -50,3 +50,14 @@ def test_current_reference_is_always_first_future_frame() -> None:
 
     torch.testing.assert_close(current["joint_angles"], step.full_trajectory.state[:, 1, 6:])
     assert torch.equal(manager.current_frame_ids(), torch.ones(3, dtype=torch.long))
+
+
+def test_fixed_trot_scheduler_advances_one_phase_step_per_replan() -> None:
+    manager = JointMpcRtiManager.from_config(JointMpcRtiCfg(), num_envs=2, device="cpu")
+    state = make_state(2)
+    field = make_flat_field(2)
+
+    first = manager.plan_from_tensors(state, make_command(2), field)
+    second = manager.plan_from_tensors(state, make_command(2), field)
+
+    assert torch.equal(second.full_trajectory.contact_state[:, :-1], first.full_trajectory.contact_state[:, 1:])

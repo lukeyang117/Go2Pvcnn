@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.losses.barriers import masked_mean, relaxed_barrier
+from extension.joint_mpc_rti.losses.barriers import localized_relaxed_barrier, masked_mean, relaxed_barrier
 
 
 def small_object_losses(
@@ -16,9 +16,11 @@ def small_object_losses(
     small_distance_touchdown: Tensor,
     link_pos_w: Tensor,
     link_small_distance: Tensor,
+    link_top_height: Tensor | None = None,
     swing_mask: Tensor,
     stance_mask: Tensor,
     extra_margin: float,
+    swing_weight: Tensor | None = None,
     influence_radius: float = 0.08,
     temperature: float = 0.02,
     touchdown_margin: float = 0.02,
@@ -30,17 +32,28 @@ def small_object_losses(
     foot_distance = torch.as_tensor(foot_small_distance, dtype=foot.dtype, device=foot.device)
     top = torch.as_tensor(small_top_height, dtype=foot.dtype, device=foot.device)
     swing = torch.as_tensor(swing_mask, dtype=torch.bool, device=foot.device)
+    swing_loss_weight = swing.to(foot.dtype) if swing_weight is None else torch.as_tensor(
+        swing_weight, dtype=foot.dtype, device=foot.device
+    )
     stance = torch.as_tensor(stance_mask, dtype=torch.bool, device=foot.device)
     influence = torch.sigmoid((float(influence_radius) - foot_distance) / float(temperature))
     over_margin = foot[..., 2] - top - float(extra_margin)
-    foot_over_raw = influence * relaxed_barrier(over_margin, relaxation=barrier_relaxation)
-    foot_over = masked_mean(foot_over_raw, swing, dims=tuple(range(1, foot_over_raw.ndim)))
+    foot_over_raw = influence * localized_relaxed_barrier(
+        over_margin,
+        activation_margin=0.005,
+        relaxation=barrier_relaxation,
+    )
+    foot_over = masked_mean(foot_over_raw, swing_loss_weight, dims=tuple(range(1, foot_over_raw.ndim)))
     touchdown_distance = torch.as_tensor(small_distance_touchdown, dtype=foot.dtype, device=foot.device)
     touchdown_raw = relaxed_barrier(touchdown_distance - float(touchdown_margin), relaxation=barrier_relaxation)
     touchdown_avoidance = touchdown_raw.reshape(foot.shape[0], -1).mean(dim=1)
     link = torch.as_tensor(link_pos_w, dtype=foot.dtype, device=foot.device)
     link_distance = torch.as_tensor(link_small_distance, dtype=foot.dtype, device=foot.device)
-    link_top = torch.broadcast_to(top, link_distance.shape)
+    link_top = (
+        torch.broadcast_to(top, link_distance.shape)
+        if link_top_height is None
+        else torch.as_tensor(link_top_height, dtype=foot.dtype, device=foot.device)
+    )
     vertical_influence = torch.sigmoid((link_top + float(link_margin_z) - link[..., 2]) / float(temperature))
     link_raw = vertical_influence * relaxed_barrier(
         link_distance - float(link_margin_xy), relaxation=barrier_relaxation

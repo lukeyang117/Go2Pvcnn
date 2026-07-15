@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.losses.barriers import masked_mean, relaxed_barrier
+from extension.joint_mpc_rti.losses.barriers import localized_relaxed_barrier, masked_mean, relaxed_barrier
 
 
 def stance_losses(foot_pos_w: Tensor, queried_height_w: Tensor, contact_state: Tensor, *, dt: float) -> dict[str, Tensor]:
@@ -52,6 +52,7 @@ def swing_losses(
     nominal_foot_pos_w: Tensor,
     queried_height_w: Tensor,
     swing_mask: Tensor,
+    swing_weight: Tensor | None = None,
     dt: float,
     terrain_margin: float = 0.02,
     barrier_relaxation: float = 0.01,
@@ -60,12 +61,19 @@ def swing_losses(
     nominal = torch.as_tensor(nominal_foot_pos_w, dtype=foot.dtype, device=foot.device)
     height = torch.as_tensor(queried_height_w, dtype=foot.dtype, device=foot.device)
     swing = torch.as_tensor(swing_mask, dtype=torch.bool, device=foot.device)
+    weight = swing.to(foot.dtype) if swing_weight is None else torch.as_tensor(
+        swing_weight, dtype=foot.dtype, device=foot.device
+    )
     shape_error = ((foot - nominal) ** 2).sum(dim=-1)
-    shape_loss = masked_mean(shape_error, swing, dims=(1, 2))
+    shape_loss = masked_mean(shape_error, weight, dims=(1, 2))
     terrain_margin_value = foot[..., 2] - height - float(terrain_margin)
     clearance = masked_mean(
-        relaxed_barrier(terrain_margin_value, relaxation=barrier_relaxation),
-        swing,
+        localized_relaxed_barrier(
+            terrain_margin_value,
+            activation_margin=0.005,
+            relaxation=barrier_relaxation,
+        ),
+        weight,
         dims=(1, 2),
     )
     velocity = (foot[:, 1:] - foot[:, :-1]) / float(dt)

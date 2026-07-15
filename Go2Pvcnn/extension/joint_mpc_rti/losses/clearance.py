@@ -5,14 +5,18 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.losses.barriers import relaxed_barrier
+from extension.joint_mpc_rti.losses.barriers import localized_relaxed_barrier
 
 
 def _clearance_cost(position_w: Tensor, height_w: Tensor, margin: float, relaxation: float) -> Tensor:
     position = torch.as_tensor(position_w)
     height = torch.as_tensor(height_w, dtype=position.dtype, device=position.device)
     clearance = position[..., 2] - height - float(margin)
-    return relaxed_barrier(clearance, relaxation=relaxation).reshape(position.shape[0], -1).mean(dim=1)
+    return localized_relaxed_barrier(
+        clearance,
+        activation_margin=0.005,
+        relaxation=relaxation,
+    ).reshape(position.shape[0], -1).mean(dim=1)
 
 
 def clearance_losses(

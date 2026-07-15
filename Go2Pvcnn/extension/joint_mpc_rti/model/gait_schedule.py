@@ -12,7 +12,7 @@ def fixed_trot_schedule(
     device: torch.device | str,
     *,
     half_cycle_steps: int = 4,
-    phase_offset_steps: int = 0,
+    phase_offset_steps: int | Tensor = 0,
 ) -> Tensor:
     """Return contact states in planner leg order FL, FR, RL, RR."""
     if batch < 1:
@@ -21,11 +21,19 @@ def fixed_trot_schedule(
         raise ValueError("horizon_steps must be positive")
     if half_cycle_steps < 1:
         raise ValueError("half_cycle_steps must be positive")
-    frame = torch.arange(horizon_steps + 1, device=device)
-    group_a_contact = torch.remainder((frame + int(phase_offset_steps)) // int(half_cycle_steps), 2) == 0
+    frame = torch.arange(horizon_steps + 1, device=device).view(1, -1)
+    offset = torch.as_tensor(phase_offset_steps, dtype=torch.long, device=device)
+    if offset.ndim == 0:
+        offset = offset.expand(batch)
+    if offset.shape != (batch,):
+        raise ValueError("phase_offset_steps must be scalar or have shape [B]")
+    group_a_contact = torch.remainder(
+        (frame + offset[:, None]) // int(half_cycle_steps),
+        2,
+    ) == 0
     group_b_contact = torch.logical_not(group_a_contact)
     contact = torch.stack((group_a_contact, group_b_contact, group_b_contact, group_a_contact), dim=-1)
-    return contact.unsqueeze(0).expand(batch, -1, -1).clone()
+    return contact.clone()
 
 
 __all__ = ["fixed_trot_schedule"]

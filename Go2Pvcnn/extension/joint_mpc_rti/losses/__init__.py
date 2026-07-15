@@ -24,3 +24,6 @@ __all__ = [
     "touchdown_losses",
     "weighted_objective",
 ]
+from .rollout_objective import rollout_loss_breakdown
+
+__all__ = ["rollout_loss_breakdown"]
