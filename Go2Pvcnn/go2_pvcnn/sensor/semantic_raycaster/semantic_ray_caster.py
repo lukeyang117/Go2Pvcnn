@@ -276,6 +276,7 @@ class SemanticGridRayCaster(RayCaster):
         self._combined_wp_mesh = None
         self._face_semantic_ids: torch.Tensor | None = None
         self._late_semantic_mesh_refresh_done = False
+        self._joint_mpc_field_observer = None
         try:
             self._semantic_dbg_remaining = max(0, int(os.environ.get("SEMANTIC_RAYCASTER_DEBUG", "0")))
         except ValueError:
@@ -285,6 +286,10 @@ class SemanticGridRayCaster(RayCaster):
         except ValueError:
             self._semantic_timing_remaining = 0
         self._semantic_timing_cuda_sync = os.environ.get("SEMANTIC_RAYCASTER_TIMING_CUDA_SYNC", "1") != "0"
+
+    def set_joint_mpc_field_observer(self, observer) -> None:
+        """Register an optional consumer invoked after aligned ray and semantic rows are complete."""
+        self._joint_mpc_field_observer = observer
 
     def _timing_now(self) -> float:
         if self._semantic_timing_cuda_sync and str(self.device).startswith("cuda") and torch.cuda.is_available():
@@ -562,6 +567,9 @@ class SemanticGridRayCaster(RayCaster):
         nx, ny = self._grid_nx, self._grid_ny
         self._data.elevation_map[env_ids] = elev_ray.view(ne, nx, ny)
         self._data.semantic_map[env_ids] = sem_ray.view(ne, nx, ny)
+        observer = self._joint_mpc_field_observer
+        if observer is not None:
+            observer.on_raycaster_update(self, env_ids)
         if timing_enabled:
             t_maps = self._timing_now()
             try:

@@ -5,8 +5,9 @@ from __future__ import annotations
 import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
+from extension.joint_mpc_rti.integration.field_sync import JointMpcRayCasterFieldSync
 from extension.joint_mpc_rti.integration.reference_adapter import trajectory_to_reference_cache
-from extension.joint_mpc_rti.integration.isaaclab_adapter import command_from_env, field_from_env, state_from_env
+from extension.joint_mpc_rti.integration.isaaclab_adapter import command_from_env, scanner_from_env, state_from_env
 from extension.joint_mpc_rti.planner import step as planner_step
 from extension.joint_mpc_rti.runtime.reference_buffer import PendingReferenceBuffer
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState, JointMpcRtiState, JointMpcRtiStepResult, JointMpcTerrainField
@@ -21,8 +22,8 @@ class JointMpcRtiManager:
         self._solver_state: JointMpcRtiSolverState | None = None
         self._buffer: PendingReferenceBuffer | None = None
         self._cache = None
+        self._field_sync: JointMpcRayCasterFieldSync | None = None
         self._last_step_token = None
-        self._refresh_count = 0
 
     @classmethod
     def from_config(
@@ -38,8 +39,8 @@ class JointMpcRtiManager:
         instance._solver_state = None
         instance._buffer = PendingReferenceBuffer(num_envs=num_envs, device=device)
         instance._cache = None
+        instance._field_sync = None
         instance._last_step_token = None
-        instance._refresh_count = 0
         return instance
 
     def horizon_steps(self) -> int:
@@ -97,23 +98,28 @@ class JointMpcRtiManager:
         measured_state = state_from_env(env, device=self._device)
         command_name = str(getattr(getattr(root, "cfg", None), "reference_command_name", "base_velocity"))
         command = command_from_env(env, device=self._device, command_name=command_name)
-        version = torch.full(
-            (measured_state.batch_size,),
-            int(self._refresh_count),
-            dtype=torch.long,
-            device=measured_state.device,
-        )
         scanner_name = str(
             getattr(getattr(root, "cfg", None), "reference_height_scanner_name", "semantic_height_scanner")
         )
-        field = field_from_env(
-            env,
-            device=self._device,
-            version=version,
-            scanner_name=scanner_name,
-        )
+        scanner = scanner_from_env(env, scanner_name=scanner_name)
+        if self._field_sync is None:
+            ray_hits = torch.as_tensor(scanner.data.ray_hits_w)
+            grid_size = int(round(float(ray_hits.shape[1]) ** 0.5))
+            pattern_cfg = getattr(getattr(scanner, "cfg", None), "pattern_cfg", None)
+            resolution = float(getattr(pattern_cfg, "resolution", 0.01))
+            self._field_sync = JointMpcRayCasterFieldSync(
+                num_envs=measured_state.batch_size,
+                grid_size=grid_size,
+                device=self._device,
+                resolution=resolution,
+            )
+            self._field_sync.attach(scanner)
+            self._field_sync.on_raycaster_update(
+                scanner,
+                torch.arange(measured_state.batch_size, dtype=torch.long, device=measured_state.device),
+            )
+        field = self._field_sync.latest_field()
         self.plan_from_tensors(measured_state, command, field)
-        self._refresh_count += 1
         self._last_step_token = step_token
         root._trajectory_reference_cache = self._cache
         return self._cache

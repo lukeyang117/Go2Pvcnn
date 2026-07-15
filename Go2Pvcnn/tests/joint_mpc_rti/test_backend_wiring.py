@@ -128,3 +128,6 @@ def test_manager_refresh_from_env_builds_ready_reference_cache() -> None:
     assert cache.is_ready()
     assert cache.horizon_length() == 17
     assert torch.equal(manager.current_frame_ids(), torch.ones(batch, dtype=torch.long))
+    assert manager._field_sync is not None
+    assert scanner._joint_mpc_field_observer is manager._field_sync
+    assert torch.equal(manager._field_sync.latest_field().version, torch.zeros(batch, dtype=torch.long))

@@ -58,6 +58,11 @@ def command_from_env(env, *, device, command_name: str = "base_velocity") -> tor
     return tensor[:, :3].contiguous()
 
 
+def scanner_from_env(env, *, scanner_name: str = "semantic_height_scanner"):
+    root = _env_root(env)
+    return _named(root.scene, scanner_name)
+
+
 def field_from_env(
     env,
     *,
@@ -69,8 +74,7 @@ def field_from_env(
     large_ids: tuple[int, ...] = (2,),
 ):
     root = _env_root(env)
-    scene = root.scene
-    scanner = _named(scene, scanner_name)
+    scanner = scanner_from_env(root, scanner_name=scanner_name)
     data = scanner.data
     ray_hits = torch.as_tensor(data.ray_hits_w, dtype=torch.float32, device=device)
     if ray_hits.ndim != 3 or int(ray_hits.shape[-1]) != 3:
@@ -106,4 +110,4 @@ def field_from_env(
     )
 
 
-__all__ = ["command_from_env", "field_from_env", "state_from_env"]
+__all__ = ["command_from_env", "field_from_env", "scanner_from_env", "state_from_env"]
