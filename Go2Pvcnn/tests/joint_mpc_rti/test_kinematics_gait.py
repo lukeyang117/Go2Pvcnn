@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+import torch
+
+
+def test_go2_fk_returns_planner_leg_order_and_link_samples() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+
+    root_pos = torch.zeros(2, 3)
+    root_rpy = torch.zeros(2, 3)
+    joint = torch.tensor([[0.0, 0.8, -1.5] * 4] * 2)
+
+    geometry = go2_fk(root_pos, root_rpy, joint)
+
+    assert geometry.foot_pos_w.shape == (2, 4, 3)
+    assert geometry.knee_pos_w.shape == (2, 4, 3)
+    assert geometry.shank_samples_w.shape == (2, 4, 3, 3)
+    assert geometry.body_samples_w.shape[0] == 2
+    assert geometry.body_samples_w.shape[-1] == 3
+    assert geometry.foot_pos_w[0, 0, 1] > geometry.foot_pos_w[0, 1, 1]
+    assert geometry.foot_pos_w[0, 2, 1] > geometry.foot_pos_w[0, 3, 1]
+
+
+def test_go2_analytic_foot_jacobian_matches_central_difference() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_joint, go2_fk
+
+    joint = torch.tensor([[0.05, 0.7, -1.4] * 4], dtype=torch.float64)
+    root_pos = torch.zeros(1, 3, dtype=torch.float64)
+    root_rpy = torch.tensor([[0.03, -0.04, 0.2]], dtype=torch.float64)
+    jacobian = foot_jacobian_joint(root_pos, root_rpy, joint)
+    epsilon = 1.0e-6
+    joint_plus = joint.clone()
+    joint_minus = joint.clone()
+    joint_plus[0, 0] += epsilon
+    joint_minus[0, 0] -= epsilon
+    finite_difference = (
+        go2_fk(root_pos, root_rpy, joint_plus).foot_pos_w
+        - go2_fk(root_pos, root_rpy, joint_minus).foot_pos_w
+    ) / (2.0 * epsilon)
+
+    assert jacobian.shape == (1, 4, 3, 12)
+    torch.testing.assert_close(jacobian[0, :, :, 0], finite_difference[0], atol=2.0e-5, rtol=2.0e-4)

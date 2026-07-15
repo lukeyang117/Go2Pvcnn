@@ -1,0 +1,192 @@
+"""Analytic Go2 forward kinematics and joint Jacobians."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+from torch import Tensor
+
+
+HIP_OFFSETS = (
+    (0.1934, 0.0465, 0.0),
+    (0.1934, -0.0465, 0.0),
+    (-0.1934, 0.0465, 0.0),
+    (-0.1934, -0.0465, 0.0),
+)
+LEG_SIDE_SIGNS = (1.0, -1.0, 1.0, -1.0)
+THIGH_LENGTH = 0.213
+CALF_LENGTH = 0.213
+HIP_OFFSET_Y = 0.0955
+
+
+@dataclass(frozen=True)
+class Go2Geometry:
+    foot_pos_w: Tensor
+    knee_pos_w: Tensor
+    shank_samples_w: Tensor
+    body_samples_w: Tensor
+
+
+def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
+    """Return body-to-world rotation matrices for XYZ fixed-axis RPY."""
+    rpy = torch.as_tensor(root_rpy_w)
+    if rpy.ndim != 2 or int(rpy.shape[-1]) != 3:
+        raise ValueError("root_rpy_w must have shape [B,3]")
+    roll = rpy[:, 0]
+    pitch = rpy[:, 1]
+    yaw = rpy[:, 2]
+    cr = torch.cos(roll)
+    sr = torch.sin(roll)
+    cp = torch.cos(pitch)
+    sp = torch.sin(pitch)
+    cy = torch.cos(yaw)
+    sy = torch.sin(yaw)
+    row0 = torch.stack((cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr), dim=-1)
+    row1 = torch.stack((sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr), dim=-1)
+    row2 = torch.stack((-sp, cp * sr, cp * cr), dim=-1)
+    return torch.stack((row0, row1, row2), dim=-2)
+
+
+def _validate_inputs(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    root_pos = torch.as_tensor(root_pos_w)
+    root_rpy = torch.as_tensor(root_rpy_w, dtype=root_pos.dtype, device=root_pos.device)
+    joint = torch.as_tensor(joint_pos, dtype=root_pos.dtype, device=root_pos.device)
+    if root_pos.ndim != 2 or int(root_pos.shape[-1]) != 3:
+        raise ValueError("root_pos_w must have shape [B,3]")
+    if root_rpy.shape != root_pos.shape:
+        raise ValueError("root_rpy_w must match root_pos_w")
+    if joint.ndim != 2 or tuple(joint.shape) != (int(root_pos.shape[0]), 12):
+        raise ValueError("joint_pos must have shape [B,12]")
+    return root_pos, root_rpy, joint
+
+
+def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor]:
+    batch = int(joint_pos.shape[0])
+    angles = joint_pos.reshape(batch, 4, 3)
+    abad = angles[..., 0]
+    thigh_angle = angles[..., 1]
+    calf_angle = angles[..., 2]
+    side = joint_pos.new_tensor(LEG_SIDE_SIGNS).view(1, 4)
+    lateral = joint_pos.new_tensor(HIP_OFFSET_Y) * side
+    thigh = joint_pos.new_tensor(THIGH_LENGTH)
+    calf = joint_pos.new_tensor(CALF_LENGTH)
+    knee_x = -thigh * torch.sin(thigh_angle)
+    knee_z = -thigh * torch.cos(thigh_angle)
+    calf_absolute = thigh_angle + calf_angle
+    foot_x = knee_x - calf * torch.sin(calf_absolute)
+    foot_z = knee_z - calf * torch.cos(calf_absolute)
+    cosine = torch.cos(abad)
+    sine = torch.sin(abad)
+    hip = joint_pos.new_tensor(HIP_OFFSETS).view(1, 4, 3)
+    knee_body = torch.stack(
+        (
+            hip[..., 0] + knee_x,
+            hip[..., 1] + cosine * lateral - sine * knee_z,
+            hip[..., 2] + sine * lateral + cosine * knee_z,
+        ),
+        dim=-1,
+    )
+    foot_body = torch.stack(
+        (
+            hip[..., 0] + foot_x,
+            hip[..., 1] + cosine * lateral - sine * foot_z,
+            hip[..., 2] + sine * lateral + cosine * foot_z,
+        ),
+        dim=-1,
+    )
+    return knee_body, foot_body
+
+
+def _body_collision_samples(dtype: torch.dtype, device: torch.device) -> Tensor:
+    x = 0.32
+    y = 0.09
+    z_bottom = -0.08
+    return torch.tensor(
+        (
+            (x, y, z_bottom),
+            (x, -y, z_bottom),
+            (-x, y, z_bottom),
+            (-x, -y, z_bottom),
+            (0.0, y, z_bottom),
+            (0.0, -y, z_bottom),
+            (x, 0.0, z_bottom),
+            (-x, 0.0, z_bottom),
+            (0.0, 0.0, z_bottom),
+        ),
+        dtype=dtype,
+        device=device,
+    )
+
+
+def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geometry:
+    """Compute planner-order foot, knee, shank, and body samples in world coordinates."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    knee_body, foot_body = _leg_points_body(joint)
+    alpha = joint.new_tensor((0.25, 0.5, 0.75)).view(1, 1, 3, 1)
+    shank_body = knee_body.unsqueeze(2) * (1.0 - alpha) + foot_body.unsqueeze(2) * alpha
+    body_samples = _body_collision_samples(joint.dtype, joint.device).unsqueeze(0).expand(joint.shape[0], -1, -1)
+    rotation = rpy_to_rotation_matrix(root_rpy)
+    knee_world = torch.einsum("bij,bkj->bki", rotation, knee_body) + root_pos.unsqueeze(1)
+    foot_world = torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
+    shank_world = torch.einsum("bij,bkqj->bkqi", rotation, shank_body) + root_pos[:, None, None, :]
+    body_world = torch.einsum("bij,bkj->bki", rotation, body_samples) + root_pos.unsqueeze(1)
+    return Go2Geometry(
+        foot_pos_w=foot_world,
+        knee_pos_w=knee_world,
+        shank_samples_w=shank_world,
+        body_samples_w=body_world,
+    )
+
+
+def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
+    """Return analytic world-foot Jacobians with respect to all 12 joint positions."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    del root_pos
+    batch = int(joint.shape[0])
+    angles = joint.reshape(batch, 4, 3)
+    abad = angles[..., 0]
+    thigh_angle = angles[..., 1]
+    calf_angle = angles[..., 2]
+    side = joint.new_tensor(LEG_SIDE_SIGNS).view(1, 4)
+    lateral = joint.new_tensor(HIP_OFFSET_Y) * side
+    thigh = joint.new_tensor(THIGH_LENGTH)
+    calf = joint.new_tensor(CALF_LENGTH)
+    absolute = thigh_angle + calf_angle
+    foot_z = -thigh * torch.cos(thigh_angle) - calf * torch.cos(absolute)
+    cosine = torch.cos(abad)
+    sine = torch.sin(abad)
+    dfoot_x_thigh = -thigh * torch.cos(thigh_angle) - calf * torch.cos(absolute)
+    dfoot_z_thigh = thigh * torch.sin(thigh_angle) + calf * torch.sin(absolute)
+    dfoot_x_calf = -calf * torch.cos(absolute)
+    dfoot_z_calf = calf * torch.sin(absolute)
+    zero = torch.zeros_like(abad)
+    derivative_abad = torch.stack(
+        (
+            zero,
+            -sine * lateral - cosine * foot_z,
+            cosine * lateral - sine * foot_z,
+        ),
+        dim=-1,
+    )
+    derivative_thigh = torch.stack(
+        (dfoot_x_thigh, -sine * dfoot_z_thigh, cosine * dfoot_z_thigh),
+        dim=-1,
+    )
+    derivative_calf = torch.stack(
+        (dfoot_x_calf, -sine * dfoot_z_calf, cosine * dfoot_z_calf),
+        dim=-1,
+    )
+    jacobian_body = torch.stack((derivative_abad, derivative_thigh, derivative_calf), dim=-1)
+    rotation = rpy_to_rotation_matrix(root_rpy)
+    jacobian_world_leg = torch.einsum("bij,bkjq->bkiq", rotation, jacobian_body)
+    selector = torch.eye(12, dtype=joint.dtype, device=joint.device).reshape(4, 3, 12)
+    return torch.einsum("bkiq,kqr->bkir", jacobian_world_leg, selector)
+
+
+__all__ = [
+    "Go2Geometry",
+    "foot_jacobian_joint",
+    "go2_fk",
+    "rpy_to_rotation_matrix",
+]
