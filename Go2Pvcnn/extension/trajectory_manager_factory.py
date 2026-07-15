@@ -7,7 +7,7 @@ import functools
 import torch
 
 
-VALID_PLANNER_BACKENDS = ("mpc",)
+VALID_PLANNER_BACKENDS = ("mpc", "joint_mpc_rti")
 TRAJECTORY_MANAGER_EXPERIMENTS = (
     "teacher_elevation_trajectory_mpc_semantic",
     "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
@@ -17,12 +17,16 @@ TRAJECTORY_MANAGER_EXPERIMENTS = (
 def planner_backend_from_cfg(cfg) -> str:
     backend = str(getattr(cfg, "planner_backend", "mpc")).lower()
     if backend not in VALID_PLANNER_BACKENDS:
-        raise ValueError("Invalid planner_backend={!r}; expected mpc".format(backend))
+        raise ValueError("Invalid planner_backend={!r}; expected one of {}".format(backend, VALID_PLANNER_BACKENDS))
     return backend
 
 
 def create_trajectory_manager(cfg, *, device):
-    planner_backend_from_cfg(cfg)
+    backend = planner_backend_from_cfg(cfg)
+    if backend == "joint_mpc_rti":
+        from extension.joint_mpc_rti.runtime.manager import JointMpcRtiManager
+
+        return JointMpcRtiManager(cfg, device=device)
     from extension.batch_mpc_planner.manager import MpcTrajectoryManager
 
     return MpcTrajectoryManager(cfg, device=device)
