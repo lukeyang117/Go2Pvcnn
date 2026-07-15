@@ -150,7 +150,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
-- T302v.2: finish real 1024-env initialization and steady-state timing; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
+- T302v.2: replace the B1024 `~1136ms` tensor Jump Flood field build, then rerun real 1024-env timing; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |

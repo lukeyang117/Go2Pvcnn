@@ -11,7 +11,7 @@
 
 ## Open Children
 
-- T302v.2: complete the real 1024-env first-time initialization and collect steady-state timing; the 10-minute attempt had no crash/OOM but did not reach final JSON.
+- T302v.2: replace the current tensor Jump Flood field build (`B1024≈1136ms`, peak `2.94GiB`) with a fixed Triton/CUDA JFA or static world-SDF cache, then rerun real 1024-env steady-state timing.
 
 ## Closed Children Archive
 
@@ -37,7 +37,7 @@
 
 ## Next Step
 
-Run the real 1024-env probe in an uncontended/prewarmed session and separate scene startup, field build, graph capture, and replay timing.
+Implement and benchmark a fixed Triton/CUDA JFA or static world-SDF cache; the real trace already shows scene startup completes and the first refresh is blocked by field construction.
 
 ## Node Details
 
