@@ -22,7 +22,7 @@ It responds to the controlled small-obstacle quantification: strict cross succes
 - Keep `H=16`, `dt=0.02s`, measured `x0`, rolling MPC, and publish-only-`x1`.
 - Change fixed trot timing to `half_cycle_steps=8`, so `H16` covers one full `stance -> swing -> stance` cycle.
 - Keep the no-hard-gate behavior contract: no `crossable_small`, specified crossing leg, shape branch, fixed bypass side, snapping, projection, or repair.
-- Upgrade small distance to signed boundary distance so inside-obstacle samples keep an exit gradient.
+- Upgrade both small and large semantic distance channels to signed boundary distance so inside-obstacle samples keep an exit gradient. The written contract now requires complementary occupied/free exact EDT passes, a half-cell boundary correction, finite empty/full-channel behavior, and query-time analytic interpolation gradients; multiplying the old zero-inside unsigned EDT by a sign is explicitly rejected.
 - Align optimization geometry and acceptance geometry: foot sphere `0.022m`, calf capsule `0.040m`, thigh capsule `0.040m`.
 - Add foot/calf/thigh small clearance residuals to both GGN/LQ and full merit, instead of leaving collision only as final scoring/diagnostic.
 - Add strict cross success and stance-ground metrics to acceptance.
@@ -31,10 +31,10 @@ It responds to the controlled small-obstacle quantification: strict cross succes
 
 Design-document checks only:
 
-- HTML parser check passed for the new spec.
+- HTML parser check passed for the new spec, including the signed-distance clarification requested during user review.
 - Placeholder scan found no `TBD`, `TODO`, `待定`, `占位`, or `placeholder`.
 
-No production planner code was changed in this pass.
+No production planner or test code was changed in this pass; the user is still reviewing the design.
 
 ## Follow-Up
 

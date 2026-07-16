@@ -163,12 +163,25 @@
     </tbody>
   </table>
 
-  <h3>5.2 Small signed distance</h3>
-  <p>small 距离场从无符号 EDT 升级为有符号边界距离：</p>
+  <h3>5.2 Semantic signed boundary distance</h3>
+  <div class="callout warn">
+    <strong>对旧设计的覆盖：</strong>2026-07-15 GPU RTI 设计中的 <code>small exact EDT</code>、<code>large exact EDT</code> 和无符号 <code>small_distance_m/large_distance_m</code> 在本设计中统一升级为有符号边界距离。后续实现、loss、GGN/LQ、merit 和测试不得继续把障碍内部表示为零距离。
+  </div>
+  <p>small 和 large 两个语义通道使用相同符号合同：</p>
   <pre><code>outside: signed_distance &gt; 0
 on boundary: signed_distance = 0
 inside: signed_distance &lt; 0</code></pre>
-  <p>这样 foot/calf/thigh 已经落进小物体时，仍有清晰的退出梯度。signed distance 的 XY 梯度由 query-time 双线性插值解析导数给出；障碍内部不能因为 EDT 为零而失去方向。</p>
+  <p>设语义占据栅格为 <code>M</code>，分辨率为 <code>r=0.01m</code>。每个语义通道在 GPU 上对 <code>M</code> 和 <code>~M</code> 分别执行一次 CUDA warp-level exact EDT，得到自由栅格中心到最近占据栅格中心的 <code>D_out</code>，以及占据栅格中心到最近自由栅格中心的 <code>D_in</code>。缓存值按下面的半栅格修正构建：</p>
+  <pre><code>free cell:     phi =  max(D_out - 0.5 * r, 0)
+occupied cell: phi = -max(D_in  - 0.5 * r, 0)</code></pre>
+  <p>半栅格修正把零等值线放在占据 cell 与自由 cell 的公共边界，而不是错误地放在 cell center。world query 对 <code>phi</code> 做双线性插值，所以穿过该公共边界时连续经过零；不能只把原无符号 EDT 乘以占据符号，因为原场在障碍内部为常数零，乘符号后仍没有退出梯度。</p>
+  <ul>
+    <li>缓存 ABI 明确为 <code>small_signed_distance_m[B,151,151]</code> 和 <code>large_signed_distance_m[B,151,151]</code>；loss 不再读取旧的 unsigned distance。</li>
+    <li>CUDA 主路径把互补 mask 作为固定通道批量 dispatch，不允许 Python per-env/per-channel 循环；workspace 在 steady-state 原位复用。</li>
+    <li>空障碍通道返回正的有限饱和值；全占据通道返回负的有限饱和值并标记该通道无有效自由边界；禁止输出 <code>inf</code> 或 <code>NaN</code>。</li>
+    <li>signed distance 的世界 XY 梯度由 query-time 双线性插值解析导数给出。foot/calf/thigh 已经进入小物体，或 root/body 已经进入大物体时，仍必须得到朝增大 <code>phi</code> 方向的有限退出梯度。</li>
+    <li>field version、世界坐标原点/yaw、valid mask 和同步发布合同保持不变；每次 MPC 仍消费本帧同版本的 height、semantic 和 signed distance。</li>
+  </ul>
 
   <h3>5.3 统一高程图</h3>
   <p>所有地面、物体顶面、stance 接触和 swing clearance 都查询同一张 <code>height_w</code>。small semantic 不再生成第二高度场，只在同一 height 表面之上叠加 signed-distance 和额外 margin residual。</p>
@@ -275,7 +288,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     <li>old MPC/reward/viewer regression 继续通过，不能破坏现有后端。</li>
     <li>public factory batch 支持 <code>1/40/512/1024</code>，动态环境数由上层参数构建。</li>
     <li>真实九命令 viewer：不同方向、速度大小、yaw 和混合命令下 root 速度跟踪和 stance 贴地不退化。</li>
-    <li>同步 exact EDT + MPC：<code>1024 × H16 × 1000</code> 在空闲 GPU 上仍需满足 <code>&lt;= 5s</code>，并且计入距离场构建。</li>
+    <li>同步 signed distance + MPC：<code>1024 × H16 × 1000</code> 在空闲 GPU 上仍需满足 <code>&lt;= 5s</code>；计时必须包含 small/large 占据区与自由区互补 exact EDT、半栅格修正、field 发布和 MPC，不得只计单侧 unsigned EDT。</li>
     <li>无非有限值、无 CUDA graph batch-size 隐式 resize、field version 正确递增。</li>
   </ul>
 
@@ -284,13 +297,14 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     <thead><tr><th>测试层</th><th>需要达成的结果</th></tr></thead>
     <tbody>
       <tr><td>纯张量 gait</td><td><code>half_cycle_steps=8</code> 后，<code>H=16</code> 内每条腿至少覆盖可识别的 stance/swing/stance 事件；接触 mask 对角腿组正确。</td></tr>
-      <tr><td>signed distance</td><td>障碍外、边界、内部都有正确符号和有限梯度；内部样本能得到退出方向。</td></tr>
+      <tr><td>signed distance</td><td>small/large 在障碍外、连续边界、内部都有正确符号；与 CPU 精确参考场一致；内部偏心样本梯度指向最近退出边界，中心等距点允许方向不唯一但场值必须为负且有限。</td></tr>
+      <tr><td>边界与退化通道</td><td>相邻 occupied/free cell center 分别得到约 <code>-0.5r/+0.5r</code>，公共边界插值为零；空通道、全占据通道无 <code>inf/NaN</code>，valid/status 语义明确。</td></tr>
       <tr><td>GGN/LQ visibility</td><td>构造 calf/foot/thigh 穿入小物体的 RED 场景时，二次子问题梯度非零并指向增大 signed distance 的方向。</td></tr>
       <tr><td>merit 一致性</td><td>同一个 small clearance residual 在 LQ/GGN 和 full merit 的 breakdown 名称、权重、几何半径一致。</td></tr>
       <tr><td>strict cross matrix</td><td>五种 shape、三种速度、多个纵向相位下达到 cross 成功目标，且不能靠 side bypass 假通过。</td></tr>
       <tr><td>stance ground matrix</td><td>零速、前后、左右、yaw、快慢、混合命令下 stance gap/penetration 达标。</td></tr>
       <tr><td>环境数封装</td><td><code>num_envs=1/40/512/1024</code> 构建 manager 后 shape、field、graph、reference buffer 全部一致；改变数量需要显式重建。</td></tr>
-      <tr><td>性能</td><td>同步距离场 + MPC 的 1000 次 refresh 小于 5 秒；报告 warmup、GPU、是否空闲、平均/P95/max。</td></tr>
+      <tr><td>性能</td><td>同步 small/large signed distance + MPC 的 1000 次 refresh 小于 5 秒；必须包含互补 EDT 两侧和半栅格修正，并报告 warmup、GPU、是否空闲、平均/P95/max。</td></tr>
     </tbody>
   </table>
 
@@ -298,7 +312,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
   <ol>
     <li>先把 strict cross、stance ground、signed-distance 和 GGN visibility 测试写成 RED，复刻当前失败。</li>
     <li>修改 gait scheduler：<code>half_cycle_steps=8</code>，保持 <code>H=16</code>。</li>
-    <li>把 small distance 改为 signed boundary distance，并补内部梯度测试。</li>
+    <li>把 small/large distance 都改为 signed boundary distance：互补 exact EDT、半栅格修正、有限饱和值，并补内部梯度和退化通道测试。</li>
     <li>在 Go2 FK 中补齐 thigh sample/Jacobian，calf sample 继续复用 shank/knee-foot 插值。</li>
     <li>把 foot/calf/thigh small clearance residual 接入 linearization/GGN/LQ，同时保持 merit 同源。</li>
     <li>调整 normalization，让近障碍样本不被全 horizon 平均稀释。</li>
