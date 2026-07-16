@@ -61,4 +61,3 @@
 - [ ] Run it in `env_isaacsim` and record joint-order error, root drift, stance gap, joint step, foot step, and viewer-plan agreement.
 - [ ] Run the full joint suite, old MPC compatibility subset, pycompile, and `git diff --check`.
 - [ ] Update notes with exact commands/metrics and commit only scoped files on `joint_mpc`.
-

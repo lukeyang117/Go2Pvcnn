@@ -90,4 +90,3 @@ RTI 线性化对 XY 和 Z 残差都使用 `foot_jacobian_joint()`，形成 joint
 - actual joint/foot 继续匹配 planner。
 - 零速与多速度组合的 stance ground gap `<= 0.01 m`。
 - 灾难性 `2.5 rad` / `0.59 m` 跳变消失。
-
