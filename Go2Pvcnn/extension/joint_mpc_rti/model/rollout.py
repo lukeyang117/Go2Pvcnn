@@ -20,6 +20,7 @@ class JointMpcRollout:
     foot_pos_w: Tensor
     knee_pos_w: Tensor
     shank_samples_w: Tensor
+    thigh_samples_w: Tensor
     body_samples_w: Tensor
 
 
@@ -89,6 +90,7 @@ def rollout_controls(
         foot_pos_w=geometry.foot_pos_w.reshape(batch, nodes, 4, 3),
         knee_pos_w=geometry.knee_pos_w.reshape(batch, nodes, 4, 3),
         shank_samples_w=geometry.shank_samples_w.reshape(batch, nodes, 4, 3, 3),
+        thigh_samples_w=geometry.thigh_samples_w.reshape(batch, nodes, 4, 3, 3),
         body_samples_w=geometry.body_samples_w.reshape(batch, nodes, geometry.body_samples_w.shape[1], 3),
     )
 

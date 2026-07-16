@@ -135,6 +135,7 @@ def _select_candidate_rollout(
         foot_pos_w=select(candidate_rollout.foot_pos_w, base_rollout.foot_pos_w),
         knee_pos_w=select(candidate_rollout.knee_pos_w, base_rollout.knee_pos_w),
         shank_samples_w=select(candidate_rollout.shank_samples_w, base_rollout.shank_samples_w),
+        thigh_samples_w=select(candidate_rollout.thigh_samples_w, base_rollout.thigh_samples_w),
         body_samples_w=select(candidate_rollout.body_samples_w, base_rollout.body_samples_w),
     )
 

@@ -27,7 +27,14 @@ class Go2Geometry:
     foot_pos_w: Tensor
     knee_pos_w: Tensor
     shank_samples_w: Tensor
+    thigh_samples_w: Tensor
     body_samples_w: Tensor
+
+
+@dataclass(frozen=True)
+class Go2LinkJacobians:
+    calf_samples: Tensor
+    thigh_samples: Tensor
 
 
 def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
@@ -63,7 +70,7 @@ def _validate_inputs(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) 
     return root_pos, root_rpy, joint
 
 
-def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor]:
+def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     batch = int(joint_pos.shape[0])
     angles = joint_pos.reshape(batch, 4, 3)
     abad = angles[..., 0]
@@ -80,7 +87,15 @@ def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor]:
     foot_z = knee_z - calf * torch.cos(calf_absolute)
     cosine = torch.cos(abad)
     sine = torch.sin(abad)
-    hip = constant_like(joint_pos, "hip_offsets", HIP_OFFSETS).view(1, 4, 3)
+    hip = constant_like(joint_pos, "hip_offsets", HIP_OFFSETS).view(1, 4, 3).expand(batch, -1, -1)
+    upper_body = torch.stack(
+        (
+            hip[..., 0],
+            hip[..., 1] + cosine * lateral,
+            hip[..., 2] + sine * lateral,
+        ),
+        dim=-1,
+    )
     knee_body = torch.stack(
         (
             hip[..., 0] + knee_x,
@@ -97,7 +112,7 @@ def _leg_points_body(joint_pos: Tensor) -> tuple[Tensor, Tensor]:
         ),
         dim=-1,
     )
-    return knee_body, foot_body
+    return upper_body, knee_body, foot_body
 
 
 def _body_collision_samples(dtype: torch.dtype, device: torch.device) -> Tensor:
@@ -125,19 +140,22 @@ def _body_collision_samples(dtype: torch.dtype, device: torch.device) -> Tensor:
 def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geometry:
     """Compute planner-order foot, knee, shank, and body samples in world coordinates."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
-    knee_body, foot_body = _leg_points_body(joint)
+    upper_body, knee_body, foot_body = _leg_points_body(joint)
     alpha = constant_like(joint, "shank_sample_alpha", (0.25, 0.5, 0.75)).view(1, 1, 3, 1)
     shank_body = knee_body.unsqueeze(2) * (1.0 - alpha) + foot_body.unsqueeze(2) * alpha
+    thigh_body = upper_body.unsqueeze(2) * (1.0 - alpha) + knee_body.unsqueeze(2) * alpha
     body_samples = _body_collision_samples(joint.dtype, joint.device).unsqueeze(0).expand(joint.shape[0], -1, -1)
     rotation = rpy_to_rotation_matrix(root_rpy)
     knee_world = torch.einsum("bij,bkj->bki", rotation, knee_body) + root_pos.unsqueeze(1)
     foot_world = torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
     shank_world = torch.einsum("bij,bkqj->bkqi", rotation, shank_body) + root_pos[:, None, None, :]
+    thigh_world = torch.einsum("bij,bkqj->bkqi", rotation, thigh_body) + root_pos[:, None, None, :]
     body_world = torch.einsum("bij,bkj->bki", rotation, body_samples) + root_pos.unsqueeze(1)
     return Go2Geometry(
         foot_pos_w=foot_world,
         knee_pos_w=knee_world,
         shank_samples_w=shank_world,
+        thigh_samples_w=thigh_world,
         body_samples_w=body_world,
     )
 
@@ -145,7 +163,7 @@ def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geom
 def go2_foot_pos(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
     """Compute only planner-order foot positions for nominal-shape references."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
-    _, foot_body = _leg_points_body(joint)
+    _, _, foot_body = _leg_points_body(joint)
     rotation = rpy_to_rotation_matrix(root_rpy)
     return torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
 
@@ -201,11 +219,58 @@ def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tenso
     return torch.einsum("bkiq,kqr->bkir", jacobian_world_leg, selector)
 
 
+def link_sample_jacobians(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2LinkJacobians:
+    """Return analytic local joint Jacobians for fixed calf and thigh samples."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    del root_pos
+    batch = int(joint.shape[0])
+    angles = joint.reshape(batch, 4, 3)
+    abad = angles[..., 0]
+    thigh_angle = angles[..., 1]
+    side = constant_like(joint, "leg_side_signs", LEG_SIDE_SIGNS).view(1, 4)
+    lateral = HIP_OFFSET_Y * side
+    cosine = torch.cos(abad)
+    sine = torch.sin(abad)
+    knee_z = -THIGH_LENGTH * torch.cos(thigh_angle)
+    dknee_x_thigh = -THIGH_LENGTH * torch.cos(thigh_angle)
+    dknee_z_thigh = THIGH_LENGTH * torch.sin(thigh_angle)
+    zero = torch.zeros_like(abad)
+    upper_abad = torch.stack((zero, -sine * lateral, cosine * lateral), dim=-1)
+    knee_abad = torch.stack(
+        (
+            zero,
+            -sine * lateral - cosine * knee_z,
+            cosine * lateral - sine * knee_z,
+        ),
+        dim=-1,
+    )
+    knee_thigh = torch.stack(
+        (dknee_x_thigh, -sine * dknee_z_thigh, cosine * dknee_z_thigh),
+        dim=-1,
+    )
+    upper_jacobian_body = torch.stack((upper_abad, torch.zeros_like(upper_abad), torch.zeros_like(upper_abad)), dim=-1)
+    knee_jacobian_body = torch.stack((knee_abad, knee_thigh, torch.zeros_like(knee_abad)), dim=-1)
+    rotation = rpy_to_rotation_matrix(root_rpy)
+    upper_jacobian = torch.einsum("bij,bkjq->bkiq", rotation, upper_jacobian_body)
+    knee_jacobian = torch.einsum("bij,bkjq->bkiq", rotation, knee_jacobian_body)
+    foot_jacobian = foot_jacobian_leg(
+        torch.zeros(batch, 3, dtype=joint.dtype, device=joint.device),
+        root_rpy,
+        joint,
+    )
+    alpha = constant_like(joint, "link_sample_alpha", (0.25, 0.5, 0.75)).view(1, 1, 3, 1, 1)
+    thigh_samples = upper_jacobian.unsqueeze(2) * (1.0 - alpha) + knee_jacobian.unsqueeze(2) * alpha
+    calf_samples = knee_jacobian.unsqueeze(2) * (1.0 - alpha) + foot_jacobian.unsqueeze(2) * alpha
+    return Go2LinkJacobians(calf_samples=calf_samples, thigh_samples=thigh_samples)
+
+
 __all__ = [
     "Go2Geometry",
+    "Go2LinkJacobians",
     "foot_jacobian_joint",
     "foot_jacobian_leg",
     "go2_fk",
     "go2_foot_pos",
+    "link_sample_jacobians",
     "rpy_to_rotation_matrix",
 ]
