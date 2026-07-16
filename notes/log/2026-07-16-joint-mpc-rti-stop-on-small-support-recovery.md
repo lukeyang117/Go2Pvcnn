@@ -4,7 +4,7 @@
 - Stage: `extension/joint_mpc_rti` rolling x1, RTI warm start, semantic/stance loss, native-shape verification, and real viewer.
 - Related todo: [T302v.5](../todo/T302v-joint-mpc-rti-gpu.md).
 - Baseline Ref: `c2093a9`.
-- Candidate Ref: working tree on `joint_mpc`; committed ref is recorded after commit.
+- Candidate Ref: `e2eb672`.
 - Key Files: `config.py`, `planner.py`, `losses/contact.py`, `losses/semantic.py`, `losses/rollout_objective.py`, `small_obstacle_stop_probe.py`, `small_obstacle_crossing_probe.py`.
 
 ## Root Causes
@@ -75,3 +75,8 @@ Per user direction, the signed-field `1024 x H16 x 1000` synchronous field+MPC `
 ## Conclusion
 
 The original sustained floating is removed without a zero-command/semantic hard gate. The planner now stops without root drift, keeps at least one real safe support through handoff, preserves strict crossing, and reports zero collision frames for foot/calf/thigh/base on the native-shape matrices.
+
+## Git Refs
+
+- Last Feature Commit: `e2eb672`.
+- Last Verified Commit: `e2eb672`.

@@ -49,8 +49,8 @@
 
 ## Git Refs
 
-- Last Feature Commit: pending T302v.5 commit.
-- Last Verified Commit: pending T302v.5 commit (`117` joint, `213` legacy, 65-case stop, crossing matrix, and real nine-command viewer pass; five-second signed-field performance open).
+- Last Feature Commit: `e2eb672`.
+- Last Verified Commit: `e2eb672` (`117` joint, `213` legacy, 65-case stop, crossing matrix, and real nine-command viewer pass; five-second signed-field performance open).
 - Current Work Ref: `joint_mpc`
 - Key Files: `planner.py`, `runtime/cuda_graph.py`, `runtime/manager.py`, `solver/primal_dual_ilqr.py`, `joint_mpc_rti_perf_probe.py`.
 
