@@ -3,7 +3,7 @@
 - Purpose: verify the synchronous exact-field implementation does not regress planner behavior or the old `mpc` backend.
 - Stage: joint planner, terrain query, factory/reward/viewer compatibility.
 - Related todo: [T302v](../todo/T302v-joint-mpc-rti-gpu.md).
-- Baseline Ref: `643a172`; Candidate Ref: `joint_mpc` working tree.
+- Baseline Ref: `643a172`; Candidate Ref: `4bad2e0`.
 - Key Files: `Go2Pvcnn/extension/joint_mpc_rti/`, `Go2Pvcnn/tests/joint_mpc_rti/`.
 
 ## Commands And Results

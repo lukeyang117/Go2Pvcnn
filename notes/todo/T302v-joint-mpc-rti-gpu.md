@@ -32,8 +32,8 @@
 
 ## Git Refs
 
-- Last Feature Commit: `643a172` plus current working tree
-- Last Verified Commit: `643a172` plus current working tree (`80` joint, `193` old MPC, full refresh acceptance)
+- Last Feature Commit: `4bad2e0`
+- Last Verified Commit: `4bad2e0` (`93` joint, `193` old MPC, full refresh acceptance)
 - Current Work Ref: `joint_mpc`
 - Key Files: `planner.py`, `runtime/cuda_graph.py`, `runtime/manager.py`, `solver/primal_dual_ilqr.py`, `joint_mpc_rti_perf_probe.py`.
 

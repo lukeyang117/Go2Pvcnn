@@ -3,7 +3,7 @@
 - Purpose: replace the B1024 tensor Jump Flood bottleneck and verify one exact distance-field refresh per MPC call.
 - Stage: `joint_mpc_rti` terrain field, query, line search and full-refresh runtime.
 - Related todo: [T302v](../todo/T302v-joint-mpc-rti-gpu.md).
-- Baseline Ref: `643a172`; Candidate Ref: `joint_mpc` working tree.
+- Baseline Ref: `643a172`; Candidate Ref: `4bad2e0`.
 - Key Files: `Go2Pvcnn/extension/joint_mpc_rti/terrain/cuda_edt.py`, `terrain/csrc/work_efficient_edt_cuda.cu`, `terrain/field_cache.py`, `terrain/query.py`, `planner.py`.
 
 ## Implementation
