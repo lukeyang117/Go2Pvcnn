@@ -201,6 +201,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
+| 2026-07-16 14:50 | Joint MPC viewer foot-name fix | undefined viewer normalization helper fixed; `133 passed`; real Isaac actual-state read finite | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [foot-name fix](log/2026-07-16-joint-mpc-viewer-foot-name-fix.md) |
 | 2026-07-16 13:35 | Joint MPC RTI speed and swing verification | planner root velocity tracks all nine commands; real viewer swing peak lift `0.034..0.064m`; direct playback velocity boundary documented | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [speed/swing verification](log/2026-07-16-joint-mpc-rti-speed-swing-verification.md) |
 | 2026-07-16 13:06 | Joint MPC RTI viewer grounding fix | functional pass: real nine-case order error `0`, stance surface gap max `0.010303m`, joint step max `0.183284rad`, zero root drift; performance recheck open | [T302v.3](todo/T302v-joint-mpc-rti-gpu.md) | [grounding fix](log/2026-07-16-joint-mpc-rti-viewer-grounding-fix.md) |
 | 2026-07-16 11:44 | Joint MPC RTI viewer foot-flying reproduction | reproduced: adapter order error mean `2.465rad`, joint step `2.479rad`, foot step `0.590m`; viewer playback matches planner | [T302v.3](todo/T302v-joint-mpc-rti-gpu.md) | [reproduction](log/2026-07-16-joint-mpc-rti-viewer-foot-flying-reproduction.md) |
