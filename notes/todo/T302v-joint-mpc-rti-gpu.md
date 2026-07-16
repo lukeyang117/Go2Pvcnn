@@ -5,16 +5,16 @@
 - Branch: `joint_mpc`; baseline commit: `cb2fff4`.
 - Rolling contract: inject measured `x0`, optimize `H=16`, publish only `x1` to PPO reference rewards.
 - Production profile: compiled fixed-horizon rollout/objective/query, packed geometry queries, diagonal GGN Riccati, `(1.0, 0.25)` line search, CUDA Graph replay.
-- Full synchronous performance: `1024 × H16 × 1000` exact field + MPC refreshes = `4469.05 ms`, mean `4.469 ms`, P95 `4.492 ms`, max `4.655 ms`, field version `+1000`, nonfinite `0`, peak `858.99 MiB`.
-- Verification: joint plus viewer `133 passed`; old MPC/reward/viewer `193 passed`; public factory batches `1/40/512/1024` are finite and version-correct.
+- Last accepted unsigned-field synchronous performance: `1024 × H16 × 1000` exact field + MPC refreshes = `4469.05 ms`, mean `4.469 ms`, P95 `4.492 ms`, max `4.655 ms`, field version `+1000`, nonfinite `0`, peak `858.99 MiB`. The signed-field candidate has not inherited this acceptance.
+- Current functional verification: joint MPC `110 passed`; old MPC/reward/viewer `213 passed`; public factory/cache batches `1/40/512/1024` are finite and version-correct.
 - Real IsaacLab: 1-env and 16-env three-step probes pass with field version `2`, finite `x1`, `target_step=1`, and `x0_error_max=0`; final refresh is about `19.9 ms`.
 - T302v.3 viewer foot-flying is fixed: shared name-based joint conversion gives zero adapter error; persistent stance anchors and physical `0.022m` foot contact offset keep the real nine-command stance surface residual at or below `0.010303m`; max joint step is `0.183284rad`; zero-command fixed trot remains active while root drift is numerically zero.
-- T302v.4 design review is approved and the implementation plan is written at [../../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md](../../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md). Execution is inline on `joint_mpc`, starting with signed-field and gait RED tests.
+- T302v.4 functional implementation is verified: small/large semantic fields are signed and half-cell corrected; H16 covers stance-swing-stance; foot/calf/thigh continuous residuals participate in merit and GGN/LQ; native sphere/cuboid/cylinder/capsule/cone at `0.1/0.2/0.4m/s` cross `254/254`, with foot/calf/thigh/base collision frames and maximum penetration all zero, stance-on-small `0`, invalid `0`.
+- Real nine-command viewer verification remains green on the current candidate: `passed=true`, joint-order error `0`, stance gap max `0.010098m`, joint step max `0.183805rad`, actual/planner foot error max `5.38e-7m`, and zero-command root drift remains numerical zero.
 
 ## Open Children
 
-- T302v.4 small-obstacle collision: five native shapes x three forward speeds reproduce geometric foot/calf/thigh contact. Strict per-leg `stance-swing-stance` cross success is `1/223 (0.45%)`; calf collision invalidates `97.8%` of crossing opportunities. Follow-up design is written in [../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html](../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html): keep `H=16`, change `half_cycle_steps=8`, upgrade small/large channels to signed boundary distance using complementary exact EDT and half-cell correction, add foot/calf/thigh residuals to both GGN/LQ and merit, require separate foot/calf/thigh/base collision-frame rates of `0%` overall and per shape-speed cell, and retain strict cross plus stance-ground metrics. Planner/loss/constraint code remains unchanged while the user reviews the design.
-- Current candidate five-second performance recheck: all four GPUs were occupied by external training; contested `1024 x H16 x 1000` samples varied from `5.63s` to `8.99s`, so the prior uncontended `4.469s` acceptance is retained but not transferred to the new candidate without an idle-card rerun.
+- Current signed-field candidate five-second performance: all four GPUs are occupied by external workloads. Do not accept or reject throughput from contested measurements; rerun `1024 x H16 x 1000` synchronous signed field + MPC on an idle card and require `<5s`, field version `+1000`, and nonfinite `0`.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
 ## Closed Children Archive
@@ -27,6 +27,7 @@
 - Batch-size contract: `create_trajectory_manager(..., num_envs=N)` is the upper-level entry; attach auto-forwards env count. Changing batch size requires rebuilding manager/cache/CUDA Graph and is rejected explicitly on an existing instance.
 - T302v.3 joint order and stance grounding: fixed and real-verified across zero, forward/backward, lateral, yaw, speed-varied, and mixed commands without disabling fixed trot.
 - Viewer actual-state foot ordering now shares the public articulation-name normalizer; the reported post-playback `NameError` is real-Isaac verified fixed.
+- T302v.4 functional crossing: signed distance, thigh geometry/Jacobians, continuous GGN/LQ link clearance, effective single-height-map object top, touchdown avoidance, and native-shape acceptance are implemented without hard behavior gates.
 
 ## Related Logs
 
@@ -40,17 +41,18 @@
 - [Viewer foot-name fix](../log/2026-07-16-joint-mpc-viewer-foot-name-fix.md)
 - [Small-obstacle collision quantification](../log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md)
 - [Small-obstacle crossing design](../log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.md)
+- [Small-obstacle crossing implementation](../log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation.md)
 
 ## Git Refs
 
-- Last Feature Commit: `b99cda0`
-- Last Verified Commit: `b99cda0` (`133` joint/viewer, real Isaac actual-state read pass; five-second perf recheck open)
+- Last Feature Commit: `625768f`.
+- Last Verified Commit: `625768f` (`110` joint, `213` legacy, real nine-command viewer and crossing matrix pass; five-second signed-field performance open).
 - Current Work Ref: `joint_mpc`
 - Key Files: `planner.py`, `runtime/cuda_graph.py`, `runtime/manager.py`, `solver/primal_dual_ilqr.py`, `joint_mpc_rti_perf_probe.py`.
 
 ## Next Step
 
-Execute the T302v.4 plan inline: signed distance and gait first, then thigh geometry, GGN/LQ collision visibility, native-shape strict-cross/zero-collision acceptance, regressions, and uncontended `1024 x H16 x 1000` full refresh performance.
+When one RTX 4090 is idle, run the uncontended `1024 x H16 x 1000` synchronous signed-field + MPC performance gate and optimize without relaxing metrics if it is not below five seconds.
 
 ## Node Details
 
