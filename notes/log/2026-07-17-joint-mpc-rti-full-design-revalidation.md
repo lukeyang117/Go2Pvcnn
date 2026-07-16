@@ -4,7 +4,7 @@
 - Stage: `Go2Pvcnn/extension/joint_mpc_rti` signed field, fixed-shape GGN/LQ RTI, rolling `x1`, native-shape behavior, viewer integration, and 1024-env synchronous performance.
 - Related todo: [T302v](../todo/T302v-joint-mpc-rti-gpu.md).
 - Baseline Ref: `d954671`.
-- Candidate Ref: `joint_mpc` working tree.
+- Candidate Ref: `9e71ac1`.
 
 ## Functional Revalidation
 
@@ -40,5 +40,5 @@ The rejected CUDA experiments were removed; the branch retains the original nume
 
 ## Git Refs
 
-- Last Verified Functional Ref: working tree after `d954671`.
+- Last Verified Functional Ref: `9e71ac1`.
 - Performance Status: blocked by realistic multi-cell exact signed EDT throughput; do not cite the earlier single-cell `4.768s` as acceptance.

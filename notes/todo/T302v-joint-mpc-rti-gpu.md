@@ -52,8 +52,8 @@
 
 ## Git Refs
 
-- Last Feature Commit: working tree after `d954671`; compiled MPC performance change pending commit.
-- Last Verified Commit: working tree after `d954671` (functional gates pass; realistic multi-cell signed performance blocked).
+- Last Feature Commit: `9e71ac1`.
+- Last Verified Commit: `9e71ac1` (functional gates pass; realistic multi-cell signed performance blocked).
 - Current Work Ref: `joint_mpc`
 - Key Files: `planner.py`, `runtime/cuda_graph.py`, `runtime/manager.py`, `solver/primal_dual_ilqr.py`, `joint_mpc_rti_perf_probe.py`.
 
