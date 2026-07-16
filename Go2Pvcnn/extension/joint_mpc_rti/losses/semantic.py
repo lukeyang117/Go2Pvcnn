@@ -30,6 +30,7 @@ def small_object_losses(
     foot_radius: float = 0.022,
     calf_radius: float = 0.040,
     thigh_radius: float = 0.040,
+    nominal_small_height: float = 0.16,
     link_margin_xy: float = 0.010,
     link_margin_z: float = 0.01,
     barrier_relaxation: float = 0.01,
@@ -43,7 +44,10 @@ def small_object_losses(
     )
     stance = torch.as_tensor(stance_mask, dtype=torch.bool, device=foot.device)
     influence = torch.sigmoid((float(influence_radius) - foot_distance) / float(temperature))
-    over_margin = foot[..., 2] - top - float(extra_margin)
+    effective_foot_top = top + float(nominal_small_height) * torch.sigmoid(
+        foot_distance / float(temperature)
+    )
+    over_margin = foot[..., 2] - effective_foot_top - float(extra_margin)
     foot_over_raw = influence * localized_relaxed_barrier(
         over_margin,
         activation_margin=0.005,
@@ -62,9 +66,12 @@ def small_object_losses(
         point = torch.as_tensor(position, dtype=foot.dtype, device=foot.device)
         signed_distance = torch.as_tensor(distance, dtype=foot.dtype, device=foot.device)
         point_top = torch.as_tensor(top_height, dtype=foot.dtype, device=foot.device)
+        effective_top = point_top + float(nominal_small_height) * torch.sigmoid(
+            signed_distance / float(temperature)
+        )
         proximity = torch.sigmoid((float(influence_radius) - signed_distance) / float(temperature))
         vertical = torch.sigmoid(
-            (point_top + float(link_margin_z) - point[..., 2]) / float(temperature)
+            (effective_top + float(link_margin_z) - point[..., 2]) / float(temperature)
         )
         barrier = relaxed_barrier(
             signed_distance - float(radius) - float(link_margin_xy),

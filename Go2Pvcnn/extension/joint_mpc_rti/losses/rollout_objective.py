@@ -220,6 +220,8 @@ def rollout_loss_breakdown(
             foot_radius=cfg.gait.foot_collision_radius,
             calf_radius=cfg.gait.calf_collision_radius,
             thigh_radius=cfg.gait.thigh_collision_radius,
+            nominal_small_height=cfg.gait.small_semantic_height,
+            touchdown_margin=cfg.gait.small_touchdown_margin,
             influence_radius=cfg.gait.small_collision_influence_radius,
             temperature=cfg.gait.small_collision_temperature,
             link_margin_xy=cfg.gait.small_collision_margin_xy,

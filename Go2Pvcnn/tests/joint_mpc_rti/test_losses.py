@@ -165,6 +165,35 @@ def test_small_object_merit_exposes_separate_foot_calf_thigh_clearance() -> None
     assert result["small_object_thigh_clearance"] > 0.0
 
 
+def test_small_clearance_reconstructs_near_boundary_top_from_signed_distance() -> None:
+    from extension.joint_mpc_rti.losses.semantic import small_object_losses
+
+    common = dict(
+        foot_pos_w=torch.tensor([[[[0.0, 0.0, 0.25]]]]),
+        foot_small_distance=torch.tensor([[[0.02]]]),
+        small_top_height=torch.zeros(1, 1, 1),
+        small_distance_touchdown=torch.tensor([[0.20]]),
+        calf_small_distance=torch.tensor([[[0.02]]]),
+        calf_top_height=torch.zeros(1, 1, 1),
+        thigh_pos_w=torch.tensor([[[[0.0, 0.0, 0.25]]]]),
+        thigh_small_distance=torch.tensor([[[0.20]]]),
+        thigh_top_height=torch.zeros(1, 1, 1),
+        swing_mask=torch.tensor([[[True]]]),
+        stance_mask=torch.tensor([[[False]]]),
+        extra_margin=0.04,
+    )
+    low = small_object_losses(
+        **common,
+        calf_pos_w=torch.tensor([[[[0.0, 0.0, 0.10]]]]),
+    )
+    high = small_object_losses(
+        **common,
+        calf_pos_w=torch.tensor([[[[0.0, 0.0, 0.25]]]]),
+    )
+
+    assert low["small_object_calf_clearance"] > high["small_object_calf_clearance"]
+
+
 def test_touchdown_on_small_is_penalized_even_when_height_matches_surface() -> None:
     from extension.joint_mpc_rti.losses.contact import touchdown_losses
     from extension.joint_mpc_rti.losses.semantic import small_object_losses

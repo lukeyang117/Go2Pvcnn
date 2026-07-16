@@ -374,4 +374,4 @@ def test_small_foot_calf_thigh_clearance_each_changes_lq_joint_gradient() -> Non
         setattr(local_cfg.losses, active_name, 10.0)
         changed = planner._add_small_obstacle_linearization(base, rollout, queries, local_cfg)
         assert torch.count_nonzero(changed.vector_q[..., 6:]) > 0
-        assert torch.all(changed.vector_q[..., 0] < base.vector_q[..., 0])
+        torch.testing.assert_close(changed.vector_q[..., :2], base.vector_q[..., :2])

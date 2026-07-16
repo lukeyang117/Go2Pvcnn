@@ -415,9 +415,15 @@ def _add_foot_terrain_linearization(
     foot_gradient[..., 2].add_(
         float(cfg.losses.terrain_swing_clearance) * normalized_mask(swing_weight) * swing_derivative
     )
-    small_influence = torch.sigmoid((0.08 - small_distance) / 0.02)
+    small_influence = torch.sigmoid(
+        (float(cfg.gait.small_collision_influence_radius) - small_distance)
+        / float(cfg.gait.small_collision_temperature)
+    )
+    small_effective_height = height + float(cfg.gait.small_semantic_height) * torch.sigmoid(
+        small_distance / float(cfg.gait.small_collision_temperature)
+    )
     small_over_derivative = localized_relaxed_barrier_derivative(
-        foot[..., 2] - height - float(cfg.gait.small_semantic_clearance),
+        foot[..., 2] - small_effective_height - float(cfg.gait.small_semantic_clearance),
         activation_margin=0.005,
         relaxation=relaxation,
     )
@@ -437,7 +443,7 @@ def _add_foot_terrain_linearization(
         float(cfg.losses.stance_xy_lock) * stance_normalizer.unsqueeze(-1) * 2.0 * stance_xy_error
     )
     small_touchdown_derivative = relaxed_barrier_derivative(
-        small_distance - 0.02,
+        small_distance - float(cfg.gait.small_touchdown_margin),
         relaxation=relaxation,
     )
     small_xy_gradient = (
@@ -542,19 +548,31 @@ def _add_small_obstacle_linearization(
         sdf_gradient = query.small_gradient_w.reshape(batch, nodes, 4, sample_count, 2)
         proximity = torch.sigmoid((influence_radius - distance) / temperature)
         normalizer = proximity.sum(dim=(1, 2, 3), keepdim=True).clamp_min(1.0)
-        vertical = torch.sigmoid((height + margin_z - position[..., 2]) / temperature)
+        effective_height = height + float(cfg.gait.small_semantic_height) * torch.sigmoid(
+            distance / temperature
+        )
+        vertical = torch.sigmoid((effective_height + margin_z - position[..., 2]) / temperature)
         clearance = distance - float(radius) - margin_xy
         barrier = relaxed_barrier(clearance, relaxation=relaxation)
         derivative = relaxed_barrier_derivative(clearance, relaxation=relaxation)
         factor = float(weight) * proximity / normalizer
-        gradient_xy = factor.unsqueeze(-1) * vertical.unsqueeze(-1) * derivative.unsqueeze(-1) * sdf_gradient
+        gradient_xy = (
+            float(cfg.gait.small_collision_link_xy_scale)
+            * factor.unsqueeze(-1)
+            * vertical.unsqueeze(-1)
+            * derivative.unsqueeze(-1)
+            * sdf_gradient
+        )
         vertical_derivative = -vertical * (1.0 - vertical) / temperature
         gradient_z = factor * vertical_derivative * barrier
         point_gradient = torch.cat((gradient_xy, gradient_z.unsqueeze(-1)), dim=-1)
         joint_gradient = torch.einsum("bnlsd,bnlsdj->bnlj", point_gradient, jacobian).reshape(
             batch, nodes, 12
         )
-        root_gradient = point_gradient[..., :2].sum(dim=(2, 3))
+        root_gradient = (
+            float(cfg.gait.small_collision_root_xy_scale)
+            * point_gradient[..., :2].sum(dim=(2, 3))
+        )
         vector_q[..., :2].add_(root_gradient[:, :-1])
         vector_q[..., 6:].add_(joint_gradient[:, :-1])
         terminal_vector[..., :2].add_(root_gradient[:, -1])

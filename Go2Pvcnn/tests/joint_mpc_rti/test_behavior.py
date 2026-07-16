@@ -6,6 +6,23 @@ import pytest
 from .helpers import make_command, make_flat_field, make_state
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="native crossing matrix requires CUDA")
+def test_native_small_matrix_crosses_without_body_collision() -> None:
+    from .small_obstacle_crossing_probe import PARTS, run_crossing_matrix
+
+    result = run_crossing_matrix(device="cuda")
+
+    assert result.overall_cross_success_rate >= 0.95, result
+    assert all(case.cross_opportunities > 0 for case in result.cases.values()), result.cases
+    assert min(result.cross_success_rate_by_case.values()) >= 0.90, result.cases
+    for part in PARTS:
+        assert result.collision_frames[part] == 0, result.cases
+        assert max(case.collision_frames[part] for case in result.cases.values()) == 0, result.cases
+        assert max(case.max_penetration_m[part] for case in result.cases.values()) <= 0.001, result.cases
+    assert result.stance_on_small_frames == 0, result.cases
+    assert result.invalid_count == 0, result
+
+
 def _realtime_cfg():
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
 

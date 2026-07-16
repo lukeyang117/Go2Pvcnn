@@ -33,19 +33,23 @@ class JointMpcRtiSolverCfg:
 class JointMpcRtiGaitCfg:
     half_cycle_steps: int = 8
     nominal_joint_pos: tuple[float, ...] = (0.0, 0.8, -1.5) * 4
-    swing_thigh_angle: float = 0.55
-    swing_calf_angle: float = -1.75
+    swing_thigh_angle: float = 1.20
+    swing_calf_angle: float = -2.60
     max_nominal_joint_velocity: float = 9.0
     foot_contact_offset: float = 0.022
     nominal_swing_clearance: float = 0.015
-    small_semantic_clearance: float = 0.03
+    small_semantic_clearance: float = 0.04
+    small_semantic_height: float = 0.16
     foot_collision_radius: float = 0.022
     calf_collision_radius: float = 0.040
     thigh_collision_radius: float = 0.040
     small_collision_margin_xy: float = 0.010
-    small_collision_margin_z: float = 0.010
+    small_collision_margin_z: float = 0.040
+    small_touchdown_margin: float = 0.032
     small_collision_influence_radius: float = 0.10
     small_collision_temperature: float = 0.02
+    small_collision_root_xy_scale: float = 0.0
+    small_collision_link_xy_scale: float = 0.10
 
 
 @dataclass
@@ -85,8 +89,8 @@ class JointMpcRtiLossCfg:
     knee_ground_clearance: float = 2.0
     shank_ground_clearance: float = 2.0
     body_ground_clearance: float = 8.0
-    small_object_foot_over: float = 10.0
-    small_object_touchdown_avoidance: float = 8.0
+    small_object_foot_over: float = 60.0
+    small_object_touchdown_avoidance: float = 30.0
     small_object_foot_clearance: float = 20.0
     small_object_calf_clearance: float = 30.0
     small_object_thigh_clearance: float = 15.0
