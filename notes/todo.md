@@ -6,7 +6,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 - Current focus: **T302v joint MPC RTI GPU**.
 - Active branch page: [T302v](todo/T302v-joint-mpc-rti-gpu.md).
-- Active implementation plan: [Joint MPC RTI GPU plan](../docs/superpowers/plans/2026-07-15-joint-mpc-rti-gpu-implementation-plan.md).
+- Active implementation plan: [Joint MPC RTI small-obstacle crossing plan](../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md).
 - Background reward implementation plan: [T302r Go2 geometry clearance reward plan](todo/T302r-go2-geometry-clearance-reward-plan.md).
 - Active code surface:
   - [Go2Pvcnn/extension/batch_mpc_planner/participation.py](../Go2Pvcnn/extension/batch_mpc_planner/participation.py)
@@ -150,7 +150,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
-- T302v.4 small-obstacle crossing collision: controlled five-shape x three-speed rolling x1 matrix reproduces collision; strict `stance-swing-stance` cross success is `1/223 (0.45%)`, with calf contact invalidating `97.8%` and foot contact `78.0%` of opportunities. Repair design is under user review and keeps the no-hard-gate route: `half_cycle_steps=8`, small/large signed boundary distance, foot/calf/thigh clearance in both GGN/LQ and merit, strict cross and stance-ground metrics, plus separate foot/calf/thigh/base collision-frame rates of `0%` overall and for every shape-speed cell; no planner code changed yet; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [design](../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html), [quantification](log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md).
+- T302v.4 small-obstacle crossing collision: controlled five-shape x three-speed rolling x1 matrix reproduces collision; strict `stance-swing-stance` cross success is `1/223 (0.45%)`, with calf contact invalidating `97.8%` and foot contact `78.0%`. Design is approved; the six-task TDD implementation plan is active, beginning with signed-field/gait RED tests, followed by thigh geometry, GGN/LQ collision visibility, strict-cross/zero-collision acceptance, and performance; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [plan](../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md), [quantification](log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md).
 - T302v current-candidate performance: functional T302v.3 is closed; rerun `1024 x H16 x 1000` exact EDT + MPC on an uncontended GPU because all current samples were polluted by external training (`5.63-8.99s`); [branch page](todo/T302v-joint-mpc-rti-gpu.md), [fix log](log/2026-07-16-joint-mpc-rti-viewer-grounding-fix.md).
 - T302v real-1024 boundary: planner-side synchronous exact-field + MPC target is closed; separately measure Isaac physics and RayCaster ray generation when an uncontended real-sim slot is available; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
@@ -202,6 +202,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
+| 2026-07-16 | Joint MPC RTI small-obstacle crossing implementation plan | six tasks / 25 TDD steps; inline execution authorized and active | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [implementation plan](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-plan.md) |
 | 2026-07-16 16:05 | Joint MPC RTI small-obstacle crossing design | under review: adds signed-distance construction and separate foot/calf/thigh/base collision-frame rate `0%` acceptance overall and per shape-speed cell; strict cross remains required; code unchanged | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [crossing design](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.md) |
 | 2026-07-16 15:20 | Joint MPC small-obstacle collision quantification | reproduced: strict cross success `1/223`; calf collision dominates; no planner code changed | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [collision quantification](log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md) |
 | 2026-07-16 14:50 | Joint MPC viewer foot-name fix | undefined viewer normalization helper fixed; `133 passed`; real Isaac actual-state read finite | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [foot-name fix](log/2026-07-16-joint-mpc-viewer-foot-name-fix.md) |

@@ -9,6 +9,7 @@
 - Verification: joint plus viewer `133 passed`; old MPC/reward/viewer `193 passed`; public factory batches `1/40/512/1024` are finite and version-correct.
 - Real IsaacLab: 1-env and 16-env three-step probes pass with field version `2`, finite `x1`, `target_step=1`, and `x0_error_max=0`; final refresh is about `19.9 ms`.
 - T302v.3 viewer foot-flying is fixed: shared name-based joint conversion gives zero adapter error; persistent stance anchors and physical `0.022m` foot contact offset keep the real nine-command stance surface residual at or below `0.010303m`; max joint step is `0.183284rad`; zero-command fixed trot remains active while root drift is numerically zero.
+- T302v.4 design review is approved and the implementation plan is written at [../../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md](../../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md). Execution is inline on `joint_mpc`, starting with signed-field and gait RED tests.
 
 ## Open Children
 
@@ -49,7 +50,7 @@
 
 ## Next Step
 
-Wait for user approval of the T302v.4 design. After approval, create the implementation plan, then implement RED/GREEN tests for signed distance, GGN/LQ visibility, strict cross, separate foot/calf/thigh/base zero collision rates, and stance-ground metrics. Separately rerun `1024 x H16 x 1000` synchronous full refresh on an uncontended GPU before transferring the five-second performance acceptance to the new candidate.
+Execute the T302v.4 plan inline: signed distance and gait first, then thigh geometry, GGN/LQ collision visibility, native-shape strict-cross/zero-collision acceptance, regressions, and uncontended `1024 x H16 x 1000` full refresh performance.
 
 ## Node Details
 
