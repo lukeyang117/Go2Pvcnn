@@ -699,6 +699,66 @@ def _add_root_support_linearization(
     return replace(problem, matrix_q=matrix_q, vector_q=vector_q)
 
 
+_COMPILED_BUILD_LQ_PROBLEM = torch.compile(
+    _build_lq_problem,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_ADD_LARGE_OBSTACLE_LINEARIZATION = torch.compile(
+    _add_large_obstacle_linearization,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_ADD_SMALL_OBSTACLE_LINEARIZATION = torch.compile(
+    _add_small_obstacle_linearization,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_ADD_FOOT_TERRAIN_LINEARIZATION = torch.compile(
+    _add_foot_terrain_linearization,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_ADD_ROOT_SUPPORT_LINEARIZATION = torch.compile(
+    _add_root_support_linearization,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_QUERY_LINEARIZATION_GEOMETRY = torch.compile(
+    _query_linearization_geometry,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_DESIRED_CONTROL = torch.compile(
+    _desired_control,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_STANCE_ANCHOR_TARGETS = torch.compile(
+    _stance_anchor_targets,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+_COMPILED_ROLLOUT_CONTROLS = torch.compile(
+    rollout_controls,
+    fullgraph=True,
+    dynamic=False,
+    options={"triton.cudagraphs": False},
+)
+
+
+def _linearization_function(eager, compiled, enabled: bool):
+    return compiled if bool(enabled) else eager
+
+
 def step(
     measured_state: JointMpcRtiState,
     command_body: Tensor,
@@ -730,7 +790,12 @@ def step(
         cfg,
         dtype=measured_state.root_pos_w.dtype,
     )
-    desired_control, joint_target = _desired_control(measured_state, command, contact, phase_step, cfg)
+    compile_linearization = bool(cfg.solver.compile_kernels) and measured_state.root_pos_w.is_cuda
+    desired_control, joint_target = _linearization_function(
+        _desired_control,
+        _COMPILED_DESIRED_CONTROL,
+        compile_linearization,
+    )(measured_state, command, contact, phase_step, cfg)
     nominal_state = rollout_state_sequence(
         measured_state,
         desired_control,
@@ -757,23 +822,51 @@ def step(
             device=measured_foot_w.device,
         )
     )
-    stance_anchor_w = _stance_anchor_targets(
+    stance_anchor_w = _linearization_function(
+        _stance_anchor_targets,
+        _COMPILED_STANCE_ANCHOR_TARGETS,
+        compile_linearization,
+    )(
         nominal_foot_pos_w,
         contact,
         initial_anchor_w=previous_stance_anchor,
     )
     base_control = _initial_control(desired_control, solver_state)
-    base_rollout = rollout_controls(
+    base_rollout = _linearization_function(
+        rollout_controls,
+        _COMPILED_ROLLOUT_CONTROLS,
+        compile_linearization,
+    )(
         measured_state,
         base_control,
         dt=float(cfg.runtime.dt),
         compile_kernels=bool(cfg.solver.compile_kernels),
     )
-    lq_problem = _build_lq_problem(base_rollout, desired_control, joint_target, measured_state, cfg)
-    linearization_queries = _query_linearization_geometry(base_rollout, terrain_field, cfg)
-    lq_problem = _add_large_obstacle_linearization(lq_problem, base_rollout, linearization_queries, cfg)
-    lq_problem = _add_small_obstacle_linearization(lq_problem, base_rollout, linearization_queries, cfg)
-    lq_problem = _add_foot_terrain_linearization(
+    lq_problem = _linearization_function(
+        _build_lq_problem,
+        _COMPILED_BUILD_LQ_PROBLEM,
+        compile_linearization,
+    )(base_rollout, desired_control, joint_target, measured_state, cfg)
+    linearization_queries = _linearization_function(
+        _query_linearization_geometry,
+        _COMPILED_QUERY_LINEARIZATION_GEOMETRY,
+        compile_linearization,
+    )(base_rollout, terrain_field, cfg)
+    lq_problem = _linearization_function(
+        _add_large_obstacle_linearization,
+        _COMPILED_ADD_LARGE_OBSTACLE_LINEARIZATION,
+        compile_linearization,
+    )(lq_problem, base_rollout, linearization_queries, cfg)
+    lq_problem = _linearization_function(
+        _add_small_obstacle_linearization,
+        _COMPILED_ADD_SMALL_OBSTACLE_LINEARIZATION,
+        compile_linearization,
+    )(lq_problem, base_rollout, linearization_queries, cfg)
+    lq_problem = _linearization_function(
+        _add_foot_terrain_linearization,
+        _COMPILED_ADD_FOOT_TERRAIN_LINEARIZATION,
+        compile_linearization,
+    )(
         lq_problem,
         base_rollout,
         contact,
@@ -784,7 +877,11 @@ def step(
         linearization_queries.foot,
         cfg,
     )
-    lq_problem = _add_root_support_linearization(lq_problem, base_rollout, contact, linearization_queries.foot, cfg)
+    lq_problem = _linearization_function(
+        _add_root_support_linearization,
+        _COMPILED_ADD_ROOT_SUPPORT_LINEARIZATION,
+        compile_linearization,
+    )(lq_problem, base_rollout, contact, linearization_queries.foot, cfg)
     previous_control = (
         measured_state.joint_vel.new_zeros((measured_state.batch_size, 18))
         if solver_state is None
@@ -839,7 +936,11 @@ def step(
     def merit_fn(candidate_control: Tensor) -> Tensor:
         repeats = int(candidate_control.shape[0]) // measured_state.batch_size
         repeated_state = _repeat_state(measured_state, repeats)
-        candidate_rollout = rollout_controls(
+        candidate_rollout = _linearization_function(
+            rollout_controls,
+            _COMPILED_ROLLOUT_CONTROLS,
+            compile_linearization,
+        )(
             repeated_state,
             candidate_control,
             dt=float(cfg.runtime.dt),

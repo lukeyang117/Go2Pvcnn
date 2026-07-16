@@ -28,7 +28,7 @@
 - Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_kinematics_gait.py`
 - Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_terrain_fields.py`
 
-- [ ] **Step 1: Add the gait RED test**
+- [x] **Step 1: Add the gait RED test**
 
 ```python
 def test_default_h16_covers_stance_swing_stance() -> None:
@@ -41,7 +41,7 @@ def test_default_h16_covers_stance_swing_stance() -> None:
         assert (transitions == 1).any()
 ```
 
-- [ ] **Step 2: Add signed CPU/CUDA RED tests**
+- [x] **Step 2: Add signed CPU/CUDA RED tests**
 
 ```python
 def test_semantic_distance_is_signed_and_half_cell_corrected() -> None:
@@ -57,7 +57,7 @@ def test_signed_distance_degenerate_channels_are_finite() -> None:
     assert torch.isfinite(full.small_distance_m).all() and (full.small_distance_m < 0).all()
 ```
 
-- [ ] **Step 3: Run and confirm RED**
+- [x] **Step 3: Run and confirm RED**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q \
@@ -79,7 +79,7 @@ Expected: default gait is `4`; obstacle interiors are zero instead of negative.
 - Modify: `Go2Pvcnn/extension/joint_mpc_rti/terrain/csrc/work_efficient_edt.cpp`
 - Modify: `Go2Pvcnn/extension/joint_mpc_rti/terrain/csrc/work_efficient_edt_cuda.cu`
 
-- [ ] **Step 1: Change default timing and implement CPU reference**
+- [x] **Step 1: Change default timing and implement CPU reference**
 
 ```python
 def signed_boundary_distance(mask: Tensor, *, resolution: float) -> Tensor:
@@ -97,7 +97,7 @@ def signed_boundary_distance(mask: Tensor, *, resolution: float) -> Tensor:
 
 Set `JointMpcRtiGaitCfg.half_cycle_steps = 8`.
 
-- [ ] **Step 2: Implement fixed-workspace CUDA signed output**
+- [x] **Step 2: Implement fixed-workspace CUDA signed output**
 
 Compute four transforms per environment: small occupied/free and large occupied/free. Keep float output `[2,B,151,151]`, expand reusable int16 workspace to `[4,B,151,151]`, then combine:
 
@@ -109,11 +109,11 @@ output[index] = occupied
 
 No occupied seed returns positive grid diagonal; no free seed returns negative grid diagonal. Do not emit `inf` or `NaN`.
 
-- [ ] **Step 3: Publish signed fields through builder/cache**
+- [x] **Step 3: Publish signed fields through builder/cache**
 
 Use `signed_boundary_distance` on CPU. Preserve the public field names `small_distance_m` and `large_distance_m` for compatibility, but all values and query gradients now follow the signed contract.
 
-- [ ] **Step 4: Run GREEN field tests and commit**
+- [x] **Step 4: Run GREEN field tests and commit**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti/test_terrain_fields.py Go2Pvcnn/tests/joint_mpc_rti/test_kinematics_gait.py
@@ -131,7 +131,7 @@ Expected: CPU/CUDA parity, boundary signs, rotated query gradient, empty/full ch
 - Modify: `Go2Pvcnn/extension/joint_mpc_rti/model/rollout.py`
 - Modify: `Go2Pvcnn/extension/joint_mpc_rti/planner.py`
 
-- [ ] **Step 1: Add RED shape and finite-difference tests**
+- [x] **Step 1: Add RED shape and finite-difference tests**
 
 ```python
 def test_fk_exposes_fixed_thigh_samples() -> None:
@@ -145,7 +145,7 @@ def test_link_sample_jacobian_matches_finite_difference(part: str) -> None:
     torch.testing.assert_close(analytic, finite, atol=3e-5, rtol=3e-4)
 ```
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti/test_kinematics_gait.py -k 'thigh or link_sample_jacobian'
@@ -153,11 +153,11 @@ def test_link_sample_jacobian_matches_finite_difference(part: str) -> None:
 
 Expected: missing thigh samples/Jacobian API.
 
-- [ ] **Step 3: Implement fixed thigh samples and point Jacobians**
+- [x] **Step 3: Implement fixed thigh samples and point Jacobians**
 
 Use alpha `(0.25, 0.5, 0.75)` for hip-to-knee thigh and knee-to-foot calf. Thigh Jacobian is `alpha * knee_jacobian`; calf Jacobian is `(1-alpha)*knee_jacobian + alpha*foot_jacobian`. Return `[B,4,3,3,3]` per sampled link and carry thigh through `JointMpcRollout` and candidate selection.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti/test_kinematics_gait.py Go2Pvcnn/tests/joint_mpc_rti/test_solver.py
@@ -175,7 +175,7 @@ git commit -m "feat: add thigh collision geometry"
 - Modify: `Go2Pvcnn/extension/joint_mpc_rti/losses/rollout_objective.py`
 - Modify: `Go2Pvcnn/extension/joint_mpc_rti/planner.py`
 
-- [ ] **Step 1: Add RED parity and direction tests**
+- [x] **Step 1: Add RED parity and direction tests**
 
 ```python
 @pytest.mark.parametrize("part", ("foot", "calf", "thigh"))
@@ -190,7 +190,7 @@ def test_lq_direction_increases_penetrating_part_signed_distance(part: str) -> N
     assert after > before
 ```
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti/test_losses.py Go2Pvcnn/tests/joint_mpc_rti/test_solver.py -k 'small_clearance or lq_direction'
@@ -198,15 +198,15 @@ def test_lq_direction_increases_penetrating_part_signed_distance(part: str) -> N
 
 Expected: named residuals missing; calf/thigh LQ direction zero.
 
-- [ ] **Step 3: Implement shared residual semantics**
+- [x] **Step 3: Implement shared residual semantics**
 
 Add physical radii `foot=0.022`, `calf=0.040`, `thigh=0.040` and separate weights. Merit returns `small_object_foot_clearance`, `small_object_calf_clearance`, `small_object_thigh_clearance`. Each uses `signed_distance - radius - margin`, continuous height weight, and proximity-weighted normalization.
 
-- [ ] **Step 4: Add thigh packed queries and LQ gradients**
+- [x] **Step 4: Add thigh packed queries and LQ gradients**
 
 Extend `_LinearizationQueries` with thigh. Chain barrier derivative, query XY gradient, and analytic point Jacobian into root XY and corresponding joint columns. Add positive diagonal GGN curvature from squared Jacobians. Reuse exactly the same radii, margins, weights, and residual names as merit.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti/test_losses.py Go2Pvcnn/tests/joint_mpc_rti/test_solver.py Go2Pvcnn/tests/joint_mpc_rti/test_behavior.py
@@ -220,7 +220,7 @@ git commit -m "feat: optimize small obstacle link clearance"
 - Create: `Go2Pvcnn/tests/joint_mpc_rti/small_obstacle_crossing_probe.py`
 - Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_behavior.py`
 
-- [ ] **Step 1: Implement reusable metrics**
+- [x] **Step 1: Implement reusable metrics**
 
 ```python
 @dataclass(frozen=True)
@@ -235,7 +235,7 @@ class CrossingMetrics:
 
 Use native sphere/cuboid/cylinder/capsule/cone, speeds `0.1/0.2/0.4m/s`, multiple longitudinal phases, foot sphere `0.022m`, calf/thigh capsules `0.040m`, and existing base samples. Strict cross is `stance -> contiguous swing -> stance`, both stances off semantic, swing XY over object, no side bypass, and no part contact.
 
-- [ ] **Step 2: Add and run the RED acceptance**
+- [x] **Step 2: Add and run the RED acceptance**
 
 ```python
 def test_native_small_matrix_crosses_without_body_collision() -> None:
@@ -254,11 +254,11 @@ def test_native_small_matrix_crosses_without_body_collision() -> None:
 
 Expected: reproduce nonzero foot/calf collisions and low strict-cross success.
 
-- [ ] **Step 3: Tune only approved continuous parameters**
+- [x] **Step 3: Tune only approved continuous parameters**
 
 Adjust weights, margins, proximity normalization, and swing target amplitude. After every change rerun native matrix plus flat command/stance tests. Do not add shape branches, hard crossing gates, fixed avoidance side, specified leg, snapping, projection, or repair.
 
-- [ ] **Step 4: Run GREEN behavior acceptance and commit**
+- [x] **Step 4: Run GREEN behavior acceptance and commit**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti/test_behavior.py Go2Pvcnn/tests/joint_mpc_rti/test_rolling_runtime.py
@@ -277,7 +277,7 @@ Expected: overall strict cross `>=95%`, every shape-speed `>=90%`, foot/calf/thi
 - Modify: `notes/log/index.md`
 - Create: `notes/log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation.md`
 
-- [ ] **Step 1: Run joint and legacy regressions**
+- [x] **Step 1: Run joint and legacy regressions**
 
 ```bash
 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q Go2Pvcnn/tests/joint_mpc_rti
@@ -286,7 +286,7 @@ Expected: overall strict cross `>=95%`, every shape-speed `>=90%`, foot/calf/thi
 
 Expected: zero failures, including factory `num_envs=1/40/512/1024`, field versions, joint order, rolling `x1`, stance ground, command direction, and old MPC/viewer contracts.
 
-- [ ] **Step 2: Run real viewer acceptance**
+- [x] **Step 2: Run real viewer acceptance**
 
 Run the existing real Isaac viewer probe for zero, forward/backward, lateral, yaw, speed-varied, and mixed commands. Require joint-order error zero, stance gap `<=0.012m`, penetration `<=0.001m`, valid ratio `1.0`, and numerical zero-command XY drift.
 
@@ -298,7 +298,7 @@ CUDA_VISIBLE_DEVICES=<idle_gpu> /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/
 
 Expected: total `<5.0s`, version `+1000`, no nonfinite values. Timing includes complementary small/large EDT, half-cell combine, MPC, and `x1`; report warmup, GPU, average, P95, max, and contention state.
 
-- [ ] **Step 4: Update notes and final verification**
+- [x] **Step 4: Update notes and final verification**
 
 Record exact commands/metrics, candidate commit, changed contracts, and any remaining real-simulation boundary with repository-relative links.
 

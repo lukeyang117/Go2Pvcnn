@@ -65,8 +65,8 @@ def run_probe(args: argparse.Namespace) -> dict[str, object]:
     ray_hits = torch.zeros(batch, grid_size * grid_size, 3, device=device)
     height_view = ray_hits[..., 2].reshape(batch, grid_size, grid_size)
     semantic = torch.zeros(batch, grid_size, grid_size, dtype=torch.long, device=device)
-    semantic[:, 75, 75] = 1
-    semantic[:, 25, 125] = 2
+    semantic[:, 70:81, 70:81] = 1
+    semantic[:, 15:56, 105:146] = 2
     env_ids = torch.arange(batch, device=device)
     origin = torch.zeros(batch, 3, device=device)
     yaw = torch.zeros(batch, device=device)
