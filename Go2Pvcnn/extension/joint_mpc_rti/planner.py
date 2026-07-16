@@ -15,7 +15,7 @@ from extension.joint_mpc_rti.losses.barriers import (
 from extension.joint_mpc_rti.losses.rollout_objective import rollout_loss_breakdown_maybe_compiled
 from extension.joint_mpc_rti.model.dynamics import kinematic_step
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
-from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_joint, go2_foot_pos
+from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_leg, go2_foot_pos
 from extension.joint_mpc_rti.model.rollout import JointMpcRollout, rollout_controls, rollout_state_sequence
 from extension.joint_mpc_rti.solver.linearization import dynamics_jacobians
 from extension.joint_mpc_rti.solver.primal_dual_ilqr import LqProblem
@@ -421,7 +421,7 @@ def _add_foot_terrain_linearization(
         * small_influence
         * small_over_derivative
     )
-    stance_error = foot[..., 2] - height
+    stance_error = foot[..., 2] - height - float(cfg.gait.foot_contact_offset)
     stance_normalizer = normalized_mask(contact)
     foot_gradient[..., 2].add_(
         float(cfg.losses.stance_ground_contact) * stance_normalizer * 2.0 * stance_error
@@ -449,12 +449,12 @@ def _add_foot_terrain_linearization(
     )
 
     state_flat = rollout.state.reshape(batch * nodes, 18)
-    jacobian = foot_jacobian_joint(
+    jacobian = foot_jacobian_leg(
         state_flat[:, :3],
         state_flat[:, 3:6],
         state_flat[:, 6:],
-    ).reshape(batch, nodes, 4, 3, 12)
-    joint_gradient = torch.einsum("btli,btliq->btq", foot_gradient, jacobian)
+    ).reshape(batch, nodes, 4, 3, 3)
+    joint_gradient = (foot_gradient.unsqueeze(-1) * jacobian).sum(dim=-2).reshape(batch, nodes, 12)
     stance_axis_weight = torch.stack(
         (
             float(cfg.losses.stance_xy_lock) * stance_normalizer,
@@ -463,11 +463,9 @@ def _add_foot_terrain_linearization(
         ),
         dim=-1,
     )
-    joint_curvature = 2.0 * torch.einsum(
-        "btli,btliq->btq",
-        stance_axis_weight,
-        jacobian * jacobian,
-    )
+    joint_curvature = (
+        2.0 * (stance_axis_weight.unsqueeze(-1) * (jacobian * jacobian)).sum(dim=-2)
+    ).reshape(batch, nodes, 12)
     matrix_q = problem.matrix_q.clone()
     vector_q = problem.vector_q.clone()
     terminal_q = problem.terminal_q.clone()

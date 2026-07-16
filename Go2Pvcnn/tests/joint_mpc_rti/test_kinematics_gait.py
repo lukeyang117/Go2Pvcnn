@@ -53,3 +53,18 @@ def test_go2_analytic_foot_jacobian_matches_central_difference() -> None:
 
     assert jacobian.shape == (1, 4, 3, 12)
     torch.testing.assert_close(jacobian[0, :, :, 0], finite_difference[0], atol=2.0e-5, rtol=2.0e-4)
+
+
+def test_go2_local_leg_jacobian_matches_nonzero_blocks_of_full_joint_jacobian() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_joint, foot_jacobian_leg
+
+    root_pos = torch.zeros(2, 3)
+    root_rpy = torch.tensor([[0.03, -0.04, 0.2], [-0.02, 0.05, -0.3]])
+    joint = torch.tensor([[0.05, 0.7, -1.4] * 4, [-0.04, 0.9, -1.7] * 4])
+
+    local = foot_jacobian_leg(root_pos, root_rpy, joint)
+    full = foot_jacobian_joint(root_pos, root_rpy, joint)
+
+    assert local.shape == (2, 4, 3, 3)
+    for leg in range(4):
+        torch.testing.assert_close(local[:, leg], full[:, leg, :, 3 * leg : 3 * (leg + 1)])

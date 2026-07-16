@@ -36,6 +36,7 @@ class JointMpcRtiGaitCfg:
     swing_thigh_angle: float = 0.55
     swing_calf_angle: float = -1.75
     max_nominal_joint_velocity: float = 9.0
+    foot_contact_offset: float = 0.022
     nominal_swing_clearance: float = 0.015
     small_semantic_clearance: float = 0.03
 
@@ -63,7 +64,7 @@ class JointMpcRtiLossCfg:
     joint_position_limit_barrier: float = 0.02
     joint_velocity_limit_barrier: float = 0.02
     stance_xy_lock: float = 1000.0
-    stance_ground_contact: float = 4000.0
+    stance_ground_contact: float = 24000.0
     stance_slip_velocity: float = 0.01
     swing_nominal_shape: float = 0.2
     terrain_swing_clearance: float = 4.0

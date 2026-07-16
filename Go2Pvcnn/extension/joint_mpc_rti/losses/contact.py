@@ -14,6 +14,7 @@ def stance_losses(
     contact_state: Tensor,
     *,
     stance_anchor_w: Tensor | None = None,
+    foot_contact_offset: float = 0.0,
     dt: float,
 ) -> dict[str, Tensor]:
     foot = torch.as_tensor(foot_pos_w)
@@ -21,7 +22,7 @@ def stance_losses(
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=foot.device)
     if height.shape != foot[..., 2].shape or contact.shape != height.shape:
         raise ValueError("queried_height_w and contact_state must match foot [B,T,4]")
-    ground_error = foot[..., 2] - height
+    ground_error = foot[..., 2] - height - float(foot_contact_offset)
     ground = masked_mean(ground_error * ground_error, contact, dims=(1, 2))
     consecutive_contact = torch.logical_and(contact[:, 1:], contact[:, :-1])
     xy_step = foot[:, 1:, :, :2] - foot[:, :-1, :, :2]
@@ -47,13 +48,14 @@ def touchdown_losses(
     touchdown_pos_w: Tensor,
     queried_height_w: Tensor,
     queried_valid: Tensor,
+    foot_contact_offset: float = 0.0,
 ) -> dict[str, Tensor]:
     touchdown = torch.as_tensor(touchdown_pos_w)
     height = torch.as_tensor(queried_height_w, dtype=touchdown.dtype, device=touchdown.device)
     valid = torch.as_tensor(queried_valid, dtype=torch.bool, device=touchdown.device)
     if height.shape != touchdown[..., 2].shape or valid.shape != height.shape:
         raise ValueError("queried touchdown fields must match touchdown [B,4]")
-    height_error = touchdown[..., 2] - height
+    height_error = touchdown[..., 2] - height - float(foot_contact_offset)
     return {
         "touchdown_ground_height": (height_error * height_error).mean(dim=-1),
         "touchdown_valid_map": torch.logical_not(valid).to(dtype=touchdown.dtype).mean(dim=-1),

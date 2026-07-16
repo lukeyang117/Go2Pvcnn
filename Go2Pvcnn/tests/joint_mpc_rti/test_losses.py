@@ -49,6 +49,26 @@ def test_stance_losses_separate_ground_contact_from_slip() -> None:
     assert stable["stance_xy_lock"] < drifting["stance_xy_lock"]
 
 
+def test_stance_and_touchdown_ground_contact_use_foot_center_offset() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses, touchdown_losses
+
+    foot = torch.zeros(1, 3, 4, 3)
+    foot[..., 2] = 0.022
+    height = torch.zeros(1, 3, 4)
+    contact = torch.ones(1, 3, 4, dtype=torch.bool)
+
+    stance = stance_losses(foot, height, contact, foot_contact_offset=0.022, dt=0.02)
+    touchdown = touchdown_losses(
+        touchdown_pos_w=foot[:, -1],
+        queried_height_w=height[:, -1],
+        queried_valid=torch.ones(1, 4, dtype=torch.bool),
+        foot_contact_offset=0.022,
+    )
+
+    assert stance["stance_ground_contact"].item() == 0.0
+    assert touchdown["touchdown_ground_height"].item() == 0.0
+
+
 def test_stance_anchor_targets_hold_each_contact_segment_in_world_xy() -> None:
     from extension.joint_mpc_rti.planner import _stance_anchor_targets
 

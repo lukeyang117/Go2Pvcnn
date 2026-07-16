@@ -2,7 +2,7 @@
 
 from .dynamics import kinematic_step
 from .gait_schedule import fixed_trot_schedule
-from .go2_kinematics import Go2Geometry, foot_jacobian_joint, go2_fk
+from .go2_kinematics import Go2Geometry, foot_jacobian_joint, foot_jacobian_leg, go2_fk
 from .rollout import JointMpcRollout, rollout_controls
 
 __all__ = [
@@ -10,6 +10,7 @@ __all__ = [
     "JointMpcRollout",
     "fixed_trot_schedule",
     "foot_jacobian_joint",
+    "foot_jacobian_leg",
     "go2_fk",
     "kinematic_step",
     "rollout_controls",

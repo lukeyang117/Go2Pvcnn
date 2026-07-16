@@ -150,8 +150,8 @@ def go2_foot_pos(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> T
     return torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
 
 
-def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
-    """Return analytic world-foot Jacobians with respect to all 12 joint positions."""
+def foot_jacobian_leg(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
+    """Return one dense 3x3 world-foot Jacobian for each independent leg."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
     del root_pos
     batch = int(joint.shape[0])
@@ -190,7 +190,13 @@ def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tenso
     )
     jacobian_body = torch.stack((derivative_abad, derivative_thigh, derivative_calf), dim=-1)
     rotation = rpy_to_rotation_matrix(root_rpy)
-    jacobian_world_leg = torch.einsum("bij,bkjq->bkiq", rotation, jacobian_body)
+    return torch.einsum("bij,bkjq->bkiq", rotation, jacobian_body)
+
+
+def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
+    """Return analytic world-foot Jacobians with respect to all 12 joint positions."""
+    joint = torch.as_tensor(joint_pos)
+    jacobian_world_leg = foot_jacobian_leg(root_pos_w, root_rpy_w, joint)
     selector = torch.eye(12, dtype=joint.dtype, device=joint.device).reshape(4, 3, 12)
     return torch.einsum("bkiq,kqr->bkir", jacobian_world_leg, selector)
 
@@ -198,6 +204,7 @@ def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tenso
 __all__ = [
     "Go2Geometry",
     "foot_jacobian_joint",
+    "foot_jacobian_leg",
     "go2_fk",
     "go2_foot_pos",
     "rpy_to_rotation_matrix",

@@ -138,6 +138,7 @@ def rollout_loss_breakdown(
             foot_height,
             contact,
             stance_anchor_w=stance_anchor,
+            foot_contact_offset=cfg.gait.foot_contact_offset,
             dt=cfg.runtime.dt,
         )
     )
@@ -158,6 +159,7 @@ def rollout_loss_breakdown(
             touchdown_pos_w=rollout.foot_pos_w[:, -1],
             queried_height_w=foot_height[:, -1],
             queried_valid=foot_query.valid.reshape(batch, nodes, 4)[:, -1],
+            foot_contact_offset=cfg.gait.foot_contact_offset,
         )
     )
     terminal_rotation = rpy_to_rotation_matrix(state[:, -1, 3:6])

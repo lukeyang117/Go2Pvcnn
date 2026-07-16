@@ -31,7 +31,7 @@ def _ground_gap(terrain, foot_pos_w: torch.Tensor, contact: torch.Tensor) -> tup
     from extension.batch_mpc_planner.terrain import height_at
 
     terrain_z = height_at(terrain, foot_pos_w[..., :2]).to(foot_pos_w)
-    gap = torch.abs(foot_pos_w[..., 2] - terrain_z)
+    gap = torch.abs(foot_pos_w[..., 2] - terrain_z - 0.022)
     stance = gap[contact]
     swing = gap[~contact]
     return (
@@ -42,6 +42,7 @@ def _ground_gap(terrain, foot_pos_w: torch.Tensor, contact: torch.Tensor) -> tup
 
 def _run_case(runtime, *, name: str, command: tuple[float, float, float], cycles: int) -> dict[str, object]:
     from extension.joint_mpc_rti.integration.isaaclab_adapter import state_from_env
+    from extension.batch_mpc_planner.terrain import height_at
 
     viewer = runtime._viewer
     base_env = runtime.base_env
@@ -56,17 +57,21 @@ def _run_case(runtime, *, name: str, command: tuple[float, float, float], cycles
     manager._graph_runner = None
     previous_joint = viewer._joint_pos_robot_to_planner(robot, robot.data.joint_pos[:1]).clone()
     previous_foot = robot.data.body_pos_w[:1].index_select(1, runtime.foot_ids).clone()
+    initial_state = state_from_env(base_env, device=base_env.device)
+    previous_contact = None
 
     adapter_order_error: list[float] = []
     adapter_velocity_order_error: list[float] = []
     joint_step_max: list[float] = []
     foot_step_max: list[float] = []
+    stance_xy_step_max: list[float] = []
     stance_gap_max: list[float] = []
     swing_gap_max: list[float] = []
     actual_plan_joint_error: list[float] = []
     actual_plan_foot_error: list[float] = []
+    cycle_rows: list[dict[str, object]] = []
 
-    for _cycle in range(cycles):
+    for cycle in range(cycles):
         raw_state = state_from_env(base_env, device=base_env.device)
         reordered_joint = viewer._joint_pos_robot_to_planner(robot, robot.data.joint_pos[:1])
         reordered_velocity = viewer._joint_pos_robot_to_planner(robot, robot.data.joint_vel[:1])
@@ -91,14 +96,38 @@ def _run_case(runtime, *, name: str, command: tuple[float, float, float], cycles
             float(torch.linalg.vector_norm(actual_foot - previous_foot, dim=-1).max().item())
         )
         stance_gap, swing_gap = _ground_gap(terrain, actual_foot, contact)
+        from extension.joint_mpc_rti.terrain.query import query_world
+
+        field_gap = actual_foot[..., 2] - query_world(manager._field_sync.latest_field(), actual_foot).height_w
         stance_gap_max.append(stance_gap)
         swing_gap_max.append(swing_gap)
         actual_plan_joint_error.append(float(torch.abs(actual_joint - planned_joint).max().item()))
         actual_plan_foot_error.append(
             float(torch.linalg.vector_norm(actual_foot - planned_foot, dim=-1).max().item())
         )
+        if previous_contact is not None:
+            consecutive_stance = torch.logical_and(contact, previous_contact)
+            xy_step = torch.linalg.vector_norm(actual_foot[..., :2] - previous_foot[..., :2], dim=-1)
+            stance_xy_step_max.append(
+                float(torch.where(consecutive_stance, xy_step, torch.zeros_like(xy_step)).max().item())
+            )
         previous_joint = actual_joint
         previous_foot = actual_foot
+        previous_contact = contact
+        cycle_rows.append(
+            {
+                "cycle": cycle,
+                "contact": contact[0].tolist(),
+                "viewer_ground_gap_m": [float(value) for value in (
+                    actual_foot[..., 2] - height_at(terrain, actual_foot[..., :2])
+                )[0].tolist()],
+                "planner_field_gap_m": [float(value) for value in field_gap[0].tolist()],
+            }
+        )
+
+    final_state = state_from_env(base_env, device=base_env.device)
+    root_xy_drift = torch.linalg.vector_norm(final_state.root_pos_w[:, :2] - initial_state.root_pos_w[:, :2], dim=-1)
+    root_yaw_drift = torch.abs(final_state.root_rpy_w[:, 2] - initial_state.root_rpy_w[:, 2])
 
     return {
         "name": name,
@@ -108,10 +137,16 @@ def _run_case(runtime, *, name: str, command: tuple[float, float, float], cycles
         "adapter_joint_velocity_order_error_rad_s": _summary(adapter_velocity_order_error),
         "joint_step_max_rad": _summary(joint_step_max),
         "foot_step_max_m": _summary(foot_step_max),
+        "stance_xy_step_max_m": _summary(stance_xy_step_max or [0.0]),
         "stance_ground_gap_max_m": _summary(stance_gap_max),
         "swing_ground_gap_max_m": _summary(swing_gap_max),
         "actual_vs_planner_joint_max_rad": _summary(actual_plan_joint_error),
         "actual_vs_planner_foot_max_m": _summary(actual_plan_foot_error),
+        "root_xy_drift_m": float(root_xy_drift.max().item()),
+        "root_yaw_drift_rad": float(root_yaw_drift.max().item()),
+        "initial_root_pos_w": [float(value) for value in initial_state.root_pos_w[0].tolist()],
+        "initial_joint_pos": [float(value) for value in initial_state.joint_pos[0].tolist()],
+        "cycle_rows": cycle_rows,
     }
 
 
@@ -128,18 +163,50 @@ def main() -> int:
             device=device,
             task_id="Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
         )
+        case_specs = (
+            ("standstill", (0.0, 0.0, 0.0)),
+            ("forward_slow", (0.1, 0.0, 0.0)),
+            ("forward_fast", (0.4, 0.0, 0.0)),
+            ("backward", (-0.25, 0.0, 0.0)),
+            ("lateral_left", (0.0, 0.25, 0.0)),
+            ("lateral_right", (0.0, -0.25, 0.0)),
+            ("yaw_left", (0.0, 0.0, 0.5)),
+            ("mixed", (0.2, 0.15, 0.3)),
+            ("mixed_reverse", (0.35, -0.2, -0.35)),
+        )
+        requested = {
+            name.strip()
+            for name in os.environ.get("JOINT_MPC_VIEWER_REPRO_CASES", "").split(",")
+            if name.strip()
+        }
+        selected_specs = case_specs if not requested else tuple(spec for spec in case_specs if spec[0] in requested)
+        cases = [_run_case(runtime, name=name, command=command, cycles=cycles) for name, command in selected_specs]
+        standstill = next((case for case in cases if case["name"] == "standstill"), None)
+        acceptance = {
+            "adapter_joint_order_error_rad": max(
+                float(case["adapter_joint_order_error_rad"]["max"]) for case in cases
+            ) <= 1.0e-6,
+            "stance_ground_gap_max_m": max(
+                float(case["stance_ground_gap_max_m"]["max"]) for case in cases
+            ) <= 0.012,
+            "joint_step_max_rad": max(float(case["joint_step_max_rad"]["max"]) for case in cases) <= 0.35,
+            "viewer_plan_foot_error_m": max(
+                float(case["actual_vs_planner_foot_max_m"]["max"]) for case in cases
+            ) <= 1.0e-4,
+            "standstill_root_xy_drift_m": standstill is None or float(standstill["root_xy_drift_m"]) <= 1.0e-5,
+            "standstill_root_yaw_drift_rad": standstill is None or float(standstill["root_yaw_drift_rad"]) <= 1.0e-5,
+        }
         result = {
             "device": device,
             "robot_joint_names": tuple(runtime.robot.joint_names),
             "planner_joint_names": tuple(runtime._viewer.PLANNER_JOINT_ORDER),
-            "cases": [
-                _run_case(runtime, name="standstill", command=(0.0, 0.0, 0.0), cycles=cycles),
-                _run_case(runtime, name="forward", command=(0.3, 0.0, 0.0), cycles=cycles),
-            ],
+            "cases": cases,
+            "acceptance": acceptance,
+            "passed": all(acceptance.values()),
         }
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
+        return 0 if result["passed"] else 2
     except BaseException as exc:  # noqa: BLE001
         error = {
             "type": type(exc).__name__,
