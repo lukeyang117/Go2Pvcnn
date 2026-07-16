@@ -21,13 +21,28 @@ class JointMpcTerrainQuery:
 
 
 def _gather_grid(grid: Tensor, flat_index: Tensor) -> Tensor:
-    batch = int(grid.shape[0])
+    field_batch = int(grid.shape[0])
+    query_batch = int(flat_index.shape[0])
     trailing = grid.shape[3:] if grid.ndim > 3 else ()
+    if query_batch != field_batch:
+        if query_batch % field_batch != 0:
+            raise ValueError("query batch must be an integer repeat of field batch")
+        repeats = query_batch // field_batch
+        row_index = torch.arange(query_batch, device=flat_index.device, dtype=torch.long) // repeats
+        cell_count = int(grid.shape[1] * grid.shape[2])
+        global_index = row_index[:, None] * cell_count + flat_index
+        if trailing:
+            flattened = grid.reshape(field_batch * cell_count, *trailing)
+            gathered = torch.index_select(flattened, 0, global_index.reshape(-1))
+            return gathered.reshape(query_batch, flat_index.shape[1], *trailing)
+        return torch.take(grid.reshape(-1), global_index)
     if trailing:
-        flattened = grid.reshape(batch, -1, *trailing)
-        index = flat_index.view(batch, -1, *([1] * len(trailing))).expand(batch, flat_index.shape[1], *trailing)
+        flattened = grid.reshape(field_batch, -1, *trailing)
+        index = flat_index.view(field_batch, -1, *([1] * len(trailing))).expand(
+            field_batch, flat_index.shape[1], *trailing
+        )
         return torch.gather(flattened, 1, index)
-    return torch.gather(grid.reshape(batch, -1), 1, flat_index)
+    return torch.gather(grid.reshape(field_batch, -1), 1, flat_index)
 
 
 def _bilinear(grid: Tensor, index_x: Tensor, index_y: Tensor) -> Tensor:
@@ -49,16 +64,46 @@ def _bilinear(grid: Tensor, index_x: Tensor, index_y: Tensor) -> Tensor:
     return (1.0 - wx) * (1.0 - wy) * f00 + wx * (1.0 - wy) * f10 + (1.0 - wx) * wy * f01 + wx * wy * f11
 
 
+def _bilinear_scalar_with_gradient(
+    grid: Tensor,
+    index_x: Tensor,
+    index_y: Tensor,
+    *,
+    resolution: float,
+) -> tuple[Tensor, Tensor]:
+    nx = int(grid.shape[1])
+    ny = int(grid.shape[2])
+    x0 = torch.floor(index_x).to(dtype=torch.long).clamp(0, nx - 1)
+    y0 = torch.floor(index_y).to(dtype=torch.long).clamp(0, ny - 1)
+    x1 = (x0 + 1).clamp(max=nx - 1)
+    y1 = (y0 + 1).clamp(max=ny - 1)
+    wx = (index_x - x0.to(index_x.dtype)).clamp(0.0, 1.0)
+    wy = (index_y - y0.to(index_y.dtype)).clamp(0.0, 1.0)
+    f00 = _gather_grid(grid, x0 * ny + y0)
+    f10 = _gather_grid(grid, x1 * ny + y0)
+    f01 = _gather_grid(grid, x0 * ny + y1)
+    f11 = _gather_grid(grid, x1 * ny + y1)
+    value = (1.0 - wx) * (1.0 - wy) * f00 + wx * (1.0 - wy) * f10 + (1.0 - wx) * wy * f01 + wx * wy * f11
+    inverse_resolution = 1.0 / float(resolution)
+    gradient_x = inverse_resolution * ((1.0 - wy) * (f10 - f00) + wy * (f11 - f01))
+    gradient_y = inverse_resolution * ((1.0 - wx) * (f01 - f00) + wx * (f11 - f10))
+    return value, torch.stack((gradient_x, gradient_y), dim=-1)
+
+
 def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrainQuery:
     points = torch.as_tensor(points_w, dtype=field.height_w.dtype, device=field.height_w.device)
     if points.ndim != 3 or int(points.shape[-1]) not in (2, 3):
         raise ValueError("points_w must have shape [B,N,2 or 3]")
-    batch, nx, ny = map(int, field.height_w.shape)
-    if int(points.shape[0]) != batch:
-        raise ValueError("points_w batch must match field batch")
-    delta = points[..., :2] - field.origin_w[:, None, :2]
-    cosine = torch.cos(field.yaw_w)[:, None]
-    sine = torch.sin(field.yaw_w)[:, None]
+    field_batch, nx, ny = map(int, field.height_w.shape)
+    query_batch = int(points.shape[0])
+    if query_batch % field_batch != 0:
+        raise ValueError("points_w batch must be an integer repeat of field batch")
+    repeats = query_batch // field_batch
+    origin_w = field.origin_w.repeat_interleave(repeats, dim=0)
+    yaw_w = field.yaw_w.repeat_interleave(repeats, dim=0)
+    delta = points[..., :2] - origin_w[:, None, :2]
+    cosine = torch.cos(yaw_w)[:, None]
+    sine = torch.sin(yaw_w)[:, None]
     local_x = cosine * delta[..., 0] + sine * delta[..., 1]
     local_y = -sine * delta[..., 0] + cosine * delta[..., 1]
     index_x = local_x / float(field.resolution) + 0.5 * float(nx - 1)
@@ -69,8 +114,12 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
     )
     sampled_valid = _bilinear(field.valid_mask.to(dtype=field.height_w.dtype), index_x, index_y) > 0.999
     valid = torch.logical_and(inside, sampled_valid)
-    small_gradient_local = _bilinear(field.small_gradient_xy, index_x, index_y)
-    large_gradient_local = _bilinear(field.large_gradient_xy, index_x, index_y)
+    small_distance, small_gradient_local = _bilinear_scalar_with_gradient(
+        field.small_distance_m, index_x, index_y, resolution=field.resolution
+    )
+    large_distance, large_gradient_local = _bilinear_scalar_with_gradient(
+        field.large_distance_m, index_x, index_y, resolution=field.resolution
+    )
 
     def rotate_gradient(local: Tensor) -> Tensor:
         return torch.stack(
@@ -83,8 +132,8 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
 
     return JointMpcTerrainQuery(
         height_w=_bilinear(field.height_w, index_x, index_y),
-        small_distance_m=_bilinear(field.small_distance_m, index_x, index_y),
-        large_distance_m=_bilinear(field.large_distance_m, index_x, index_y),
+        small_distance_m=small_distance,
+        large_distance_m=large_distance,
         small_gradient_w=rotate_gradient(small_gradient_local),
         large_gradient_w=rotate_gradient(large_gradient_local),
         valid=valid,

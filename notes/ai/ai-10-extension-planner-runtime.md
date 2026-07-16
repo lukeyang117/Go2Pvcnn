@@ -151,5 +151,9 @@ Evidence: [../log/2026-04-28-1132-together-zero-command-rehome.md](../log/2026-0
 - First call initializes solver state; steady-state calls use `JointMpcCudaGraphRunner` with static state/command storage and stable field-cache addresses.
 - RayCaster callbacks queue updated env ids only; `latest_field()` builds/publishes rows outside the Warp/Isaac sensor callback. A newly captured graph replays once before its first result is returned.
 - Production profile: compiled kernels, diagonal state Riccati, alphas `(1.0,0.25)`, named breakdown off.
-- Acceptance: 1024 env, H16, 1000 calls `2896.49ms`, nonfinite `0`, peak `282.58MiB`.
-- Real Isaac 1-env and 16-env three-step probes pass with field version `2`, finite references, and `x0_error_max=0`; real 1024 first-time initialization/timing remains open.
+- Every `latest_field()` call performs one synchronous current-row refresh. CUDA exact EDT uses a fixed int16 vertical workspace and warp parabola envelopes; height/valid can overlap EDT within the same refresh, but MPC waits for both before consuming the incremented version.
+- Line-search candidates query original per-env maps through repeated-row global gather; they do not duplicate full 151x151 fields. Query gradients are analytic derivatives of bilinear exact-distance interpolation.
+- Full acceptance: 1024 env, H16, 1000 synchronous exact-field + MPC refreshes `4469.05ms`; mean `4.469ms`, P95 `4.492ms`, max `4.655ms`, version `+1000`, nonfinite `0`, peak `858.99MiB`.
+- Batch size is fixed per manager/cache/CUDA-Graph instance but configurable across runs. Probes for `1/40/512/1024` are finite and version-correct; in-place resize raises an explicit rebuild error.
+- Public construction: `create_trajectory_manager(cfg, device=device, num_envs=N)`; normal env attachment forwards `env.unwrapped.num_envs`, so callers do not manage cache/workspace/graph internals.
+- Real Isaac 1-env and 16-env three-step probes pass with field version `2`, finite references, and `x0_error_max=0`; real 1024 physics/raycast timing remains a separate measurement boundary.

@@ -327,7 +327,6 @@ field_builder synchronously updates exactly the same chunk_ids
   - height_w
   - small exact EDT
   - large exact EDT
-  - gradients
   - valid_mask
         |
         v
@@ -338,13 +337,15 @@ run MPC with the same version</code></pre>
   <p>生产默认同步等待当前 field 完整发布，然后 MPC 使用同一 version；不读取半更新字段，也不在正常路径使用上一帧 field。只有 field 构建失败时才进入明确 invalid/fallback。</p>
 
   <h3>8.3 CUDA warp-level 精确 EDT</h3>
-  <p>距离场不再使用 Python/PyTorch Jump Flood。small/large mask 合并为 <code>[B,2,151,151]</code>，以 <code>B×2</code> 独立二维图像交给 CUDA extension。实现参考 work-efficient exact EDT：先做 warp-level 1D EDT，再沿另一维做第二次 1D EDT；使用 ballot、shuffle、前缀/包络并行和连续内存访问，总工作量保持 <code>O(B×C×N²)</code>。</p>
+  <p>距离场不再使用 Python/PyTorch Jump Flood。CUDA extension 从 <code>[B,151,151]</code> semantic id 一次生成 small/large 两通道，以 <code>B×2</code> 独立二维图像执行两阶段精确 EDT：纵向线程线性扫描得到 int16 平方距离，横向由 warp 构造 Felzenszwalb 抛物线下包络并并行求值，总工作量保持 <code>O(B×C×N²)</code>。</p>
   <ul>
     <li>结果必须与 CPU brute-force / SciPy exact EDT 在数值容差内一致。</li>
     <li>禁止 Python per-env/per-channel 循环。</li>
     <li>固定支持 <code>151×151</code> 主路径，同时保留 CPU tensor fallback 供测试。</li>
     <li>small/large 两通道一次 dispatch；空通道仍返回正确最大距离，不改变 loss 语义。</li>
-    <li>CUDA kernel、梯度构建和 cache 写回均在同一同步 refresh 中完成。</li>
+    <li>固定 int16 vertical workspace 和 float32 distance cache 原位复用，不在 steady-state 分配全图临时场。</li>
+    <li>距离梯度不再逐帧写出两张全分辨率 gradient map；world query 直接对双线性 distance 插值求解析 XY 导数，数值仍来自本次 exact EDT。</li>
+    <li>height/valid 与 semantic EDT 可在同一次 refresh 内使用独立 CUDA stream 并行，但 MPC 必须等待两者汇合后才消费当前 version；这不是跨帧异步或 stale field。</li>
   </ul>
 
   <h3>8.4 Cache ABI</h3>
@@ -352,7 +353,8 @@ run MPC with the same version</code></pre>
 semantic_id     [B,151,151]
 small_sdf       [B,151,151]
 large_sdf       [B,151,151]
-small_grad_xy   [B,151,151,2]
+small_grad_xy   [B,151,151,2]  # compatibility placeholder; query-time analytic derivative
+large_grad_xy   [B,151,151,2]  # compatibility placeholder; query-time analytic derivative
 large_grad_xy   [B,151,151,2]
 valid_mask      [B,151,151]
 
@@ -903,13 +905,14 @@ solver_status</code></pre>
       <tr><td>小物体总被绕开</td><td>降低 root-small 横向排斥，强化 swing-over 与 touchdown-safe 的相对代价。</td><td>写死场景 gate 或指定某条腿跨。</td></tr>
       <tr><td>足端跨过但 knee/shank 碰撞</td><td>增加 link sample 密度和解析碰撞 Jacobian，调整 swing shape。</td><td>只看 foot clearance。</td></tr>
       <tr><td>大障碍绕行不足</td><td>提高 large-SDF barrier、terminal risk 和 root/body footprint sampling。</td><td>规划后 snapping 或硬改 root 位置。</td></tr>
-      <tr><td>完整 refresh 超过 5ms</td><td>固定 workspace、融合 exact EDT/gradient/cache write、减少 launch、继续融合 MPC query/Jacobian。</td><td>删除关键安全几何、降低 batch 或排除 field 计时。</td></tr>
+      <tr><td>完整 refresh 超过 5ms</td><td>固定 workspace、原位 exact EDT/cache write、query-time distance gradient、减少 launch、消除 line-search 全图复制。</td><td>删除关键安全几何、降低 batch 或排除 field 计时。</td></tr>
       <tr><td>地图更新慢</td><td>使用 CUDA warp-level work-efficient exact EDT，并以 B×2 图像批量 dispatch。</td><td>恢复 Python/PyTorch Jump Flood、改成异步 stale-field 流水线。</td></tr>
     </tbody>
   </table>
 
   <h2>19. 最终接口摘要</h2>
   <pre><code>planner_backend = "joint_mpc_rti"
+manager = create_trajectory_manager(cfg, device=device, num_envs=N)
 
 input:
   measured_state_world

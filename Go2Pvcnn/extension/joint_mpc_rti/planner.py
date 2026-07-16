@@ -109,28 +109,6 @@ def _repeat_state(state: JointMpcRtiState, repeats: int) -> JointMpcRtiState:
     )
 
 
-def _repeat_field(field: JointMpcTerrainField, repeats: int) -> JointMpcTerrainField:
-    def repeat(tensor: Tensor) -> Tensor:
-        return tensor[:, None].expand(-1, repeats, *tensor.shape[1:]).reshape(
-            tensor.shape[0] * repeats, *tensor.shape[1:]
-        )
-
-    return JointMpcTerrainField(
-        height_w=repeat(field.height_w),
-        semantic_id=repeat(field.semantic_id),
-        small_distance_m=repeat(field.small_distance_m),
-        large_distance_m=repeat(field.large_distance_m),
-        small_gradient_xy=repeat(field.small_gradient_xy),
-        large_gradient_xy=repeat(field.large_gradient_xy),
-        valid_mask=repeat(field.valid_mask),
-        origin_w=repeat(field.origin_w),
-        yaw_w=repeat(field.yaw_w),
-        timestamp=repeat(field.timestamp),
-        version=repeat(field.version),
-        resolution=field.resolution,
-    )
-
-
 def _select_candidate_rollout(
     candidate_rollout: JointMpcRollout,
     base_rollout: JointMpcRollout,
@@ -537,7 +515,6 @@ def step(
 
     def evaluate_rollout(candidate_rollout: JointMpcRollout, repeats: int) -> Tensor:
         repeated_command = command[:, None].expand(-1, repeats, -1).reshape(-1, 3)
-        repeated_field = _repeat_field(terrain_field, repeats)
         repeated_nominal_foot = nominal_foot_pos_w[:, None].expand(-1, repeats, -1, -1, -1).reshape(
             measured_state.batch_size * repeats,
             nominal_foot_pos_w.shape[1],
@@ -556,7 +533,7 @@ def step(
             swing_weight=swing_weight[:, None].expand(-1, repeats, -1, -1).reshape(
                 measured_state.batch_size * repeats, *swing_weight.shape[1:]
             ),
-            terrain_field=repeated_field,
+            terrain_field=terrain_field,
             command_body=repeated_command,
             joint_target=repeated_target,
             previous_control=previous_control[:, None].expand(-1, repeats, -1).reshape(-1, 18),

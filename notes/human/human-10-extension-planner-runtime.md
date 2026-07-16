@@ -806,6 +806,12 @@ raw CPU 路径现在的主要职责是：
 
 显式选择 `planner_backend="joint_mpc_rti"` 后，manager 每次 refresh 都从真实观测重规划，不播放旧 segment。首帧 eager 初始化 solver state；稳态使用 `JointMpcCudaGraphRunner`，更新静态 measured-state/command 后 replay 固定图。RayCaster observer 只登记本批完成更新的 env ids；manager 读取 `latest_field()` 时才在传感器回调栈之外构建并原位发布对应 field rows。新 graph capture 完成后先 replay 一次，再把首次结果暴露给 reference 层。
 
-生产 profile 使用 H16、float32、对角 GGN Riccati、line search `(1.0,0.25)`、named diagnostics 关闭。1024 环境 1000 次 hot path 为 `2896.49ms`，nonfinite `0`；首次 JIT/capture 不计入稳态指标。
+生产 profile 使用 H16、float32、对角 GGN Riccati、line search `(1.0,0.25)`、named diagnostics 关闭。距离场不再使用 tensor Jump Flood：CUDA extension 用 int16 vertical workspace + warp 抛物线下包络生成 small/large exact EDT；height/valid 与 EDT 在同一次 refresh 内并行，MPC 前显式汇合。即使没有新的 RayCaster callback，`latest_field()` 也会用当前 scanner rows 同步重建一次 field，因此每次 MPC 对应一次 version 推进，不使用 stale field。
 
-真实 IsaacLab 的 1-env 与 16-env 三步 probe 已通过，field version 连续更新到 `2`，`x0_error_max=0`，第三次 refresh 约 `19.9ms`。真实 1024-env 首次初始化在 10 分钟内未完成，仍需在空闲/预热环境中单独验证。
+1024 环境、H16、1000 次同步“当前 height/semantic -> exact EDT/cache publish -> one RTI -> x1”验收为 `4469.05ms`，mean `4.469ms`、P95 `4.492ms`、max `4.655ms`、field version `+1000`、nonfinite `0`、peak `858.99MiB`。首次 extension build、torch.compile 和 CUDA Graph capture 不计入 warm steady-state；硬验收循环只在完整 refresh 边界记录 CUDA event，中间分段事件在独立诊断循环中测量。
+
+环境数量是“构建时固定、跨运行可变”：`1/40/512/1024` batch 的 exact-field + MPC probe 均 finite 且 version 正确。由于 CUDA Graph、field cache 和 pending-reference buffer 都是 fixed-shape，同一个 manager 实例不支持从 1024 原地 resize 到 512；调用方需要按新 `num_envs` 重建 manager，代码会对原地 batch 变化抛出明确 rebuild 错误。
+
+上层不需要直接接触这些底层对象：调用 `create_trajectory_manager(cfg, device=device, num_envs=N)` 即可；正常 Isaac attach 路径会自动读取 `env.unwrapped.num_envs`。factory 预建对应大小的 pending buffer，field cache/workspace/CUDA Graph 在首次真实 scanner/state 到来时按同一 N 自动建立。
+
+真实 IsaacLab 的 1-env 与 16-env 三步 probe 已通过，field version 连续更新到 `2`，`x0_error_max=0`，第三次 refresh 约 `19.9ms`。新的 1024 full-refresh acceptance 是固定张量/scanner-buffer probe；真实 IsaacLab 1024-env physics + RayCaster 射线本体仍需单独报告，不包含在 4.469 秒 planner acceptance 中。

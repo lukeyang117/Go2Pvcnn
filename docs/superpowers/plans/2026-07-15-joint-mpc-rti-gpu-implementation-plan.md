@@ -291,16 +291,22 @@ class JointMpcRtiCfg:
 ```python
 VALID_PLANNER_BACKENDS = ("mpc", "joint_mpc_rti")
 
-def create_trajectory_manager(cfg, *, device):
+def create_trajectory_manager(cfg, *, device, num_envs: int | None = None):
     backend = planner_backend_from_cfg(cfg)
     if backend == "joint_mpc_rti":
         from extension.joint_mpc_rti.runtime.manager import JointMpcRtiManager
+        if num_envs is not None:
+            return JointMpcRtiManager.from_config(
+                cfg.joint_mpc_rti_cfg, num_envs=num_envs, device=device
+            )
         return JointMpcRtiManager(cfg, device=device)
     from extension.batch_mpc_planner.manager import MpcTrajectoryManager
     return MpcTrajectoryManager(cfg, device=device)
 ```
 
 为避免 manager 尚未创建导致 Task 1 import 失败，先在 `runtime/manager.py` 建立最小类，只实现 constructor、`planner_backend` 和 `horizon_steps()`；完整行为在 Task 8 TDD 实现。
+
+上层调用只需要把环境数传给 factory：`create_trajectory_manager(cfg, device=device, num_envs=N)`。`attach_trajectory_manager()` 自动从 `env.unwrapped.num_envs` 传入该参数；factory 负责构建对应 fixed-shape pending buffer，后续 manager 自动构建同 batch 的 field cache/workspace/CUDA Graph。环境数变化时重新调用 factory，不要求调用方操作底层 cache。
 
 - [ ] **Step 5: 运行 GREEN**
 
@@ -526,7 +532,7 @@ def test_field_cache_updates_only_selected_env_rows_atomically() -> None:
 
 - [ ] **Step 3: 实现固定 151×151 单高度场**
 
-`build_field_batch()` 输入 `height_w`，不创建第二高度场。small/large mask 由 semantic ids 构造；CPU 测试保留 tensor exact/fallback，CUDA 生产路径必须调用 Task 14 的 warp-level work-efficient exact EDT，不再使用 Python/PyTorch Jump Flood。输出以米为单位的 distance 和 XY gradient。
+`build_field_batch()` 输入 `height_w`，不创建第二高度场。small/large mask 由 semantic ids 构造；CPU 测试保留 tensor exact/fallback，CUDA 生产路径必须调用 Task 14 的 warp-level work-efficient exact EDT，不再使用 Python/PyTorch Jump Flood。输出以米为单位的 distance；XY gradient 在 world query 中由双线性 distance 插值解析求导，避免每帧构建全分辨率 gradient map。
 
 - [ ] **Step 4: 实现 field cache 原子行更新**
 
@@ -1151,7 +1157,7 @@ CUDA 主路径把 `B×C` 视为独立图像。第一阶段对每列执行 exact 
 
 - [ ] **Step 5: 接入 field builder**
 
-CUDA `build_field_batch()` 一次构造 `[B,2,151,151]` small/large mask，调用 exact EDT，乘以 `resolution²` 后只在最终 distance 输出处开方。gradient 使用一个融合 CUDA kernel从 distance 计算并写入现有 ABI；CPU 测试继续使用原 tensor fallback。不得改变 world-query、loss key 或 field cache ABI。
+CUDA `build_field_batch()` 从 `[B,151,151]` semantic id 一次生成 small/large exact EDT，vertical squared-distance 使用固定 int16 workspace，最终 distance 以 float32 米制输出。CUDA world query 从 distance 四邻点的双线性插值直接解析计算 XY gradient；gradient ABI 字段保留兼容占位，但热路径不逐帧写出两张全图。CPU 测试继续使用原 tensor fallback。不得改变 loss key。
 
 - [ ] **Step 6: 写同步每步更新 RED 测试**
 
@@ -1159,7 +1165,7 @@ manager 连续两次 refresh 时，第二次必须先发布递增 field version�
 
 - [ ] **Step 7: 扩展 full-refresh probe**
 
-probe 预分配 `B=1024,H=16` scanner/state/command，完成 CUDA extension build、compile 和 graph capture 后，每个 iteration 同步执行：semantic/height rows → exact EDT/gradient/cache publish → measured `x0` → one RTI → `x1`。CUDA events 记录 field、MPC 和 full refresh；循环结束统一同步并输出 total/mean/P50/P95/P99/max/peak/nonfinite/version count。
+probe 预分配 `B=1024,H=16` scanner/state/command，完成 CUDA extension build、compile 和 graph capture 后，每个 iteration 同步执行：semantic/height rows → exact EDT/cache publish → query-time gradient → measured `x0` → one RTI → `x1`。硬验收循环只在完整 refresh 边界记录 CUDA event，分段 profiler 在独立短循环中运行，避免把中间诊断 event 计入生产流水线；输出 total/mean/P50/P95/P99/max/peak/nonfinite/version count。
 
 - [ ] **Step 8: 达到硬目标**
 
@@ -1183,10 +1189,10 @@ no sustained memory growth
 
 - [ ] **Step 9: 若 full refresh 仍超时，按顺序优化**
 
-1. 融合 small/large mask、EDT 和 gradient dispatch；
-2. 复用 EDT/gradient/cache workspace，消除 allocator；
+1. 融合 small/large semantic 读取与 EDT dispatch，梯度改为 query-time 解析导数；
+2. 复用 EDT/cache workspace，消除 allocator；
 3. 将 field update 和 MPC 捕获到同一固定 CUDA Graph；
-4. 融合 world query + gradient gather；
+4. 消除 line-search candidate 的全图 field repeat，以原 env row 全局 gather；
 5. 继续融合 FK/Jacobian/GGN kernel，直到 full total 达标。
 
 - [ ] **Step 10: Commit**

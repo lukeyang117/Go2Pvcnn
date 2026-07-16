@@ -46,12 +46,12 @@ class JointMpcRayCasterFieldSync:
         self._pending_env_ids.append(env_ids)
 
     def _flush_pending(self) -> None:
-        if not self._pending_env_ids:
-            return
         scanner = self._scanner
         if scanner is None:
-            raise RuntimeError("RayCaster field sync has pending rows without an attached scanner")
-        pending = self._pending_env_ids
+            if self._pending_env_ids:
+                raise RuntimeError("RayCaster field sync has pending rows without an attached scanner")
+            return
+        pending = self._pending_env_ids or [slice(0, self._num_envs)]
         self._pending_env_ids = []
         id_tensors = []
         for env_ids in pending:
@@ -79,13 +79,15 @@ class JointMpcRayCasterFieldSync:
         else:
             timestamp = torch.as_tensor(timestamp_source, dtype=torch.float32, device=self._device).reshape(-1)
 
+        full_refresh = int(ids.numel()) == self._num_envs
         self._cache.update_rows(
             env_ids=ids,
-            height_w=ray_hits.index_select(0, ids)[..., 2].reshape(-1, side, side),
-            semantic_id=semantic.index_select(0, ids).reshape(-1, side, side),
-            origin_w=pos_w.index_select(0, ids),
-            yaw_w=extract_yaw_batch(quat_w.index_select(0, ids)),
-            timestamp=timestamp.index_select(0, ids),
+            height_w=(ray_hits if full_refresh else ray_hits.index_select(0, ids))[..., 2].reshape(-1, side, side),
+            semantic_id=(semantic if full_refresh else semantic.index_select(0, ids)).reshape(-1, side, side),
+            origin_w=pos_w if full_refresh else pos_w.index_select(0, ids),
+            yaw_w=extract_yaw_batch(quat_w if full_refresh else quat_w.index_select(0, ids)),
+            timestamp=timestamp if full_refresh else timestamp.index_select(0, ids),
+            ordered_full_batch=full_refresh,
         )
 
     def latest_field(self):

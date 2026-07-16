@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
@@ -79,3 +80,10 @@ def test_cuda_graph_capture_materializes_the_first_result_before_return() -> Non
 
     source = Path("Go2Pvcnn/extension/joint_mpc_rti/runtime/cuda_graph.py").read_text()
     assert source.count("self._graph.replay()") == 2
+
+
+def test_manager_requires_rebuild_when_environment_batch_size_changes() -> None:
+    manager = JointMpcRtiManager.from_config(JointMpcRtiCfg(), num_envs=4, device="cpu")
+
+    with pytest.raises(ValueError, match="rebuild"):
+        manager.plan_from_tensors(make_state(2), make_command(2), make_flat_field(2))

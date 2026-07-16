@@ -27,6 +27,7 @@ class JointMpcRtiManager:
         self._field_sync: JointMpcRayCasterFieldSync | None = None
         self._last_step_token = None
         self._graph_runner: JointMpcCudaGraphRunner | None = None
+        self._num_envs: int | None = None
 
     @classmethod
     def from_config(
@@ -46,6 +47,7 @@ class JointMpcRtiManager:
         instance._field_sync = None
         instance._last_step_token = None
         instance._graph_runner = None
+        instance._num_envs = int(num_envs)
         return instance
 
     def horizon_steps(self) -> int:
@@ -63,8 +65,16 @@ class JointMpcRtiManager:
         command_body,
         terrain_field: JointMpcTerrainField,
     ) -> JointMpcRtiStepResult:
+        batch_size = measured_state.batch_size
+        if self._num_envs is None:
+            self._num_envs = batch_size
+        elif batch_size != self._num_envs:
+            raise ValueError(
+                f"joint_mpc_rti batch changed from {self._num_envs} to {batch_size}; "
+                "rebuild the manager/cache/CUDA graph for the new environment count"
+            )
         if self._buffer is None:
-            self._buffer = PendingReferenceBuffer(num_envs=measured_state.batch_size, device=measured_state.device)
+            self._buffer = PendingReferenceBuffer(num_envs=batch_size, device=measured_state.device)
         use_graph = (
             bool(self._cfg.solver.use_cuda_graph)
             and measured_state.device.type == "cuda"

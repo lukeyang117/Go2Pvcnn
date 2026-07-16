@@ -110,7 +110,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
-- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): pure behavior and accepted 1024×1000 performance pass; real 1/16-env multi-step is fixed, real 1024 startup/timing remains open.
+- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): synchronous CUDA exact EDT + MPC acceptance passes at `4469.05ms/1000`; joint `93`, old MPC `193`; public `num_envs` factory supports `1/40/512/1024`, with rebuild required when batch changes.
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
@@ -150,7 +150,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
-- T302v.2: replace the B1024 `~1136ms` tensor Jump Flood field build, then rerun real 1024-env timing; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
+- T302v real-1024 boundary: planner-side synchronous exact-field + MPC target is closed; separately measure Isaac physics and RayCaster ray generation when an uncontended real-sim slot is available; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
 | --- | --- | --- | --- | --- | --- |
@@ -200,6 +200,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
+| 2026-07-16 10:40 | Joint MPC RTI synchronous exact EDT | pass: 1024×H16×1000 full refresh `4469.05ms`, version `+1000`, nonfinite `0` | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [exact EDT acceptance](log/2026-07-16-joint-mpc-rti-synchronous-exact-edt.md) |
+| 2026-07-16 10:35 | Joint MPC RTI exact EDT regression | pass: joint `93`, old MPC `193`, public batches `1/40/512/1024`, pycompile/diff clean | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [regression](log/2026-07-16-joint-mpc-rti-exact-edt-regression.md) |
 | 2026-07-16 00:38 | Joint MPC RTI multi-step Isaac fix | partial pass: 1/16-env three-step stable; real 1024 startup still open | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [multi-step fix](log/2026-07-16-joint-mpc-rti-multistep-isaac-fix.md) |
 | 2026-07-15 23:50 | Joint MPC RTI performance acceptance | pass: 1024×H16×1000 `2885.63ms`, nonfinite `0`, peak `282.58MiB` | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [performance](log/2026-07-15-joint-mpc-rti-performance.md) |
 | 2026-07-15 23:49 | Joint MPC RTI regression | pass: latest joint `72`, old MPC `193`, pycompile/diff clean | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [regression](log/2026-07-15-joint-mpc-rti-regression.md) |

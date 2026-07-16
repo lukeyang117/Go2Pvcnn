@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import torch
+import pytest
 
 
 def test_task_cfg_declares_joint_backend_config_without_changing_default() -> None:
@@ -35,6 +36,36 @@ def test_factory_creates_joint_mpc_rti_manager() -> None:
 
     assert manager.planner_backend == "joint_mpc_rti"
     assert manager.horizon_steps() == 16
+
+
+@pytest.mark.parametrize("num_envs", (1, 40, 512, 1024))
+def test_factory_builds_joint_mpc_for_requested_environment_count(num_envs: int) -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.trajectory_manager_factory import create_trajectory_manager
+
+    cfg = SimpleNamespace(planner_backend="joint_mpc_rti", joint_mpc_rti_cfg=JointMpcRtiCfg())
+    manager = create_trajectory_manager(cfg, device="cpu", num_envs=num_envs)
+
+    assert manager._num_envs == num_envs
+    assert manager.pending_valid.shape == (num_envs,)
+
+
+def test_attach_factory_infers_environment_count_from_env() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.trajectory_manager_factory import attach_trajectory_manager
+
+    cfg = SimpleNamespace(
+        planner_backend="joint_mpc_rti",
+        joint_mpc_rti_cfg=JointMpcRtiCfg(),
+        reference_command_name="base_velocity",
+    )
+    root = SimpleNamespace(num_envs=512, device=torch.device("cpu"), command_manager=None)
+    env = SimpleNamespace(unwrapped=root, device=torch.device("cpu"))
+
+    manager = attach_trajectory_manager(env, cfg)
+
+    assert manager._num_envs == 512
+    assert manager.pending_valid.shape == (512,)
 
 
 def test_reference_adapter_preserves_full_horizon_and_future_frame_one() -> None:
@@ -142,7 +173,7 @@ def test_manager_refresh_from_env_builds_ready_reference_cache() -> None:
     assert torch.equal(manager.current_frame_ids(), torch.ones(batch, dtype=torch.long))
     assert manager._field_sync is not None
     assert scanner._joint_mpc_field_observer is manager._field_sync
-    assert torch.equal(manager._field_sync.latest_field().version, torch.zeros(batch, dtype=torch.long))
+    assert torch.equal(manager._field_sync.latest_field().version, torch.ones(batch, dtype=torch.long))
     assert manager.latest_trajectory().state.shape == (batch, 17, 18)
 
 

@@ -117,3 +117,4 @@ Do not route new planner work there. Use `extension/reference/*` and `extension/
 - Independent H16 rolling kinematic SQP-RTI with fixed trot, analytic FK/Jacobians, one world height field and semantic SDF.
 - Shared boundaries only: task cfg, manager factory, `ReferenceTrajectoryCache`, reward and viewer adapters.
 - `raw/mpx` informed fixed-program GPU structure but is not a dependency.
+- Terrain path: current 151x151 scanner rows -> fixed-workspace warp-level exact EDT -> world query; distance gradients are analytic derivatives of bilinear distance interpolation, and line-search candidates gather original env field rows without duplicating full maps.

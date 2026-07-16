@@ -157,3 +157,5 @@ Isaac Lab 在 trajectory reward 链路里主要承担两类职责：
 ## Joint MPC RTI pending reference（2026-07-15）
 
 新 backend 的 cache 保持完整 `[B,H+1,...]` ABI，但 reward/current-reference 固定读取索引 `1`：索引 `0` 是刚注入 planner 的真实 measured state，索引 `1` 才是 PPO 下一步要跟踪的 reference。reset 会清除对应 env 的 pending-valid，避免读取上一 episode 的 `x1`。
+
+2026-07-16 的同步 exact EDT 更新只改变 `x1` 生成前的 terrain-field 构建方式，不改变 reward 时序：每次 field version 发布后运行一次 RTI，reward 仍在下一真实步比较 pending frame `1`。旧 `mpc` phase 语义保持不变。

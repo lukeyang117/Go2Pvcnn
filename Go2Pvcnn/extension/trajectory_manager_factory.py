@@ -21,11 +21,19 @@ def planner_backend_from_cfg(cfg) -> str:
     return backend
 
 
-def create_trajectory_manager(cfg, *, device):
+def create_trajectory_manager(cfg, *, device, num_envs: int | None = None):
     backend = planner_backend_from_cfg(cfg)
     if backend == "joint_mpc_rti":
+        from extension.joint_mpc_rti.config import JointMpcRtiCfg
         from extension.joint_mpc_rti.runtime.manager import JointMpcRtiManager
 
+        if num_envs is not None:
+            joint_cfg = getattr(cfg, "joint_mpc_rti_cfg", JointMpcRtiCfg())
+            return JointMpcRtiManager.from_config(
+                joint_cfg,
+                num_envs=int(num_envs),
+                device=device,
+            )
         return JointMpcRtiManager(cfg, device=device)
     from extension.batch_mpc_planner.manager import MpcTrajectoryManager
 
@@ -125,8 +133,15 @@ def install_trajectory_manager_hooks(env, cfg, manager) -> None:
 def attach_trajectory_manager(env, cfg, *, device=None):
     sim = getattr(cfg, "sim", None)
     manager_device = device if device is not None else getattr(env, "device", getattr(sim, "device", "cpu"))
-    manager = create_trajectory_manager(cfg, device=manager_device)
     root = _env_root(env)
+    num_envs = getattr(root, "num_envs", None)
+    if num_envs is None:
+        num_envs = getattr(env, "num_envs")
+    manager = create_trajectory_manager(
+        cfg,
+        device=manager_device,
+        num_envs=int(num_envs),
+    )
     root._trajectory_manager = manager
     root._trajectory_reference_cache = None
     install_trajectory_manager_hooks(root, cfg, manager)

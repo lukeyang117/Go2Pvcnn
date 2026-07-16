@@ -80,3 +80,5 @@ Do not treat these as current architecture docs:
 ## Joint MPC RTI Pending Frame
 
 For `joint_mpc_rti`, the full cache has `H+1` nodes. Frame `0` is measured `x0`; reward and viewer current-reference selection use frame `1` as the pending next-step target. Old `mpc` phase semantics remain unchanged.
+
+The synchronous exact-EDT refresh changes only terrain-field construction before RTI. After the current field version is published, one RTI produces pending frame `1`; reward timing and the old `mpc` path are unchanged.
