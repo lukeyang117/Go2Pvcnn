@@ -49,6 +49,37 @@ def test_stance_losses_separate_ground_contact_from_slip() -> None:
     assert stable["stance_xy_lock"] < drifting["stance_xy_lock"]
 
 
+def test_stance_anchor_targets_hold_each_contact_segment_in_world_xy() -> None:
+    from extension.joint_mpc_rti.planner import _stance_anchor_targets
+
+    foot = torch.zeros(1, 5, 4, 3)
+    foot[0, :, 0, 0] = torch.tensor([0.10, 0.11, 0.20, 0.30, 0.31])
+    contact = torch.zeros(1, 5, 4, dtype=torch.bool)
+    contact[0, :, 0] = torch.tensor([True, True, False, True, True])
+
+    anchor = _stance_anchor_targets(foot, contact)
+
+    torch.testing.assert_close(anchor[0, 0:2, 0, 0], torch.tensor([0.10, 0.10]))
+    torch.testing.assert_close(anchor[0, 2, 0, 0], torch.tensor(0.20))
+    torch.testing.assert_close(anchor[0, 3:5, 0, 0], torch.tensor([0.30, 0.30]))
+
+
+def test_stance_xy_loss_tracks_world_anchor_not_only_previous_node() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses
+
+    foot = torch.zeros(1, 3, 4, 3)
+    height = torch.zeros(1, 3, 4)
+    contact = torch.ones(1, 3, 4, dtype=torch.bool)
+    anchor = torch.zeros_like(foot)
+    stable = stance_losses(foot, height, contact, stance_anchor_w=anchor, dt=0.02)
+    displaced = foot.clone()
+    displaced[:, 1:, :, 0] = 0.02
+    drifting = stance_losses(displaced, height, contact, stance_anchor_w=anchor, dt=0.02)
+
+    assert stable["stance_xy_lock"].item() == 0.0
+    assert drifting["stance_xy_lock"] > 0.0
+
+
 def test_small_object_loss_prefers_foot_over_or_bypass_without_root_gate() -> None:
     from extension.joint_mpc_rti.losses.semantic import small_object_losses
 

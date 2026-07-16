@@ -47,6 +47,7 @@ class JointMpcCudaGraphRunner:
             dual=solver_state.dual.clone(),
             previous_control=solver_state.previous_control.clone(),
             gait_phase=None if solver_state.gait_phase is None else solver_state.gait_phase.clone(),
+            stance_anchor_w=None if solver_state.stance_anchor_w is None else solver_state.stance_anchor_w.clone(),
         )
         warm = planner_step(self._state, self._command, self._field, self._solver_state, self._cfg)
         torch.cuda.synchronize(device=measured_state.device)
@@ -66,6 +67,8 @@ class JointMpcCudaGraphRunner:
             self._solver_state.previous_control.copy_(self._result.solver_state.previous_control)
             if self._solver_state.gait_phase is not None and self._result.solver_state.gait_phase is not None:
                 self._solver_state.gait_phase.copy_(self._result.solver_state.gait_phase)
+            if self._solver_state.stance_anchor_w is not None and self._result.solver_state.stance_anchor_w is not None:
+                self._solver_state.stance_anchor_w.copy_(self._result.solver_state.stance_anchor_w)
         self._graph.replay()
 
     @property

@@ -172,6 +172,33 @@ def _swing_phase_weight(contact: Tensor, phase_step: Tensor, cfg: JointMpcRtiCfg
     )
 
 
+def _stance_anchor_targets(
+    nominal_foot_pos_w: Tensor,
+    contact_state: Tensor,
+    initial_anchor_w: Tensor | None = None,
+) -> Tensor:
+    """Hold one world-space foot anchor through each contiguous stance segment."""
+    foot = torch.as_tensor(nominal_foot_pos_w)
+    contact = torch.as_tensor(contact_state, dtype=torch.bool, device=foot.device)
+    if foot.ndim != 4 or tuple(foot.shape[-2:]) != (4, 3):
+        raise ValueError("nominal_foot_pos_w must have shape [B,T,4,3]")
+    if contact.shape != foot.shape[:-1]:
+        raise ValueError("contact_state must have shape [B,T,4]")
+    if initial_anchor_w is None:
+        current = foot[:, 0]
+    else:
+        initial = torch.as_tensor(initial_anchor_w, dtype=foot.dtype, device=foot.device)
+        if initial.shape != foot[:, 0].shape:
+            raise ValueError("initial_anchor_w must have shape [B,4,3]")
+        current = torch.where(torch.isfinite(initial), initial, foot[:, 0])
+    anchors: list[Tensor] = [current]
+    for node in range(1, int(foot.shape[1])):
+        touchdown = torch.logical_and(contact[:, node], torch.logical_not(contact[:, node - 1]))
+        current = torch.where(touchdown.unsqueeze(-1), foot[:, node], current)
+        anchors.append(torch.where(contact[:, node].unsqueeze(-1), current, foot[:, node]))
+    return torch.stack(anchors, dim=1)
+
+
 def _desired_control(
     measured_state: JointMpcRtiState,
     command_body: Tensor,
@@ -179,9 +206,18 @@ def _desired_control(
     phase_step: Tensor,
     cfg: JointMpcRtiCfg,
 ) -> tuple[Tensor, Tensor]:
+    joint_target = _nominal_joint_target(contact, phase_step, cfg, dtype=measured_state.root_pos_w.dtype)
+    return _control_from_joint_target(measured_state, command_body, joint_target, cfg), joint_target
+
+
+def _control_from_joint_target(
+    measured_state: JointMpcRtiState,
+    command_body: Tensor,
+    joint_target: Tensor,
+    cfg: JointMpcRtiCfg,
+) -> Tensor:
     batch = measured_state.batch_size
     horizon = int(cfg.runtime.horizon_steps)
-    joint_target = _nominal_joint_target(contact, phase_step, cfg, dtype=measured_state.root_pos_w.dtype)
     joint_velocity = (joint_target[:, 1:] - joint_target[:, :-1]) / float(cfg.runtime.dt)
     joint_velocity = joint_velocity.clamp(
         -float(cfg.gait.max_nominal_joint_velocity), float(cfg.gait.max_nominal_joint_velocity)
@@ -190,7 +226,7 @@ def _desired_control(
     desired[..., :2] = command_body[:, None, :2]
     desired[..., 5] = command_body[:, None, 2]
     desired[..., 6:] = joint_velocity
-    return desired, joint_target
+    return desired
 
 
 def _initial_control(
@@ -333,6 +369,7 @@ def _add_foot_terrain_linearization(
     rollout: JointMpcRollout,
     contact_state: Tensor,
     swing_weight: Tensor,
+    stance_anchor_w: Tensor,
     foot_query: JointMpcTerrainQuery,
     cfg: JointMpcRtiCfg,
 ) -> LqProblem:
@@ -344,6 +381,9 @@ def _add_foot_terrain_linearization(
     large_distance = foot_query.large_distance_m.reshape(batch, nodes, 4)
     large_gradient = foot_query.large_gradient_w.reshape(batch, nodes, 4, 2)
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=foot.device)
+    stance_anchor = torch.as_tensor(stance_anchor_w, dtype=foot.dtype, device=foot.device)
+    if stance_anchor.shape != foot.shape:
+        raise ValueError("stance_anchor_w must match rollout foot positions")
     swing = torch.logical_not(contact)
     swing_weight = torch.as_tensor(swing_weight, dtype=foot.dtype, device=foot.device)
     relaxation = float(cfg.solver.barrier_relaxation)
@@ -382,8 +422,13 @@ def _add_foot_terrain_linearization(
         * small_over_derivative
     )
     stance_error = foot[..., 2] - height
+    stance_normalizer = normalized_mask(contact)
     foot_gradient[..., 2].add_(
-        float(cfg.losses.stance_ground_contact) * normalized_mask(contact) * 2.0 * stance_error
+        float(cfg.losses.stance_ground_contact) * stance_normalizer * 2.0 * stance_error
+    )
+    stance_xy_error = foot[..., :2] - stance_anchor[..., :2]
+    foot_gradient[..., :2].add_(
+        float(cfg.losses.stance_xy_lock) * stance_normalizer.unsqueeze(-1) * 2.0 * stance_xy_error
     )
     small_touchdown_derivative = relaxed_barrier_derivative(
         small_distance - 0.02,
@@ -410,6 +455,19 @@ def _add_foot_terrain_linearization(
         state_flat[:, 6:],
     ).reshape(batch, nodes, 4, 3, 12)
     joint_gradient = torch.einsum("btli,btliq->btq", foot_gradient, jacobian)
+    stance_axis_weight = torch.stack(
+        (
+            float(cfg.losses.stance_xy_lock) * stance_normalizer,
+            float(cfg.losses.stance_xy_lock) * stance_normalizer,
+            float(cfg.losses.stance_ground_contact) * stance_normalizer,
+        ),
+        dim=-1,
+    )
+    joint_curvature = 2.0 * torch.einsum(
+        "btli,btliq->btq",
+        stance_axis_weight,
+        jacobian * jacobian,
+    )
     matrix_q = problem.matrix_q.clone()
     vector_q = problem.vector_q.clone()
     terminal_q = problem.terminal_q.clone()
@@ -418,7 +476,9 @@ def _add_foot_terrain_linearization(
     vector_q[..., 6:].add_(joint_gradient[:, :-1])
     terminal_vector[..., 6:].add_(joint_gradient[:, -1])
     matrix_q[..., 6:, 6:].add_(torch.diag_embed(joint_gradient[:, :-1].abs() / trust_scale))
+    matrix_q[..., 6:, 6:].add_(torch.diag_embed(joint_curvature[:, :-1]))
     terminal_q[..., 6:, 6:].add_(torch.diag_embed(joint_gradient[:, -1].abs() / trust_scale))
+    terminal_q[..., 6:, 6:].add_(torch.diag_embed(joint_curvature[:, -1]))
     return replace(
         problem,
         matrix_q=matrix_q,
@@ -474,13 +534,6 @@ def step(
     )
     swing_weight = _swing_phase_weight(contact, phase_step, cfg, dtype=measured_state.root_pos_w.dtype)
     desired_control, joint_target = _desired_control(measured_state, command, contact, phase_step, cfg)
-    base_control = _initial_control(desired_control, solver_state)
-    base_rollout = rollout_controls(
-        measured_state,
-        base_control,
-        dt=float(cfg.runtime.dt),
-        compile_kernels=bool(cfg.solver.compile_kernels),
-    )
     nominal_state = rollout_state_sequence(
         measured_state,
         desired_control,
@@ -493,6 +546,32 @@ def step(
         nominal_state[..., 3:6].reshape(batch * nodes, 3),
         nominal_state[..., 6:].reshape(batch * nodes, 12),
     ).reshape(batch, nodes, 4, 3)
+    measured_foot_w = go2_foot_pos(
+        measured_state.root_pos_w,
+        measured_state.root_rpy_w,
+        measured_state.joint_pos,
+    )
+    previous_stance_anchor = (
+        measured_foot_w
+        if solver_state is None or solver_state.stance_anchor_w is None
+        else torch.as_tensor(
+            solver_state.stance_anchor_w,
+            dtype=measured_foot_w.dtype,
+            device=measured_foot_w.device,
+        )
+    )
+    stance_anchor_w = _stance_anchor_targets(
+        nominal_foot_pos_w,
+        contact,
+        initial_anchor_w=previous_stance_anchor,
+    )
+    base_control = _initial_control(desired_control, solver_state)
+    base_rollout = rollout_controls(
+        measured_state,
+        base_control,
+        dt=float(cfg.runtime.dt),
+        compile_kernels=bool(cfg.solver.compile_kernels),
+    )
     lq_problem = _build_lq_problem(base_rollout, desired_control, joint_target, measured_state, cfg)
     linearization_queries = _query_linearization_geometry(base_rollout, terrain_field, cfg)
     lq_problem = _add_large_obstacle_linearization(lq_problem, base_rollout, linearization_queries, cfg)
@@ -501,6 +580,7 @@ def step(
         base_rollout,
         contact,
         swing_weight,
+        stance_anchor_w,
         linearization_queries.foot,
         cfg,
     )
@@ -524,9 +604,16 @@ def step(
         repeated_target = joint_target[:, None].expand(-1, repeats, -1, -1).reshape(
             measured_state.batch_size * repeats, joint_target.shape[1], 12
         )
+        repeated_stance_anchor = stance_anchor_w[:, None].expand(-1, repeats, -1, -1, -1).reshape(
+            measured_state.batch_size * repeats,
+            stance_anchor_w.shape[1],
+            4,
+            3,
+        )
         _, total = rollout_loss_breakdown_maybe_compiled(
             rollout=candidate_rollout,
             nominal_foot_pos_w=repeated_nominal_foot,
+            stance_anchor_w=repeated_stance_anchor,
             contact_state=contact[:, None].expand(-1, repeats, -1, -1).reshape(
                 measured_state.batch_size * repeats, *contact.shape[1:]
             ),
@@ -576,6 +663,7 @@ def step(
         final_losses, _ = rollout_loss_breakdown_maybe_compiled(
             rollout=rollout,
             nominal_foot_pos_w=nominal_foot_pos_w,
+            stance_anchor_w=stance_anchor_w,
             contact_state=contact,
             swing_weight=swing_weight,
             terrain_field=terrain_field,
@@ -616,6 +704,7 @@ def step(
         dual=update.lq_solution.dual,
         previous_control=rollout.control[:, 0],
         gait_phase=torch.remainder(phase_step + 1, 2 * int(cfg.gait.half_cycle_steps)),
+        stance_anchor_w=stance_anchor_w[:, 1],
     )
     return JointMpcRtiStepResult(
         full_trajectory=trajectory,

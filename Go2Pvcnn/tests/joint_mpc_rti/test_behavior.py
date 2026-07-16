@@ -68,6 +68,79 @@ def test_flat_commands_track_direction_with_grounded_stance(
     assert trajectory.foot_pos_w[..., 2].min() >= -1.0e-4
 
 
+def test_rolling_x1_keeps_stance_grounded_for_zero_direction_magnitude_yaw_and_mixed_commands() -> None:
+    from extension.joint_mpc_rti.planner import step
+    from extension.joint_mpc_rti.terrain.query import query_world
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    commands = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [0.10, 0.0, 0.0],
+            [0.40, 0.0, 0.0],
+            [-0.25, 0.0, 0.0],
+            [0.0, 0.25, 0.0],
+            [0.0, -0.25, 0.0],
+            [0.0, 0.0, 0.50],
+            [0.20, 0.15, 0.30],
+            [0.35, -0.20, -0.35],
+        ],
+        dtype=torch.float32,
+    )
+    batch = int(commands.shape[0])
+    field = make_flat_field(batch)
+    measured = make_state(batch)
+    initial_root = measured.root_pos_w.clone()
+    initial_yaw = measured.root_rpy_w[:, 2].clone()
+    solver_state = None
+    max_stance_gap = torch.zeros(batch)
+    max_stance_xy_step = torch.zeros(batch)
+    min_foot_gap = torch.full((batch,), torch.inf)
+    previous_foot = None
+    previous_contact = None
+
+    for _ in range(32):
+        result = step(measured, commands, field, solver_state, _realtime_cfg())
+        trajectory = result.full_trajectory
+        foot = trajectory.foot_pos_w[:, 1]
+        contact = trajectory.contact_state[:, 1]
+        query = query_world(field, foot)
+        gap = foot[..., 2] - query.height_w
+        max_stance_gap = torch.maximum(
+            max_stance_gap,
+            torch.where(contact, torch.abs(gap), torch.zeros_like(gap)).amax(dim=1),
+        )
+        if previous_foot is not None and previous_contact is not None:
+            consecutive_stance = torch.logical_and(contact, previous_contact)
+            xy_step = torch.linalg.vector_norm(foot[..., :2] - previous_foot[..., :2], dim=-1)
+            max_stance_xy_step = torch.maximum(
+                max_stance_xy_step,
+                torch.where(consecutive_stance, xy_step, torch.zeros_like(xy_step)).amax(dim=1),
+            )
+        min_foot_gap = torch.minimum(min_foot_gap, gap.amin(dim=1))
+        first_control = trajectory.control[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=trajectory.state[:, 1, :3],
+            root_rpy_w=trajectory.state[:, 1, 3:6],
+            joint_pos=trajectory.state[:, 1, 6:],
+            root_lin_vel_b=first_control[:, :3],
+            root_ang_vel_b=first_control[:, 3:6],
+            joint_vel=first_control[:, 6:],
+        )
+        solver_state = result.solver_state
+        previous_foot = foot
+        previous_contact = contact
+
+    zero_root_xy_drift = torch.linalg.vector_norm(measured.root_pos_w[0, :2] - initial_root[0, :2])
+    zero_root_yaw_drift = torch.abs(measured.root_rpy_w[0, 2] - initial_yaw[0])
+    assert zero_root_xy_drift <= 1.0e-5
+    assert zero_root_yaw_drift <= 1.0e-5
+    assert max_stance_gap.max() <= 0.01
+    assert max_stance_xy_step.max() <= 0.012
+    assert min_foot_gap.min() >= -1.0e-4
+    assert torch.isfinite(measured.as_vector()).all()
+
+
 @pytest.mark.parametrize(
     ("y_range", "expected_lateral_sign"),
     (((0.02, 0.18), -1.0), ((-0.18, -0.02), 1.0)),

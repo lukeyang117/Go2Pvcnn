@@ -115,6 +115,8 @@ class JointMpcRtiManager:
         if self._solver_state is not None and self._solver_state.gait_phase is not None:
             mask = torch.as_tensor(env_mask, dtype=torch.bool, device=self._solver_state.gait_phase.device)
             self._solver_state.gait_phase.masked_fill_(mask, 0)
+            if self._solver_state.stance_anchor_w is not None:
+                self._solver_state.stance_anchor_w[mask] = torch.nan
 
     def current_reference(self):
         if self._buffer is None or self._buffer.reference is None:

@@ -8,7 +8,14 @@ from torch import Tensor
 from extension.joint_mpc_rti.losses.barriers import localized_relaxed_barrier, masked_mean, relaxed_barrier
 
 
-def stance_losses(foot_pos_w: Tensor, queried_height_w: Tensor, contact_state: Tensor, *, dt: float) -> dict[str, Tensor]:
+def stance_losses(
+    foot_pos_w: Tensor,
+    queried_height_w: Tensor,
+    contact_state: Tensor,
+    *,
+    stance_anchor_w: Tensor | None = None,
+    dt: float,
+) -> dict[str, Tensor]:
     foot = torch.as_tensor(foot_pos_w)
     height = torch.as_tensor(queried_height_w, dtype=foot.dtype, device=foot.device)
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=foot.device)
@@ -19,7 +26,14 @@ def stance_losses(foot_pos_w: Tensor, queried_height_w: Tensor, contact_state: T
     consecutive_contact = torch.logical_and(contact[:, 1:], contact[:, :-1])
     xy_step = foot[:, 1:, :, :2] - foot[:, :-1, :, :2]
     xy_step_sq = (xy_step * xy_step).sum(dim=-1)
-    xy_lock = masked_mean(xy_step_sq, consecutive_contact, dims=(1, 2))
+    if stance_anchor_w is None:
+        xy_lock = masked_mean(xy_step_sq, consecutive_contact, dims=(1, 2))
+    else:
+        anchor = torch.as_tensor(stance_anchor_w, dtype=foot.dtype, device=foot.device)
+        if anchor.shape != foot.shape:
+            raise ValueError("stance_anchor_w must match foot_pos_w")
+        xy_anchor_error = foot[..., :2] - anchor[..., :2]
+        xy_lock = masked_mean((xy_anchor_error * xy_anchor_error).sum(dim=-1), contact, dims=(1, 2))
     slip = masked_mean(xy_step_sq / (float(dt) ** 2), consecutive_contact, dims=(1, 2))
     return {
         "stance_xy_lock": xy_lock,

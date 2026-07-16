@@ -78,6 +78,7 @@ def rollout_loss_breakdown(
     rollout: JointMpcRollout,
     nominal_rollout: JointMpcRollout | None = None,
     nominal_foot_pos_w: torch.Tensor | None = None,
+    stance_anchor_w: torch.Tensor | None = None,
     contact_state: torch.Tensor,
     swing_weight: torch.Tensor,
     terrain_field: JointMpcTerrainField,
@@ -94,6 +95,9 @@ def rollout_loss_breakdown(
         nominal_foot = nominal_rollout.foot_pos_w
     else:
         nominal_foot = torch.as_tensor(nominal_foot_pos_w, dtype=state.dtype, device=state.device)
+    stance_anchor = nominal_foot if stance_anchor_w is None else torch.as_tensor(
+        stance_anchor_w, dtype=state.dtype, device=state.device
+    )
     foot_query, knee_query, shank_query, body_query, root_query = _packed_geometry_queries(
         terrain_field,
         rollout,
@@ -128,7 +132,15 @@ def rollout_loss_breakdown(
             barrier_relaxation=cfg.solver.barrier_relaxation,
         )
     )
-    losses.update(stance_losses(rollout.foot_pos_w, foot_height, contact, dt=cfg.runtime.dt))
+    losses.update(
+        stance_losses(
+            rollout.foot_pos_w,
+            foot_height,
+            contact,
+            stance_anchor_w=stance_anchor,
+            dt=cfg.runtime.dt,
+        )
+    )
     losses.update(
         swing_losses(
             foot_pos_w=rollout.foot_pos_w,

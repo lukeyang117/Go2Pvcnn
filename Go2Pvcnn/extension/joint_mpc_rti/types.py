@@ -82,6 +82,7 @@ class JointMpcRtiSolverState:
     dual: Tensor | None
     previous_control: Tensor
     gait_phase: Tensor | None = None
+    stance_anchor_w: Tensor | None = None
 
 
 @dataclass(frozen=True)
