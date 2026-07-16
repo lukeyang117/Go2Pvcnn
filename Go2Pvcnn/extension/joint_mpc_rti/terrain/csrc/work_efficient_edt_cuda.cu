@@ -51,7 +51,7 @@ __global__ void vertical_distance_kernel(const bool* __restrict__ mask,
   }
 }
 
-__global__ void semantic_vertical_distance_dual_kernel(
+__global__ void semantic_vertical_distance_signed_kernel(
     const int64_t* __restrict__ semantic,
     int16_t* __restrict__ vertical,
     int64_t small_id,
@@ -66,12 +66,18 @@ __global__ void semantic_vertical_distance_dual_kernel(
   const int semantic_offset = batch_index * kGridSize * kGridSize;
   const int small_offset = batch_index * kGridSize * kGridSize;
   const int large_offset = (batch + batch_index) * kGridSize * kGridSize;
+  const int small_free_offset = (2 * batch + batch_index) * kGridSize * kGridSize;
+  const int large_free_offset = (3 * batch + batch_index) * kGridSize * kGridSize;
   int nearest_small = -kNoSeed;
   int nearest_large = -kNoSeed;
+  int nearest_small_free = -kNoSeed;
+  int nearest_large_free = -kNoSeed;
   for (int row = 0; row < kGridSize; ++row) {
     const int source_index = semantic_offset + row * kGridSize + column;
     const int small_index = small_offset + row * kGridSize + column;
     const int large_index = large_offset + row * kGridSize + column;
+    const int small_free_index = small_free_offset + row * kGridSize + column;
+    const int large_free_index = large_free_offset + row * kGridSize + column;
     const int64_t semantic_value = semantic[source_index];
     if (semantic_value == small_id) {
       nearest_small = row;
@@ -87,14 +93,32 @@ __global__ void semantic_vertical_distance_dual_kernel(
       const int delta = row - nearest_large;
       vertical[large_index] = nearest_large <= -kGridSize ? kNoSeed : delta * delta;
     }
+    if (semantic_value != small_id) {
+      nearest_small_free = row;
+      vertical[small_free_index] = 0;
+    } else {
+      const int delta = row - nearest_small_free;
+      vertical[small_free_index] = nearest_small_free <= -kGridSize ? kNoSeed : delta * delta;
+    }
+    if (semantic_value != large_id) {
+      nearest_large_free = row;
+      vertical[large_free_index] = 0;
+    } else {
+      const int delta = row - nearest_large_free;
+      vertical[large_free_index] = nearest_large_free <= -kGridSize ? kNoSeed : delta * delta;
+    }
   }
 
   nearest_small = kNoSeed;
   nearest_large = kNoSeed;
+  nearest_small_free = kNoSeed;
+  nearest_large_free = kNoSeed;
   for (int row = kGridSize - 1; row >= 0; --row) {
     const int source_index = semantic_offset + row * kGridSize + column;
     const int small_index = small_offset + row * kGridSize + column;
     const int large_index = large_offset + row * kGridSize + column;
+    const int small_free_index = small_free_offset + row * kGridSize + column;
+    const int large_free_index = large_free_offset + row * kGridSize + column;
     const int64_t semantic_value = semantic[source_index];
     if (semantic_value == small_id) {
       nearest_small = row;
@@ -107,6 +131,18 @@ __global__ void semantic_vertical_distance_dual_kernel(
     } else if (nearest_large < kNoSeed) {
       const int delta = nearest_large - row;
       vertical[large_index] = min(vertical[large_index], delta * delta);
+    }
+    if (semantic_value != small_id) {
+      nearest_small_free = row;
+    } else if (nearest_small_free < kNoSeed) {
+      const int delta = nearest_small_free - row;
+      vertical[small_free_index] = min(vertical[small_free_index], delta * delta);
+    }
+    if (semantic_value != large_id) {
+      nearest_large_free = row;
+    } else if (nearest_large_free < kNoSeed) {
+      const int delta = nearest_large_free - row;
+      vertical[large_free_index] = min(vertical[large_free_index], delta * delta);
     }
   }
 }
@@ -226,6 +262,107 @@ __global__ void horizontal_envelope_kernel(const int16_t* __restrict__ vertical,
   }
 }
 
+__global__ void horizontal_signed_combine_kernel(
+    const int16_t* __restrict__ vertical,
+    const int64_t* __restrict__ semantic,
+    float* __restrict__ output,
+    int batch,
+    int64_t small_id,
+    int64_t large_id,
+    float resolution) {
+  const int image = blockIdx.x;
+  const int image_count = batch * 2;
+  const int warp = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31;
+  if (image >= image_count) {
+    return;
+  }
+  const int channel = image / batch;
+  const int batch_index = image % batch;
+  const int64_t semantic_id = channel == 0 ? small_id : large_id;
+  const int semantic_offset = batch_index * kGridSize * kGridSize;
+  const int image_offset = image * kGridSize * kGridSize;
+  const int inside_offset = (image_count + image) * kGridSize * kGridSize;
+  __shared__ int has_occupied;
+  __shared__ int has_free;
+  __shared__ int envelope_index[kWarpsPerBlock][kGridSize];
+  __shared__ float envelope_break[kWarpsPerBlock][kGridSize + 1];
+  __shared__ int envelope_size[kWarpsPerBlock];
+  if (threadIdx.x == 0) {
+    has_occupied = 0;
+    has_free = 0;
+  }
+  __syncthreads();
+  bool local_occupied = false;
+  bool local_free = false;
+  for (int index = threadIdx.x; index < kGridSize * kGridSize; index += blockDim.x) {
+    const bool occupied = semantic[semantic_offset + index] == semantic_id;
+    local_occupied = local_occupied || occupied;
+    local_free = local_free || !occupied;
+  }
+  if (local_occupied) atomicExch(&has_occupied, 1);
+  if (local_free) atomicExch(&has_free, 1);
+  __syncthreads();
+  const float maximum_distance = sqrtf(kMaximumSquaredDistance) * resolution;
+  const float half_cell = 0.5F * resolution;
+
+  for (int row = warp; row < kGridSize; row += kWarpsPerBlock) {
+    const int inside_row_offset = inside_offset + row * kGridSize;
+    if (lane == 0) {
+      int size = -1;
+      for (int column = 0; column < kGridSize; ++column) {
+        const int value = vertical[inside_row_offset + column];
+        if (value >= kNoSeed) continue;
+        float intersection = -kEnvelopeInfinity;
+        while (size >= 0) {
+          const int previous_column = envelope_index[warp][size];
+          const int previous_value = vertical[inside_row_offset + previous_column];
+          intersection = static_cast<float>((value + column * column) -
+                                             (previous_value + previous_column * previous_column)) /
+                         static_cast<float>(2 * (column - previous_column));
+          if (intersection > envelope_break[warp][size]) break;
+          --size;
+        }
+        ++size;
+        envelope_index[warp][size] = column;
+        envelope_break[warp][size] = size == 0 ? -kEnvelopeInfinity : intersection;
+        envelope_break[warp][size + 1] = kEnvelopeInfinity;
+      }
+      envelope_size[warp] = size;
+    }
+    __syncwarp();
+    const int size = envelope_size[warp];
+    for (int query = lane; query < kGridSize; query += 32) {
+      const int output_index = image_offset + row * kGridSize + query;
+      if (!has_occupied) {
+        output[output_index] = maximum_distance;
+        continue;
+      }
+      if (!has_free) {
+        output[output_index] = -maximum_distance;
+        continue;
+      }
+      const bool occupied = semantic[semantic_offset + row * kGridSize + query] == semantic_id;
+      if (!occupied) {
+        output[output_index] = fmaxf(output[output_index] - half_cell, half_cell);
+        continue;
+      }
+      int lower = 0;
+      int upper = size + 1;
+      while (lower + 1 < upper) {
+        const int middle = (lower + upper) >> 1;
+        if (envelope_break[warp][middle] <= static_cast<float>(query)) lower = middle;
+        else upper = middle;
+      }
+      const int seed_column = envelope_index[warp][lower];
+      const int delta = query - seed_column;
+      const float squared = static_cast<float>(vertical[inside_row_offset + seed_column] + delta * delta);
+      output[output_index] = -fmaxf(sqrtf(squared) * resolution - half_cell, half_cell);
+    }
+    __syncwarp();
+  }
+}
+
 }  // namespace
 
 torch::Tensor exact_squared_edt_cuda(torch::Tensor mask) {
@@ -251,19 +388,24 @@ torch::Tensor semantic_distance_fields_cuda(
   const int batch = static_cast<int>(semantic.size(0));
   const int image_count = batch * 2;
   auto field_sizes = std::vector<int64_t>{2, batch, kGridSize, kGridSize};
+  auto workspace_sizes = std::vector<int64_t>{4, batch, kGridSize, kGridSize};
   auto float_options = semantic.options().dtype(torch::kFloat32);
   auto int_options = semantic.options().dtype(torch::kInt16);
-  auto vertical = torch::empty(field_sizes, int_options);
+  auto vertical = torch::empty(workspace_sizes, int_options);
   auto distance = torch::empty(field_sizes, float_options);
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-  semantic_vertical_distance_dual_kernel<<<batch, 256, 0, stream>>>(
+  semantic_vertical_distance_signed_kernel<<<batch, 256, 0, stream>>>(
       semantic.data_ptr<int64_t>(), vertical.data_ptr<int16_t>(), small_id, large_id,
       batch);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   horizontal_envelope_kernel<<<image_count, kThreadsPerBlock, 0, stream>>>(
       vertical.data_ptr<int16_t>(), distance.data_ptr<float>(), image_count,
       static_cast<float>(resolution), true);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  horizontal_signed_combine_kernel<<<image_count, kThreadsPerBlock, 0, stream>>>(
+      vertical.data_ptr<int16_t>(), semantic.data_ptr<int64_t>(), distance.data_ptr<float>(),
+      batch, small_id, large_id, static_cast<float>(resolution));
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return distance;
 }
@@ -280,13 +422,17 @@ void semantic_distance_fields_out_cuda(
   const int batch = static_cast<int>(semantic.size(0));
   const int image_count = batch * 2;
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  semantic_vertical_distance_dual_kernel<<<batch, 256, 0, stream>>>(
+  semantic_vertical_distance_signed_kernel<<<batch, 256, 0, stream>>>(
       semantic.data_ptr<int64_t>(), vertical_workspace.data_ptr<int16_t>(), small_id,
       large_id, batch);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   horizontal_envelope_kernel<<<image_count, kThreadsPerBlock, 0, stream>>>(
       vertical_workspace.data_ptr<int16_t>(), distance.data_ptr<float>(), image_count,
       static_cast<float>(resolution), true);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  horizontal_signed_combine_kernel<<<image_count, kThreadsPerBlock, 0, stream>>>(
+      vertical_workspace.data_ptr<int16_t>(), semantic.data_ptr<int64_t>(),
+      distance.data_ptr<float>(), batch, small_id, large_id, static_cast<float>(resolution));
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 

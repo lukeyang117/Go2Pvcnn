@@ -9,6 +9,84 @@ import pytest
 import torch
 
 
+def _build_semantic_field_for_signed_test(semantic: torch.Tensor):
+    from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
+
+    batch = int(semantic.shape[0])
+    return build_field_batch(
+        height_w=torch.zeros_like(semantic, dtype=torch.float32),
+        semantic_id=semantic,
+        origin_w=torch.zeros(batch, 3),
+        yaw_w=torch.zeros(batch),
+        timestamp=torch.zeros(batch),
+        version=torch.zeros(batch, dtype=torch.long),
+        resolution=0.01,
+        small_ids=(1,),
+        large_ids=(2,),
+    )
+
+
+def test_cpu_semantic_distance_is_signed_and_half_cell_corrected() -> None:
+    semantic = torch.zeros(1, 151, 151, dtype=torch.long)
+    semantic[:, 70:81, 70:81] = 1
+
+    field = _build_semantic_field_for_signed_test(semantic)
+
+    assert field.small_distance_m[0, 75, 75] < 0.0
+    torch.testing.assert_close(
+        field.small_distance_m[0, 75, 69],
+        torch.tensor(0.005),
+        atol=1.0e-6,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        field.small_distance_m[0, 75, 70],
+        torch.tensor(-0.005),
+        atol=1.0e-6,
+        rtol=0.0,
+    )
+
+
+def test_cpu_signed_distance_degenerate_channels_are_finite() -> None:
+    empty = _build_semantic_field_for_signed_test(torch.zeros(1, 151, 151, dtype=torch.long))
+    full = _build_semantic_field_for_signed_test(torch.ones(1, 151, 151, dtype=torch.long))
+
+    assert torch.isfinite(empty.small_distance_m).all()
+    assert torch.all(empty.small_distance_m > 0.0)
+    assert torch.isfinite(full.small_distance_m).all()
+    assert torch.all(full.small_distance_m < 0.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA signed EDT requires a GPU")
+def test_cuda_semantic_distance_matches_cpu_signed_reference() -> None:
+    semantic = torch.zeros(2, 151, 151, dtype=torch.long)
+    semantic[0, 70:81, 70:81] = 1
+    semantic[0, 30:41, 100:111] = 2
+    semantic[1, 50:66, 85:101] = 1
+    semantic[1, 90:106, 40:56] = 2
+    cpu_field = _build_semantic_field_for_signed_test(semantic)
+    cuda_field = _build_semantic_field_for_signed_test(semantic.cuda())
+
+    torch.testing.assert_close(cuda_field.small_distance_m.cpu(), cpu_field.small_distance_m, atol=1.0e-5, rtol=0.0)
+    torch.testing.assert_close(cuda_field.large_distance_m.cpu(), cpu_field.large_distance_m, atol=1.0e-5, rtol=0.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA signed EDT requires a GPU")
+def test_cuda_signed_distance_degenerate_channels_are_finite() -> None:
+    semantic = torch.stack(
+        (
+            torch.zeros(151, 151, dtype=torch.long),
+            torch.ones(151, 151, dtype=torch.long),
+        ),
+        dim=0,
+    ).cuda()
+    field = _build_semantic_field_for_signed_test(semantic)
+
+    assert torch.isfinite(field.small_distance_m).all()
+    assert torch.all(field.small_distance_m[0] > 0.0)
+    assert torch.all(field.small_distance_m[1] < 0.0)
+
+
 def test_world_query_uses_bound_field_pose_and_returns_invalid_outside() -> None:
     from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
     from extension.joint_mpc_rti.terrain.query import query_world
@@ -308,13 +386,13 @@ def test_cuda_field_builder_uses_exact_edt_without_jump_flood(monkeypatch) -> No
     from extension.joint_mpc_rti.terrain import field_builder
     from extension.joint_mpc_rti.terrain import cuda_edt
 
-    def fail_jump_flood(*args, **kwargs):
-        raise AssertionError("CUDA field construction must not call jump_flood_distance")
+    def fail_cpu_signed_distance(*args, **kwargs):
+        raise AssertionError("CUDA field construction must not call the CPU signed distance builder")
 
     def fail_unfused_edt(*args, **kwargs):
         raise AssertionError("CUDA field construction must use the fused semantic-field kernel")
 
-    monkeypatch.setattr(field_builder, "jump_flood_distance", fail_jump_flood)
+    monkeypatch.setattr(field_builder, "signed_boundary_distance", fail_cpu_signed_distance)
     monkeypatch.setattr(cuda_edt, "exact_squared_edt_cuda", fail_unfused_edt)
     semantic = torch.zeros(2, 151, 151, dtype=torch.long, device="cuda")
     semantic[0, 75, 75] = 1
@@ -331,8 +409,8 @@ def test_cuda_field_builder_uses_exact_edt_without_jump_flood(monkeypatch) -> No
         large_ids=(2,),
     )
 
-    assert field.small_distance_m[0, 75, 75] == 0.0
-    assert field.large_distance_m[1, 25, 125] == 0.0
+    torch.testing.assert_close(field.small_distance_m[0, 75, 75], torch.tensor(-0.005, device="cuda"))
+    torch.testing.assert_close(field.large_distance_m[1, 25, 125], torch.tensor(-0.005, device="cuda"))
     assert torch.isfinite(field.small_gradient_xy).all()
     assert torch.isfinite(field.large_gradient_xy).all()
 
@@ -365,8 +443,8 @@ def test_cuda_full_cache_refresh_writes_exact_edt_in_place(monkeypatch) -> None:
     )
 
     assert torch.all(cache.version == 0)
-    assert torch.all(cache.small_distance_m[:, 75, 75] == 0.0)
-    assert torch.all(cache.large_distance_m[:, 25, 125] == 0.0)
+    torch.testing.assert_close(cache.small_distance_m[:, 75, 75], torch.full((4,), -0.005, device="cuda"))
+    torch.testing.assert_close(cache.large_distance_m[:, 25, 125], torch.full((4,), -0.005, device="cuda"))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA exact EDT requires a GPU")
@@ -415,5 +493,5 @@ def test_cuda_full_but_permuted_env_ids_preserve_row_mapping() -> None:
         timestamp=torch.zeros(2, device="cuda"),
     )
 
-    assert cache.small_distance_m[1, 25, 25] == 0.0
-    assert cache.small_distance_m[0, 125, 125] == 0.0
+    torch.testing.assert_close(cache.small_distance_m[1, 25, 25], torch.tensor(-0.005, device="cuda"))
+    torch.testing.assert_close(cache.small_distance_m[0, 125, 125], torch.tensor(-0.005, device="cuda"))

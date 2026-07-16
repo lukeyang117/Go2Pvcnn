@@ -31,7 +31,7 @@ class JointMpcTerrainFieldCache:
         self._distance_cb = torch.full((2, *shape), maximum_distance, dtype=torch.float32, device=device)
         self.small_distance_m = self._distance_cb[0]
         self.large_distance_m = self._distance_cb[1]
-        self._edt_vertical_workspace = torch.empty((2, *shape), dtype=torch.int16, device=device)
+        self._edt_vertical_workspace = torch.empty((4, *shape), dtype=torch.int16, device=device)
         zero_gradient = torch.zeros(1, 1, 1, 2, dtype=torch.float32, device=device)
         self.small_gradient_xy = zero_gradient.expand(*shape, 2)
         self.large_gradient_xy = zero_gradient.expand(*shape, 2)

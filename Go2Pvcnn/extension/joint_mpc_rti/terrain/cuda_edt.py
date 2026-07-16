@@ -69,7 +69,7 @@ def semantic_distance_fields_cuda(
     large_ids: tuple[int, ...],
     resolution: float,
 ) -> Tensor:
-    """Build exact metre distances with output layout ``[2,B,151,151]``."""
+    """Build exact signed metre distances with output layout ``[2,B,151,151]``."""
     if not isinstance(semantic_id, Tensor):
         raise TypeError("semantic_id must be a torch.Tensor")
     if not semantic_id.is_cuda or semantic_id.dtype is not torch.long:
@@ -93,7 +93,7 @@ def semantic_distance_fields_out_cuda(
     large_ids: tuple[int, ...],
     resolution: float,
 ) -> None:
-    """Write exact distances into fixed ``[2,B,151,151]`` output and workspace."""
+    """Write signed distances into ``[2,B,151,151]`` using ``[4,B,151,151]`` workspace."""
     if len(small_ids) != 1 or len(large_ids) != 1:
         raise ValueError("CUDA fused semantic EDT currently requires one small id and one large id")
     _load_extension().semantic_distance_fields_out(

@@ -3,6 +3,26 @@ from __future__ import annotations
 import torch
 
 
+def test_default_h16_covers_stance_swing_stance_for_every_leg() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
+
+    cfg = JointMpcRtiCfg()
+    assert cfg.gait.half_cycle_steps == 8
+    contact = fixed_trot_schedule(
+        1,
+        cfg.runtime.horizon_steps,
+        torch.device("cpu"),
+        half_cycle_steps=cfg.gait.half_cycle_steps,
+    )[0]
+
+    assert contact.shape == (17, 4)
+    for leg in range(4):
+        transitions = contact[1:, leg].to(torch.int8) - contact[:-1, leg].to(torch.int8)
+        assert torch.count_nonzero(transitions == -1) == 1
+        assert torch.count_nonzero(transitions == 1) == 1
+
+
 def test_go2_fk_returns_planner_leg_order_and_link_samples() -> None:
     from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 

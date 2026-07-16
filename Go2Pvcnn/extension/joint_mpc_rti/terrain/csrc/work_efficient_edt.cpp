@@ -69,12 +69,14 @@ void semantic_distance_fields_out(
               "semantic, distance, and workspace must be contiguous");
   TORCH_CHECK(semantic.dim() == 3 && semantic.size(1) == 151 && semantic.size(2) == 151,
               "semantic must have shape [B,151,151]");
-  TORCH_CHECK(distance.sizes() == vertical_workspace.sizes(),
-              "distance and workspace shapes must match");
   TORCH_CHECK(distance.dim() == 4 && distance.size(0) == 2 &&
                   distance.size(1) == semantic.size(0) && distance.size(2) == 151 &&
                   distance.size(3) == 151,
-              "distance and workspace must have shape [2,B,151,151]");
+              "distance must have shape [2,B,151,151]");
+  TORCH_CHECK(vertical_workspace.dim() == 4 && vertical_workspace.size(0) == 4 &&
+                  vertical_workspace.size(1) == semantic.size(0) &&
+                  vertical_workspace.size(2) == 151 && vertical_workspace.size(3) == 151,
+              "workspace must have shape [4,B,151,151]");
   TORCH_CHECK(semantic.device() == distance.device() &&
                   semantic.device() == vertical_workspace.device(),
               "semantic, distance, and workspace must share a device");

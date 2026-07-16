@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.terrain.distance_field import distance_gradient, jump_flood_distance, semantic_mask
+from extension.joint_mpc_rti.terrain.distance_field import distance_gradient, semantic_mask, signed_boundary_distance
 from extension.joint_mpc_rti.types import JointMpcTerrainField
 
 
@@ -49,8 +49,8 @@ def build_field_batch(
     else:
         small_mask = semantic_mask(semantic, small_ids)
         large_mask = semantic_mask(semantic, large_ids)
-        small_distance = jump_flood_distance(small_mask, resolution=resolution)
-        large_distance = jump_flood_distance(large_mask, resolution=resolution)
+        small_distance = signed_boundary_distance(small_mask, resolution=resolution)
+        large_distance = signed_boundary_distance(large_mask, resolution=resolution)
         small_gradient = distance_gradient(small_distance, resolution=resolution)
         large_gradient = distance_gradient(large_distance, resolution=resolution)
     return JointMpcTerrainField(

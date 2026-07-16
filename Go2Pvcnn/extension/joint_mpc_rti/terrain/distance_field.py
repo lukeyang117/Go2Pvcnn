@@ -80,6 +80,28 @@ def jump_flood_distance(mask: Tensor, *, resolution: float) -> Tensor:
     return torch.where(torch.isfinite(distance), distance, distance.new_full((), maximum_distance))
 
 
+def signed_boundary_distance(mask: Tensor, *, resolution: float) -> Tensor:
+    """Return boundary-corrected signed distance, positive outside obstacles."""
+    occupied = torch.as_tensor(mask, dtype=torch.bool)
+    if occupied.ndim != 3:
+        raise ValueError("mask must have shape [B,NX,NY]")
+    outside = jump_flood_distance(occupied, resolution=resolution)
+    inside = jump_flood_distance(torch.logical_not(occupied), resolution=resolution)
+    half_cell = 0.5 * float(resolution)
+    maximum_distance = float(resolution) * math.sqrt(
+        float((occupied.shape[1] - 1) ** 2 + (occupied.shape[2] - 1) ** 2)
+    )
+    signed = torch.where(
+        occupied,
+        -(inside - half_cell).clamp_min(half_cell),
+        (outside - half_cell).clamp_min(half_cell),
+    )
+    has_occupied = occupied.flatten(1).any(dim=1).view(-1, 1, 1)
+    has_free = torch.logical_not(occupied).flatten(1).any(dim=1).view(-1, 1, 1)
+    signed = torch.where(has_occupied, signed, signed.new_full((), maximum_distance))
+    return torch.where(has_free, signed, signed.new_full((), -maximum_distance))
+
+
 def distance_gradient(distance_m: Tensor, *, resolution: float) -> Tensor:
     """Return local field-frame gradients ordered as d/dx, d/dy."""
     distance = torch.as_tensor(distance_m)
@@ -95,4 +117,4 @@ def distance_gradient(distance_m: Tensor, *, resolution: float) -> Tensor:
     return torch.stack((gradient_x, gradient_y), dim=-1)
 
 
-__all__ = ["distance_gradient", "jump_flood_distance", "semantic_mask"]
+__all__ = ["distance_gradient", "jump_flood_distance", "semantic_mask", "signed_boundary_distance"]

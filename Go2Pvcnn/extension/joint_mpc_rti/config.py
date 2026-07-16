@@ -31,7 +31,7 @@ class JointMpcRtiSolverCfg:
 
 @dataclass
 class JointMpcRtiGaitCfg:
-    half_cycle_steps: int = 4
+    half_cycle_steps: int = 8
     nominal_joint_pos: tuple[float, ...] = (0.0, 0.8, -1.5) * 4
     swing_thigh_angle: float = 0.55
     swing_calf_angle: float = -1.75
