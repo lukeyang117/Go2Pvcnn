@@ -526,7 +526,7 @@ def test_field_cache_updates_only_selected_env_rows_atomically() -> None:
 
 - [ ] **Step 3: 实现固定 151×151 单高度场**
 
-`build_field_batch()` 输入 `height_w`，不创建第二高度场。small/large mask 由 semantic ids 构造；SDF 使用全 tensor 固定迭代的 jump-flood 或等价 GPU distance transform，输出以米为单位的 signed/unsigned distance 和 XY gradient。
+`build_field_batch()` 输入 `height_w`，不创建第二高度场。small/large mask 由 semantic ids 构造；CPU 测试保留 tensor exact/fallback，CUDA 生产路径必须调用 Task 14 的 warp-level work-efficient exact EDT，不再使用 Python/PyTorch Jump Flood。输出以米为单位的 distance 和 XY gradient。
 
 - [ ] **Step 4: 实现 field cache 原子行更新**
 
@@ -950,9 +950,9 @@ git commit -m "feat: wire joint MPC RTI into reference rewards"
 
 RayCaster 完成 `ray_hits_w` 和 `semantic_map` row 写入后调用已注册的 field-sync observer。未启用 `joint_mpc_rti` 时 observer 为 `None`，旧 scanner 路径没有额外 SDF 开销。
 
-- [ ] **Step 4: 实现独立 CUDA stream/ready event**
+- [ ] **Step 4: 实现同步 field → MPC 契约**
 
-field builder 在独立 stream 构建同一 ids；完成后记录 ready event 和 version。planner 读取最近 ready version，不能同步读取半完成数据。
+RayCaster 回调只登记同批 env ids。manager refresh 在回调栈之外同步构建当前 field，等待 CUDA exact EDT 和 cache write 完成后，立即用同一 version 执行 MPC。默认每次 MPC 都更新一次 field，不使用异步流水线或 stale field。
 
 - [ ] **Step 5: 运行 GREEN**
 
@@ -1105,60 +1105,95 @@ git commit -m "test: add IsaacLab joint MPC runtime coverage"
 
 ---
 
-### Task 14: 1024 环境 GPU 性能与固定执行图
+### Task 14: CUDA Warp-Level Exact EDT 与 1024 环境同步 Full-Refresh 性能
 
 **Files:**
-- Create: `Go2Pvcnn/extension/joint_mpc_rti/diagnostics/profiler.py`
-- Create: `Go2Pvcnn/extension/joint_mpc_rti/diagnostics/metrics.py`
-- Create: `Go2Pvcnn/extension/joint_mpc_rti/diagnostics/validation.py`
-- Create: `Go2Pvcnn/tests/joint_mpc_rti/test_performance.py`
-- Create: `Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_perf_probe.py`
+- Create: `Go2Pvcnn/extension/joint_mpc_rti/terrain/csrc/work_efficient_edt.cpp`
+- Create: `Go2Pvcnn/extension/joint_mpc_rti/terrain/csrc/work_efficient_edt_cuda.cu`
+- Create: `Go2Pvcnn/extension/joint_mpc_rti/terrain/cuda_edt.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/terrain/distance_field.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/terrain/field_builder.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/integration/field_sync.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/runtime/manager.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/diagnostics/profiler.py`
+- Create: `Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_full_refresh_probe.py`
+- Extend: `Go2Pvcnn/tests/joint_mpc_rti/test_terrain_fields.py`
+- Extend: `Go2Pvcnn/tests/joint_mpc_rti/test_performance.py`
 
-- [ ] **Step 1: 写性能 probe 和非同步计时测试**
+- [ ] **Step 1: 写 exact EDT parity RED 测试**
 
-probe 预分配 `B=1024,H=16` 输入，完成 compile/warm-up 后，用 CUDA events 包围 1000 次 planner hot path；循环内不 synchronize，循环结束后统一同步并报告 total/mean/P50/P95/P99/max/peak memory/nonfinite count。
+测试构造空图、单点、边界点、圆形、矩形、随机稀疏 mask 和 `B=1024,C=2,N=151` shape。CUDA 输出必须与 CPU brute-force exact EDT 对齐：距离绝对误差 `<=1e-5m`，空图返回对角线最大距离，输出有限且不同 env/channel 不串扰。测试还断言 CUDA 路径没有调用 `jump_flood_distance()`。
 
-- [ ] **Step 2: 建立初始基线**
+- [ ] **Step 2: 运行 RED**
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
-  Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_perf_probe.py \
-  --num-envs 1024 --horizon 16 --steps 1000 --warmup 100
+CUDA_VISIBLE_DEVICES=0 /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest \
+  Go2Pvcnn/tests/joint_mpc_rti/test_terrain_fields.py \
+  -k 'cuda_exact_edt or cuda_edt_batch' -q
 ```
 
-- [ ] **Step 3: 固定 workspace 和编译图**
+Expected: FAIL，缺少 `cuda_edt.py` 和 CUDA extension。
 
-移除热路径动态分配、字典重建、CPU 分支和同步；稳定后使用 `torch.compile` 与 CUDA Graph 或等价固定执行图。诊断关闭时 loss breakdown 使用预分配 tensor views，不触发 host readback。
+- [ ] **Step 3: 实现 C++/CUDA binding 和 lazy build**
 
-- [ ] **Step 4: 若仍超时，按顺序优化**
+`cuda_edt.py` 通过 `torch.utils.cpp_extension.load()` 按源码 hash 缓存编译结果；首次编译不计入 warm 性能。公开接口固定为：
 
-1. 融合 world query + gradient gather；
-2. 融合 FK link samples + Jacobian；
-3. 合并 residual/GGN block kernel；
-4. 检查 associative scan kernel 数；
-5. 必要时为 scan/query 编写 Triton/CUDA 专用 kernel。
+```python
+def exact_squared_edt_cuda(mask_bcxy: torch.Tensor) -> torch.Tensor:
+    """bool [B,C,151,151] -> float32 squared cell distance [B,C,151,151]."""
+```
 
-不得通过删除全身安全采样、减少 1024 batch 或伪造异步 enqueue 时间通过。
+binding 检查 CUDA、contiguous、bool、固定 `151×151` 和 channel `2`；错误输入抛出明确异常，不静默 fallback。
 
-- [ ] **Step 5: 达到硬目标**
+- [ ] **Step 4: 实现 warp-level work-efficient 1D EDT**
+
+CUDA 主路径把 `B×C` 视为独立图像。第一阶段对每列执行 exact 1D EDT，第二阶段转置/连续读取后对每行执行 exact 1D EDT。每个 warp 使用 ballot、`__ffs/__clz`、shuffle 和并行下包络构建，避免每像素扫描全部 151 seeds；总工作量 `O(B*C*N²)`。固定 workspace 在 Python wrapper 首次 shape 初始化时分配并复用。
+
+- [ ] **Step 5: 接入 field builder**
+
+CUDA `build_field_batch()` 一次构造 `[B,2,151,151]` small/large mask，调用 exact EDT，乘以 `resolution²` 后只在最终 distance 输出处开方。gradient 使用一个融合 CUDA kernel从 distance 计算并写入现有 ABI；CPU 测试继续使用原 tensor fallback。不得改变 world-query、loss key 或 field cache ABI。
+
+- [ ] **Step 6: 写同步每步更新 RED 测试**
+
+manager 连续两次 refresh 时，第二次必须先发布递增 field version，再调用 planner；断言每次 MPC 恰好对应一次 field update，没有 stale version、独立 stream 或 pending asynchronous result。
+
+- [ ] **Step 7: 扩展 full-refresh probe**
+
+probe 预分配 `B=1024,H=16` scanner/state/command，完成 CUDA extension build、compile 和 graph capture 后，每个 iteration 同步执行：semantic/height rows → exact EDT/gradient/cache publish → measured `x0` → one RTI → `x1`。CUDA events 记录 field、MPC 和 full refresh；循环结束统一同步并输出 total/mean/P50/P95/P99/max/peak/nonfinite/version count。
+
+- [ ] **Step 8: 达到硬目标**
 
 Required:
 
 ```text
 1024 envs
-H=16
-1000 planner calls
-total <= 3.0 s
-mean <= 3.0 ms
+151 x 151, small + large exact EDT every refresh
+H = 16
+1000 synchronous field + MPC refreshes
+full total <= 5.0 s
+full mean <= 5.0 ms
+P95 <= 10.0 ms
+max <= 20.0 ms after warm-up
+field version increments 1000 times
 nonfinite = 0
 no sustained memory growth
 ```
 
-- [ ] **Step 6: Commit**
+不得通过降低 batch、降低地图分辨率、减少 field 更新次数、使用 stale field、异步排除 field 时间、删除安全采样或改成近似距离通过。
+
+- [ ] **Step 9: 若 full refresh 仍超时，按顺序优化**
+
+1. 融合 small/large mask、EDT 和 gradient dispatch；
+2. 复用 EDT/gradient/cache workspace，消除 allocator；
+3. 将 field update 和 MPC 捕获到同一固定 CUDA Graph；
+4. 融合 world query + gradient gather；
+5. 继续融合 FK/Jacobian/GGN kernel，直到 full total 达标。
+
+- [ ] **Step 10: Commit**
 
 ```bash
-git add Go2Pvcnn/extension/joint_mpc_rti/diagnostics Go2Pvcnn/tests/joint_mpc_rti
-git commit -m "perf: optimize joint MPC RTI for 1024 environments"
+git add Go2Pvcnn/extension/joint_mpc_rti Go2Pvcnn/tests/joint_mpc_rti
+git commit -m "perf: add synchronous CUDA exact EDT full refresh"
 ```
 
 ---
@@ -1234,6 +1269,6 @@ git commit -m "feat: complete joint MPC RTI GPU planner"
 - 每个 rolling step 的 `x0` 是真实状态，发布的是 `x1`，PPO 在下一步比较正确 pending reference。
 - 平地 command、小物体 true-overpass、大障碍绕行、粗糙地形多 gait 周期全部达到设计验收。
 - 1024 环境无串扰、无非有限、无显存持续增长。
-- 1000 次 planner hot-path 总计不超过 3 秒。
+- 1024 环境每次同步构建 small/large CUDA exact EDT，并与 MPC 一起计时；1000 次完整 refresh 总计不超过 5 秒。
 - 真实 IsaacLab 测试使用 `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim` 串行完成。
 - todo/log/human/AI notes 与最终代码和验证证据一致。

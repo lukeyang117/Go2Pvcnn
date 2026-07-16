@@ -139,20 +139,21 @@
       <ul>
         <li><code>B=1024</code>、<code>H=16</code>、<code>dt=0.02s</code>。</li>
         <li>每控制步只做一次 RTI 更新。</li>
-        <li>1000 次 planner hot-path 调用总计不超过 3 秒。</li>
-        <li>平均 planner hot-path 不超过 3 ms/次。</li>
+        <li>每次 MPC 都同步重建同批 1024 环境的 height/semantic distance field。</li>
+        <li>1000 次同步 field + MPC refresh 总计不超过 5 秒。</li>
+        <li>平均完整 refresh 不超过 5 ms/次。</li>
         <li>无 Python per-env 和 per-horizon 主循环。</li>
       </ul>
     </div>
   </div>
   <div class="callout warn">
-    <strong>计时边界：</strong>3 秒目标只统计已经完成编译、已经建立 terrain/SDF cache 后，从 batched state/command/field-ready 输入到第一未来 reference 输出的 planner hot path。Isaac 仿真、渲染、RayCaster 射线计算、首次编译和首次距离场初始化分别计时；距离场更新必须能与 planner 并行，不允许在 planner 热路径中同步重建。
+    <strong>计时边界：</strong>5 秒目标从已完成 RayCaster 本帧 <code>ray_hits_w/semantic_map</code> 写入开始，包含同批 1024 环境的同步 height/semantic field 发布、CUDA warp-level exact EDT、真实状态注入、一次 RTI 和 <code>x1</code> 发布。首次 CUDA extension 编译和首次 CUDA Graph capture 不计入 warm steady-state；Isaac physics、渲染和 RayCaster 射线本体另报。禁止只报告纯 planner 或 CUDA enqueue 时间。
   </div>
 
   <h2>4. 总体架构</h2>
   <pre><code>IsaacLab current observation at time t
  body-frame command [vx, vy, yaw_rate]
- latest ready world-queryable terrain field
+ current-step synchronously rebuilt world-queryable terrain field
  previous RTI solution
  fixed trot schedule
 -------------------------------+
@@ -312,7 +313,7 @@ group A / group B 交替 swing</code></pre>
 size       = 1.5 m × 1.5 m
 grid       = 151 × 151
 cells/env  = 22,801</code></pre>
-  <p>每个环境拥有独立地图。地图随 SemanticRayCaster 的实际更新批次刷新，而不是 planner 自己使用另一套定时器。</p>
+  <p>每个环境拥有独立地图。默认每次 MPC refresh 都消费 SemanticRayCaster 当前帧数据，并同步重建同批 field；不使用独立低频定时器、不使用一帧异步流水线。</p>
 
   <h3>8.2 同步契约</h3>
   <pre><code>RayCaster updates chunk_ids
@@ -322,18 +323,31 @@ cells/env  = 22,801</code></pre>
   - scanner timestamp/version
         |
         v
-field_builder updates exactly the same chunk_ids
+field_builder synchronously updates exactly the same chunk_ids
   - height_w
-  - small_sdf
-  - large_sdf
+  - small exact EDT
+  - large exact EDT
   - gradients
   - valid_mask
         |
         v
-atomically publish field_ready(version)</code></pre>
-  <p>planner 只读取完整 ready version。新 field 尚未构建完成时，允许继续使用上一个完整 version，但必须携带它自己的旧 origin/yaw/timestamp；禁止用最新 scanner pose 解释旧数组。</p>
+atomically publish field_ready(version)
+        |
+        v
+run MPC with the same version</code></pre>
+  <p>生产默认同步等待当前 field 完整发布，然后 MPC 使用同一 version；不读取半更新字段，也不在正常路径使用上一帧 field。只有 field 构建失败时才进入明确 invalid/fallback。</p>
 
-  <h3>8.3 Cache ABI</h3>
+  <h3>8.3 CUDA warp-level 精确 EDT</h3>
+  <p>距离场不再使用 Python/PyTorch Jump Flood。small/large mask 合并为 <code>[B,2,151,151]</code>，以 <code>B×2</code> 独立二维图像交给 CUDA extension。实现参考 work-efficient exact EDT：先做 warp-level 1D EDT，再沿另一维做第二次 1D EDT；使用 ballot、shuffle、前缀/包络并行和连续内存访问，总工作量保持 <code>O(B×C×N²)</code>。</p>
+  <ul>
+    <li>结果必须与 CPU brute-force / SciPy exact EDT 在数值容差内一致。</li>
+    <li>禁止 Python per-env/per-channel 循环。</li>
+    <li>固定支持 <code>151×151</code> 主路径，同时保留 CPU tensor fallback 供测试。</li>
+    <li>small/large 两通道一次 dispatch；空通道仍返回正确最大距离，不改变 loss 语义。</li>
+    <li>CUDA kernel、梯度构建和 cache 写回均在同一同步 refresh 中完成。</li>
+  </ul>
+
+  <h3>8.4 Cache ABI</h3>
   <pre><code>height_w        [B,151,151]
 semantic_id     [B,151,151]
 small_sdf       [B,151,151]
@@ -348,7 +362,7 @@ field_timestamp [B]
 field_version   [B]</code></pre>
   <p><code>height_w</code> 使用 <code>ray_hits_w[...,2]</code>，不能使用相对 scanner 的 observation elevation 作为世界 Z。</p>
 
-  <h3>8.4 世界坐标查询</h3>
+  <h3>8.5 世界坐标查询</h3>
   <pre><code>query_world(points_w) -&gt;
   height_w,
   small_distance_m,
@@ -629,7 +643,7 @@ Hessian  ≈ Jᵀ W J + convex_barrier_curvature + regularization</code></pre>
       <tr><td>无时间 Python 循环</td><td>rollout/solve 使用编译图和 scan；允许图内固定展开，不允许解释器逐节点调度 kernel。</td></tr>
       <tr><td>固定 GPU 图</td><td>预分配 workspace，避免每帧 allocator 抖动；稳定后捕获 CUDA Graph 或等价固定执行图。</td></tr>
       <tr><td>避免同步</td><td>热路径不调用 <code>.item()</code>、CPU logging 或逐 stage synchronize。</td></tr>
-      <tr><td>字段缓存</td><td>SDF、梯度和 field transform 在 RayCaster 更新时构建，优化内只查询。</td></tr>
+      <tr><td>同步字段</td><td>每次 refresh 先运行 CUDA warp-level exact EDT 并原位发布当前 version，再执行同一步 MPC。</td></tr>
       <tr><td>每帧一次 RTI</td><td>不执行 16/25 次 Adam 梯度下降，不做外层多轮 SQP。</td></tr>
       <tr><td>按环境容错</td><td>失败环境 masked fallback，不让少量坏样本阻塞整个 batch。</td></tr>
     </tbody>
@@ -637,6 +651,7 @@ Hessian  ≈ Jᵀ W J + convex_barrier_curvature + regularization</code></pre>
   <p>主要计算规模近似：</p>
   <pre><code>geometry/loss work: O(B * H * G)
 block solver work:  O(B * H * block_cost(nx, nu))
+field work:         O(B * 2 * 151 * 151)
 time critical depth with scan: O(log H)</code></pre>
   <p>最终性能报告必须同时给出 warm-up 后总耗时、平均值、P50、P95、P99、最大显存和非有限环境数量。</p>
 
@@ -745,7 +760,7 @@ solver_status</code></pre>
     <thead><tr><th>失败</th><th>该环境处理</th><th>必须记录</th></tr></thead>
     <tbody>
       <tr><td>输入 state 非有限</td><td>输出 invalid，不进入求解。</td><td>env id、输入字段。</td></tr>
-      <tr><td>terrain field 不可用</td><td>短时使用绑定正确 pose 的上一 ready version；无历史则站立。</td><td>field age/version。</td></tr>
+      <tr><td>terrain field 不可用</td><td>本次 reference 标记 invalid 并安全站立，不在生产默认路径消费 stale field。</td><td>field status/version。</td></tr>
       <tr><td>所有 line-search 候选不改善</td><td>保留 shifted warm start，提升正则化。</td><td>merit、alpha、regularization。</td></tr>
       <tr><td>solver 输出非有限</td><td>回退到安全 shifted reference 或站立。</td><td>首个非有限 stage。</td></tr>
       <tr><td>未来第一步出现非有限值、无效地图查询或违反第 2.1 节的数据有效性约束</td><td>不发布该步，输出站立/减速 reference。</td><td>具体无效字段与 safety margin。</td></tr>
@@ -835,7 +850,7 @@ solver_status</code></pre>
       <tr><td>scanner 移动/旋转后生成新地图。</td><td>新字段绑定新 pose；旧字段仍使用旧 pose 查询，不能发生坐标漂移。</td></tr>
       <tr><td>查询点超出 151×151 覆盖范围。</td><td>返回 invalid 并触发安全处理，不返回边界复制值。</td></tr>
       <tr><td>1024 环境拥有不同障碍布局。</td><td>每个环境只响应自己的地图，不发生 batch 行串扰。</td></tr>
-      <tr><td>field 构建和 planner 并行。</td><td>planner 只读取完整 ready version，不读取半更新的 height/SDF 组合。</td></tr>
+      <tr><td>每次 MPC 同步 field 构建。</td><td>planner 使用本次 refresh 刚发布的同一 field version；field version 每次调用推进。</td></tr>
     </tbody>
   </table>
 
@@ -852,19 +867,19 @@ solver_status</code></pre>
   <ul>
     <li>单个环境注入 NaN 时，只有该环境 invalid，其余环境仍产生有限结果。</li>
     <li>line search 全部失败时，输出有限、安全且连续的 fallback reference。</li>
-    <li>短时 field stale 时使用上一完整版本，并记录 field age；超过配置时限后转安全站立。</li>
+    <li>同步 field 构建失败或超时时，本次 reference 标记 invalid 并转安全站立；生产默认不消费 stale field。</li>
     <li>所有公开输出均携带 status、valid 和 fallback 标志。</li>
   </ul>
 
   <h3>16.10 1024 环境性能</h3>
   <p>在固定 GPU、固定 shape、关闭逐步诊断同步、完成 warm-up 和编译后：</p>
   <ul>
-    <li><code>1024</code> 环境、<code>H=16</code>、<code>1000</code> 次 rolling planner 调用总耗时不超过 <code>3.0s</code>。</li>
-    <li>平均 planner hot-path 不超过 <code>3.0ms</code>。</li>
+    <li><code>1024</code> 环境、<code>H=16</code>、<code>1000</code> 次同步 field + MPC refresh 总耗时不超过 <code>5.0s</code>。</li>
+    <li>平均完整 refresh 不超过 <code>5.0ms</code>。</li>
     <li>1000 次调用中不出现非有限输出、显存持续增长或临时 allocator 长尾。</li>
     <li>输出必须报告 P50、P95、P99、最大值和峰值显存，不能只报告异步 kernel enqueue 时间。</li>
     <li>计时开始和结束需要正确 GPU 同步，但循环内部不得每步同步。</li>
-    <li>terrain/SDF 构建单独报告，并证明它可与 planner 重叠且不会污染 planner hot-path 数字。</li>
+    <li>报告 field、MPC 和完整 refresh 三组 timing；验收以包含 field 的完整 refresh 为准。</li>
   </ul>
 
   <h2>17. 实现阶段顺序</h2>
@@ -888,8 +903,8 @@ solver_status</code></pre>
       <tr><td>小物体总被绕开</td><td>降低 root-small 横向排斥，强化 swing-over 与 touchdown-safe 的相对代价。</td><td>写死场景 gate 或指定某条腿跨。</td></tr>
       <tr><td>足端跨过但 knee/shank 碰撞</td><td>增加 link sample 密度和解析碰撞 Jacobian，调整 swing shape。</td><td>只看 foot clearance。</td></tr>
       <tr><td>大障碍绕行不足</td><td>提高 large-SDF barrier、terminal risk 和 root/body footprint sampling。</td><td>规划后 snapping 或硬改 root 位置。</td></tr>
-      <tr><td>性能超过 3ms</td><td>剔除同步、固定 workspace、融合 query/Jacobian、scan、CUDA Graph，再做专用 kernel。</td><td>删除关键安全几何或伪造异步计时。</td></tr>
-      <tr><td>地图更新慢</td><td>同 RayCaster chunk 更新并使用独立 stream，planner 消费最近 ready version。</td><td>在 RTI 内同步等待全量 SDF 重建。</td></tr>
+      <tr><td>完整 refresh 超过 5ms</td><td>固定 workspace、融合 exact EDT/gradient/cache write、减少 launch、继续融合 MPC query/Jacobian。</td><td>删除关键安全几何、降低 batch 或排除 field 计时。</td></tr>
+      <tr><td>地图更新慢</td><td>使用 CUDA warp-level work-efficient exact EDT，并以 B×2 图像批量 dispatch。</td><td>恢复 Python/PyTorch Jump Flood、改成异步 stale-field 流水线。</td></tr>
     </tbody>
   </table>
 
@@ -917,7 +932,7 @@ output:
   solver status / loss / safety / timing diagnostics</code></pre>
 
   <div class="callout success">
-    <strong>完成定义：</strong>只有当规划器在真实 rolling 语义下同时达到 command 跟踪、小物体真实跨越、大障碍绕行、粗糙地形运动学安全、PPO reference 正确时序、1024 环境独立性和 1000 次 hot-path ≤ 3 秒，才算完成。任何单段轨迹看起来合理、单场景通过或只在少量环境运行，都不足以替代这些结果。
+    <strong>完成定义：</strong>只有当规划器在真实 rolling 语义下同时达到 command 跟踪、小物体真实跨越、大障碍绕行、粗糙地形运动学安全、PPO reference 正确时序、1024 环境独立性，并且 1000 次“同步 CUDA exact EDT + MPC”完整 refresh ≤ 5 秒，才算完成。任何只报告纯 planner、异步 enqueue、单段轨迹或少量环境的结果都不能替代完整验收。
   </div>
 </main>
 </body>
