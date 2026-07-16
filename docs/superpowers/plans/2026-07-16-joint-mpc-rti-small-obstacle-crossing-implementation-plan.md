@@ -4,6 +4,8 @@
 
 **Goal:** Make `joint_mpc_rti` produce signed-field-driven, collision-free small-obstacle crossings while preserving rolling `x1`, stance grounding, command tracking, arbitrary batch size, and the five-second performance target.
 
+**T302v.5 Continuation:** Preserve the verified `254/254` crossing and zero-collision result while making rolling x1 recover real stance support when command progress stops inside a small-object influence region. The continuation is part of the same design and retains the no-hard-gate constraint.
+
 **Architecture:** Keep the existing `x0 -> H16 -> x1` RTI pipeline. Replace unsigned semantic EDT with signed boundary distance, extend fixed-shape FK with thigh samples and analytic link Jacobians, and place identical foot/calf/thigh residuals in LQ/GGN and merit. A deterministic five-shape x three-speed probe owns final cross and per-part collision acceptance.
 
 **Tech Stack:** Python 3.10, PyTorch, C++/CUDA extension, pytest, Isaac Lab `env_isaacsim`.
@@ -16,6 +18,7 @@
 - `model/go2_kinematics.py`, `model/rollout.py`: thigh samples and foot/calf/thigh analytic point Jacobians.
 - `losses/semantic.py`, `losses/rollout_objective.py`, `planner.py`, `config.py`: shared collision residual definitions and LQ/GGN visibility.
 - `tests/joint_mpc_rti/small_obstacle_crossing_probe.py`: native-shape rolling collision/cross metrics.
+- `tests/joint_mpc_rti/small_obstacle_stop_probe.py`: native-shape approach, stop-phase, support-recovery, collision, and drift metrics.
 - Existing `tests/joint_mpc_rti/test_*.py`: RED/GREEN and regression acceptance.
 - `notes/todo*`, `notes/log*`: required repository memory and evidence.
 
@@ -312,3 +315,73 @@ Expected: no whitespace errors; known `${data}/NvStreamer-*` and `raw/mpx/` rema
 git add notes docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md Go2Pvcnn/tests/joint_mpc_rti/test_performance.py
 git commit -m "docs: verify joint mpc small crossing"
 ```
+
+### Task 7: T302v.5 Stop-On-Small Support Recovery
+
+**Files:**
+- Create: `Go2Pvcnn/tests/joint_mpc_rti/small_obstacle_stop_probe.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_behavior.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_losses.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_solver.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/config.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/losses/semantic.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/losses/rollout_objective.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/planner.py`
+
+- [ ] **Step 1: Add the reusable stop-phase probe**
+
+Use native sphere/cuboid/cylinder/capsule/cone, forward approach at `0.2m/s`, multiple root stop offsets, and at least `32` zero-command rolling x1 hold cycles. Track scheduled stance frames, grounded support count, floating stance frames, maximum surface gap, consecutive zero-support frames, root XY drift, stance-on-small, per-part collision frames/penetration, and invalid count.
+
+- [ ] **Step 2: Add and run RED support acceptance**
+
+```python
+def test_native_small_stop_matrix_recovers_grounded_support() -> None:
+    result = run_stop_matrix()
+    assert result.support_recovery_rate == 1.0
+    assert result.max_consecutive_zero_support_frames == 0
+    assert result.floating_stance_frames == 0
+    assert result.stop_stance_ground_gap_max_m <= 0.012
+    assert result.max_stop_root_xy_drift_m <= 0.015
+    assert result.stance_on_small_frames == 0
+    assert all(result.collision_frames[part] == 0 for part in PARTS)
+    assert result.invalid_count == 0
+```
+
+```bash
+CUDA_VISIBLE_DEVICES=<gpu> /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q \
+  Go2Pvcnn/tests/joint_mpc_rti/test_behavior.py -k 'native_small_stop_matrix'
+```
+
+Expected RED on `625768f`: all `65/65` cases reproduce floating and zero grounded support for at least `64` consecutive cycles.
+
+- [ ] **Step 3: Add unit RED for continuous phase handoff**
+
+Require mid-swing foot-over weight to peak at the swing center and continuously approach zero at lift-off/touchdown. Require safe-landing weight to rise only near late swing and only as signed distance becomes safely positive. Test that there is no branch on command zero, semantic id, shape name, or selected leg.
+
+- [ ] **Step 4: Implement merit residuals**
+
+Add configurable continuous exponents/weights. Apply phase-shaped mid-swing weight to `small_object_foot_over`. Add `small_object_safe_landing` using late-swing phase weight, signed-distance sigmoid, and squared surface contact error. Preserve the same single `height_w`, physical foot radius, signed distance, and temperature contracts.
+
+- [ ] **Step 5: Implement matching LQ/GGN terms**
+
+Use the identical phase/signed-distance weights and surface residual in `_add_foot_terrain_linearization`. Chain surface Z error through the analytic foot Jacobian and include positive diagonal GGN curvature. Do not implement zero-command gates, semantic branches, projection, snapping, or specified-leg repair.
+
+- [ ] **Step 6: Tune against both stop and cross matrices**
+
+Tune only phase exponents, continuous landing weight, existing foot-over amplitude, and swing target amplitude. After every change run the stop matrix, strict cross matrix, flat rolling stance test, and loss/LQ parity tests. Do not weaken collision geometry or acceptance thresholds.
+
+- [ ] **Step 7: Run GREEN and regression**
+
+```bash
+CUDA_VISIBLE_DEVICES=<gpu> /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest -q \
+  Go2Pvcnn/tests/joint_mpc_rti/test_losses.py \
+  Go2Pvcnn/tests/joint_mpc_rti/test_solver.py \
+  Go2Pvcnn/tests/joint_mpc_rti/test_behavior.py \
+  Go2Pvcnn/tests/joint_mpc_rti/test_rolling_runtime.py
+```
+
+Expected: stop support recovery `100%`, zero floating/zero-support/collision/stance-on-small/invalid counts, strict cross remains at least `95%` overall and `90%` per shape-speed, and flat stance/command tracking remain green.
+
+- [ ] **Step 8: Run full joint, legacy, real viewer, notes, and commit**
+
+Run Task 6 regressions and real nine-command viewer again. Update T302v.5 notes/log with exact metrics. Keep the idle-GPU five-second performance gate open until it is measured uncontended.

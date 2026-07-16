@@ -112,6 +112,10 @@
     的增量。前者定义同步 GPU RTI、151×151 世界高程/距离场、任意环境数封装、一次 MPC 发布 <code>x1</code> 和 5 秒性能目标；后者修复关节顺序与 stance 贴地。本设计只补齐小障碍跨越的几何净空和优化方向，不改变这些基础合同。
   </div>
 
+  <div class="note">
+    <strong>T302v.5 延续补充：</strong>本设计继续承接 2026-07-16 已验证的 signed-field crossing 实现。新复现表明，机器人从平地走到小物体影响区后归零命令时，<code>small_object_foot_over</code> 会让 swing 足端持续高抬，而 rolling x1 + 单次 RTI 无法在 swing→stance 交接时恢复支撑。补充设计不撤销 strict cross 和零碰撞目标，而是在同一连续优化链中增加支撑恢复合同。
+  </div>
+
   <h2>1. 当前问题</h2>
   <p>真实 viewer 中 stance 已经贴地，零速度 root 也不漂移；但是低矮小语义物体场景下，轨迹仍经常直接穿过物体。受控量化显示，在五种小物体原生形状、三种前进速度下，strict cross 成功率只有 <code>1/223 = 0.45%</code>，其中 calf 接触导致失败 <code>97.8%</code>，foot 接触导致失败 <code>78.0%</code>。</p>
   <p>根因不是“最终总 loss 看不到碰撞”，而是当前碰撞净空在优化链路中的位置不一致：部分小障碍 link clearance 只进入完整 merit 评分，line search 能看见轨迹差，但 LQ/GGN 子问题没有同源 residual/Jacobian，因此不会主动产生把 calf、thigh 或 foot 从障碍中推出去的搜索方向。</p>
@@ -228,6 +232,22 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
   <h3>6.4 Touchdown avoidance</h3>
   <p>touchdown 和 stance 用 signed-distance barrier 远离 small footprint。这个项只表达“不要踩上去”，不指定“必须跨越”。如果 command/progress 和 swing/link clearance 的总代价认为绕行更便宜，也允许绕行。</p>
 
+  <h3>6.5 Mid-swing 净空与 late-swing 安全落地交接</h3>
+  <p><code>small_object_foot_over</code> 不再把整段 swing 当作相同目标。它继续由 signed distance 决定空间影响，同时由连续 gait phase envelope 将主要抬腿作用集中到摆动中段：</p>
+  <pre><code>mid_swing_weight = swing_mask * phase_envelope ^ p
+safe_xy_weight = sigmoid((small_signed_distance - touchdown_margin) / temperature)
+landing_weight = swing_mask * (1 - phase_envelope) ^ q * safe_xy_weight
+
+foot_over_residual = mid_swing_weight * obstacle_clearance_barrier
+safe_landing_residual = landing_weight * (foot_z - height_w - foot_radius) ^ 2</code></pre>
+  <ul>
+    <li><code>phase_envelope</code> 来自现有受限 gait phase，范围连续为 <code>[0,1]</code>；不读取 command 是否为零，不创建 stop mode。</li>
+    <li>mid-swing 仍保持足够的物体顶面净空，不能通过整体关闭 foot-over 通过停驻测试。</li>
+    <li>late-swing 只有在 signed distance 连续表示落点已离开物体安全边界时才拉向地面；处在物体 footprint 内时不会把脚压到物体上。</li>
+    <li><code>safe_landing_residual</code> 必须同时进入 merit 和 LQ/GGN，使用相同 phase、signed-distance、height 和 contact offset。</li>
+    <li>进入 stance 后继续由现有 <code>stance_ground_contact</code> 和 <code>stance_xy_lock</code> 接管，不增加足端 snapping、输出投影或离散修复。</li>
+  </ul>
+
   <h2>7. 优化链路</h2>
   <p>当前名词关系保持如下：</p>
   <table>
@@ -303,7 +323,21 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     </tbody>
   </table>
 
-  <h3>8.4 旧指标必须继续通过</h3>
+  <h3>8.4 Stop-on-small 支撑恢复指标</h3>
+  <p>复用五种原生小物体，从平地以 <code>0.2m/s</code> 接近，并在多个纵向 gait/obstacle 相位将 command 连续变为零，随后只执行 rolling <code>x1</code> 至少 32 个周期。测试不要求脚踩到物体上，而要求优化器在物体安全边界外恢复真实支撑：</p>
+  <table>
+    <thead><tr><th>指标</th><th>目标</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>stop_support_recovery_rate</code></td><td><code>100%</code></td><td>每个 shape-stop-phase case 在保持窗口内恢复至少一条贴地 stance 支撑腿。</td></tr>
+      <tr><td><code>max_consecutive_zero_support_frames</code></td><td><code>0</code></td><td>每个保持周期都至少有一条 scheduled stance 足端满足贴地阈值。</td></tr>
+      <tr><td><code>floating_stance_frame_rate</code></td><td><code>0%</code></td><td>scheduled stance 足端表面间隙不得超过 <code>0.03m</code>。</td></tr>
+      <tr><td><code>stop_stance_ground_gap_max_m</code></td><td><code>&lt;= 0.012m</code></td><td>与现有 planner 自动化 stance 阈值一致；真实 viewer 仍报告更严格结果。</td></tr>
+      <tr><td><code>stop_root_xy_drift_m</code></td><td><code>&lt;= 0.015m</code></td><td>归零后不能靠继续向前走出物体影响区来假装恢复。</td></tr>
+      <tr><td>停驻 foot/calf/thigh/base collision frames</td><td><code>0</code></td><td>恢复支撑不能以碰撞、穿入或踩上 small semantic 为代价。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.5 旧指标必须继续通过</h3>
   <ul>
     <li>joint/viewer regression 继续通过，不能恢复关节顺序错配。</li>
     <li>old MPC/reward/viewer regression 继续通过，不能破坏现有后端。</li>
@@ -325,6 +359,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
       <tr><td>strict cross matrix</td><td>五种 shape、三种速度、多个纵向相位下达到 cross 成功目标，且不能靠 side bypass 假通过。</td></tr>
       <tr><td>分部位碰撞率矩阵</td><td>复用原生 shape 几何检测，在总体及每个 shape-speed 组合中分别达到 foot/calf/thigh/base collision frame rate <code>0%</code>，并输出各自分子、分母、最大穿入和 <code>invalid_count=0</code>。</td></tr>
       <tr><td>stance ground matrix</td><td>零速、前后、左右、yaw、快慢、混合命令下 stance gap/penetration 达标。</td></tr>
+      <tr><td>stop-on-small matrix</td><td>五种原生 shape、多个停止相位下，归零后每帧至少一条有效贴地支撑腿，悬空 stance、连续零支撑、语义踩踏和分部位碰撞均为零。</td></tr>
       <tr><td>环境数封装</td><td><code>num_envs=1/40/512/1024</code> 构建 manager 后 shape、field、graph、reference buffer 全部一致；改变数量需要显式重建。</td></tr>
       <tr><td>性能</td><td>同步 small/large signed distance + MPC 的 1000 次 refresh 小于 5 秒；必须包含互补 EDT 两侧和半栅格修正，并报告 warmup、GPU、是否空闲、平均/P95/max。</td></tr>
     </tbody>
@@ -338,7 +373,9 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     <li>在 Go2 FK 中补齐 thigh sample/Jacobian，calf sample 继续复用 shank/knee-foot 插值。</li>
     <li>把 foot/calf/thigh small clearance residual 接入 linearization/GGN/LQ，同时保持 merit 同源。</li>
     <li>调整 normalization，让近障碍样本不被全 horizon 平均稀释。</li>
-    <li>跑 strict cross、foot/calf/thigh/base 分部位零碰撞率、stance ground、旧 regression、真实 viewer 和 1024 性能验收。</li>
+    <li>加入 T302v.5 stop-on-small RED：平地接近、多个相位归零、rolling x1 保持，复刻 scheduled stance 与真实支撑分离。</li>
+    <li>将 foot-over 连续集中到 mid-swing，并把 safe landing residual 同源接入 merit 和 LQ/GGN。</li>
+    <li>跑 strict cross、stop support、foot/calf/thigh/base 分部位零碰撞率、stance ground、旧 regression、真实 viewer 和 1024 性能验收。</li>
   </ol>
 
   <h2>11. 风险与边界</h2>
@@ -347,6 +384,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     <li><code>half_cycle_steps=8</code> 会降低摆腿频率，低速更自然，但高速 command 可能需要更强 progress/velocity 平衡。</li>
     <li>signed distance 内部梯度在极小物体中心可能方向不唯一；测试应覆盖中心、边缘和偏心穿入。</li>
     <li>thigh/calf sample 增加会提高 GGN 计算量；必须用固定形状、batched query 和 proximity normalization 控制性能。</li>
+    <li>late-swing landing 过强会把脚提前压向物体，过弱则无法在一步 RTI 中恢复支撑；必须由 signed-distance soft safety 和 stop/cross 双矩阵共同约束。</li>
     <li>本设计仍是运动学可行，不声明动力学、力矩或真实接触力可行。</li>
   </ul>
 </main>
