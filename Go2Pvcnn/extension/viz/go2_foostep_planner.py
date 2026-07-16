@@ -423,7 +423,7 @@ def _reorder_feet_to_planner_order(robot, foot_ids_t: torch.Tensor, foot_pos_w: 
     for local_idx, body_id in enumerate(foot_ids_t.detach().cpu().tolist()):
         if not (0 <= int(body_id) < len(body_names)):
             return foot_pos_w
-        body_name = _normalize_joint_name(body_names[int(body_id)])
+        body_name = normalize_articulation_name(body_names[int(body_id)])
         name_to_local_index[body_name] = int(local_idx)
     order: list[int] = []
     for planner_name in ("fl_foot", "fr_foot", "rl_foot", "rr_foot"):
@@ -769,6 +769,7 @@ SEMANTIC_MARKER_COLORS = {
 from extension.joint_mpc_rti.integration.joint_order import (
     PLANNER_JOINT_ORDER,
     joint_order_indices,
+    normalize_articulation_name,
     planner_to_robot_joints,
     robot_to_planner_joints,
 )

@@ -112,6 +112,25 @@ def test_viewer_zero_base_command_clears_command_tensor() -> None:
     torch.testing.assert_close(command, torch.zeros_like(command))
 
 
+def test_viewer_reorders_namespaced_foot_bodies_to_planner_order() -> None:
+    robot = SimpleNamespace(
+        body_names=(
+            "/World/envs/env_0/Robot/RL_foot",
+            "robot:FR_foot",
+            "RR_foot",
+            "FL_foot",
+        )
+    )
+    foot_ids = torch.tensor([2, 0, 3, 1], dtype=torch.long)
+    foot_pos_w = torch.tensor(
+        [[[20.0, 0.0, 0.0], [30.0, 0.0, 0.0], [10.0, 0.0, 0.0], [40.0, 0.0, 0.0]]]
+    )
+
+    actual = viewer._reorder_feet_to_planner_order(robot, foot_ids, foot_pos_w)
+
+    torch.testing.assert_close(actual[..., 0], torch.tensor([[10.0, 40.0, 30.0, 20.0]]))
+
+
 def test_viewer_apply_reset_snapshot_restores_root_and_joint_state() -> None:
     base_env, robot, scene, sim = _fake_base_env()
     snapshot = viewer.ViewerResetSnapshot(

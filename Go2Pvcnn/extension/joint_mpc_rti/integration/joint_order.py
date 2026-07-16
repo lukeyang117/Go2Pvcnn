@@ -22,19 +22,19 @@ PLANNER_JOINT_ORDER = (
 )
 
 
-def _normalize_joint_name(name: str) -> str:
+def normalize_articulation_name(name: str) -> str:
     normalized = str(name).split("/")[-1]
     normalized = normalized.split(":")[-1]
     return normalized.lower()
 
 
 def joint_order_indices(*, source_order: tuple[str, ...], target_order: tuple[str, ...]) -> Tensor:
-    source_to_index = {_normalize_joint_name(name): idx for idx, name in enumerate(source_order)}
-    missing = [name for name in target_order if _normalize_joint_name(name) not in source_to_index]
+    source_to_index = {normalize_articulation_name(name): idx for idx, name in enumerate(source_order)}
+    missing = [name for name in target_order if normalize_articulation_name(name) not in source_to_index]
     if missing:
         raise ValueError(f"joint order is missing required joints: {missing}")
     return torch.tensor(
-        [source_to_index[_normalize_joint_name(name)] for name in target_order],
+        [source_to_index[normalize_articulation_name(name)] for name in target_order],
         dtype=torch.long,
     )
 
@@ -70,6 +70,7 @@ def planner_to_robot_joints(values: Tensor, robot_joint_names) -> Tensor:
 __all__ = [
     "PLANNER_JOINT_ORDER",
     "joint_order_indices",
+    "normalize_articulation_name",
     "planner_to_robot_joints",
     "reorder_joints",
     "robot_to_planner_joints",
