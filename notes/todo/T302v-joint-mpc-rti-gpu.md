@@ -12,7 +12,7 @@
 
 ## Open Children
 
-- T302v.4 small-obstacle collision: five native shapes x three forward speeds reproduce geometric foot/calf/thigh contact. Strict per-leg `stance-swing-stance` cross success is `1/223 (0.45%)`; calf collision invalidates `97.8%` of crossing opportunities. This is diagnosis-only; planner/loss/constraint code remains unchanged.
+- T302v.4 small-obstacle collision: five native shapes x three forward speeds reproduce geometric foot/calf/thigh contact. Strict per-leg `stance-swing-stance` cross success is `1/223 (0.45%)`; calf collision invalidates `97.8%` of crossing opportunities. Follow-up design is written in [../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html](../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html): keep `H=16`, change `half_cycle_steps=8`, use signed small distance, add foot/calf/thigh residuals to both GGN/LQ and merit, and add strict cross plus stance-ground metrics. Planner/loss/constraint code remains unchanged in this design-only update.
 - Current candidate five-second performance recheck: all four GPUs were occupied by external training; contested `1024 x H16 x 1000` samples varied from `5.63s` to `8.99s`, so the prior uncontended `4.469s` acceptance is retained but not transferred to the new candidate without an idle-card rerun.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
@@ -38,6 +38,7 @@
 - [Viewer grounding fix](../log/2026-07-16-joint-mpc-rti-viewer-grounding-fix.md)
 - [Viewer foot-name fix](../log/2026-07-16-joint-mpc-viewer-foot-name-fix.md)
 - [Small-obstacle collision quantification](../log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md)
+- [Small-obstacle crossing design](../log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.md)
 
 ## Git Refs
 
@@ -48,7 +49,7 @@
 
 ## Next Step
 
-Analyze T302v.4 loss/linearization visibility for calf and foot collisions before proposing a fix. Separately rerun `1024 x H16 x 1000` synchronous full refresh on an uncontended GPU before transferring the five-second performance acceptance to the current candidate.
+Create the implementation plan from the T302v.4 small-obstacle crossing design, then implement RED/GREEN tests for signed distance, GGN/LQ visibility, strict cross, and stance-ground metrics. Separately rerun `1024 x H16 x 1000` synchronous full refresh on an uncontended GPU before transferring the five-second performance acceptance to the new candidate.
 
 ## Node Details
 

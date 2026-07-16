@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joint MPC RTI 小障碍跨越与几何净空设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5e6b77;
+      --line: #d7dee6;
+      --panel: #f6f8fa;
+      --blue: #1d5f8f;
+      --blue-soft: #eef6fb;
+      --green: #24734a;
+      --green-soft: #eef8f2;
+      --amber: #8a5a00;
+      --amber-soft: #fff8eb;
+      --red: #9d2f24;
+      --red-soft: #fff0ee;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.66;
+    }
+    main {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 36px 28px 64px;
+    }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.25; letter-spacing: 0; }
+    h2 {
+      margin: 34px 0 12px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      font-size: 22px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+    h3 { margin: 22px 0 8px; font-size: 17px; line-height: 1.35; letter-spacing: 0; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 15px 24px; padding: 0; }
+    li { margin: 5px 0; }
+    code {
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.93em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 12px 0 18px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      line-height: 1.52;
+    }
+    pre code { padding: 0; border: 0; background: transparent; }
+    table { width: 100%; margin: 12px 0 20px; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 9px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--panel); }
+    .meta { margin-bottom: 22px; color: var(--muted); font-size: 14px; }
+    .note, .ok, .warn, .danger {
+      margin: 14px 0;
+      padding: 12px 14px;
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+    }
+    .ok { border-left-color: var(--green); background: var(--green-soft); }
+    .warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .danger { border-left-color: var(--red); background: var(--red-soft); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 14px 0;
+    }
+    .card {
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .card h3 { margin-top: 0; }
+    @media (max-width: 760px) {
+      main { padding: 26px 18px 50px; }
+      .grid { grid-template-columns: 1fr; }
+      table { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Joint MPC RTI 小障碍跨越与几何净空设计</h1>
+  <p class="meta">
+    日期：2026-07-16 ｜ 主线：T302v.4 ｜ 目标路径：<code>Go2Pvcnn/extension/joint_mpc_rti/</code> ｜ 分支：<code>joint_mpc</code>
+  </p>
+
+  <div class="note">
+    <strong>延续关系：</strong>本设计是
+    <code>docs/superpowers/specs/2026-07-15-joint-mpc-rti-gpu-design.html</code>
+    和
+    <code>docs/superpowers/specs/2026-07-16-joint-mpc-rti-joint-order-stance-grounding-design.md</code>
+    的增量。前者定义同步 GPU RTI、151×151 世界高程/距离场、任意环境数封装、一次 MPC 发布 <code>x1</code> 和 5 秒性能目标；后者修复关节顺序与 stance 贴地。本设计只补齐小障碍跨越的几何净空和优化方向，不改变这些基础合同。
+  </div>
+
+  <h2>1. 当前问题</h2>
+  <p>真实 viewer 中 stance 已经贴地，零速度 root 也不漂移；但是低矮小语义物体场景下，轨迹仍经常直接穿过物体。受控量化显示，在五种小物体原生形状、三种前进速度下，strict cross 成功率只有 <code>1/223 = 0.45%</code>，其中 calf 接触导致失败 <code>97.8%</code>，foot 接触导致失败 <code>78.0%</code>。</p>
+  <p>根因不是“最终总 loss 看不到碰撞”，而是当前碰撞净空在优化链路中的位置不一致：部分小障碍 link clearance 只进入完整 merit 评分，line search 能看见轨迹差，但 LQ/GGN 子问题没有同源 residual/Jacobian，因此不会主动产生把 calf、thigh 或 foot 从障碍中推出去的搜索方向。</p>
+
+  <h2>2. 设计目标</h2>
+  <ul>
+    <li>保持 <code>H=16</code>、<code>dt=0.02s</code>、每帧真实 <code>x0</code>、只发布未来 <code>x1</code>。</li>
+    <li>把 fixed trot 从 <code>half_cycle_steps=4</code> 改为 <code>half_cycle_steps=8</code>，让一个 horizon 覆盖一整次 <code>stance -> swing -> stance</code> 周期，而不是腿摆得过快。</li>
+    <li>用连续 loss 让轨迹自然选择抬脚跨越、减速或绕行；不增加 small/large 行为硬 gate。</li>
+    <li>让 foot、calf、thigh 的小障碍净空 residual 同时进入 GGN/LQ 和 merit，确保优化方向与最终验收指标一致。</li>
+    <li>统一只使用当前世界高程图和 semantic signed distance，不再建立双高度场。</li>
+    <li>新增 strict cross 成功率和 stance 落地指标，并要求旧指标全部继续通过。</li>
+  </ul>
+
+  <h2>3. 修改约束</h2>
+  <div class="danger">
+    <strong>禁止新增硬行为 gate：</strong>不引入 <code>crossable_small</code>、指定跨越腿、按物体形状分支、固定避障侧、后处理 snapping、hard projection 或 optimize-then-repair。small 语义只产生连续 signed-distance residual；是否跨越由 command/progress、stance、swing clearance、touchdown avoidance、link clearance 和 smoothness 的总代价共同决定。
+  </div>
+  <p>允许保留或新增的硬约束只属于问题定义和数据一致性：</p>
+  <ul>
+    <li><code>X[:,0]</code> 必须等于真实 IsaacLab 当前状态。</li>
+    <li>root/joint 到 foot/calf/thigh 的几何必须来自同一套 Go2 FK，不能让诊断几何和优化几何各算各的。</li>
+    <li>field version、env id、世界坐标原点和 yaw 必须与 RayCaster 当前帧对齐。</li>
+    <li>batch size 由上层 <code>num_envs</code> 参数构建；改变 <code>1/40/512/1024</code> 等环境数必须重建 manager/cache/graph，不能在固定实例里偷偷 resize。</li>
+    <li>非有限输入、无效 field 或地图越界查询必须暴露 invalid 诊断。</li>
+  </ul>
+
+  <h2>4. Gait 时间设计</h2>
+  <table>
+    <thead><tr><th>参数</th><th>旧值</th><th>新值</th><th>意义</th></tr></thead>
+    <tbody>
+      <tr><td><code>H</code></td><td><code>16</code></td><td><code>16</code></td><td>不改变 solver 形状和性能边界。</td></tr>
+      <tr><td><code>dt</code></td><td><code>0.02s</code></td><td><code>0.02s</code></td><td>继续对齐 50 Hz 控制。</td></tr>
+      <tr><td><code>half_cycle_steps</code></td><td><code>4</code></td><td><code>8</code></td><td>每个对角腿组 swing/stance 时长从 <code>0.08s</code> 变为 <code>0.16s</code>。</td></tr>
+      <tr><td>完整 trot 周期</td><td><code>0.16s</code></td><td><code>0.32s</code></td><td><code>H=16</code> 正好覆盖一个完整周期。</td></tr>
+    </tbody>
+  </table>
+  <p>fixed trot 仍只表示步态拓扑和接触节奏，不表示足端轨迹长度固定。rolling MPC 每帧重新注入真实 <code>x0</code>，障碍距离变化通过落点、关节角、root 速度和连续重规划处理。</p>
+
+  <h2>5. 几何与距离场</h2>
+  <h3>5.1 验收几何必须和优化几何一致</h3>
+  <table>
+    <thead><tr><th>身体部位</th><th>几何模型</th><th>半径/采样</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>foot</td><td>sphere</td><td><code>0.022m</code></td><td>足端触地、swing over、touchdown avoidance、strict cross 统计。</td></tr>
+      <tr><td>calf / shank</td><td>capsule samples</td><td><code>0.040m</code></td><td>小腿跨越时最主要的碰撞风险，必须进入优化方向。</td></tr>
+      <tr><td>thigh</td><td>capsule midpoint/samples</td><td><code>0.040m</code></td><td>补齐当前 FK 诊断缺口，防止大步跨越时大腿扫过障碍。</td></tr>
+      <tr><td>base</td><td>footprint samples</td><td>沿用现有底面采样</td><td>v1 保持诊断和 large obstacle 避障，不把低小障碍 root 抬高作为主要策略。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.2 Small signed distance</h3>
+  <p>small 距离场从无符号 EDT 升级为有符号边界距离：</p>
+  <pre><code>outside: signed_distance &gt; 0
+on boundary: signed_distance = 0
+inside: signed_distance &lt; 0</code></pre>
+  <p>这样 foot/calf/thigh 已经落进小物体时，仍有清晰的退出梯度。signed distance 的 XY 梯度由 query-time 双线性插值解析导数给出；障碍内部不能因为 EDT 为零而失去方向。</p>
+
+  <h3>5.3 统一高程图</h3>
+  <p>所有地面、物体顶面、stance 接触和 swing clearance 都查询同一张 <code>height_w</code>。small semantic 不再生成第二高度场，只在同一 height 表面之上叠加 signed-distance 和额外 margin residual。</p>
+
+  <h2>6. Loss 设计</h2>
+  <p>本设计不新增离散模式，只调整和补齐连续 residual。关键原则是：同一个安全概念必须同时出现在 LQ/GGN 方向和 line-search merit 中。</p>
+
+  <h3>6.1 Stance 落地相关 loss</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th><th>验收指标</th></tr></thead>
+    <tbody>
+      <tr><td><code>stance_xy_lock</code></td><td>stance 段足端世界 XY 贴住当前 stance anchor，避免脚跟着 root 滑走。</td><td>stance XY slip、足端跳变。</td></tr>
+      <tr><td><code>stance_ground_contact</code></td><td>stance foot Z 等于 <code>height_w(foot_xy)</code> 加 foot radius 接触偏置。</td><td>新增 <code>stance_ground_gap_max_m</code> 和 <code>stance_ground_penetration_max_m</code>。</td></tr>
+      <tr><td><code>stance_semantic_avoidance</code></td><td>stance/touchdown foot 到 small signed distance 保持 margin，防止站在小物体上。</td><td>strict cross 的前后 stance 不在语义物体上。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.2 Swing 足端跨越 loss</h3>
+  <table>
+    <thead><tr><th>Loss</th><th>实际做什么</th><th>连续性</th></tr></thead>
+    <tbody>
+      <tr><td><code>terrain_swing_clearance</code></td><td>所有 swing foot 高于统一高程图表面和基础 margin。</td><td>与地形无关，普通坡面、台阶、小物体顶面都生效。</td></tr>
+      <tr><td><code>small_object_foot_over</code></td><td>当 swing foot XY 接近 small footprint 时，连续增加额外净空，让脚从物体上方过去。</td><td>权重由 signed distance kernel 连续衰减，不要求离散判断“正在跨”。</td></tr>
+      <tr><td><code>swing_velocity_smoothness</code></td><td>限制 swing foot 速度和加速度，防止为了净空产生尖峰抬腿。</td><td>保护 viewer 里看起来像真实走路。</td></tr>
+      <tr><td><code>touchdown_velocity</code></td><td>落地前足端速度降低，避免扫过物体后砸地或擦地。</td><td>配合 <code>half_cycle_steps=8</code> 让摆动不那么急。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.3 Small link clearance loss</h3>
+  <p>这是本次修复的核心。foot、calf、thigh 都用同一类 signed-distance residual，并进入 LQ/GGN：</p>
+  <pre><code>clearance = signed_distance_xy(sample_xy) - radius - margin_xy
+height_weight = sigmoid((height_w(sample_xy) + margin_z - sample_z) / temperature)
+residual = height_weight * relaxed_barrier(clearance)</code></pre>
+  <table>
+    <thead><tr><th>Residual</th><th>采样对象</th><th>实际做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>small_object_foot_clearance</code></td><td>foot sphere center</td><td>避免 swing 或 stance foot sphere 和小物体水平 footprint 相交。</td></tr>
+      <tr><td><code>small_object_calf_clearance</code></td><td>knee-foot 插值 capsule samples</td><td>针对当前 <code>97.8%</code> 失败主因，主动把小腿从物体侧面或上方让开。</td></tr>
+      <tr><td><code>small_object_thigh_clearance</code></td><td>hip-knee midpoint/samples</td><td>补齐大腿碰撞诊断和优化方向，避免只修 calf 后换成 thigh 撞。</td></tr>
+    </tbody>
+  </table>
+  <p><code>height_weight</code> 的作用不是硬 gate，而是让“远高于物体顶部”的 link 不再被二维 footprint 过度惩罚；当 link 低、近、甚至已经在障碍内部时，signed distance 提供强梯度。</p>
+
+  <h3>6.4 Touchdown avoidance</h3>
+  <p>touchdown 和 stance 用 signed-distance barrier 远离 small footprint。这个项只表达“不要踩上去”，不指定“必须跨越”。如果 command/progress 和 swing/link clearance 的总代价认为绕行更便宜，也允许绕行。</p>
+
+  <h2>7. 优化链路</h2>
+  <p>当前名词关系保持如下：</p>
+  <table>
+    <thead><tr><th>组件</th><th>职责</th><th>本设计要求</th></tr></thead>
+    <tbody>
+      <tr><td>LQ / GGN</td><td>把 residual 和 Jacobian 近似成二次子问题，产生 <code>Δu</code> 优化方向。</td><td>small foot/calf/thigh residual 必须进入这里。</td></tr>
+      <tr><td>line search</td><td>只沿 <code>u + αΔu</code> 尝试几个步长。</td><td>继续使用完整 merit 选择候选，但不能承担创造方向的职责。</td></tr>
+      <tr><td>merit</td><td>完整非线性总分，用于判断候选轨迹好坏。</td><td>必须和 LQ/GGN 的 residual 语义一致，用来验收而不是藏诊断项。</td></tr>
+    </tbody>
+  </table>
+  <p>实现上使用局部 <code>3×3</code> 或低维 analytic Jacobian：</p>
+  <ul>
+    <li>foot 使用现有 foot analytic Jacobian。</li>
+    <li>knee 使用 knee Jacobian。</li>
+    <li>calf sample 使用 knee/foot Jacobian 按插值比例组合。</li>
+    <li>thigh sample 使用 hip-zero/knee Jacobian 按插值比例组合。</li>
+    <li>signed-distance residual 的空间梯度通过 chain rule 传到 joint/root block。</li>
+  </ul>
+  <p>为了避免 <code>H×4×samples</code> 平均把少数真实碰撞稀释，small clearance 采用 proximity-weighted normalization：靠近或穿入的样本权重大，远离物体的样本几乎不影响归一化。</p>
+
+  <h2>8. 指标与验收</h2>
+  <h3>8.1 新增 strict cross 指标</h3>
+  <p>一个 cross 事件定义为某条腿完成：</p>
+  <pre><code>stance -> contiguous swing -> stance</code></pre>
+  <p>并满足：</p>
+  <ul>
+    <li>前一个 stance 不在 small semantic footprint 上。</li>
+    <li>swing 阶段 foot XY 经过 small obstacle 上方。</li>
+    <li>后一个 stance 不在 small semantic footprint 上。</li>
+    <li>该腿 foot、calf、thigh 在整个事件中没有几何接触或穿入。</li>
+    <li>side bypass 不算 cross。</li>
+  </ul>
+  <table>
+    <thead><tr><th>指标</th><th>目标</th></tr></thead>
+    <tbody>
+      <tr><td>总体 strict cross success</td><td><code>&gt;= 95%</code></td></tr>
+      <tr><td>每个 shape-speed 组合 strict cross success</td><td><code>&gt;= 90%</code></td></tr>
+      <tr><td>foot/calf/thigh 最大穿入</td><td><code>&lt;= 1mm</code></td></tr>
+      <tr><td>stance 落在 small semantic 上</td><td><code>0</code></td></tr>
+      <tr><td>base collision</td><td><code>0</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.2 新增 stance 落地指标</h3>
+  <table>
+    <thead><tr><th>指标</th><th>目标</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>stance_ground_gap_max_m</code></td><td><code>&lt;= 0.01m</code></td><td>stance foot contact surface 高于 <code>height_w</code> 的最大间隙。</td></tr>
+      <tr><td><code>stance_ground_penetration_max_m</code></td><td><code>&lt;= 0.001m</code></td><td>stance foot contact surface 低于 <code>height_w</code> 的最大穿入。</td></tr>
+      <tr><td><code>stance_ground_valid_ratio</code></td><td><code>1.0</code></td><td>所有 stance 样本必须在有效地图内完成查询。</td></tr>
+      <tr><td><code>zero_command_root_xy_drift_m</code></td><td>保持当前数值级别</td><td>零速度允许摆腿，但不允许 root 指令外位移。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.3 旧指标必须继续通过</h3>
+  <ul>
+    <li>joint/viewer regression 继续通过，不能恢复关节顺序错配。</li>
+    <li>old MPC/reward/viewer regression 继续通过，不能破坏现有后端。</li>
+    <li>public factory batch 支持 <code>1/40/512/1024</code>，动态环境数由上层参数构建。</li>
+    <li>真实九命令 viewer：不同方向、速度大小、yaw 和混合命令下 root 速度跟踪和 stance 贴地不退化。</li>
+    <li>同步 exact EDT + MPC：<code>1024 × H16 × 1000</code> 在空闲 GPU 上仍需满足 <code>&lt;= 5s</code>，并且计入距离场构建。</li>
+    <li>无非有限值、无 CUDA graph batch-size 隐式 resize、field version 正确递增。</li>
+  </ul>
+
+  <h2>9. 测试设计</h2>
+  <table>
+    <thead><tr><th>测试层</th><th>需要达成的结果</th></tr></thead>
+    <tbody>
+      <tr><td>纯张量 gait</td><td><code>half_cycle_steps=8</code> 后，<code>H=16</code> 内每条腿至少覆盖可识别的 stance/swing/stance 事件；接触 mask 对角腿组正确。</td></tr>
+      <tr><td>signed distance</td><td>障碍外、边界、内部都有正确符号和有限梯度；内部样本能得到退出方向。</td></tr>
+      <tr><td>GGN/LQ visibility</td><td>构造 calf/foot/thigh 穿入小物体的 RED 场景时，二次子问题梯度非零并指向增大 signed distance 的方向。</td></tr>
+      <tr><td>merit 一致性</td><td>同一个 small clearance residual 在 LQ/GGN 和 full merit 的 breakdown 名称、权重、几何半径一致。</td></tr>
+      <tr><td>strict cross matrix</td><td>五种 shape、三种速度、多个纵向相位下达到 cross 成功目标，且不能靠 side bypass 假通过。</td></tr>
+      <tr><td>stance ground matrix</td><td>零速、前后、左右、yaw、快慢、混合命令下 stance gap/penetration 达标。</td></tr>
+      <tr><td>环境数封装</td><td><code>num_envs=1/40/512/1024</code> 构建 manager 后 shape、field、graph、reference buffer 全部一致；改变数量需要显式重建。</td></tr>
+      <tr><td>性能</td><td>同步距离场 + MPC 的 1000 次 refresh 小于 5 秒；报告 warmup、GPU、是否空闲、平均/P95/max。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>10. 实施顺序</h2>
+  <ol>
+    <li>先把 strict cross、stance ground、signed-distance 和 GGN visibility 测试写成 RED，复刻当前失败。</li>
+    <li>修改 gait scheduler：<code>half_cycle_steps=8</code>，保持 <code>H=16</code>。</li>
+    <li>把 small distance 改为 signed boundary distance，并补内部梯度测试。</li>
+    <li>在 Go2 FK 中补齐 thigh sample/Jacobian，calf sample 继续复用 shank/knee-foot 插值。</li>
+    <li>把 foot/calf/thigh small clearance residual 接入 linearization/GGN/LQ，同时保持 merit 同源。</li>
+    <li>调整 normalization，让近障碍样本不被全 horizon 平均稀释。</li>
+    <li>跑 strict cross、stance ground、旧 regression、真实 viewer 和 1024 性能验收。</li>
+  </ol>
+
+  <h2>11. 风险与边界</h2>
+  <ul>
+    <li>如果 clearance 权重过高，可能牺牲 command tracking 或让 robot 在小物体前绕行；用 strict cross 中的 side-bypass 排除假成功。</li>
+    <li><code>half_cycle_steps=8</code> 会降低摆腿频率，低速更自然，但高速 command 可能需要更强 progress/velocity 平衡。</li>
+    <li>signed distance 内部梯度在极小物体中心可能方向不唯一；测试应覆盖中心、边缘和偏心穿入。</li>
+    <li>thigh/calf sample 增加会提高 GGN 计算量；必须用固定形状、batched query 和 proximity normalization 控制性能。</li>
+    <li>本设计仍是运动学可行，不声明动力学、力矩或真实接触力可行。</li>
+  </ul>
+</main>
+</body>
+</html>

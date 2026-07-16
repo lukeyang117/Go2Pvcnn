@@ -150,7 +150,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
-- T302v.4 small-obstacle crossing collision: controlled five-shape x three-speed rolling x1 matrix reproduces collision; strict `stance-swing-stance` cross success is `1/223 (0.45%)`, with calf contact invalidating `97.8%` and foot contact `78.0%` of opportunities; diagnosis only, no planner code changed; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [quantification](log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md).
+- T302v.4 small-obstacle crossing collision: controlled five-shape x three-speed rolling x1 matrix reproduces collision; strict `stance-swing-stance` cross success is `1/223 (0.45%)`, with calf contact invalidating `97.8%` and foot contact `78.0%` of opportunities. Repair design is written and keeps the no-hard-gate route: `half_cycle_steps=8`, signed small distance, foot/calf/thigh clearance in both GGN/LQ and merit, plus strict cross and stance-ground metrics; no planner code changed yet; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [design](../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html), [quantification](log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md).
 - T302v current-candidate performance: functional T302v.3 is closed; rerun `1024 x H16 x 1000` exact EDT + MPC on an uncontended GPU because all current samples were polluted by external training (`5.63-8.99s`); [branch page](todo/T302v-joint-mpc-rti-gpu.md), [fix log](log/2026-07-16-joint-mpc-rti-viewer-grounding-fix.md).
 - T302v real-1024 boundary: planner-side synchronous exact-field + MPC target is closed; separately measure Isaac physics and RayCaster ray generation when an uncontended real-sim slot is available; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
@@ -202,6 +202,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
+| 2026-07-16 16:05 | Joint MPC RTI small-obstacle crossing design | written: HTML design extends GPU RTI and stance-grounding specs; adds stance-ground metric, strict cross acceptance, signed small distance, and GGN/LQ-visible foot/calf/thigh residuals | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [crossing design](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.md) |
 | 2026-07-16 15:20 | Joint MPC small-obstacle collision quantification | reproduced: strict cross success `1/223`; calf collision dominates; no planner code changed | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [collision quantification](log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md) |
 | 2026-07-16 14:50 | Joint MPC viewer foot-name fix | undefined viewer normalization helper fixed; `133 passed`; real Isaac actual-state read finite | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [foot-name fix](log/2026-07-16-joint-mpc-viewer-foot-name-fix.md) |
 | 2026-07-16 13:35 | Joint MPC RTI speed and swing verification | planner root velocity tracks all nine commands; real viewer swing peak lift `0.034..0.064m`; direct playback velocity boundary documented | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [speed/swing verification](log/2026-07-16-joint-mpc-rti-speed-swing-verification.md) |
