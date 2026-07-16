@@ -8,9 +8,13 @@
 - Full synchronous performance: `1024 × H16 × 1000` exact field + MPC refreshes = `4469.05 ms`, mean `4.469 ms`, P95 `4.492 ms`, max `4.655 ms`, field version `+1000`, nonfinite `0`, peak `858.99 MiB`.
 - Verification: joint `93 passed`; old MPC/reward/viewer `193 passed`; public factory batches `1/40/512/1024` are finite and version-correct.
 - Real IsaacLab: 1-env and 16-env three-step probes pass with field version `2`, finite `x1`, `target_step=1`, and `x0_error_max=0`; final refresh is about `19.9 ms`.
+- Viewer foot-flying is reproduced in the real one-env direct-playback loop. Isaac joint order is grouped by joint type while planner order is grouped by leg; `state_from_env()` does not reorder the input. The measured adapter error is about `2.465 rad`, causing about `2.479 rad` joint and `0.590 m` foot jumps per cycle while actual playback still matches the planner at micron scale.
 
 ## Open Children
 
+- T302v.3 viewer foot-flying:
+  - Primary confirmed cause: `joint_pos` and `joint_vel` must cross the Isaac robot-order -> planner-order boundary in `integration/isaaclab_adapter.py`; no production fix has been applied yet.
+  - Secondary follow-up after the primary fix: zero command still advances the fixed-trot phase in the pure-tensor planner, so standstill/contact-grounding needs an independent acceptance probe.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
 ## Closed Children Archive
@@ -29,6 +33,7 @@
 - [IsaacLab smoke](../log/2026-07-15-joint-mpc-rti-isaac-smoke.md)
 - [MPX reference mapping](../log/2026-07-15-mpx-reference-reading.md)
 - [Multi-step Isaac fix](../log/2026-07-16-joint-mpc-rti-multistep-isaac-fix.md)
+- [Viewer foot-flying reproduction](../log/2026-07-16-joint-mpc-rti-viewer-foot-flying-reproduction.md)
 
 ## Git Refs
 
@@ -39,7 +44,7 @@
 
 ## Next Step
 
-Record the remaining real IsaacLab 1024-env physics/raycast boundary separately; do not reopen the planner field+MPC performance leaf unless fresh uncontended acceptance regresses.
+For T302v.3, first add failing joint position/velocity ordering tests at the Isaac adapter boundary, then apply the single boundary conversion and rerun the real viewer reproduction. Keep zero-command fixed-trot grounding as a separate second-stage issue. The real IsaacLab 1024-env physics/raycast boundary remains independent.
 
 ## Node Details
 

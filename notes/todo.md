@@ -110,7 +110,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
-- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): synchronous CUDA exact EDT + MPC acceptance passes at `4469.05ms/1000`; joint `93`, old MPC `193`; public `num_envs` factory supports `1/40/512/1024`, with rebuild required when batch changes.
+- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): synchronous CUDA exact EDT + MPC acceptance passes at `4469.05ms/1000`; viewer foot-flying is reproduced and traced to missing Isaac robot-order -> planner-order joint input conversion (`2.465rad` adapter error, `0.590m` mean foot jump); zero-command fixed-trot grounding remains a separate follow-up.
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
@@ -150,6 +150,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
+- T302v.3 viewer foot-flying: primary joint-order input mismatch is confirmed but not fixed; add adapter position/velocity contract tests, fix the single input boundary, rerun the real viewer probe, then separately evaluate zero-command fixed-trot grounding; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [reproduction log](log/2026-07-16-joint-mpc-rti-viewer-foot-flying-reproduction.md).
 - T302v real-1024 boundary: planner-side synchronous exact-field + MPC target is closed; separately measure Isaac physics and RayCaster ray generation when an uncontended real-sim slot is available; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
@@ -200,6 +201,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
+| 2026-07-16 11:44 | Joint MPC RTI viewer foot-flying reproduction | reproduced: adapter order error mean `2.465rad`, joint step `2.479rad`, foot step `0.590m`; viewer playback matches planner | [T302v.3](todo/T302v-joint-mpc-rti-gpu.md) | [reproduction](log/2026-07-16-joint-mpc-rti-viewer-foot-flying-reproduction.md) |
 | 2026-07-16 10:40 | Joint MPC RTI synchronous exact EDT | pass: 1024×H16×1000 full refresh `4469.05ms`, version `+1000`, nonfinite `0` | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [exact EDT acceptance](log/2026-07-16-joint-mpc-rti-synchronous-exact-edt.md) |
 | 2026-07-16 10:35 | Joint MPC RTI exact EDT regression | pass: joint `93`, old MPC `193`, public batches `1/40/512/1024`, pycompile/diff clean | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [regression](log/2026-07-16-joint-mpc-rti-exact-edt-regression.md) |
 | 2026-07-16 00:38 | Joint MPC RTI multi-step Isaac fix | partial pass: 1/16-env three-step stable; real 1024 startup still open | [T302v](todo/T302v-joint-mpc-rti-gpu.md) | [multi-step fix](log/2026-07-16-joint-mpc-rti-multistep-isaac-fix.md) |
