@@ -14,6 +14,9 @@ def stance_losses(
     contact_state: Tensor,
     *,
     stance_anchor_w: Tensor | None = None,
+    support_weight: Tensor | None = None,
+    ground_far_weight: Tensor | None = None,
+    ground_far_gain: float = 0.0,
     foot_contact_offset: float = 0.0,
     dt: float,
 ) -> dict[str, Tensor]:
@@ -23,7 +26,30 @@ def stance_losses(
     if height.shape != foot[..., 2].shape or contact.shape != height.shape:
         raise ValueError("queried_height_w and contact_state must match foot [B,T,4]")
     ground_error = foot[..., 2] - height - float(foot_contact_offset)
-    ground = masked_mean(ground_error * ground_error, contact, dims=(1, 2))
+    ground_error_sq = ground_error * ground_error
+    ground = masked_mean(ground_error_sq, contact, dims=(1, 2))
+    if ground_far_weight is not None:
+        far = torch.as_tensor(ground_far_weight, dtype=foot.dtype, device=foot.device)
+        if far.shape != contact.shape[:2]:
+            raise ValueError("ground_far_weight must have shape [B,T]")
+        ground = ground + float(ground_far_gain) * masked_mean(
+            ground_error_sq,
+            contact.to(dtype=foot.dtype) * far.unsqueeze(-1),
+            dims=(1, 2),
+        )
+    support_epsilon = 1.0e-6
+    contact_float = contact.to(dtype=foot.dtype)
+    support_contact_weight = contact_float if support_weight is None else contact_float * torch.as_tensor(
+        support_weight, dtype=foot.dtype, device=foot.device
+    )
+    support_count = support_contact_weight.sum(dim=2)
+    inverse_error = (support_contact_weight / (ground_error_sq + support_epsilon)).sum(dim=2)
+    support_viability_node = torch.where(
+        support_count > 0.0,
+        (support_count / inverse_error.clamp_min(1.0e-12) - support_epsilon).clamp_min(0.0),
+        torch.zeros_like(support_count),
+    )
+    support_viability = support_viability_node.mean(dim=1)
     consecutive_contact = torch.logical_and(contact[:, 1:], contact[:, :-1])
     xy_step = foot[:, 1:, :, :2] - foot[:, :-1, :, :2]
     xy_step_sq = (xy_step * xy_step).sum(dim=-1)
@@ -39,6 +65,7 @@ def stance_losses(
     return {
         "stance_xy_lock": xy_lock,
         "stance_ground_contact": ground,
+        "stance_support_viability": support_viability,
         "stance_slip_velocity": slip,
     }
 

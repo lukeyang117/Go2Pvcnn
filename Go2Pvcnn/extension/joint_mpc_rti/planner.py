@@ -178,6 +178,26 @@ def _swing_phase_weight(contact: Tensor, phase_step: Tensor, cfg: JointMpcRtiCfg
     )
 
 
+def _small_swing_handoff_weights(
+    contact: Tensor,
+    phase_step: Tensor,
+    cfg: JointMpcRtiCfg,
+    *,
+    dtype: torch.dtype,
+) -> tuple[Tensor, Tensor]:
+    nodes = int(contact.shape[1])
+    half_cycle = int(cfg.gait.half_cycle_steps)
+    frame = torch.arange(nodes, device=contact.device).view(1, nodes)
+    frame_in_half = torch.remainder(frame + phase_step[:, None], half_cycle).to(dtype=dtype)
+    progress = frame_in_half / float(max(half_cycle - 1, 1))
+    swing = torch.logical_not(contact).to(dtype=dtype)
+    mid_swing = torch.sin(torch.pi * progress).clamp_min(0.0).pow(
+        float(cfg.gait.small_foot_over_phase_exponent)
+    )
+    safe_landing = progress.pow(float(cfg.gait.small_safe_landing_phase_exponent))
+    return mid_swing.unsqueeze(-1) * swing, safe_landing.unsqueeze(-1) * swing
+
+
 def _stance_anchor_targets(
     nominal_foot_pos_w: Tensor,
     contact_state: Tensor,
@@ -244,7 +264,8 @@ def _initial_control(
     previous = torch.as_tensor(solver_state.control, dtype=desired_control.dtype, device=desired_control.device)
     if previous.shape != desired_control.shape:
         return desired_control.clone()
-    return torch.cat((previous[:, 1:], previous[:, -1:]), dim=1)
+    shifted = torch.cat((previous[:, 1:], previous[:, -1:]), dim=1)
+    return torch.cat((desired_control[..., :6], shifted[..., 6:]), dim=-1)
 
 
 def _build_lq_problem(
@@ -375,6 +396,8 @@ def _add_foot_terrain_linearization(
     rollout: JointMpcRollout,
     contact_state: Tensor,
     swing_weight: Tensor,
+    foot_over_weight: Tensor,
+    safe_landing_weight: Tensor,
     stance_anchor_w: Tensor,
     foot_query: JointMpcTerrainQuery,
     cfg: JointMpcRtiCfg,
@@ -392,6 +415,8 @@ def _add_foot_terrain_linearization(
         raise ValueError("stance_anchor_w must match rollout foot positions")
     swing = torch.logical_not(contact)
     swing_weight = torch.as_tensor(swing_weight, dtype=foot.dtype, device=foot.device)
+    foot_over_weight = torch.as_tensor(foot_over_weight, dtype=foot.dtype, device=foot.device)
+    safe_landing_weight = torch.as_tensor(safe_landing_weight, dtype=foot.dtype, device=foot.device)
     relaxation = float(cfg.solver.barrier_relaxation)
     foot_gradient = torch.zeros_like(foot)
 
@@ -416,7 +441,7 @@ def _add_foot_terrain_linearization(
         float(cfg.losses.terrain_swing_clearance) * normalized_mask(swing_weight) * swing_derivative
     )
     small_influence = torch.sigmoid(
-        (float(cfg.gait.small_collision_influence_radius) - small_distance)
+        (float(cfg.gait.small_foot_over_influence_radius) - small_distance)
         / float(cfg.gait.small_collision_temperature)
     )
     small_effective_height = height + float(cfg.gait.small_semantic_height) * torch.sigmoid(
@@ -429,14 +454,52 @@ def _add_foot_terrain_linearization(
     )
     foot_gradient[..., 2].add_(
         float(cfg.losses.small_object_foot_over)
-        * normalized_mask(swing_weight)
+        * normalized_mask(foot_over_weight)
         * small_influence
         * small_over_derivative
     )
+    landing_safe_weight = safe_landing_weight * torch.sigmoid(
+        (small_distance - float(cfg.gait.small_safe_landing_margin))
+        / float(cfg.gait.small_collision_temperature)
+    )
+    landing_normalizer = normalized_mask(landing_safe_weight)
+    landing_error = foot[..., 2] - height - float(cfg.gait.foot_contact_offset)
+    foot_gradient[..., 2].add_(
+        float(cfg.losses.small_object_safe_landing) * landing_normalizer * 2.0 * landing_error
+    )
     stance_error = foot[..., 2] - height - float(cfg.gait.foot_contact_offset)
     stance_normalizer = normalized_mask(contact)
+    stance_far_weight = torch.sigmoid(
+        (
+            small_distance.amin(dim=2)
+            - float(cfg.gait.stance_ground_far_influence_radius)
+        )
+        / float(cfg.gait.stance_ground_far_temperature)
+    )
+    stance_ground_normalizer = stance_normalizer + float(cfg.losses.stance_ground_far_gain) * normalized_mask(
+        contact.to(dtype=foot.dtype) * stance_far_weight.unsqueeze(-1)
+    )
     foot_gradient[..., 2].add_(
-        float(cfg.losses.stance_ground_contact) * stance_normalizer * 2.0 * stance_error
+        float(cfg.losses.stance_ground_contact) * stance_ground_normalizer * 2.0 * stance_error
+    )
+    support_epsilon = 1.0e-6
+    support_safety = torch.sigmoid(
+        (small_distance - float(cfg.gait.small_support_safety_margin))
+        / float(cfg.gait.small_support_safety_temperature)
+    ).pow(float(cfg.gait.small_support_safety_exponent))
+    contact_float = contact.to(dtype=foot.dtype) * support_safety
+    stance_error_sq = stance_error * stance_error
+    support_count = contact_float.sum(dim=2, keepdim=True)
+    support_inverse = (contact_float / (stance_error_sq + support_epsilon)).sum(dim=2, keepdim=True)
+    support_error_derivative = (
+        support_count
+        * contact_float
+        / support_inverse.clamp_min(1.0e-12).square()
+        / (stance_error_sq + support_epsilon).square()
+    )
+    support_node_weight = float(cfg.losses.stance_support_viability) / float(nodes)
+    foot_gradient[..., 2].add_(
+        support_node_weight * support_error_derivative * 2.0 * stance_error
     )
     stance_xy_error = foot[..., :2] - stance_anchor[..., :2]
     foot_gradient[..., :2].add_(
@@ -471,7 +534,9 @@ def _add_foot_terrain_linearization(
         (
             float(cfg.losses.stance_xy_lock) * stance_normalizer,
             float(cfg.losses.stance_xy_lock) * stance_normalizer,
-            float(cfg.losses.stance_ground_contact) * stance_normalizer,
+            float(cfg.losses.stance_ground_contact) * stance_ground_normalizer
+            + float(cfg.losses.small_object_safe_landing) * landing_normalizer
+            + support_node_weight * support_error_derivative,
         ),
         dim=-1,
     )
@@ -659,6 +724,12 @@ def step(
         phase_offset_steps=phase_step,
     )
     swing_weight = _swing_phase_weight(contact, phase_step, cfg, dtype=measured_state.root_pos_w.dtype)
+    foot_over_weight, safe_landing_weight = _small_swing_handoff_weights(
+        contact,
+        phase_step,
+        cfg,
+        dtype=measured_state.root_pos_w.dtype,
+    )
     desired_control, joint_target = _desired_control(measured_state, command, contact, phase_step, cfg)
     nominal_state = rollout_state_sequence(
         measured_state,
@@ -707,6 +778,8 @@ def step(
         base_rollout,
         contact,
         swing_weight,
+        foot_over_weight,
+        safe_landing_weight,
         stance_anchor_w,
         linearization_queries.foot,
         cfg,
@@ -746,6 +819,12 @@ def step(
             ),
             swing_weight=swing_weight[:, None].expand(-1, repeats, -1, -1).reshape(
                 measured_state.batch_size * repeats, *swing_weight.shape[1:]
+            ),
+            foot_over_weight=foot_over_weight[:, None].expand(-1, repeats, -1, -1).reshape(
+                measured_state.batch_size * repeats, *foot_over_weight.shape[1:]
+            ),
+            safe_landing_weight=safe_landing_weight[:, None].expand(-1, repeats, -1, -1).reshape(
+                measured_state.batch_size * repeats, *safe_landing_weight.shape[1:]
             ),
             terrain_field=terrain_field,
             command_body=repeated_command,
@@ -793,6 +872,8 @@ def step(
             stance_anchor_w=stance_anchor_w,
             contact_state=contact,
             swing_weight=swing_weight,
+            foot_over_weight=foot_over_weight,
+            safe_landing_weight=safe_landing_weight,
             terrain_field=terrain_field,
             command_body=command,
             joint_target=joint_target,

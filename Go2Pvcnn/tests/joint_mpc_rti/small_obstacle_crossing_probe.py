@@ -143,8 +143,9 @@ def _build_matrix_field(
 def run_crossing_matrix(
     *,
     device: str = "cuda",
-    steps: int = 128,
+    steps: int = 160,
     placements_per_case: int = 6,
+    cfg=None,
 ) -> CrossingMatrixMetrics:
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
     from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
@@ -161,8 +162,7 @@ def run_crossing_matrix(
         device=device,
     )
     measured = make_state(batch, device=device)
-    cfg = JointMpcRtiCfg()
-    cfg.solver.line_search_alphas = (1.0, 0.25)
+    cfg = JointMpcRtiCfg() if cfg is None else cfg
     solver_state = None
     active = torch.zeros(batch, 4, dtype=torch.bool, device=device)
     pre_safe = torch.zeros_like(active)
@@ -204,21 +204,38 @@ def run_crossing_matrix(
         calf_distance = queried.small_distance_m[:, 4:16].reshape(batch, 4, 3)
         thigh_distance = queried.small_distance_m[:, 16:28].reshape(batch, 4, 3)
         base_distance = queried.small_distance_m[:, 28:]
-        top = torch.full((batch,), 0.16, device=device)
+        foot_height = queried.height_w[:, :4]
+        calf_height = queried.height_w[:, 4:16].reshape(batch, 4, 3)
+        thigh_height = queried.height_w[:, 16:28].reshape(batch, 4, 3)
+        base_height = queried.height_w[:, 28:]
 
-        def sphere_collision(position: torch.Tensor, distance: torch.Tensor, radius: float):
+        def sphere_collision(
+            position: torch.Tensor,
+            distance: torch.Tensor,
+            top_height: torch.Tensor,
+            radius: float,
+        ):
             vertical = torch.logical_and(
-                position[..., 2] - float(radius) < top.view(batch, *([1] * (position.ndim - 2))),
+                position[..., 2] - float(radius) < top_height,
                 position[..., 2] + float(radius) > 0.0,
             )
             collision = torch.logical_and(distance < float(radius), vertical)
             penetration = torch.where(collision, float(radius) - distance, torch.zeros_like(distance))
             return collision, penetration
 
-        foot_collision, foot_penetration = sphere_collision(geometry.foot_pos_w, foot_distance, 0.022)
-        calf_collision, calf_penetration = sphere_collision(geometry.shank_samples_w, calf_distance, 0.040)
-        thigh_collision, thigh_penetration = sphere_collision(geometry.thigh_samples_w, thigh_distance, 0.040)
-        base_vertical = torch.logical_and(geometry.body_samples_w[..., 2] < top[:, None], geometry.body_samples_w[..., 2] > 0.0)
+        foot_collision, foot_penetration = sphere_collision(
+            geometry.foot_pos_w, foot_distance, foot_height, 0.022
+        )
+        calf_collision, calf_penetration = sphere_collision(
+            geometry.shank_samples_w, calf_distance, calf_height, 0.040
+        )
+        thigh_collision, thigh_penetration = sphere_collision(
+            geometry.thigh_samples_w, thigh_distance, thigh_height, 0.040
+        )
+        base_vertical = torch.logical_and(
+            geometry.body_samples_w[..., 2] < base_height,
+            geometry.body_samples_w[..., 2] > 0.0,
+        )
         base_collision = torch.logical_and(base_distance < 0.0, base_vertical)
         base_penetration = torch.where(base_collision, -base_distance, torch.zeros_like(base_distance))
         part_collision = {

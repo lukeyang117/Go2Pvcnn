@@ -194,6 +194,137 @@ def test_small_clearance_reconstructs_near_boundary_top_from_signed_distance() -
     assert low["small_object_calf_clearance"] > high["small_object_calf_clearance"]
 
 
+def test_small_swing_handoff_weights_release_foot_over_before_touchdown() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
+    from extension.joint_mpc_rti.planner import _small_swing_handoff_weights
+
+    cfg = JointMpcRtiCfg()
+    contact = fixed_trot_schedule(1, 16, torch.device("cpu"), half_cycle_steps=8)
+    foot_over, safe_landing = _small_swing_handoff_weights(
+        contact,
+        torch.zeros(1, dtype=torch.long),
+        cfg,
+        dtype=torch.float32,
+    )
+
+    # FL swings on nodes 8..15 and FR on 0..7 under the default diagonal trot.
+    for leg, nodes in ((0, slice(8, 16)), (1, slice(0, 8))):
+        over = foot_over[0, nodes, leg]
+        landing = safe_landing[0, nodes, leg]
+        torch.testing.assert_close(over[[0, -1]], torch.zeros(2))
+        assert over[3:5].max() > 0.8
+        torch.testing.assert_close(landing[[0, -1]], torch.tensor([0.0, 1.0]))
+        assert torch.all(torch.diff(landing) >= 0.0)
+
+
+def test_small_safe_landing_only_pulls_down_at_safe_signed_distance() -> None:
+    from extension.joint_mpc_rti.losses.semantic import small_object_losses
+
+    common = dict(
+        foot_pos_w=torch.tensor([[[[0.0, 0.0, 0.12]]]]),
+        small_top_height=torch.zeros(1, 1, 1),
+        small_distance_touchdown=torch.tensor([[0.20]]),
+        calf_pos_w=torch.tensor([[[[0.0, 0.0, 0.30]]]]),
+        calf_small_distance=torch.tensor([[[0.20]]]),
+        calf_top_height=torch.zeros(1, 1, 1),
+        thigh_pos_w=torch.tensor([[[[0.0, 0.0, 0.30]]]]),
+        thigh_small_distance=torch.tensor([[[0.20]]]),
+        thigh_top_height=torch.zeros(1, 1, 1),
+        swing_mask=torch.tensor([[[True]]]),
+        stance_mask=torch.tensor([[[False]]]),
+        swing_weight=torch.ones(1, 1, 1),
+        foot_over_weight=torch.zeros(1, 1, 1),
+        safe_landing_weight=torch.ones(1, 1, 1),
+        extra_margin=0.04,
+    )
+    safe = small_object_losses(**common, foot_small_distance=torch.tensor([[[0.20]]]))
+    unsafe = small_object_losses(**common, foot_small_distance=torch.tensor([[[-0.02]]]))
+
+    assert safe["small_object_safe_landing"] > unsafe["small_object_safe_landing"]
+
+
+def test_stance_support_viability_penalizes_all_feet_floating_more_than_one_grounded() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses
+
+    contact = torch.tensor([[[True, False, False, True]]])
+    height = torch.zeros(1, 1, 4)
+    all_floating = torch.zeros(1, 1, 4, 3)
+    all_floating[..., 2] = torch.tensor([[[0.12, 0.0, 0.0, 0.12]]])
+    one_grounded = all_floating.clone()
+    one_grounded[0, 0, 0, 2] = 0.022
+
+    floating_loss = stance_losses(
+        all_floating,
+        height,
+        contact,
+        foot_contact_offset=0.022,
+        dt=0.02,
+    )
+    grounded_loss = stance_losses(
+        one_grounded,
+        height,
+        contact,
+        foot_contact_offset=0.022,
+        dt=0.02,
+    )
+
+    assert "stance_support_viability" in floating_loss
+    assert floating_loss["stance_support_viability"] > 100.0 * grounded_loss["stance_support_viability"]
+
+
+def test_stance_support_viability_does_not_count_unsafe_grounded_foot() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses
+
+    contact = torch.tensor([[[True, False, False, True]]])
+    height = torch.zeros(1, 1, 4)
+    foot = torch.zeros(1, 1, 4, 3)
+    foot[..., 2] = torch.tensor([[[0.022, 0.0, 0.0, 0.12]]])
+    unsafe_grounded = stance_losses(
+        foot,
+        height,
+        contact,
+        support_weight=torch.tensor([[[0.0, 0.0, 0.0, 1.0]]]),
+        foot_contact_offset=0.022,
+        dt=0.02,
+    )
+    safe_grounded = stance_losses(
+        foot,
+        height,
+        contact,
+        support_weight=torch.tensor([[[1.0, 0.0, 0.0, 1.0]]]),
+        foot_contact_offset=0.022,
+        dt=0.02,
+    )
+
+    assert unsafe_grounded["stance_support_viability"] > 100.0 * safe_grounded["stance_support_viability"]
+
+
+def test_stance_ground_far_weight_continuously_strengthens_flat_grounding() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses
+
+    contact = torch.tensor([[[True, False, False, True]]])
+    foot = torch.zeros(1, 1, 4, 3)
+    foot[..., 2] = 0.12
+    base = stance_losses(foot, torch.zeros(1, 1, 4), contact, foot_contact_offset=0.022, dt=0.02)
+    strengthened = stance_losses(
+        foot,
+        torch.zeros(1, 1, 4),
+        contact,
+        ground_far_weight=torch.ones(1, 1),
+        ground_far_gain=1.0,
+        foot_contact_offset=0.022,
+        dt=0.02,
+    )
+
+    torch.testing.assert_close(
+        strengthened["stance_ground_contact"],
+        2.0 * base["stance_ground_contact"],
+    )
+
+
+
+
 def test_touchdown_on_small_is_penalized_even_when_height_matches_surface() -> None:
     from extension.joint_mpc_rti.losses.contact import touchdown_losses
     from extension.joint_mpc_rti.losses.semantic import small_object_losses

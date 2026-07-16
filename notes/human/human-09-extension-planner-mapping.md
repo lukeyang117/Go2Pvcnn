@@ -182,3 +182,5 @@ graph LR
 算法主链是：真实 root/joint 状态 + body-frame command + 世界坐标单高程场/SDF -> fixed-trot H16 kinematic rollout -> 连续 terrain/semantic/full-body loss -> 单次 GGN RTI -> 第一未来帧 `x1`。`raw/mpx` 仅作为 GPU SQP 固定程序参考，不是运行依赖。
 
 地形子链现在是独立 CUDA 实现：`SemanticRayCaster` 当前 151×151 semantic/height rows -> fixed-workspace warp-level exact EDT -> 世界坐标 distance query。small/large 两通道每次 MPC 都同步重建；距离梯度在 query 点由双线性 distance 插值解析求导，不再逐帧生成全图 gradient tensor。line-search candidate 通过 env-row 映射查询原 field，不复制整张地图。
+
+2026-07-16 的 rolling 支撑合同补充：RTI shift 后 root control 对当前 command reference 重新基准化，joint control 继续使用 shifted warm start；small foot-over 由 mid-swing phase 连续塑形，safe landing、touchdown avoidance、support safety 使用各自连续 margin 且在 merit/LQ 内一致。该后端在 65 个 native shape-stop 相位下最长连续零支撑为 1 帧、root 漂移为 0，并保持 crossing/分部位碰撞/真实 viewer 验收通过。

@@ -96,6 +96,8 @@ def rollout_loss_breakdown(
     joint_target: torch.Tensor,
     previous_control: torch.Tensor,
     cfg: JointMpcRtiCfg,
+    foot_over_weight: torch.Tensor | None = None,
+    safe_landing_weight: torch.Tensor | None = None,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
     state = rollout.state
     batch, nodes = int(state.shape[0]), int(state.shape[1])
@@ -149,6 +151,21 @@ def rollout_loss_breakdown(
             foot_height,
             contact,
             stance_anchor_w=stance_anchor,
+            support_weight=torch.sigmoid(
+                (
+                    foot_query.small_distance_m.reshape(batch, nodes, 4)
+                    - float(cfg.gait.small_support_safety_margin)
+                )
+                / float(cfg.gait.small_support_safety_temperature)
+            ).pow(float(cfg.gait.small_support_safety_exponent)),
+            ground_far_weight=torch.sigmoid(
+                (
+                    foot_query.small_distance_m.reshape(batch, nodes, 4).amin(dim=2)
+                    - float(cfg.gait.stance_ground_far_influence_radius)
+                )
+                / float(cfg.gait.stance_ground_far_temperature)
+            ),
+            ground_far_gain=float(cfg.losses.stance_ground_far_gain),
             foot_contact_offset=cfg.gait.foot_contact_offset,
             dt=cfg.runtime.dt,
         )
@@ -222,11 +239,16 @@ def rollout_loss_breakdown(
             thigh_radius=cfg.gait.thigh_collision_radius,
             nominal_small_height=cfg.gait.small_semantic_height,
             touchdown_margin=cfg.gait.small_touchdown_margin,
+            safe_landing_margin=cfg.gait.small_safe_landing_margin,
             influence_radius=cfg.gait.small_collision_influence_radius,
+            foot_over_influence_radius=cfg.gait.small_foot_over_influence_radius,
             temperature=cfg.gait.small_collision_temperature,
             link_margin_xy=cfg.gait.small_collision_margin_xy,
             link_margin_z=cfg.gait.small_collision_margin_z,
             swing_weight=swing_weight,
+            foot_over_weight=foot_over_weight,
+            safe_landing_weight=safe_landing_weight,
+            foot_contact_offset=cfg.gait.foot_contact_offset,
             barrier_relaxation=cfg.solver.barrier_relaxation,
         )
     )

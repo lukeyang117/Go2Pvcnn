@@ -20,7 +20,7 @@ class JointMpcRtiRuntimeCfg:
 class JointMpcRtiSolverCfg:
     regularization: float = 1.0e-4
     barrier_relaxation: float = 1.0e-3
-    line_search_alphas: tuple[float, ...] = (1.0, 0.5, 0.25)
+    line_search_alphas: tuple[float, ...] = (1.0, 0.25)
     root_xy_trust_scale: float = 0.05
     joint_trust_scale: float = 0.25
     compile_kernels: bool = False
@@ -45,11 +45,20 @@ class JointMpcRtiGaitCfg:
     thigh_collision_radius: float = 0.040
     small_collision_margin_xy: float = 0.010
     small_collision_margin_z: float = 0.040
-    small_touchdown_margin: float = 0.032
+    small_touchdown_margin: float = 0.052
+    small_safe_landing_margin: float = 0.035
+    small_support_safety_margin: float = 0.035
+    stance_ground_far_influence_radius: float = 0.50
+    stance_ground_far_temperature: float = 0.005
     small_collision_influence_radius: float = 0.10
+    small_foot_over_influence_radius: float = 0.08
     small_collision_temperature: float = 0.02
     small_collision_root_xy_scale: float = 0.0
     small_collision_link_xy_scale: float = 0.10
+    small_foot_over_phase_exponent: float = 8.0
+    small_safe_landing_phase_exponent: float = 1.0
+    small_support_safety_temperature: float = 0.007
+    small_support_safety_exponent: float = 1.0
 
 
 @dataclass
@@ -74,8 +83,10 @@ class JointMpcRtiLossCfg:
     joint_nominal_posture: float = 0.25
     joint_position_limit_barrier: float = 0.02
     joint_velocity_limit_barrier: float = 0.02
-    stance_xy_lock: float = 1000.0
+    stance_xy_lock: float = 1100.0
     stance_ground_contact: float = 24000.0
+    stance_ground_far_gain: float = 4.0
+    stance_support_viability: float = 250000.0
     stance_slip_velocity: float = 0.01
     swing_nominal_shape: float = 0.2
     terrain_swing_clearance: float = 4.0
@@ -90,10 +101,11 @@ class JointMpcRtiLossCfg:
     shank_ground_clearance: float = 2.0
     body_ground_clearance: float = 8.0
     small_object_foot_over: float = 60.0
-    small_object_touchdown_avoidance: float = 30.0
+    small_object_safe_landing: float = 2000.0
+    small_object_touchdown_avoidance: float = 45.0
     small_object_foot_clearance: float = 20.0
-    small_object_calf_clearance: float = 30.0
-    small_object_thigh_clearance: float = 15.0
+    small_object_calf_clearance: float = 60.0
+    small_object_thigh_clearance: float = 45.0
     large_root_footprint_barrier: float = 30.0
     large_body_collision: float = 12.0
     large_foot_collision: float = 6.0

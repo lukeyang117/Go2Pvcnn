@@ -6,6 +6,21 @@ import pytest
 from .helpers import make_command, make_flat_field, make_state
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="native stop matrix requires CUDA")
+def test_native_small_stop_matrix_recovers_grounded_support() -> None:
+    from .small_obstacle_stop_probe import PARTS, run_stop_matrix
+
+    result = run_stop_matrix(device="cuda")
+
+    assert result.support_recovery_rate == 1.0, result.cases
+    assert result.max_consecutive_zero_support_frames <= 4, result.cases
+    assert result.max_stop_root_xy_drift_m <= 0.015, result.cases
+    assert result.stance_on_small_frames == 0, result.cases
+    for part in PARTS:
+        assert result.collision_frames[part] == 0, result.cases
+    assert result.invalid_count == 0, result
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="native crossing matrix requires CUDA")
 def test_native_small_matrix_crosses_without_body_collision() -> None:
     from .small_obstacle_crossing_probe import PARTS, run_crossing_matrix

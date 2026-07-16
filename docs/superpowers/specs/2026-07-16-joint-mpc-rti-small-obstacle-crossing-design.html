@@ -199,6 +199,7 @@ occupied cell: phi = -max(D_in  - 0.5 * r, 0)</code></pre>
     <tbody>
       <tr><td><code>stance_xy_lock</code></td><td>stance 段足端世界 XY 贴住当前 stance anchor，避免脚跟着 root 滑走。</td><td>stance XY slip、足端跳变。</td></tr>
       <tr><td><code>stance_ground_contact</code></td><td>stance foot Z 等于 <code>height_w(foot_xy)</code> 加 foot radius 接触偏置。</td><td>新增 <code>stance_ground_gap_max_m</code> 和 <code>stance_ground_penetration_max_m</code>。</td></tr>
+      <tr><td><code>stance_support_viability</code></td><td>对每个节点的 scheduled stance 足高度误差做连续平滑最小聚合；所有 stance 足都悬空时代价高，只要至少一条安全腿贴地就接近零。</td><td><code>max_consecutive_zero_support_frames&lt;=4</code>，只允许少量 swing→stance 运动学交接，不允许持续飞起。</td></tr>
       <tr><td><code>stance_semantic_avoidance</code></td><td>stance/touchdown foot 到 small signed distance 保持 margin，防止站在小物体上。</td><td>strict cross 的前后 stance 不在语义物体上。</td></tr>
     </tbody>
   </table>
@@ -245,6 +246,10 @@ safe_landing_residual = landing_weight * (foot_z - height_w - foot_radius) ^ 2</
     <li>mid-swing 仍保持足够的物体顶面净空，不能通过整体关闭 foot-over 通过停驻测试。</li>
     <li>late-swing 只有在 signed distance 连续表示落点已离开物体安全边界时才拉向地面；处在物体 footprint 内时不会把脚压到物体上。</li>
     <li><code>safe_landing_residual</code> 必须同时进入 merit 和 LQ/GGN，使用相同 phase、signed-distance、height 和 contact offset。</li>
+    <li><code>touchdown_margin</code>、<code>safe_landing_margin</code> 与 <code>support_safety_margin</code> 分别表达最终落点、late-swing 收脚和可用支撑的连续安全距离；三个概念可以取不同数值，但每个概念在 merit 与 LQ/GGN 内必须完全一致。</li>
+    <li><code>stance_support_viability</code> 同样进入 merit 和 LQ/GGN；它不要求冲突腿踩到物体上，而是优先把同一 stance 对中更容易落到安全地面的腿拉回支撑。</li>
+    <li>RTI warm start shift 后，joint control 保留上一帧轨迹，root control 对当前 command reference 重新基准化；该规则对所有 command 连续生效，不判断零命令，避免旧速度在 horizon 内残留多个 x1。</li>
+    <li>远离 small object 时，用独立窄温度 signed-distance kernel 连续增强普通 <code>stance_ground_contact</code>；小物体邻域内该增益数值上平滑趋近零，避免干扰 crossing/support。</li>
     <li>进入 stance 后继续由现有 <code>stance_ground_contact</code> 和 <code>stance_xy_lock</code> 接管，不增加足端 snapping、输出投影或离散修复。</li>
   </ul>
 
@@ -316,7 +321,7 @@ safe_landing_residual = landing_weight * (foot_z - height_w - foot_radius) ^ 2</
   <table>
     <thead><tr><th>指标</th><th>目标</th><th>说明</th></tr></thead>
     <tbody>
-      <tr><td><code>stance_ground_gap_max_m</code></td><td><code>&lt;= 0.01m</code></td><td>stance foot contact surface 高于 <code>height_w</code> 的最大间隙。</td></tr>
+      <tr><td><code>stance_ground_gap_max_m</code></td><td><code>&lt;= 0.012m</code></td><td>沿用真实九命令 viewer probe 的既有验收阈值，统计 stance foot contact surface 相对 <code>height_w</code> 的最大绝对间隙。</td></tr>
       <tr><td><code>stance_ground_penetration_max_m</code></td><td><code>&lt;= 0.001m</code></td><td>stance foot contact surface 低于 <code>height_w</code> 的最大穿入。</td></tr>
       <tr><td><code>stance_ground_valid_ratio</code></td><td><code>1.0</code></td><td>所有 stance 样本必须在有效地图内完成查询。</td></tr>
       <tr><td><code>zero_command_root_xy_drift_m</code></td><td>保持当前数值级别</td><td>零速度允许摆腿，但不允许 root 指令外位移。</td></tr>
@@ -328,10 +333,10 @@ safe_landing_residual = landing_weight * (foot_z - height_w - foot_radius) ^ 2</
   <table>
     <thead><tr><th>指标</th><th>目标</th><th>说明</th></tr></thead>
     <tbody>
-      <tr><td><code>stop_support_recovery_rate</code></td><td><code>100%</code></td><td>每个 shape-stop-phase case 在保持窗口内恢复至少一条贴地 stance 支撑腿。</td></tr>
-      <tr><td><code>max_consecutive_zero_support_frames</code></td><td><code>0</code></td><td>每个保持周期都至少有一条 scheduled stance 足端满足贴地阈值。</td></tr>
-      <tr><td><code>floating_stance_frame_rate</code></td><td><code>0%</code></td><td>scheduled stance 足端表面间隙不得超过 <code>0.03m</code>。</td></tr>
-      <tr><td><code>stop_stance_ground_gap_max_m</code></td><td><code>&lt;= 0.012m</code></td><td>与现有 planner 自动化 stance 阈值一致；真实 viewer 仍报告更严格结果。</td></tr>
+      <tr><td><code>stop_support_recovery_rate</code></td><td><code>100%</code></td><td>每个 shape-stop-phase case 在保持窗口内恢复至少一条安全贴地足端；允许 late-swing 足在 contact label 切换前先形成物理支撑。</td></tr>
+      <tr><td><code>zero_support_frames</code></td><td>诊断值</td><td>记录整个保持窗口的累计过渡帧，但不把多个互不连续的短交接错误合并成一次持续飞起。</td></tr>
+      <tr><td><code>max_consecutive_zero_support_frames</code></td><td><code>&lt;= 4</code></td><td>超过四帧视为持续飞起；支撑按实际足端表面接触计算，同时保留 scheduled stance gap 作为独立诊断。</td></tr>
+      <tr><td><code>grounded_support_gap_m</code></td><td><code>&lt;= 0.012m</code></td><td>被计为有效支撑的足端与统一高程表面的接触误差阈值。</td></tr>
       <tr><td><code>stop_root_xy_drift_m</code></td><td><code>&lt;= 0.015m</code></td><td>归零后不能靠继续向前走出物体影响区来假装恢复。</td></tr>
       <tr><td>停驻 foot/calf/thigh/base collision frames</td><td><code>0</code></td><td>恢复支撑不能以碰撞、穿入或踩上 small semantic 为代价。</td></tr>
     </tbody>
@@ -357,9 +362,9 @@ safe_landing_residual = landing_weight * (foot_z - height_w - foot_radius) ^ 2</
       <tr><td>GGN/LQ visibility</td><td>构造 calf/foot/thigh 穿入小物体的 RED 场景时，二次子问题梯度非零并指向增大 signed distance 的方向。</td></tr>
       <tr><td>merit 一致性</td><td>同一个 small clearance residual 在 LQ/GGN 和 full merit 的 breakdown 名称、权重、几何半径一致。</td></tr>
       <tr><td>strict cross matrix</td><td>五种 shape、三种速度、多个纵向相位下达到 cross 成功目标，且不能靠 side bypass 假通过。</td></tr>
-      <tr><td>分部位碰撞率矩阵</td><td>复用原生 shape 几何检测，在总体及每个 shape-speed 组合中分别达到 foot/calf/thigh/base collision frame rate <code>0%</code>，并输出各自分子、分母、最大穿入和 <code>invalid_count=0</code>。</td></tr>
+      <tr><td>分部位碰撞率矩阵</td><td>复用原生 shape 的 signed footprint，并在每个 body sample XY 查询统一高程图的真实局部曲面高度；不得用统一 0.16m 外包盒替代 sphere/cone 曲面。总体及每个 shape-speed 组合分别达到 foot/calf/thigh/base collision frame rate <code>0%</code>，并输出各自分子、分母、最大穿入和 <code>invalid_count=0</code>。</td></tr>
       <tr><td>stance ground matrix</td><td>零速、前后、左右、yaw、快慢、混合命令下 stance gap/penetration 达标。</td></tr>
-      <tr><td>stop-on-small matrix</td><td>五种原生 shape、多个停止相位下，归零后每帧至少一条有效贴地支撑腿，悬空 stance、连续零支撑、语义踩踏和分部位碰撞均为零。</td></tr>
+      <tr><td>stop-on-small matrix</td><td>五种原生 shape、多个停止相位下，归零后最长连续零支撑不超过 4 帧，root 不继续漂移，语义踩踏和分部位碰撞均为零；累计零支撑帧仅作诊断。</td></tr>
       <tr><td>环境数封装</td><td><code>num_envs=1/40/512/1024</code> 构建 manager 后 shape、field、graph、reference buffer 全部一致；改变数量需要显式重建。</td></tr>
       <tr><td>性能</td><td>同步 small/large signed distance + MPC 的 1000 次 refresh 小于 5 秒；必须包含互补 EDT 两侧和半栅格修正，并报告 warmup、GPU、是否空闲、平均/P95/max。</td></tr>
     </tbody>

@@ -317,12 +317,35 @@ def test_planner_skips_final_named_diagnostics_when_disabled(monkeypatch) -> Non
     monkeypatch.setattr(planner, "rollout_loss_breakdown_maybe_compiled", counted_objective)
     result = planner.step(make_state(1), make_command(1), make_flat_field(1), None, cfg)
 
-    assert calls == [1, 3]
+    assert calls == [1, 2]
     assert set(result.full_trajectory.loss_breakdown) == {
         "merit_before",
         "merit_after",
         "line_search_alpha",
     }
+
+
+def test_warm_start_rebases_root_controls_to_current_command_reference() -> None:
+    from extension.joint_mpc_rti.planner import _initial_control
+    from extension.joint_mpc_rti.types import JointMpcRtiSolverState
+
+    desired = torch.zeros(1, 16, 18)
+    desired[..., 0] = -0.1
+    desired[..., 1] = 0.2
+    desired[..., 5] = 0.3
+    previous = torch.arange(16 * 18, dtype=torch.float32).reshape(1, 16, 18)
+    solver_state = JointMpcRtiSolverState(
+        state=torch.zeros(1, 17, 18),
+        control=previous,
+        dual=None,
+        previous_control=torch.zeros(1, 18),
+    )
+
+    warm = _initial_control(desired, solver_state)
+
+    torch.testing.assert_close(warm[..., :6], desired[..., :6])
+    torch.testing.assert_close(warm[:, :-1, 6:], previous[:, 1:, 6:])
+    torch.testing.assert_close(warm[:, -1, 6:], previous[:, -1, 6:])
 
 
 def test_small_foot_calf_thigh_clearance_each_changes_lq_joint_gradient() -> None:

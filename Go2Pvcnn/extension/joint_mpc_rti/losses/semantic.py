@@ -24,9 +24,14 @@ def small_object_losses(
     stance_mask: Tensor,
     extra_margin: float,
     swing_weight: Tensor | None = None,
+    foot_over_weight: Tensor | None = None,
+    safe_landing_weight: Tensor | None = None,
+    foot_contact_offset: float = 0.022,
     influence_radius: float = 0.08,
+    foot_over_influence_radius: float | None = None,
     temperature: float = 0.02,
     touchdown_margin: float = 0.02,
+    safe_landing_margin: float | None = None,
     foot_radius: float = 0.022,
     calf_radius: float = 0.040,
     thigh_radius: float = 0.040,
@@ -42,8 +47,15 @@ def small_object_losses(
     swing_loss_weight = swing.to(foot.dtype) if swing_weight is None else torch.as_tensor(
         swing_weight, dtype=foot.dtype, device=foot.device
     )
+    over_loss_weight = swing_loss_weight if foot_over_weight is None else torch.as_tensor(
+        foot_over_weight, dtype=foot.dtype, device=foot.device
+    )
+    landing_phase_weight = torch.zeros_like(swing_loss_weight) if safe_landing_weight is None else torch.as_tensor(
+        safe_landing_weight, dtype=foot.dtype, device=foot.device
+    )
     stance = torch.as_tensor(stance_mask, dtype=torch.bool, device=foot.device)
-    influence = torch.sigmoid((float(influence_radius) - foot_distance) / float(temperature))
+    over_influence_radius = influence_radius if foot_over_influence_radius is None else foot_over_influence_radius
+    influence = torch.sigmoid((float(over_influence_radius) - foot_distance) / float(temperature))
     effective_foot_top = top + float(nominal_small_height) * torch.sigmoid(
         foot_distance / float(temperature)
     )
@@ -53,7 +65,17 @@ def small_object_losses(
         activation_margin=0.005,
         relaxation=barrier_relaxation,
     )
-    foot_over = masked_mean(foot_over_raw, swing_loss_weight, dims=tuple(range(1, foot_over_raw.ndim)))
+    foot_over = masked_mean(foot_over_raw, over_loss_weight, dims=tuple(range(1, foot_over_raw.ndim)))
+    landing_margin = touchdown_margin if safe_landing_margin is None else safe_landing_margin
+    landing_safe_weight = landing_phase_weight * torch.sigmoid(
+        (foot_distance - float(landing_margin)) / float(temperature)
+    )
+    landing_error = foot[..., 2] - top - float(foot_contact_offset)
+    safe_landing = masked_mean(
+        landing_error * landing_error,
+        landing_safe_weight,
+        dims=tuple(range(1, landing_error.ndim)),
+    )
     touchdown_distance = torch.as_tensor(small_distance_touchdown, dtype=foot.dtype, device=foot.device)
     touchdown_raw = relaxed_barrier(touchdown_distance - float(touchdown_margin), relaxation=barrier_relaxation)
     touchdown_avoidance = touchdown_raw.reshape(foot.shape[0], -1).mean(dim=1)
@@ -101,6 +123,7 @@ def small_object_losses(
     )
     return {
         "small_object_foot_over": foot_over,
+        "small_object_safe_landing": safe_landing,
         "small_object_touchdown_avoidance": touchdown_avoidance + stance_touchdown,
         "small_object_foot_clearance": foot_clearance,
         "small_object_calf_clearance": calf_clearance,

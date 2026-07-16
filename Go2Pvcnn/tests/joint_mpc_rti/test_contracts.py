@@ -13,7 +13,7 @@ def test_joint_mpc_rti_config_defaults_match_fixed_shape_contract() -> None:
     assert cfg.runtime.horizon_steps == 16
     assert cfg.runtime.dt == pytest.approx(0.02)
     assert cfg.runtime.sqp_iterations_per_step == 1
-    assert tuple(cfg.solver.line_search_alphas) == (1.0, 0.5, 0.25)
+    assert tuple(cfg.solver.line_search_alphas) == (1.0, 0.25)
 
 
 def test_factory_accepts_joint_mpc_rti_without_changing_mpc_default() -> None:
