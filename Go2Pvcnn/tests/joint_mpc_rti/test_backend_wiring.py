@@ -9,6 +9,44 @@ import torch
 import pytest
 
 
+def test_state_from_env_reorders_robot_joint_position_and_velocity_into_planner_order() -> None:
+    from extension.joint_mpc_rti.integration.isaaclab_adapter import state_from_env
+
+    robot_order = (
+        "FL_hip_joint",
+        "FR_hip_joint",
+        "RL_hip_joint",
+        "RR_hip_joint",
+        "FL_thigh_joint",
+        "FR_thigh_joint",
+        "RL_thigh_joint",
+        "RR_thigh_joint",
+        "FL_calf_joint",
+        "FR_calf_joint",
+        "RL_calf_joint",
+        "RR_calf_joint",
+    )
+    root_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    robot = SimpleNamespace(
+        joint_names=robot_order,
+        data=SimpleNamespace(
+            root_pos_w=torch.tensor([[0.0, 0.0, 0.32]]),
+            root_quat_w=root_quat,
+            root_lin_vel_b=torch.zeros(1, 3),
+            root_ang_vel_b=torch.zeros(1, 3),
+            joint_pos=torch.arange(12, dtype=torch.float32).view(1, 12),
+            joint_vel=(100.0 + torch.arange(12, dtype=torch.float32)).view(1, 12),
+        ),
+    )
+    env = SimpleNamespace(unwrapped=SimpleNamespace(scene={"robot": robot}))
+
+    state = state_from_env(env, device="cpu")
+
+    expected_indices = torch.tensor([0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11])
+    torch.testing.assert_close(state.joint_pos, robot.data.joint_pos.index_select(-1, expected_indices))
+    torch.testing.assert_close(state.joint_vel, robot.data.joint_vel.index_select(-1, expected_indices))
+
+
 def test_task_cfg_declares_joint_backend_config_without_changing_default() -> None:
     source = Path("Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py").read_text()
 

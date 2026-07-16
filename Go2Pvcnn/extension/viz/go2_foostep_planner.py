@@ -766,57 +766,27 @@ SEMANTIC_MARKER_COLORS = {
     SEMANTIC_LARGE_ID: (1.0, 0.2, 0.2),
 }
 
-PLANNER_JOINT_ORDER = (
-    "FL_hip_joint",
-    "FL_thigh_joint",
-    "FL_calf_joint",
-    "FR_hip_joint",
-    "FR_thigh_joint",
-    "FR_calf_joint",
-    "RL_hip_joint",
-    "RL_thigh_joint",
-    "RL_calf_joint",
-    "RR_hip_joint",
-    "RR_thigh_joint",
-    "RR_calf_joint",
+from extension.joint_mpc_rti.integration.joint_order import (
+    PLANNER_JOINT_ORDER,
+    joint_order_indices,
+    planner_to_robot_joints,
+    robot_to_planner_joints,
 )
 
 
-def _normalize_joint_name(name: str) -> str:
-    normalized = str(name).split("/")[-1]
-    normalized = normalized.split(":")[-1]
-    return normalized.lower()
-
-
 def _joint_order_indices(*, source_order: tuple[str, ...], target_order: tuple[str, ...]) -> torch.Tensor | None:
-    source_to_index = {_normalize_joint_name(name): idx for idx, name in enumerate(source_order)}
-    indices: list[int] = []
-    for target_name in target_order:
-        source_idx = source_to_index.get(_normalize_joint_name(target_name))
-        if source_idx is None:
-            return None
-        indices.append(int(source_idx))
-    return torch.tensor(indices, dtype=torch.long)
+    try:
+        return joint_order_indices(source_order=source_order, target_order=target_order)
+    except ValueError:
+        return None
 
 
 def _joint_pos_planner_to_robot(robot, joint_pos: torch.Tensor) -> torch.Tensor:
-    joint_names = getattr(robot, "joint_names", None)
-    if not joint_names:
-        return joint_pos
-    indices = _joint_order_indices(source_order=PLANNER_JOINT_ORDER, target_order=tuple(joint_names))
-    if indices is None:
-        return joint_pos
-    return joint_pos.index_select(-1, indices.to(device=joint_pos.device))
+    return planner_to_robot_joints(joint_pos, getattr(robot, "joint_names", None))
 
 
 def _joint_pos_robot_to_planner(robot, joint_pos: torch.Tensor) -> torch.Tensor:
-    joint_names = getattr(robot, "joint_names", None)
-    if not joint_names:
-        return joint_pos
-    indices = _joint_order_indices(source_order=tuple(joint_names), target_order=PLANNER_JOINT_ORDER)
-    if indices is None:
-        return joint_pos
-    return joint_pos.index_select(-1, indices.to(device=joint_pos.device))
+    return robot_to_planner_joints(joint_pos, getattr(robot, "joint_names", None))
 
 
 @dataclass

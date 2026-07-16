@@ -7,6 +7,7 @@ import math
 import torch
 
 from extension.convention import extract_roll_pitch_batch, extract_yaw_batch
+from extension.joint_mpc_rti.integration.joint_order import robot_to_planner_joints
 from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
 from extension.joint_mpc_rti.types import JointMpcRtiState
 
@@ -32,7 +33,15 @@ def state_from_env(env, *, device) -> JointMpcRtiState:
     roll, pitch = extract_roll_pitch_batch(root_quat)
     yaw = extract_yaw_batch(root_quat)
     root_pos = torch.as_tensor(data.root_pos_w, dtype=torch.float32, device=device)
-    joint_pos = torch.as_tensor(data.joint_pos, dtype=torch.float32, device=device)
+    joint_names = getattr(robot, "joint_names", None)
+    joint_pos = robot_to_planner_joints(
+        torch.as_tensor(data.joint_pos, dtype=torch.float32, device=device),
+        joint_names,
+    )
+    joint_vel = robot_to_planner_joints(
+        torch.as_tensor(getattr(data, "joint_vel", torch.zeros_like(joint_pos)), dtype=torch.float32, device=device),
+        joint_names,
+    )
     return JointMpcRtiState(
         root_pos_w=root_pos,
         root_rpy_w=torch.stack((roll, pitch, yaw), dim=-1),
@@ -43,9 +52,7 @@ def state_from_env(env, *, device) -> JointMpcRtiState:
         root_ang_vel_b=torch.as_tensor(
             getattr(data, "root_ang_vel_b", torch.zeros_like(root_pos)), dtype=torch.float32, device=device
         ),
-        joint_vel=torch.as_tensor(
-            getattr(data, "joint_vel", torch.zeros_like(joint_pos)), dtype=torch.float32, device=device
-        ),
+        joint_vel=joint_vel,
     )
 
 
