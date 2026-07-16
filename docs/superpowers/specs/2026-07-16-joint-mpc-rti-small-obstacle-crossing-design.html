@@ -271,7 +271,28 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     </tbody>
   </table>
 
-  <h3>8.2 新增 stance 落地指标</h3>
+  <h3>8.2 新增分部位碰撞率指标</h3>
+  <p>碰撞率必须复用当前五种原生物体碰撞量化的几何和检测链，不允许为了通过验收修改 detector、缩小碰撞半径或排除困难帧。对每个有效评估帧，某身体部位的任一几何 sample 与 small obstacle 原生几何发生重叠，就给该部位累计一次 collision frame；同一部位同一帧命中多个 sample 仍只计一次：</p>
+  <pre><code>part_collision_frame_rate =
+  colliding valid env-frames for this part
+  / all valid evaluated env-frames for this part</code></pre>
+  <table>
+    <thead><tr><th>指标</th><th>总体目标</th><th>分组目标</th></tr></thead>
+    <tbody>
+      <tr><td><code>foot_collision_frame_rate</code></td><td><code>0%</code></td><td>每个 shape-speed 组合均为 <code>0%</code></td></tr>
+      <tr><td><code>calf_collision_frame_rate</code></td><td><code>0%</code></td><td>每个 shape-speed 组合均为 <code>0%</code></td></tr>
+      <tr><td><code>thigh_collision_frame_rate</code></td><td><code>0%</code></td><td>每个 shape-speed 组合均为 <code>0%</code></td></tr>
+      <tr><td><code>base_collision_frame_rate</code></td><td><code>0%</code></td><td>每个 shape-speed 组合均为 <code>0%</code></td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>固定矩阵沿用 sphere、cuboid、cylinder、capsule、cone，速度沿用 <code>0.1/0.2/0.4m/s</code>，并保留多个纵向放置以覆盖不同 gait/obstacle phase。</li>
+    <li>验收必须同时满足 strict cross success；机器人停住、完全侧绕、没有形成 crossing opportunity，均不能用来证明碰撞率达标。</li>
+    <li>报告每个部位的 collision frame 分子、有效帧分母、比率和最大穿入深度；不得只报告四个部位合并后的平均值。</li>
+    <li>地图外、无效 FK 或无效物体几何不进入分母，但必须单独报告 invalid count，且正式验收要求 <code>invalid_count=0</code>。</li>
+  </ul>
+
+  <h3>8.3 新增 stance 落地指标</h3>
   <table>
     <thead><tr><th>指标</th><th>目标</th><th>说明</th></tr></thead>
     <tbody>
@@ -282,7 +303,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     </tbody>
   </table>
 
-  <h3>8.3 旧指标必须继续通过</h3>
+  <h3>8.4 旧指标必须继续通过</h3>
   <ul>
     <li>joint/viewer regression 继续通过，不能恢复关节顺序错配。</li>
     <li>old MPC/reward/viewer regression 继续通过，不能破坏现有后端。</li>
@@ -302,6 +323,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
       <tr><td>GGN/LQ visibility</td><td>构造 calf/foot/thigh 穿入小物体的 RED 场景时，二次子问题梯度非零并指向增大 signed distance 的方向。</td></tr>
       <tr><td>merit 一致性</td><td>同一个 small clearance residual 在 LQ/GGN 和 full merit 的 breakdown 名称、权重、几何半径一致。</td></tr>
       <tr><td>strict cross matrix</td><td>五种 shape、三种速度、多个纵向相位下达到 cross 成功目标，且不能靠 side bypass 假通过。</td></tr>
+      <tr><td>分部位碰撞率矩阵</td><td>复用原生 shape 几何检测，在总体及每个 shape-speed 组合中分别达到 foot/calf/thigh/base collision frame rate <code>0%</code>，并输出各自分子、分母、最大穿入和 <code>invalid_count=0</code>。</td></tr>
       <tr><td>stance ground matrix</td><td>零速、前后、左右、yaw、快慢、混合命令下 stance gap/penetration 达标。</td></tr>
       <tr><td>环境数封装</td><td><code>num_envs=1/40/512/1024</code> 构建 manager 后 shape、field、graph、reference buffer 全部一致；改变数量需要显式重建。</td></tr>
       <tr><td>性能</td><td>同步 small/large signed distance + MPC 的 1000 次 refresh 小于 5 秒；必须包含互补 EDT 两侧和半栅格修正，并报告 warmup、GPU、是否空闲、平均/P95/max。</td></tr>
@@ -316,7 +338,7 @@ residual = height_weight * relaxed_barrier(clearance)</code></pre>
     <li>在 Go2 FK 中补齐 thigh sample/Jacobian，calf sample 继续复用 shank/knee-foot 插值。</li>
     <li>把 foot/calf/thigh small clearance residual 接入 linearization/GGN/LQ，同时保持 merit 同源。</li>
     <li>调整 normalization，让近障碍样本不被全 horizon 平均稀释。</li>
-    <li>跑 strict cross、stance ground、旧 regression、真实 viewer 和 1024 性能验收。</li>
+    <li>跑 strict cross、foot/calf/thigh/base 分部位零碰撞率、stance ground、旧 regression、真实 viewer 和 1024 性能验收。</li>
   </ol>
 
   <h2>11. 风险与边界</h2>

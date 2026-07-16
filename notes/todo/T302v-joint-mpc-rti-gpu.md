@@ -12,7 +12,7 @@
 
 ## Open Children
 
-- T302v.4 small-obstacle collision: five native shapes x three forward speeds reproduce geometric foot/calf/thigh contact. Strict per-leg `stance-swing-stance` cross success is `1/223 (0.45%)`; calf collision invalidates `97.8%` of crossing opportunities. Follow-up design is written in [../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html](../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html): keep `H=16`, change `half_cycle_steps=8`, upgrade small/large channels to signed boundary distance using complementary exact EDT and half-cell correction, add foot/calf/thigh residuals to both GGN/LQ and merit, and add strict cross plus stance-ground metrics. Planner/loss/constraint code remains unchanged while the user reviews the design.
+- T302v.4 small-obstacle collision: five native shapes x three forward speeds reproduce geometric foot/calf/thigh contact. Strict per-leg `stance-swing-stance` cross success is `1/223 (0.45%)`; calf collision invalidates `97.8%` of crossing opportunities. Follow-up design is written in [../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html](../../docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html): keep `H=16`, change `half_cycle_steps=8`, upgrade small/large channels to signed boundary distance using complementary exact EDT and half-cell correction, add foot/calf/thigh residuals to both GGN/LQ and merit, require separate foot/calf/thigh/base collision-frame rates of `0%` overall and per shape-speed cell, and retain strict cross plus stance-ground metrics. Planner/loss/constraint code remains unchanged while the user reviews the design.
 - Current candidate five-second performance recheck: all four GPUs were occupied by external training; contested `1024 x H16 x 1000` samples varied from `5.63s` to `8.99s`, so the prior uncontended `4.469s` acceptance is retained but not transferred to the new candidate without an idle-card rerun.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
@@ -49,7 +49,7 @@
 
 ## Next Step
 
-Wait for user approval of the T302v.4 design. After approval, create the implementation plan, then implement RED/GREEN tests for signed distance, GGN/LQ visibility, strict cross, and stance-ground metrics. Separately rerun `1024 x H16 x 1000` synchronous full refresh on an uncontended GPU before transferring the five-second performance acceptance to the new candidate.
+Wait for user approval of the T302v.4 design. After approval, create the implementation plan, then implement RED/GREEN tests for signed distance, GGN/LQ visibility, strict cross, separate foot/calf/thigh/base zero collision rates, and stance-ground metrics. Separately rerun `1024 x H16 x 1000` synchronous full refresh on an uncontended GPU before transferring the five-second performance acceptance to the new candidate.
 
 ## Node Details
 

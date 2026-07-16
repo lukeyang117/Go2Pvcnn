@@ -26,6 +26,7 @@ It responds to the controlled small-obstacle quantification: strict cross succes
 - Align optimization geometry and acceptance geometry: foot sphere `0.022m`, calf capsule `0.040m`, thigh capsule `0.040m`.
 - Add foot/calf/thigh small clearance residuals to both GGN/LQ and full merit, instead of leaving collision only as final scoring/diagnostic.
 - Add strict cross success and stance-ground metrics to acceptance.
+- Reuse the existing native-shape geometry detector and require separate foot/calf/thigh/base collision-frame rates of `0%`, both overall and for every shape-speed cell. Each part must report numerator, valid denominator, maximum penetration, and zero invalid samples; strict-cross acceptance remains mandatory so stopping or bypassing cannot fake a zero-collision result.
 
 ## Verification
 
