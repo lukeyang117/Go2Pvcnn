@@ -39,6 +39,13 @@ class JointMpcRtiGaitCfg:
     foot_contact_offset: float = 0.022
     nominal_swing_clearance: float = 0.015
     small_semantic_clearance: float = 0.03
+    foot_collision_radius: float = 0.022
+    calf_collision_radius: float = 0.040
+    thigh_collision_radius: float = 0.040
+    small_collision_margin_xy: float = 0.010
+    small_collision_margin_z: float = 0.010
+    small_collision_influence_radius: float = 0.10
+    small_collision_temperature: float = 0.02
 
 
 @dataclass
@@ -80,7 +87,9 @@ class JointMpcRtiLossCfg:
     body_ground_clearance: float = 8.0
     small_object_foot_over: float = 10.0
     small_object_touchdown_avoidance: float = 8.0
-    small_object_link_clearance: float = 5.0
+    small_object_foot_clearance: float = 20.0
+    small_object_calf_clearance: float = 30.0
+    small_object_thigh_clearance: float = 15.0
     large_root_footprint_barrier: float = 30.0
     large_body_collision: float = 12.0
     large_foot_collision: float = 6.0

@@ -28,12 +28,20 @@ def _packed_geometry_queries(
     field: JointMpcTerrainField,
     rollout: JointMpcRollout,
     cfg: JointMpcRtiCfg,
-) -> tuple[JointMpcTerrainQuery, JointMpcTerrainQuery, JointMpcTerrainQuery, JointMpcTerrainQuery, JointMpcTerrainQuery]:
+) -> tuple[
+    JointMpcTerrainQuery,
+    JointMpcTerrainQuery,
+    JointMpcTerrainQuery,
+    JointMpcTerrainQuery,
+    JointMpcTerrainQuery,
+    JointMpcTerrainQuery,
+]:
     batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
     shank = rollout.shank_samples_w.reshape(batch, nodes, 12, 3)
+    thigh = rollout.thigh_samples_w.reshape(batch, nodes, 12, 3)
     root = rollout.state[..., :3].unsqueeze(2)
     packed = torch.cat(
-        (rollout.foot_pos_w, rollout.knee_pos_w, shank, rollout.body_samples_w, root),
+        (rollout.foot_pos_w, rollout.knee_pos_w, shank, thigh, rollout.body_samples_w, root),
         dim=2,
     )
     points_per_node = int(packed.shape[2])
@@ -63,12 +71,14 @@ def _packed_geometry_queries(
     foot_stop = 4
     knee_stop = foot_stop + 4
     shank_stop = knee_stop + 12
-    body_stop = shank_stop + int(rollout.body_samples_w.shape[2])
+    thigh_stop = shank_stop + 12
+    body_stop = thigh_stop + int(rollout.body_samples_w.shape[2])
     return (
         section(0, foot_stop),
         section(foot_stop, knee_stop),
         section(knee_stop, shank_stop),
-        section(shank_stop, body_stop),
+        section(shank_stop, thigh_stop),
+        section(thigh_stop, body_stop),
         section(body_stop, body_stop + 1),
     )
 
@@ -98,7 +108,7 @@ def rollout_loss_breakdown(
     stance_anchor = nominal_foot if stance_anchor_w is None else torch.as_tensor(
         stance_anchor_w, dtype=state.dtype, device=state.device
     )
-    foot_query, knee_query, shank_query, body_query, root_query = _packed_geometry_queries(
+    foot_query, knee_query, shank_query, thigh_query, body_query, root_query = _packed_geometry_queries(
         terrain_field,
         rollout,
         cfg,
@@ -106,6 +116,7 @@ def rollout_loss_breakdown(
     foot_height = foot_query.height_w.reshape(batch, nodes, 4)
     knee_height = knee_query.height_w.reshape(batch, nodes, 4)
     shank_height = shank_query.height_w.reshape(batch, nodes, 4, 3)
+    thigh_height = thigh_query.height_w.reshape(batch, nodes, 4, 3)
     body_height = body_query.height_w.reshape(batch, nodes, -1)
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=state.device)
     swing_weight = torch.as_tensor(swing_weight, dtype=state.dtype, device=state.device)
@@ -191,27 +202,28 @@ def rollout_loss_breakdown(
             barrier_relaxation=cfg.solver.barrier_relaxation,
         )
     )
-    link_pos = torch.cat((rollout.knee_pos_w, rollout.shank_samples_w.reshape(batch, nodes, -1, 3)), dim=2)
-    link_small_distance = torch.cat(
-        (
-            knee_query.small_distance_m.reshape(batch, nodes, 4),
-            shank_query.small_distance_m.reshape(batch, nodes, -1),
-        ),
-        dim=2,
-    )
-    link_height = torch.cat((knee_height, shank_height.reshape(batch, nodes, -1)), dim=2)
     losses.update(
         small_object_losses(
             foot_pos_w=rollout.foot_pos_w,
             foot_small_distance=foot_query.small_distance_m.reshape(batch, nodes, 4),
             small_top_height=foot_height,
             small_distance_touchdown=foot_query.small_distance_m.reshape(batch, nodes, 4)[:, -1],
-            link_pos_w=link_pos,
-            link_small_distance=link_small_distance,
-            link_top_height=link_height,
+            calf_pos_w=rollout.shank_samples_w,
+            calf_small_distance=shank_query.small_distance_m.reshape(batch, nodes, 4, 3),
+            calf_top_height=shank_height,
+            thigh_pos_w=rollout.thigh_samples_w,
+            thigh_small_distance=thigh_query.small_distance_m.reshape(batch, nodes, 4, 3),
+            thigh_top_height=thigh_height,
             swing_mask=torch.logical_not(contact),
             stance_mask=contact,
             extra_margin=cfg.gait.small_semantic_clearance,
+            foot_radius=cfg.gait.foot_collision_radius,
+            calf_radius=cfg.gait.calf_collision_radius,
+            thigh_radius=cfg.gait.thigh_collision_radius,
+            influence_radius=cfg.gait.small_collision_influence_radius,
+            temperature=cfg.gait.small_collision_temperature,
+            link_margin_xy=cfg.gait.small_collision_margin_xy,
+            link_margin_z=cfg.gait.small_collision_margin_z,
             swing_weight=swing_weight,
             barrier_relaxation=cfg.solver.barrier_relaxation,
         )
@@ -224,6 +236,7 @@ def rollout_loss_breakdown(
         (
             knee_query.large_distance_m.reshape(batch, nodes, 4),
             shank_query.large_distance_m.reshape(batch, nodes, -1),
+            thigh_query.large_distance_m.reshape(batch, nodes, -1),
         ),
         dim=2,
     )

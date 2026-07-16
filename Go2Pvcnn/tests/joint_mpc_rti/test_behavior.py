@@ -192,6 +192,7 @@ def test_small_object_is_crossed_by_swing_clearance_without_lifting_root(
     surface_height = foot_query.height_w.reshape(1, 17, 4)
     swing = torch.logical_not(trajectory.contact_state)
     near_small_swing = torch.logical_and(swing, small_distance < 0.02)
+    near_small_swing[:, 0] = False  # measured x0 is injected, not an optimizable/published future node
 
     assert near_small_swing.any()
     clearance = trajectory.foot_pos_w[..., 2] - surface_height

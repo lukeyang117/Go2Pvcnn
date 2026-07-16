@@ -106,8 +106,12 @@ def test_small_object_loss_prefers_foot_over_or_bypass_without_root_gate() -> No
     common = dict(
         small_top_height=torch.tensor([[[0.08]]]),
         small_distance_touchdown=torch.tensor([[0.20]]),
-        link_pos_w=torch.tensor([[[[0.0, 0.0, 0.20]]]]),
-        link_small_distance=torch.tensor([[[0.0]]]),
+        calf_pos_w=torch.tensor([[[[0.0, 0.0, 0.20]]]]),
+        calf_small_distance=torch.tensor([[[0.0]]]),
+        calf_top_height=torch.tensor([[[0.08]]]),
+        thigh_pos_w=torch.tensor([[[[0.0, 0.0, 0.20]]]]),
+        thigh_small_distance=torch.tensor([[[0.0]]]),
+        thigh_top_height=torch.tensor([[[0.08]]]),
         swing_mask=torch.tensor([[[True]]]),
         stance_mask=torch.tensor([[[False]]]),
         extra_margin=0.03,
@@ -137,6 +141,30 @@ def test_small_object_loss_prefers_foot_over_or_bypass_without_root_gate() -> No
     assert "small_object_root_avoidance" not in over_loss
 
 
+def test_small_object_merit_exposes_separate_foot_calf_thigh_clearance() -> None:
+    from extension.joint_mpc_rti.losses.semantic import small_object_losses
+
+    result = small_object_losses(
+        foot_pos_w=torch.tensor([[[[0.0, 0.0, 0.04]]]]),
+        foot_small_distance=torch.tensor([[[-0.01]]]),
+        small_top_height=torch.tensor([[[0.16]]]),
+        small_distance_touchdown=torch.tensor([[-0.01]]),
+        calf_pos_w=torch.tensor([[[[0.0, 0.0, 0.08]]]]),
+        calf_small_distance=torch.tensor([[[-0.02]]]),
+        calf_top_height=torch.tensor([[[0.16]]]),
+        thigh_pos_w=torch.tensor([[[[0.0, 0.0, 0.12]]]]),
+        thigh_small_distance=torch.tensor([[[-0.02]]]),
+        thigh_top_height=torch.tensor([[[0.16]]]),
+        swing_mask=torch.tensor([[[True]]]),
+        stance_mask=torch.tensor([[[False]]]),
+        extra_margin=0.03,
+    )
+
+    assert result["small_object_foot_clearance"] > 0.0
+    assert result["small_object_calf_clearance"] > 0.0
+    assert result["small_object_thigh_clearance"] > 0.0
+
+
 def test_touchdown_on_small_is_penalized_even_when_height_matches_surface() -> None:
     from extension.joint_mpc_rti.losses.contact import touchdown_losses
     from extension.joint_mpc_rti.losses.semantic import small_object_losses
@@ -152,8 +180,12 @@ def test_touchdown_on_small_is_penalized_even_when_height_matches_surface() -> N
         foot_small_distance=torch.tensor([[[-0.01]]]),
         small_top_height=torch.tensor([[[0.08]]]),
         small_distance_touchdown=torch.tensor([[-0.01]]),
-        link_pos_w=foot,
-        link_small_distance=torch.tensor([[[-0.01]]]),
+        calf_pos_w=foot,
+        calf_small_distance=torch.tensor([[[-0.01]]]),
+        calf_top_height=torch.tensor([[[0.08]]]),
+        thigh_pos_w=foot,
+        thigh_small_distance=torch.tensor([[[-0.01]]]),
+        thigh_top_height=torch.tensor([[[0.08]]]),
         swing_mask=torch.tensor([[[False]]]),
         stance_mask=torch.tensor([[[True]]]),
         extra_margin=0.03,
@@ -389,4 +421,4 @@ def test_rollout_objective_packs_geometry_into_one_world_query(monkeypatch) -> N
         cfg=JointMpcRtiCfg(),
     )
 
-    assert calls == [(2, 17 * (4 + 4 + 12 + 9 + 1), 3)]
+    assert calls == [(2, 17 * (4 + 4 + 12 + 12 + 9 + 1), 3)]

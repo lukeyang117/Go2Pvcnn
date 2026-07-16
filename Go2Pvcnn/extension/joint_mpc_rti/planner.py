@@ -10,12 +10,13 @@ from torch import Tensor
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.losses.barriers import (
     localized_relaxed_barrier_derivative,
+    relaxed_barrier,
     relaxed_barrier_derivative,
 )
 from extension.joint_mpc_rti.losses.rollout_objective import rollout_loss_breakdown_maybe_compiled
 from extension.joint_mpc_rti.model.dynamics import kinematic_step
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
-from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_leg, go2_foot_pos
+from extension.joint_mpc_rti.model.go2_kinematics import foot_jacobian_leg, go2_foot_pos, link_sample_jacobians
 from extension.joint_mpc_rti.model.rollout import JointMpcRollout, rollout_controls, rollout_state_sequence
 from extension.joint_mpc_rti.solver.linearization import dynamics_jacobians
 from extension.joint_mpc_rti.solver.primal_dual_ilqr import LqProblem
@@ -46,6 +47,7 @@ class _LinearizationQueries:
     foot: JointMpcTerrainQuery
     knee: JointMpcTerrainQuery
     shank: JointMpcTerrainQuery
+    thigh: JointMpcTerrainQuery
     root: JointMpcTerrainQuery
 
 
@@ -56,9 +58,10 @@ def _query_linearization_geometry(
 ) -> _LinearizationQueries:
     batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
     shank = rollout.shank_samples_w.reshape(batch, nodes, 12, 3)
+    thigh = rollout.thigh_samples_w.reshape(batch, nodes, 12, 3)
     root = rollout.state[..., :3].unsqueeze(2)
     packed = torch.cat(
-        (rollout.body_samples_w, rollout.foot_pos_w, rollout.knee_pos_w, shank, root),
+        (rollout.body_samples_w, rollout.foot_pos_w, rollout.knee_pos_w, shank, thigh, root),
         dim=2,
     )
     points_per_node = int(packed.shape[2])
@@ -84,12 +87,14 @@ def _query_linearization_geometry(
     foot_stop = body_stop + 4
     knee_stop = foot_stop + 4
     shank_stop = knee_stop + 12
+    thigh_stop = shank_stop + 12
     return _LinearizationQueries(
         body=section(0, body_stop),
         foot=section(body_stop, foot_stop),
         knee=section(foot_stop, knee_stop),
         shank=section(knee_stop, shank_stop),
-        root=section(shank_stop, shank_stop + 1),
+        thigh=section(shank_stop, thigh_stop),
+        root=section(thigh_stop, thigh_stop + 1),
     )
 
 
@@ -487,6 +492,110 @@ def _add_foot_terrain_linearization(
     )
 
 
+def _add_small_obstacle_linearization(
+    problem: LqProblem,
+    rollout: JointMpcRollout,
+    queries: _LinearizationQueries,
+    cfg: JointMpcRtiCfg,
+) -> LqProblem:
+    """Add signed-distance foot/calf/thigh gradients to the RTI LQ direction."""
+    batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
+    state_flat = rollout.state.reshape(batch * nodes, 18)
+    foot_jacobian = foot_jacobian_leg(
+        state_flat[:, :3],
+        state_flat[:, 3:6],
+        state_flat[:, 6:],
+    ).reshape(batch, nodes, 4, 1, 3, 3)
+    link_jacobian = link_sample_jacobians(
+        state_flat[:, :3],
+        state_flat[:, 3:6],
+        state_flat[:, 6:],
+    )
+    calf_jacobian = link_jacobian.calf_samples.reshape(batch, nodes, 4, 3, 3, 3)
+    thigh_jacobian = link_jacobian.thigh_samples.reshape(batch, nodes, 4, 3, 3, 3)
+    matrix_q = problem.matrix_q.clone()
+    vector_q = problem.vector_q.clone()
+    terminal_q = problem.terminal_q.clone()
+    terminal_vector = problem.terminal_vector.clone()
+    relaxation = float(cfg.solver.barrier_relaxation)
+    temperature = float(cfg.gait.small_collision_temperature)
+    influence_radius = float(cfg.gait.small_collision_influence_radius)
+    margin_xy = float(cfg.gait.small_collision_margin_xy)
+    margin_z = float(cfg.gait.small_collision_margin_z)
+    joint_trust = float(cfg.solver.joint_trust_scale)
+    root_trust = float(cfg.solver.root_xy_trust_scale)
+
+    def add_part(
+        positions: Tensor,
+        query: JointMpcTerrainQuery,
+        jacobian: Tensor,
+        *,
+        radius: float,
+        weight: float,
+    ) -> None:
+        if float(weight) == 0.0:
+            return
+        position = positions.reshape(batch, nodes, 4, -1, 3)
+        sample_count = int(position.shape[3])
+        distance = query.small_distance_m.reshape(batch, nodes, 4, sample_count)
+        height = query.height_w.reshape(batch, nodes, 4, sample_count)
+        sdf_gradient = query.small_gradient_w.reshape(batch, nodes, 4, sample_count, 2)
+        proximity = torch.sigmoid((influence_radius - distance) / temperature)
+        normalizer = proximity.sum(dim=(1, 2, 3), keepdim=True).clamp_min(1.0)
+        vertical = torch.sigmoid((height + margin_z - position[..., 2]) / temperature)
+        clearance = distance - float(radius) - margin_xy
+        barrier = relaxed_barrier(clearance, relaxation=relaxation)
+        derivative = relaxed_barrier_derivative(clearance, relaxation=relaxation)
+        factor = float(weight) * proximity / normalizer
+        gradient_xy = factor.unsqueeze(-1) * vertical.unsqueeze(-1) * derivative.unsqueeze(-1) * sdf_gradient
+        vertical_derivative = -vertical * (1.0 - vertical) / temperature
+        gradient_z = factor * vertical_derivative * barrier
+        point_gradient = torch.cat((gradient_xy, gradient_z.unsqueeze(-1)), dim=-1)
+        joint_gradient = torch.einsum("bnlsd,bnlsdj->bnlj", point_gradient, jacobian).reshape(
+            batch, nodes, 12
+        )
+        root_gradient = point_gradient[..., :2].sum(dim=(2, 3))
+        vector_q[..., :2].add_(root_gradient[:, :-1])
+        vector_q[..., 6:].add_(joint_gradient[:, :-1])
+        terminal_vector[..., :2].add_(root_gradient[:, -1])
+        terminal_vector[..., 6:].add_(joint_gradient[:, -1])
+        matrix_q[..., 0, 0].add_(root_gradient[:, :-1, 0].abs() / root_trust)
+        matrix_q[..., 1, 1].add_(root_gradient[:, :-1, 1].abs() / root_trust)
+        matrix_q[..., 6:, 6:].add_(torch.diag_embed(joint_gradient[:, :-1].abs() / joint_trust))
+        terminal_q[..., 0, 0].add_(root_gradient[:, -1, 0].abs() / root_trust)
+        terminal_q[..., 1, 1].add_(root_gradient[:, -1, 1].abs() / root_trust)
+        terminal_q[..., 6:, 6:].add_(torch.diag_embed(joint_gradient[:, -1].abs() / joint_trust))
+
+    add_part(
+        rollout.foot_pos_w.unsqueeze(3),
+        queries.foot,
+        foot_jacobian,
+        radius=cfg.gait.foot_collision_radius,
+        weight=cfg.losses.small_object_foot_clearance,
+    )
+    add_part(
+        rollout.shank_samples_w,
+        queries.shank,
+        calf_jacobian,
+        radius=cfg.gait.calf_collision_radius,
+        weight=cfg.losses.small_object_calf_clearance,
+    )
+    add_part(
+        rollout.thigh_samples_w,
+        queries.thigh,
+        thigh_jacobian,
+        radius=cfg.gait.thigh_collision_radius,
+        weight=cfg.losses.small_object_thigh_clearance,
+    )
+    return replace(
+        problem,
+        matrix_q=matrix_q,
+        vector_q=vector_q,
+        terminal_q=terminal_q,
+        terminal_vector=terminal_vector,
+    )
+
+
 def _add_root_support_linearization(
     problem: LqProblem,
     rollout: JointMpcRollout,
@@ -574,6 +683,7 @@ def step(
     lq_problem = _build_lq_problem(base_rollout, desired_control, joint_target, measured_state, cfg)
     linearization_queries = _query_linearization_geometry(base_rollout, terrain_field, cfg)
     lq_problem = _add_large_obstacle_linearization(lq_problem, base_rollout, linearization_queries, cfg)
+    lq_problem = _add_small_obstacle_linearization(lq_problem, base_rollout, linearization_queries, cfg)
     lq_problem = _add_foot_terrain_linearization(
         lq_problem,
         base_rollout,

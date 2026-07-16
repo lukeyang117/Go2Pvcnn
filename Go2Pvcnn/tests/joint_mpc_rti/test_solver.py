@@ -297,7 +297,7 @@ def test_planner_packs_linearization_geometry_into_one_world_query(monkeypatch) 
     monkeypatch.setattr(planner, "query_world_maybe_compiled", counted_query)
     planner.step(make_state(1), make_command(1), make_flat_field(1), None, JointMpcRtiCfg())
 
-    assert calls == [(1, 17 * (9 + 4 + 4 + 12 + 1), 3)]
+    assert calls == [(1, 17 * (9 + 4 + 4 + 12 + 12 + 1), 3)]
 
 
 def test_planner_skips_final_named_diagnostics_when_disabled(monkeypatch) -> None:
@@ -323,3 +323,55 @@ def test_planner_skips_final_named_diagnostics_when_disabled(monkeypatch) -> Non
         "merit_after",
         "line_search_alpha",
     }
+
+
+def test_small_foot_calf_thigh_clearance_each_changes_lq_joint_gradient() -> None:
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.model.rollout import rollout_controls
+    from extension.joint_mpc_rti.terrain.query import JointMpcTerrainQuery
+    from .helpers import make_state
+
+    cfg = JointMpcRtiCfg()
+    state = make_state(1)
+    control = torch.zeros(1, 16, 18)
+    rollout = rollout_controls(state, control, dt=0.02)
+    joint_target = rollout.state[..., 6:].clone()
+    base = planner._build_lq_problem(rollout, control, joint_target, state, cfg)
+    nodes = int(rollout.state.shape[1])
+
+    def query(point_count: int) -> JointMpcTerrainQuery:
+        shape = (1, nodes, point_count)
+        gradient = torch.zeros(*shape, 2)
+        gradient[..., 0] = 1.0
+        return JointMpcTerrainQuery(
+            height_w=torch.full(shape, 0.16),
+            small_distance_m=torch.full(shape, -0.02),
+            large_distance_m=torch.full(shape, 1.0),
+            small_gradient_w=gradient,
+            large_gradient_w=torch.zeros_like(gradient),
+            valid=torch.ones(shape, dtype=torch.bool),
+        )
+
+    queries = planner._LinearizationQueries(
+        body=query(9),
+        foot=query(4),
+        knee=query(4),
+        shank=query(12),
+        thigh=query(12),
+        root=query(1),
+    )
+
+    for active_name in (
+        "small_object_foot_clearance",
+        "small_object_calf_clearance",
+        "small_object_thigh_clearance",
+    ):
+        local_cfg = JointMpcRtiCfg()
+        local_cfg.losses.small_object_foot_clearance = 0.0
+        local_cfg.losses.small_object_calf_clearance = 0.0
+        local_cfg.losses.small_object_thigh_clearance = 0.0
+        setattr(local_cfg.losses, active_name, 10.0)
+        changed = planner._add_small_obstacle_linearization(base, rollout, queries, local_cfg)
+        assert torch.count_nonzero(changed.vector_q[..., 6:]) > 0
+        assert torch.all(changed.vector_q[..., 0] < base.vector_q[..., 0])
