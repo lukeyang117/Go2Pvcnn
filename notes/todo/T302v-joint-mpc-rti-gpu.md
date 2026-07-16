@@ -15,6 +15,7 @@
 ## Open Children
 
 - Current signed-field candidate five-second performance: all four GPUs are occupied by external workloads. Do not accept or reject throughput from contested measurements; rerun `1024 x H16 x 1000` synchronous signed field + MPC on an idle card and require `<5s`, field version `+1000`, and nonfinite `0`.
+- T302v.5 stop-on-small support viability: walking onto a native small object and switching to zero command leaves scheduled stance active but retracts all feet from the local surface. A `65`-case shape x stop-phase scan reproduces floating in every case and zero grounded support for at least `64` consecutive hold cycles. Flat and height-only controls largely ground; semantic-only and full semantic+height do not. Loss ablation identifies `small_object_foot_over` as the primary trigger. Any fix must preserve T302v.4 strict cross `254/254`, per-part collision frames `0`, stance-on-small `0`, flat grounding, and the no-hard-gate requirement.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
 ## Closed Children Archive
@@ -42,6 +43,7 @@
 - [Small-obstacle collision quantification](../log/2026-07-16-joint-mpc-small-obstacle-collision-quantification.md)
 - [Small-obstacle crossing design](../log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.md)
 - [Small-obstacle crossing implementation](../log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation.md)
+- [Stop-on-small floating reproduction](../log/2026-07-16-joint-mpc-rti-stop-on-small-floating-reproduction.md)
 
 ## Git Refs
 
@@ -52,7 +54,7 @@
 
 ## Next Step
 
-When one RTX 4090 is idle, run the uncontended `1024 x H16 x 1000` synchronous signed-field + MPC performance gate and optimize without relaxing metrics if it is not below five seconds.
+Design and implement T302v.5 support recovery without a hard zero-command/semantic gate, then reverify strict cross/zero collision/stance grounding. Keep the uncontended `1024 x H16 x 1000` signed-field performance gate open in parallel.
 
 ## Node Details
 

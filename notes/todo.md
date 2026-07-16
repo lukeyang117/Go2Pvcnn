@@ -151,6 +151,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 ## Open Leaves
 
 - T302v.4 small-obstacle crossing performance: functional implementation is closed with signed small/large fields, H16 stance-swing-stance timing, thigh geometry, GGN-visible continuous foot/calf/thigh residuals, strict cross `254/254`, and all four body-part collision rates `0%`. Rerun the synchronous signed-field + MPC `1024 x H16 x 1000 <5s` gate on an idle GPU; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [plan](../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md), [implementation verification](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation.md).
+- T302v.5 stop-on-small support viability: reproduced when walking onto a native small object and then holding zero command. All `65/65` shape/stop-phase cases contain scheduled-stance feet more than `0.03m` above the local surface and at least `64` consecutive cycles with zero grounded support; flat control is `128/128` grounded. Semantic/high-map ablation and loss ablation identify `small_object_foot_over` as the primary trigger; no planner code changed; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [reproduction](log/2026-07-16-joint-mpc-rti-stop-on-small-floating-reproduction.md).
 - T302v real-1024 boundary: planner-side synchronous exact-field + MPC target is closed; separately measure Isaac physics and RayCaster ray generation when an uncontended real-sim slot is available; [branch page](todo/T302v-joint-mpc-rti-gpu.md).
 
 | Leaf | Parent | Status | Priority | Why Active | Next Read |
@@ -201,6 +202,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Recent Logs
 
+| 2026-07-16 20:19 | Joint MPC RTI stop-on-small floating reproduction | reproduced: semantic foot-over conflicts with support recovery after command stops; no code change | [T302v.5](todo/T302v-joint-mpc-rti-gpu.md) | [floating reproduction](log/2026-07-16-joint-mpc-rti-stop-on-small-floating-reproduction.md) |
 | 2026-07-16 | Joint MPC RTI small-obstacle crossing implementation plan | six tasks / 25 TDD steps; inline execution authorized and active | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [implementation plan](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-plan.md) |
 | 2026-07-16 19:58 | Joint MPC RTI small-obstacle crossing implementation | functional pass; idle-GPU performance gate remains open | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [implementation verification](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation.md) |
 | 2026-07-16 16:05 | Joint MPC RTI small-obstacle crossing design | under review: adds signed-distance construction and separate foot/calf/thigh/base collision-frame rate `0%` acceptance overall and per shape-speed cell; strict cross remains required; code unchanged | [T302v.4](todo/T302v-joint-mpc-rti-gpu.md) | [crossing design](log/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.md) |
