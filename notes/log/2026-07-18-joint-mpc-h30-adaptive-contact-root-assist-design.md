@@ -23,6 +23,7 @@ T302v.8 design; Stage A remains open, Stage B remains paused and incomplete.
 - Use medium clamps: lateral `0.06m`/`0.20m/s`, roll/pitch `6deg`/`0.6rad/s`, yaw `10deg`/`0.8rad/s` relative to command nominal.
 - Expand parallel line search to `(1.0, 0.5, 0.25, 0.1)`.
 - Extend the shared JointMetrics contract with root roll/pitch deviation, adaptive-contact/recovery, root-assist clamps, knee/base small collision, and alpha histograms/rejection reasons.
+- Use the full signed command Cartesian product: `vx={0,±0.2,±0.4,±0.6,±0.8,±1.0}`, `vy={0,±0.3,±0.5}`, and `yaw={0,±0.5,±1.0}`, for 275 combinations before shape/phase/placement expansion.
 
 ## Evidence Carried Into The Design
 
@@ -43,6 +44,7 @@ The design fixes the Stage B performance contract to idle-GPU realistic `1024 x 
 
 - Placeholder scan: no `TBD` or `TODO`.
 - Inheritance, H30 timing, per-leg scheduler, collision parts, root clamps, JointMetrics, Stage A/B/C, paused Stage B progress and completion definition are all present.
+- The formal Stage A/Stage C command matrix records all 275 raw `(vx,vy,yaw_rate)` keys; the older `0.1/0.2/0.4` matrix remains evidence only.
 - No planner implementation was changed by this design pass.
 
 ## Follow-up

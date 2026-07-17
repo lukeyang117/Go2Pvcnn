@@ -265,10 +265,21 @@ reachability_pressure = sigmoid((margin_threshold - joint_safe_margin) / tempera
   </table>
 
   <h2>8. 场景 × 指标联合矩阵</h2>
+  <h3>8.1 正式 Command 笛卡尔积</h3>
+  <p>Stage A 与 Stage C 的正式速度方向不再使用旧的 <code>0.1/0.2/0.4m/s</code> 子集，而是对以下带符号集合做完整笛卡尔积：</p>
+  <pre><code>vx ∈ {0, ±0.2, ±0.4, ±0.6, ±0.8, ±1.0} m/s  # 11 values
+vy ∈ {0, ±0.3, ±0.5} m/s                     # 5 values
+yaw_rate ∈ {0, ±0.5, ±1.0} rad/s             # 5 values
+
+command_count = 11 * 5 * 5 = 275</code></pre>
+  <p>275 个组合全部保留，不按合速度大小、方向或 yaw 是否为零过滤。它们同时覆盖静止、纯前后、纯左右、四象限斜向、纯 yaw、前后+yaw、左右+yaw 和斜向+yaw。<code>vx=vy=0</code> 时平移方向指标按数学不适用记录 N/A，但 root XY drift、yaw tracking、stance、碰撞、接触和数值指标仍必须计算；<code>vx=vy=yaw=0</code> 是正式 zero-command 单元，不得删除。</p>
+  <p>报告 key 必须保存原始 <code>(vx, vy, yaw_rate)</code>，不能只保存 “forward/diagonal/mixed” 标签。每个 shape 在进入 phase、障碍偏置和 recovery 维度展开前，至少包含 <code>275</code> 个 command 单元；五种小障碍 shape 的 command-shape 基础层共 <code>1375</code> 个单元。</p>
+
+  <h3>8.2 场景展开</h3>
   <p>以下每个单元都计算第 7 节全部适用指标，不允许只检查该场景主指标：</p>
   <ul>
-    <li>平地：零速、前后、左右、四个斜向、yaw-only、平移+yaw；速度覆盖 <code>0.1/0.2/0.4m/s</code>。</li>
-    <li>小障碍：sphere/cuboid/cylinder/capsule/cone，全部方向、速度、yaw、进入 phase、横向偏置；同时覆盖 nominal touchdown、1-10 帧 extension、grounded-but-unsafe 和 recovery。</li>
+    <li>平地：运行全部 275 个 command 组合，统一检查 root tracking/RPY、stance、swing、coupling、joint、RTI、碰撞和数值合同。</li>
+    <li>小障碍：sphere/cuboid/cylinder/capsule/cone × 全部 275 个 command 组合 × 进入 phase × 横向偏置；同时覆盖 nominal touchdown、1-10 帧 extension、grounded-but-unsafe 和 recovery。</li>
     <li>小障碍 stop/restart：root 位于障碍前、上方和越过后；验证支撑、无飞起、独立 touchdown 与足端再次领先。</li>
     <li>大障碍：正前、左右偏置和 mixed command，确认 H30 与 root assist 不破坏绕行。</li>
     <li>地形：平地、坡面、上台阶、下台阶、局部高差，确认 terrain grounding 与逐腿 readiness。</li>
@@ -285,7 +296,7 @@ reachability_pressure = sigmoid((margin_threshold - joint_safe_margin) / tempera
     <li>foot/knee/calf/thigh/base 小障碍方向同时进入 LQ、merit、constraint violation；全身碰撞率降为 0。</li>
     <li>root roll/pitch 在每个小障碍单元 abs max 不超过 6°，yaw/lateral/rate clamp 不越界；不能通过 root 饱和代替足端跨越。</li>
     <li>airborne touchdown、unsafe anchor、forced touchdown、short-lookahead collision 均为 0；extension/recovery 能结束到真实安全 stance。</li>
-    <li>原实施计划的 flat/small/stop/large/terrain/viewer/rolling/dynamic-batch/legacy 联合门全部重新运行并通过。</li>
+    <li>原实施计划的 flat/small/stop/large/terrain/viewer/rolling/dynamic-batch/legacy 联合门全部重新运行并通过；所有适用场景使用本设计的 275-command 正式矩阵，不能引用旧速度子集替代。</li>
   </ol>
   <p>Stage A 期间性能只记录，不以五秒门阻止行为定位；但任何行为修改必须保持 fixed-shape GPU 并行可实现，不能引入按环境 Python 分支。</p>
 
