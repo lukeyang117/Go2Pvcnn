@@ -92,6 +92,47 @@ def test_go2_local_leg_jacobian_matches_nonzero_blocks_of_full_joint_jacobian() 
         torch.testing.assert_close(local[:, leg], full[:, leg, :, 3 * leg : 3 * (leg + 1)])
 
 
+def test_complete_foot_jacobian_matches_root_and_joint_central_difference() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import complete_foot_jacobian, go2_foot_pos
+
+    root_pos = torch.tensor([[0.12, -0.08, 0.34]], dtype=torch.float64)
+    root_rpy = torch.tensor([[0.07, -0.05, 0.31]], dtype=torch.float64)
+    joint = torch.tensor([[0.05, 0.72, -1.43] * 4], dtype=torch.float64)
+    analytic = complete_foot_jacobian(root_pos, root_rpy, joint)
+    epsilon = 1.0e-6
+
+    assert analytic.shape == (1, 4, 3, 18)
+    for dimension in range(18):
+        plus_pos, minus_pos = root_pos.clone(), root_pos.clone()
+        plus_rpy, minus_rpy = root_rpy.clone(), root_rpy.clone()
+        plus_joint, minus_joint = joint.clone(), joint.clone()
+        if dimension < 3:
+            plus_pos[0, dimension] += epsilon
+            minus_pos[0, dimension] -= epsilon
+        elif dimension < 6:
+            plus_rpy[0, dimension - 3] += epsilon
+            minus_rpy[0, dimension - 3] -= epsilon
+        else:
+            plus_joint[0, dimension - 6] += epsilon
+            minus_joint[0, dimension - 6] -= epsilon
+        finite = (
+            go2_foot_pos(plus_pos, plus_rpy, plus_joint)
+            - go2_foot_pos(minus_pos, minus_rpy, minus_joint)
+        ) / (2.0 * epsilon)
+        torch.testing.assert_close(
+            analytic[0, :, :, dimension],
+            finite[0],
+            atol=3.0e-5,
+            rtol=3.0e-4,
+        )
+
+    torch.testing.assert_close(analytic[0, :, :, :3], torch.eye(3, dtype=torch.float64).expand(4, -1, -1))
+    for leg in range(4):
+        for other_leg in range(4):
+            if leg != other_leg:
+                assert torch.count_nonzero(analytic[0, leg, :, 6 + 3 * other_leg : 9 + 3 * other_leg]) == 0
+
+
 @pytest.mark.parametrize("part", ("calf", "thigh"))
 def test_link_sample_jacobian_matches_central_difference(part: str) -> None:
     from extension.joint_mpc_rti.model.go2_kinematics import go2_fk, link_sample_jacobians

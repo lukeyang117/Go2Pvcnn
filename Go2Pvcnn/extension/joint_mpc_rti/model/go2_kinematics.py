@@ -57,6 +57,42 @@ def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
     return torch.stack((row0, row1, row2), dim=-2)
 
 
+def _rpy_rotation_derivatives(root_rpy_w: Tensor) -> Tensor:
+    """Return dR/dr, dR/dp, dR/dy for the XYZ fixed-axis RPY convention."""
+    rpy = torch.as_tensor(root_rpy_w)
+    roll, pitch, yaw = rpy.unbind(dim=-1)
+    cr, sr = torch.cos(roll), torch.sin(roll)
+    cp, sp = torch.cos(pitch), torch.sin(pitch)
+    cy, sy = torch.cos(yaw), torch.sin(yaw)
+    zero = torch.zeros_like(roll)
+
+    droll = torch.stack(
+        (
+            torch.stack((zero, cy * sp * cr + sy * sr, -cy * sp * sr + sy * cr), dim=-1),
+            torch.stack((zero, sy * sp * cr - cy * sr, -sy * sp * sr - cy * cr), dim=-1),
+            torch.stack((zero, cp * cr, -cp * sr), dim=-1),
+        ),
+        dim=-2,
+    )
+    dpitch = torch.stack(
+        (
+            torch.stack((-cy * sp, cy * cp * sr, cy * cp * cr), dim=-1),
+            torch.stack((-sy * sp, sy * cp * sr, sy * cp * cr), dim=-1),
+            torch.stack((-cp, -sp * sr, -sp * cr), dim=-1),
+        ),
+        dim=-2,
+    )
+    dyaw = torch.stack(
+        (
+            torch.stack((-sy * cp, -sy * sp * sr - cy * cr, -sy * sp * cr + cy * sr), dim=-1),
+            torch.stack((cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr), dim=-1),
+            torch.stack((zero, zero, zero), dim=-1),
+        ),
+        dim=-2,
+    )
+    return torch.stack((droll, dpitch, dyaw), dim=1)
+
+
 def _validate_inputs(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     root_pos = torch.as_tensor(root_pos_w)
     root_rpy = torch.as_tensor(root_rpy_w, dtype=root_pos.dtype, device=root_pos.device)
@@ -219,6 +255,28 @@ def foot_jacobian_joint(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tenso
     return torch.einsum("bkiq,kqr->bkir", jacobian_world_leg, selector)
 
 
+def complete_foot_jacobian(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
+    """Return world-foot Jacobians with respect to root position/RPY and all joints."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    del root_pos
+    batch = int(joint.shape[0])
+    foot_body = _leg_points_body(joint)[2]
+    rotation_derivatives = _rpy_rotation_derivatives(root_rpy)
+    root_rotation = torch.einsum("bqij,bkj->bkiq", rotation_derivatives, foot_body)
+    output = torch.zeros(batch, 4, 3, 18, dtype=joint.dtype, device=joint.device)
+    identity = torch.eye(3, dtype=joint.dtype, device=joint.device).view(1, 1, 3, 3)
+    output[..., :3] = identity
+    output[..., 3:6] = root_rotation
+    local = foot_jacobian_leg(
+        torch.zeros(batch, 3, dtype=joint.dtype, device=joint.device),
+        root_rpy,
+        joint,
+    )
+    for leg in range(4):
+        output[:, leg, :, 6 + 3 * leg : 9 + 3 * leg] = local[:, leg]
+    return output
+
+
 def link_sample_jacobians(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2LinkJacobians:
     """Return analytic local joint Jacobians for fixed calf and thigh samples."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
@@ -267,6 +325,7 @@ def link_sample_jacobians(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Ten
 __all__ = [
     "Go2Geometry",
     "Go2LinkJacobians",
+    "complete_foot_jacobian",
     "foot_jacobian_joint",
     "foot_jacobian_leg",
     "go2_fk",
