@@ -15,6 +15,7 @@
 - T302v performance continuation compiles the fixed-shape LQ/query/rollout path, reducing MPC to about `2.55-2.85ms` without changing losses or geometry. Exact signed EDT remains the blocker on realistic multi-cell maps. See [full design revalidation](../log/2026-07-17-joint-mpc-rti-full-design-revalidation.md).
 - T302v.7 root/foot propulsion-order diagnostics confirm the viewer observation: across eight flat rolling commands, consecutive-stance feet move by `1.040x` the signed root step on average, only `4.02%` stay within `1mm/frame`, and swing motion relative to root contributes only `7.0%` of root progress on average. The root is independently command-integrated while the phase-only swing target has no command-conditioned foothold. See [root/foot quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
 - T302v.7 Chinese HTML design is approved with a three-stage completion rule. It inherits all three prior Joint MPC designs, specifies complete root-joint FK/GGN cross blocks, scheduled stance equality, horizon command progress, command-conditioned touchdown, 20-80ms foot-leading-root startup, arrowhead/Schur Riccati, and one scenario-metric JointMetrics contract. Stage A closes walking/safety, Stage B freezes behavior and reduces the idle-GPU realistic baseline from `7.4025s/1000` to `<=5.0s/1000`, and Stage C reruns both complete gates on the same final candidate. See [design log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md).
+- The 13-task TDD implementation plan is written and inline execution is authorized. Tasks 1-8 close Stage A behavior, tasks 9-12 close Stage B performance, and task 13 performs the mandatory same-candidate joint rerun. See [plan log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-plan.md).
 
 ## Open Children
 
@@ -54,6 +55,7 @@
 - [Full design revalidation and signed performance closure](../log/2026-07-17-joint-mpc-rti-full-design-revalidation.md)
 - [Root/foot propulsion-order quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md)
 - [Root-joint coupled gait design](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md)
+- [Root-joint coupled gait implementation plan](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-plan.md)
 
 ## Git Refs
 
