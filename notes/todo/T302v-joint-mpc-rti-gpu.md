@@ -16,6 +16,7 @@
 - T302v.7 root/foot propulsion-order diagnostics confirm the viewer observation: across eight flat rolling commands, consecutive-stance feet move by `1.040x` the signed root step on average, only `4.02%` stay within `1mm/frame`, and swing motion relative to root contributes only `7.0%` of root progress on average. The root is independently command-integrated while the phase-only swing target has no command-conditioned foothold. See [root/foot quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
 - T302v.7 Chinese HTML design is approved with a three-stage completion rule. It inherits all three prior Joint MPC designs, specifies complete root-joint FK/GGN cross blocks, scheduled stance equality, horizon command progress, command-conditioned touchdown, 20-80ms foot-leading-root startup, arrowhead/Schur Riccati, and one scenario-metric JointMetrics contract. Stage A jointly explores H16-H50 fixed periods and the original solver/loss directions, then selects the shortest stable `H_selected` passing every behavior metric. Stage B freezes that exact horizon and uses MPX-referenced temporal/state-space GPU parallelism to reach `<=5.0s/1000` without relaxing the threshold for longer trajectories. Stage C reruns both complete gates on the same final candidate. See [design log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md).
 - The amended 14-task TDD implementation plan is written and inline execution is authorized. Tasks 1-9 close Stage A behavior and select `H_selected`, tasks 10-13 close the unchanged selected-horizon performance gate with MPX-referenced parallelism, and task 14 performs the mandatory same-candidate joint rerun. See [plan log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-plan.md).
+- The current uncommitted Stage A continuation has a constrained-Riccati/active-joint-bound candidate with `88` focused tests passing, near-unity one-placement command tracking, and full crossing coverage, but the new joint gate is **not closed**: rare continuing-stance bound conflicts still produce centimeter x1 slip plus nonzero foot/calf collision or stance-on-small frames. Performance remains deferred. See [constrained RTI diagnostics](../log/2026-07-17-joint-mpc-stage-a-constrained-rti-diagnostics.md).
 
 ## Open Children
 
@@ -27,6 +28,7 @@
 
 - Public contracts, kinematics, gait, terrain/SDF cache, continuous loss model, RTI solver, rolling manager, reward/viewer wiring.
 - MPX reference reading: MPX is JAX multiple-shooting SQP with `jit(vmap)`, temporal `associative_scan`, parallel line search, and shifted warm starts; it is not MPPI/CEM.
+- 2026-07-17 Stage B pause: viewer/production CUDA Graph capture now passes after graph-safe `solve_ex/cholesky_ex`, cached CUDA constants, capture-safe validation and complete solver-state fixed-address copy-back. A fixed-size Triton SPD solve replaces MAGMA in the coupled Riccati, so `1/40/512/1024` batches capture with finite outputs instead of failing at `magma_queue::setup_ptrArray`. Busy-GPU 1024xH16 screening measured field `6.54-8.94ms`, MPC `61.30-88.47ms`, full `69.20-95.30ms`; these are diagnostic only and Stage B is not passed. Fixed general solve and conditional-factor associativity pass independently, but PyTorch 2.7 generic `associative_scan` fails inside its symbolic-vmap `matmul`; no incomplete associative solver is routed into planner. Stage B is paused by user direction while crossing roll/pitch and airborne-touchdown behavior is diagnosed.
 - Packed objective/linearization queries, fixed-shape compilation, rollout reuse, and production CUDA Graph runner.
 - T302v.1 multi-step stability: defer field construction out of the RayCaster callback and replay a newly captured graph once before returning its first result.
 - T302v.2 synchronous exact EDT: tensor Jump Flood replaced by fixed-workspace CUDA warp-level exact EDT; query-time analytic gradients and repeated-row gathers remove full gradient/candidate-map copies.
@@ -56,6 +58,8 @@
 - [Root/foot propulsion-order quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md)
 - [Root-joint coupled gait design](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md)
 - [Root-joint coupled gait implementation plan](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-plan.md)
+- [Stage A constrained RTI diagnostics](../log/2026-07-17-joint-mpc-stage-a-constrained-rti-diagnostics.md)
+- [H30 adaptive contact and root assist design](../log/2026-07-18-joint-mpc-h30-adaptive-contact-root-assist-design.md)
 
 ## Git Refs
 
@@ -66,7 +70,7 @@
 
 ## Next Step
 
-Amend and execute the implementation plan: Stage A explores period length plus the existing solver/loss directions and closes all old/new JointMetrics on one selected `H_selected`; Stage B then closes `1024 x H_selected x 1000 <=5.0s` using MPX-referenced GPU parallelism; Stage C reruns both complete gates on the same final candidate.
+After user review, amend the inherited implementation plan around the fixed H30 contract: Stage A closes H30/15+15 adaptive contact, bounded root assistance and every old/new JointMetrics field; Stage B then closes realistic `1024 x H30 x 1000 <=5.0s` using the recorded MPX-referenced GPU work; Stage C reruns both complete gates on the same final candidate.
 
 ## Node Details
 

@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joint MPC RTI H30 自适应接触与受限 Root 辅助设计</title>
+  <style>
+    :root { color-scheme: light; --ink:#18212a; --muted:#5d6873; --line:#d7dee5; --panel:#f5f7f9; --blue:#1f5f86; --blue-soft:#eef6fa; --green:#28724b; --green-soft:#eef8f2; --amber:#8a5a00; --amber-soft:#fff8e9; --red:#9b352d; --red-soft:#fff1ef; }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); background:#fff; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.68; }
+    main { max-width:1180px; margin:0 auto; padding:38px 30px 72px; }
+    h1 { margin:0 0 8px; font-size:30px; line-height:1.28; }
+    h2 { margin:36px 0 12px; padding-top:22px; border-top:1px solid var(--line); font-size:22px; line-height:1.32; }
+    h3 { margin:23px 0 8px; font-size:18px; line-height:1.38; }
+    p { margin:8px 0; }
+    ul,ol { margin:8px 0 15px 25px; padding:0; }
+    li { margin:5px 0; }
+    code { padding:1px 5px; border:1px solid var(--line); border-radius:4px; background:var(--panel); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.93em; }
+    pre { overflow-x:auto; margin:12px 0 18px; padding:14px 16px; border:1px solid var(--line); border-radius:7px; background:var(--panel); line-height:1.52; }
+    pre code { padding:0; border:0; background:transparent; }
+    table { width:100%; margin:12px 0 20px; border-collapse:collapse; font-size:14px; }
+    th,td { padding:9px 10px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:var(--panel); }
+    .meta { margin-bottom:22px; color:var(--muted); font-size:14px; }
+    .note,.ok,.warn,.danger { margin:14px 0; padding:12px 14px; border-left:4px solid var(--blue); background:var(--blue-soft); }
+    .ok { border-left-color:var(--green); background:var(--green-soft); }
+    .warn { border-left-color:var(--amber); background:var(--amber-soft); }
+    .danger { border-left-color:var(--red); background:var(--red-soft); }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:14px 0; }
+    .card { padding:13px 15px; border:1px solid var(--line); border-radius:7px; background:#fff; }
+    .card h3 { margin-top:0; }
+    .small { color:var(--muted); font-size:13px; }
+    @media (max-width:760px) { main { padding:26px 18px 50px; } .grid { grid-template-columns:1fr; } table { font-size:13px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Joint MPC RTI H30 自适应接触与受限 Root 辅助设计</h1>
+  <p class="meta">日期：2026-07-18 ｜ 主线：T302v.8 ｜ 目标：<code>Go2Pvcnn/extension/joint_mpc_rti/</code> ｜ 分支：<code>joint_mpc</code></p>
+
+  <div class="note">
+    <strong>继承关系：</strong>本设计直接继承
+    <code>docs/superpowers/specs/2026-07-17-joint-mpc-rti-root-joint-coupled-gait-design.html</code>
+    及其实施计划
+    <code>docs/superpowers/plans/2026-07-17-joint-mpc-rti-root-joint-coupled-gait-implementation-plan.md</code>；同时继续继承其中点名的 2026-07-15 GPU、2026-07-16 joint-order/stance-grounding 和 small-obstacle-crossing 设计。旧设计、旧测试和旧指标不被替换，全部作为 Stage A 联合门的一部分继续验收。
+  </div>
+
+  <div class="danger">
+    <strong>当前状态不是通过：</strong>原实施计划的 Stage A 行为门尚未通过，Stage B 五秒性能门也尚未通过。本设计不是在已通过基线上增加可选功能，而是把已暴露的空中 touchdown、持续 stance 碰撞、root roll/pitch 异常、关节触边和 line-search 回退纳入同一个修复合同。任何历史局部通过结果不能替代本设计完成后的完整联合复验。
+  </div>
+
+  <h2>1. 新证据与问题定义</h2>
+  <p>144 个小障碍 rolling 场景覆盖 sphere/cuboid、八个平移方向、<code>0.1/0.2/0.4m/s</code> 和 <code>-0.4/0/0.4rad/s</code> yaw，每个场景 160 帧。与同配置平地对照相比：</p>
+  <table>
+    <thead><tr><th>指标</th><th>平地</th><th>小障碍</th></tr></thead>
+    <tbody>
+      <tr><td>最大 roll</td><td>7.02°</td><td>26.23°</td></tr>
+      <tr><td>最大 pitch</td><td>6.63°</td><td>25.84°</td></tr>
+      <tr><td>touchdown 高于 surface 20mm</td><td>2/5760</td><td>2677/5760，46.48%</td></tr>
+      <tr><td>touchdown 高于 surface 5mm</td><td>116/5760</td><td>3837/5760，66.61%</td></tr>
+      <tr><td>最大 touchdown surface error</td><td>29.5mm</td><td>475.6mm</td></tr>
+      <tr><td>stance 悬空腿帧</td><td>766</td><td>16474</td></tr>
+      <tr><td>line-search alpha=0</td><td>5.58%</td><td>26.44%</td></tr>
+      <tr><td>最大 swing/stance 足端单帧位移</td><td>41.7/17.0mm</td><td>233.9/147.1mm</td></tr>
+    </tbody>
+  </table>
+  <p>小障碍碰撞帧为 foot 75、knee 38、calf 144、thigh 1、base 15；foot 的 71/75 与 calf 的 140/144 发生在 continuing stance。问题不是单纯 swing clearance 不足，而是固定时间 contact 切换、空中 anchor、短周期、关节可达压力与 root-joint 分配共同造成。</p>
+
+  <h2>2. 设计目标与非目标</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>目标</h3>
+      <ul>
+        <li>生产 horizon 固定从 H16 改为 H30，<code>dt=0.02s</code> 不变。</li>
+        <li>nominal stance/swing 各 15 帧；每腿 touchdown 可独立延长最多 10 帧。</li>
+        <li>只有真正贴地且 foot/knee/calf/thigh/base 对小障碍安全时才建立 stance anchor。</li>
+        <li>联合规划受限 root 横移、roll、pitch、yaw，足端仍先于 root 主动运动。</li>
+        <li>所有碰撞、接触、姿态和可达性项同时进入 LQ/GGN、非线性 merit、line search 与 JointMetrics。</li>
+        <li>保持 1/40/512/1024 任意环境数、固定 tensor shape、CUDA Graph 和只发布 x1 的接口合同。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>非目标</h3>
+      <ul>
+        <li>不引入动力学、接触力或在线 gait topology 优化。</li>
+        <li>不使用输出后的 root/foot/contact 修补。</li>
+        <li>不使用语义硬 gate 选择手写跨越轨迹。</li>
+        <li>不允许通过关闭旧 loss、缩小碰撞几何、减少环境数或改 detector 通过指标。</li>
+        <li>不以 H16 性能替代 H30 的 Stage B 正式结果。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>3. 固定 H30 时间合同</h2>
+  <pre><code>dt = 0.02s
+horizon_steps = 30          # 0.60s
+half_cycle_steps = 15
+nominal_stance = 15 frames  # 0.30s
+nominal_swing = 15 frames   # 0.30s
+max_swing_extension = 10    # 0.20s
+max_actual_swing = 25       # 0.50s
+line_search_alphas = (1.0, 0.5, 0.25, 0.1)</code></pre>
+  <p>该合同覆盖一次完整 nominal stance-swing-stance 边界。原计划中 H16/H20/H24/H30/H40/H50 的探索任务被本设计修订：H30 不再只是候选，而是生产目标和 Stage A/Stage B/Stage C 的统一固定 shape。H16 仅保留为历史诊断基线。</p>
+
+  <h2>4. 每腿自适应接触 Scheduler</h2>
+  <p>Scheduler 保存固定 shape 的逐腿状态，不把 phase 增加为连续优化变量：</p>
+  <pre><code>contact_state[B,4]
+phase_age[B,4]
+swing_extension_age[B,4]
+stance_age[B,4]
+stance_anchor_w[B,4,3]
+recovery_state[B,4]</code></pre>
+
+  <h3>4.1 Touchdown readiness</h3>
+  <p>每条腿独立满足下列联合条件才进入可靠 stance：</p>
+  <pre><code>touchdown_ready =
+    map_valid
+    AND abs(foot_z - terrain_z - foot_contact_offset) &lt;= 0.010m
+    AND foot_not_moving_up
+    AND foot_small_sdf &gt;= 0.052m
+    AND foot/knee/calf/thigh collision_free
+    AND base collision_free
+    AND joints_inside_safe_limits
+    AND x1/x2 short_stance_lookahead_safe</code></pre>
+  <p>碰撞判断使用 XY signed distance、物体 top height 和部位半径的三维组合，允许 link 从障碍上方安全经过，不把纯 XY proximity 误判为碰撞。</p>
+
+  <h3>4.2 Anchor 与逐帧延长</h3>
+  <ul>
+    <li>readiness 成立：<code>anchor_xy=current_foot_xy</code>，<code>anchor_z=terrain_z+foot_contact_offset</code>。</li>
+    <li>readiness 不成立：该腿保持 swing，<code>extension_age+=1</code>，不建立 anchor。</li>
+    <li>已经 grounded 但仍碰小障碍：进入 <code>grounded-but-unsafe recovery</code>，不计为可靠支撑，重新小幅抬起并沿 SDF 梯度移动到安全地面。</li>
+    <li><code>extension_age=10</code> 后仍不安全：保持 recovery，不强制 stance。</li>
+  </ul>
+
+  <h3>4.3 独立 touchdown 与 liftoff 支撑保护</h3>
+  <p>对角摆动腿不再被要求同帧 touchdown。已安全落地的腿立即 stance，未落地腿独立延长。下一组 liftoff 只有在抬腿后仍保留至少两条可靠 stance 腿，且新 touchdown 腿已经 grounded 至少一帧时才获准发生。该规则允许受限 per-leg timing offset，但保留 nominal trot 顺序。</p>
+  <p>延长期间 root progress 连续缩放：</p>
+  <pre><code>progress_scale = clamp(1 - max_extension_age / 10, 0, 1)</code></pre>
+  <p>原始用户 command 不被覆盖；缩放发生在 MPC 内部 horizon progress reference。达到 recovery 时沿 command 的 nominal progress 为零，root 仍可在已批准 clamp 内做安全横移和姿态恢复。</p>
+
+  <h2>5. 受限 Root 辅助联合规划</h2>
+  <p>Root 变量继续位于同一个 18 维 state/control 中，不新建输出后控制器。以 command 世界方向定义 <code>e_parallel</code> 与 <code>e_lateral</code>，root XY 碰撞 Jacobian 从纯 command-axis 投影改为：</p>
+  <pre><code>P_root_xy = P_parallel + w_root_assist * P_lateral
+w_root_assist = small_sdf_proximity * swing_phase_release * reachability_pressure</code></pre>
+  <p>三个权重均为连续 sigmoid/smoothstep：远离障碍时保持 nominal；swing 前段以足端/关节为主；接近障碍且关节余量下降时逐渐释放 root；touchdown 与稳定 stance 后回收到 nominal。</p>
+  <p>关节可达压力由安全边界余量连续产生：</p>
+  <pre><code>joint_safe_margin = min(q - safe_lower, safe_upper - q)
+reachability_pressure = sigmoid((margin_threshold - joint_safe_margin) / temperature)</code></pre>
+
+  <h3>5.1 双层 Clamp</h3>
+  <table>
+    <thead><tr><th>自由度</th><th>累计状态范围</th><th>每帧控制范围</th></tr></thead>
+    <tbody>
+      <tr><td>root lateral</td><td>相对 command nominal <code>±0.06m</code></td><td>横向速度偏差 <code>±0.20m/s</code></td></tr>
+      <tr><td>roll</td><td>相对 upright nominal <code>±6°</code></td><td>角速度 <code>±0.6rad/s</code></td></tr>
+      <tr><td>pitch</td><td>相对 upright nominal <code>±6°</code></td><td>角速度 <code>±0.6rad/s</code></td></tr>
+      <tr><td>yaw</td><td>相对 command-integrated nominal <code>±10°</code></td><td>yaw-rate 偏差 <code>±0.8rad/s</code></td></tr>
+    </tbody>
+  </table>
+  <p>Root Z 不作为小障碍直接避障自由度，继续由 support-height 与地形高度管理。所有 clamp 在 candidate 非线性 rollout 前执行，并由 line search 看到一致结果；禁止发布后裁剪。</p>
+
+  <h2>6. LQ/GGN、碰撞与 Line Search</h2>
+  <p>小障碍线性化必须为 foot、knee、calf/shank、thigh、base 全部生成一阶 signed-distance gradient 和 Gauss-Newton curvature。root XY lateral 与 root RPY 乘连续 assist 权重进入同一 LQ；joint block保持完整 per-leg Jacobian。任何在 JointMetrics 中作为安全门的碰撞都不能只存在于最终 merit。</p>
+  <p>候选顺序固定为：</p>
+  <pre><code>base + alpha * delta
+→ control trust-region clamp
+→ H30 joint-position projection
+→ root per-frame clamp
+→ root cumulative nominal-relative clamp
+→ per-leg stance equality projection
+→ collision feasibility restoration
+→ nonlinear FK rollout
+→ joint constraint violation + merit</code></pre>
+  <p>四个 alpha 在 <code>[B,4,H,18]</code> 固定 shape 上并行评估。若 base 可行，候选必须保持可行并降低 merit；若 base 不可行，候选必须严格降低联合约束违反量；全部失败才允许 <code>alpha=0</code>。</p>
+
+  <h2>7. JointMetrics 统一数据合同</h2>
+  <div class="ok"><strong>统一原则：</strong>每个场景都产生同一份原始 trace，并计算全部适用指标。报告维度保留 <code>[scenario, command, phase, shape, speed, yaw, environment, time, leg_or_body_part]</code>；每个字段记录 value、numerator、denominator、valid count、N/A 原因、worst-case key 和阈值结果。</div>
+
+  <h3>7.1 Root 与 Command</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th><th>Stage A 门</th></tr></thead>
+    <tbody>
+      <tr><td><code>root_velocity_error</code></td><td>发布 pose 差分速度与 command 的误差。</td><td>继承旧门，不因 H30 放宽。</td></tr>
+      <tr><td><code>root_direction_error</code></td><td>rolling root XY progress 与 command 方向夹角。</td><td>继承旧门。</td></tr>
+      <tr><td><code>root_yaw_rate_error</code></td><td>发布 yaw 差分角速度与 yaw command 的误差。</td><td>继承旧门。</td></tr>
+      <tr><td><code>root_drift</code></td><td>零速/stop 的 XY/yaw 累计偏移。</td><td>继承旧门。</td></tr>
+      <tr><td><code>root_step_jump</code></td><td>相邻发布帧 XY/Z/RPY 最大跳变。</td><td>继承旧门。</td></tr>
+      <tr><td><code>root_progress</code></td><td>沿 command 方向累计进度与 recovery 缩放后的参考对照。</td><td>非 recovery 单元保持旧 command 门。</td></tr>
+      <tr><td><code>root_lateral_offset_from_nominal_m</code></td><td>root 相对 command nominal 的垂直方向偏移。</td><td>每节点绝对值 <code>&lt;=0.06m</code>。</td></tr>
+      <tr><td><code>root_lateral_velocity_error_mps</code></td><td>相对 nominal 的横向速度偏差。</td><td>绝对值 <code>&lt;=0.20m/s</code>。</td></tr>
+      <tr><td><code>root_roll_error_deg</code></td><td>发布 roll 相对 upright nominal 的有符号偏差；报告 mean/P95/abs max。</td><td>小障碍每个单元 abs max <code>&lt;=6°</code>。</td></tr>
+      <tr><td><code>root_pitch_error_deg</code></td><td>发布 pitch 相对 upright nominal 的有符号偏差；报告 mean/P95/abs max。</td><td>小障碍每个单元 abs max <code>&lt;=6°</code>。</td></tr>
+      <tr><td><code>root_yaw_error_from_nominal_deg</code></td><td>发布 yaw 相对 command-integrated nominal 的 wrap 后偏差。</td><td>绝对值 <code>&lt;=10°</code>。</td></tr>
+      <tr><td><code>root_roll_pitch_rate_max_rps</code></td><td>发布 RPY 差分或实际 control 的 roll/pitch 最大角速度，二者需一致。</td><td><code>&lt;=0.6rad/s</code>。</td></tr>
+      <tr><td><code>root_yaw_rate_assist_error_rps</code></td><td>yaw rate 相对 command 的辅助偏差。</td><td><code>&lt;=0.8rad/s</code>。</td></tr>
+      <tr><td><code>root_assist_weight</code></td><td>连续 soft release 的 min/mean/max 与相位分布。</td><td>记录；平地应接近 0，不能形成无障碍横漂。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>7.2 Stance、支撑与 Scheduler</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td><code>stance_xy_slip_max/mean</code></td><td>连续可靠 stance 的世界 XY 位移。</td><td><code>&lt;=0.5/0.2mm/frame</code>。</td></tr>
+      <tr><td><code>stance_stationary_ratio</code></td><td>stance 样本小于等于 1mm/frame 的比例。</td><td>100%。</td></tr>
+      <tr><td><code>stance_ground_gap/error/penetration</code></td><td>足底相对统一 height surface 的有符号间隙、绝对误差和穿入。</td><td>gap <code>&lt;=12mm</code>，penetration <code>&lt;=1mm</code>。</td></tr>
+      <tr><td><code>stance_anchor_residual</code></td><td>完整 FK 足端与 world anchor 残差。</td><td>max <code>&lt;=0.5mm</code>。</td></tr>
+      <tr><td><code>safe_support_count</code></td><td>贴地、语义安全、全身无碰撞的可靠支撑腿数量。</td><td>liftoff 后不得违反最少两腿支撑合同。</td></tr>
+      <tr><td><code>zero_support_run</code></td><td>连续可靠支撑数为零的最长帧数。</td><td>继承旧 stop 门 <code>&lt;=4</code>，新 liftoff guard violation 必须为 0。</td></tr>
+      <tr><td><code>liftoff_guard_violation_count</code></td><td>支撑不足或新 stance 未稳定一帧仍发生 liftoff。</td><td>0。</td></tr>
+      <tr><td><code>airborne_stance_anchor_count</code></td><td>anchor 建立时足端高于 surface 10mm。</td><td>0。</td></tr>
+      <tr><td><code>unsafe_stance_anchor_count</code></td><td>anchor 建立时任一相关部位碰小障碍。</td><td>0。</td></tr>
+      <tr><td><code>phase_continuity_error</code></td><td>逐腿 phase/contact/extension/recovery 跨重规划连续性。</td><td>0。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>7.3 Swing、Touchdown 与 Recovery</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td><code>swing_surface_clearance</code>、<code>mid_swing_clearance</code></td><td>相对 height surface 的全程与中段净空。</td><td>继承 terrain/small clearance 门。</td></tr>
+      <tr><td><code>swing_relative_root_progress</code>、<code>swing_active_motion_ratio</code></td><td>足端相对 root 主动推进。</td><td>每完整事件正值；单元均值 <code>&gt;=0.50</code>。</td></tr>
+      <tr><td><code>swing_world_progress</code>、<code>touchdown_lead/gain/direction_error</code></td><td>世界进度与 command-conditioned touchdown 方向。</td><td>继承旧门。</td></tr>
+      <tr><td><code>swing_duration_frames</code></td><td>实际 liftoff 到确认 touchdown 的帧数。</td><td>nominal 15；非 recovery 最大 25。</td></tr>
+      <tr><td><code>scheduled/confirmed_touchdown_count</code></td><td>计划与实际确认事件及 opportunity coverage。</td><td>所有完整机会必须确认或明确进入 recovery。</td></tr>
+      <tr><td><code>touchdown_surface_error_m</code></td><td>确认时足端相对 ground contact surface 的误差。</td><td>绝对值 <code>&lt;=10mm</code>。</td></tr>
+      <tr><td><code>airborne_touchdown_count</code></td><td>确认 touchdown 时高于 surface 10mm。</td><td>0。</td></tr>
+      <tr><td><code>touchdown_on_small_count</code></td><td>确认点违反 small touchdown SDF margin。</td><td>0。</td></tr>
+      <tr><td><code>grounded_but_unsafe_count</code></td><td>足端触地但 foot/knee/calf/thigh/base 不安全的帧数。</td><td>允许作为 recovery 诊断；可靠 stance 转换数必须为 0。</td></tr>
+      <tr><td><code>swing_extension_frames</code></td><td>每事件延长长度和分布。</td><td>普通路径 <code>&lt;=10</code>；超过后必须处于 recovery。</td></tr>
+      <tr><td><code>forced_touchdown_after_extension_count</code></td><td>达到最大延长后未安全仍被强制 stance。</td><td>0。</td></tr>
+      <tr><td><code>recovery_entry/exit/success</code></td><td>进入原因、持续时间、退出时联合安全条件。</td><td>每次退出均满足 readiness；不得因超时伪成功。</td></tr>
+      <tr><td><code>short_stance_lookahead_collision_count</code></td><td>touchdown 后 x1/x2 立即碰撞。</td><td>0。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>7.4 Root-Joint 耦合与可达性</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td><code>root_joint_cross_hessian_norm</code></td><td>stance/touchdown/collision GGN 中 root-leg 交叉块范数。</td><td>有效 residual 下有限且严格非零。</td></tr>
+      <tr><td><code>root_joint_coupled_direction</code></td><td>注入误差后 root 与对应腿同时修正并降低残差。</td><td>通过 dense/finite-difference parity。</td></tr>
+      <tr><td><code>root_motion_without_support</code></td><td>无可靠支撑期间 root 累计位移。</td><td>单事件 <code>&lt;=0.5mm</code>。</td></tr>
+      <tr><td><code>stance_root_carry_ratio</code></td><td>stance 足世界位移与同期 root 位移比。</td><td>每非零单元绝对值 <code>&lt;=0.10</code>。</td></tr>
+      <tr><td><code>foot_motion_explained_by_root</code></td><td>root 位移对足端世界位移解释系数，stance/swing 分开。</td><td>继承旧联合门。</td></tr>
+      <tr><td><code>foot_root_lead_time</code>、<code>root_leak_before_foot</code></td><td>足端相对 root 的启动顺序。</td><td><code>20-80ms</code>；leak <code>&lt;=0.5mm</code>。</td></tr>
+      <tr><td><code>joint_safe_margin_min_rad</code></td><td>每节点到原始 joint limit 的最小余量。</td><td>不得小于配置的 <code>0.1rad</code> 安全边界。</td></tr>
+      <tr><td><code>joint_safety_clamp_hit_rate</code></td><td>轨迹节点恰好触及安全边界的比例。</td><td>记录并按单元报告；不能由触边掩盖 collision/grounding 失败。</td></tr>
+      <tr><td><code>root_state/control_clamp_hit_rate</code></td><td>root 累计与每帧 clamp 的命中比例。</td><td>记录；连续命中必须定位，不能依赖饱和维持通过。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>7.5 全身几何、RTI 与数值</h3>
+  <table>
+    <thead><tr><th>组</th><th>完整字段</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td>Small collision</td><td><code>foot/knee/calf/thigh/base_collision_frames</code>、phase breakdown、valid denominator、frame rate、max penetration、clearance。</td><td>每部位、每单元 collision rate 0%，max penetration <code>&lt;=1mm</code>。</td></tr>
+      <tr><td>Large collision</td><td>全身 large collision、clearance、avoidance progress。</td><td>继承旧门。</td></tr>
+      <tr><td>关节连续性</td><td><code>joint_limit/velocity_violation</code>、step、velocity、acceleration、<code>foot_step_jump</code>。</td><td>继承旧门，H30 不放宽。</td></tr>
+      <tr><td>Rolling RTI</td><td><code>x0_injection_error</code>、<code>published_x1_error</code>、replan boundary、warm-start shift、cycle drift。</td><td>继承旧门。</td></tr>
+      <tr><td>Line search</td><td>alpha 1/0.5/0.25/0.1/0 使用次数与连续 run、各候选 merit/violation、拒绝原因。</td><td><code>alpha=0</code> 总体 <code>&lt;=5%</code>、每单元 <code>&lt;=10%</code>、连续回退 <code>&lt;=2</code> 帧；所有安全门仍必须独立通过。</td></tr>
+      <tr><td>数值/地图</td><td><code>nonfinite_count</code>、terrain query invalid、field version/age、signed-field exactness。</td><td>全部为 0 或符合继承版本合同。</td></tr>
+      <tr><td>Small semantic</td><td><code>stance_on_small</code>、strict cross opportunity/success/rate、bypass failure、分部位 small clearance。</td><td>stance_on_small=0；总体 cross <code>&gt;=95%</code>，每 shape-speed <code>&gt;=90%</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>8. 场景 × 指标联合矩阵</h2>
+  <p>以下每个单元都计算第 7 节全部适用指标，不允许只检查该场景主指标：</p>
+  <ul>
+    <li>平地：零速、前后、左右、四个斜向、yaw-only、平移+yaw；速度覆盖 <code>0.1/0.2/0.4m/s</code>。</li>
+    <li>小障碍：sphere/cuboid/cylinder/capsule/cone，全部方向、速度、yaw、进入 phase、横向偏置；同时覆盖 nominal touchdown、1-10 帧 extension、grounded-but-unsafe 和 recovery。</li>
+    <li>小障碍 stop/restart：root 位于障碍前、上方和越过后；验证支撑、无飞起、独立 touchdown 与足端再次领先。</li>
+    <li>大障碍：正前、左右偏置和 mixed command，确认 H30 与 root assist 不破坏绕行。</li>
+    <li>地形：平地、坡面、上台阶、下台阶、局部高差，确认 terrain grounding 与逐腿 readiness。</li>
+    <li>真实 viewer/IsaacLab：九命令与小障碍 crossing/stop，读取 actual root/joint/foot，不以 planner 内部 state 自证。</li>
+    <li>动态 batch：<code>num_envs=1/40/512/1024</code>，相同上层参数构建，不出现 shape、cache、Graph 或 solver 错误。</li>
+  </ul>
+  <div class="danger"><strong>禁止平均掩盖：</strong>每个 scenario×command×phase×shape×speed×yaw 单元、每类 worst case 和全局汇总必须同时通过；N/A 必须给出数学原因和 opportunity coverage，不能计为成功。</div>
+
+  <h2>9. Stage A：行为与安全门</h2>
+  <p>Stage A 固定 H30，不再选择更短 horizon。完成顺序是先让新 H30/contact/root-assist 行为通过，再联合重跑所有继承指标：</p>
+  <ol>
+    <li>H30/15+15 时序、逐腿 scheduler、最大延长 10、recovery 和 liftoff guard 的确定性合同通过。</li>
+    <li>root lateral/RPY 连续 soft release、双层 clamp、foot-leading-root 和完整 root-joint GGN/LQ parity 通过。</li>
+    <li>foot/knee/calf/thigh/base 小障碍方向同时进入 LQ、merit、constraint violation；全身碰撞率降为 0。</li>
+    <li>root roll/pitch 在每个小障碍单元 abs max 不超过 6°，yaw/lateral/rate clamp 不越界；不能通过 root 饱和代替足端跨越。</li>
+    <li>airborne touchdown、unsafe anchor、forced touchdown、short-lookahead collision 均为 0；extension/recovery 能结束到真实安全 stance。</li>
+    <li>原实施计划的 flat/small/stop/large/terrain/viewer/rolling/dynamic-batch/legacy 联合门全部重新运行并通过。</li>
+  </ol>
+  <p>Stage A 期间性能只记录，不以五秒门阻止行为定位；但任何行为修改必须保持 fixed-shape GPU 并行可实现，不能引入按环境 Python 分支。</p>
+
+  <h2>10. Stage B：H30 性能门与当前暂停进度</h2>
+  <div class="warn">
+    <strong>正式性能合同：</strong>空闲 GPU、1024 环境、H30、1000 次同步 exact signed field + MPC full refresh 总耗时 <code>&lt;=5.0s</code>；平均 <code>&lt;=5ms/update</code>，field version 增加 1000，nonfinite=0，保留 realistic small 11×11 与 large 41×41 footprint、完整 H30 几何、四档 line search 和全部 Stage A loss/constraint。
+  </div>
+  <p>Stage B 继承原计划 Tasks 10-13，并记录 2026-07-17 暂停点：</p>
+  <ul>
+    <li>CUDA Graph 已移除 capture 内同步 <code>solve/cholesky</code>、主机常量创建和 device-to-host 参数校验，补齐 stance dual、command startup 等 solver-state 固定地址回写；真实 capture/replay 已通过。</li>
+    <li>coupled Riccati 已使用 graph-safe fixed-size Triton SPD solve 代替 MAGMA，<code>1/40/512/1024</code> batch capture 均 finite，解决 batch&gt;1 的 <code>magma_queue::setup_ptrArray</code> 崩溃。</li>
+    <li>繁忙 GPU 的 1024×H16 short screening：field <code>6.54-8.94ms</code>、MPC <code>61.30-88.47ms</code>、full <code>69.20-95.30ms</code>，只用于定位，不是正式验收。</li>
+    <li>fixed general Triton solve 与 conditional-value factor 三因子结合律已独立验证；PyTorch 2.7 generic <code>associative_scan</code> 在 symbolic-vmap batched <code>matmul</code> 失败，未完成路径没有接入 planner。</li>
+    <li>Stage B 当前仍暂停且未通过。Stage A H30 行为门通过后，性能工作从自定义 scan lowering/显式树形 factor composition、packed query、候选复用、kernel fusion 与 workspace 继续。</li>
+  </ul>
+  <p>所有后续性能结果必须使用 H30；不得引用旧 H16 7402.55ms 正式基线或繁忙 GPU short screening 作为 H30 通过证据。</p>
+
+  <h2>11. Stage C：同一候选联合复验</h2>
+  <p>Stage B 达标后，在同一个最终 HEAD 和固定 H30 上从头执行：</p>
+  <ol>
+    <li>完整 Stage A 场景×指标笛卡尔积、joint/legacy pytest、真实 viewer、rolling manager 和动态 batch。</li>
+    <li>完整 Stage B 空闲 GPU 1024×H30×1000 realistic synchronous full-refresh。</li>
+    <li>记录同一 HEAD、配置、地图、环境数、H30、指标报告和性能报告；任何一门失败都回到对应阶段修复，修复后两门都重新运行。</li>
+  </ol>
+
+  <h2>12. 完成定义</h2>
+  <div class="ok">
+    完成定义与 2026-07-17 原设计保持一致，只把最终 horizon 从待选 <code>H_selected</code> 固定修订为 H30。第一步单独修复并通过 Stage A：H30/15+15、自适应逐腿 touchdown、最大延长 10、全身无小障碍碰撞、受限 root lateral/RPY、root roll/pitch 小障碍偏差不超过 6°、足端先于 root、所有新旧 JointMetrics 与旧回归同时通过。第二步冻结 Stage A 的 H30、loss、constraint、几何、阈值和场景，完成 Stage B：空闲 GPU realistic <code>1024×H30×1000&lt;=5.0s</code>。第三步在同一个最终候选上从头联合重跑两门；只有最新行为与最新性能同时通过才算完成。
+  </div>
+  <p>以下结果均不算完成：只改善 crossing 主指标；只在 merit 诊断碰撞而 LQ 无方向；强制空中 touchdown；达到 extension 上限后伪 stance；使用全局 phase 延长阻塞其他腿；依赖 root clamp 饱和代替足端运动；把 H30 改回更短 horizon 通过性能；修改 detector/阈值；减少环境数；排除 field 时间；引用历史通过结果；在输出后修补轨迹。</p>
+
+  <h2>13. 预期文件边界</h2>
+  <pre><code>Go2Pvcnn/extension/joint_mpc_rti/
+├── config.py                     # H30、15+15、extension、root clamps、4 alpha
+├── types.py                      # per-leg scheduler/recovery state
+├── planner.py                    # contact masks、root assist、candidate constraints
+├── model/go2_kinematics.py       # foot/knee/calf/thigh/base FK/Jacobian
+├── losses/                       # LQ 与 merit 一致的 contact/collision/posture
+├── solver/                       # coupled RTI、parallel line search、Stage B solve
+└── runtime/                      # fixed-shape manager/CUDA Graph state copy
+
+Go2Pvcnn/tests/joint_mpc_rti/
+├── joint_metrics.py              # 完整统一 trace 与 accumulator
+├── acceptance_thresholds.py      # applicability 与本设计阈值
+├── scenario_matrix.py            # 全场景联合矩阵
+├── run_joint_acceptance.py       # Stage A/Stage C 唯一行为入口
+├── small_obstacle_*_probe.py     # 只生成 trace，不定义私有 detector
+└── joint_mpc_rti_full_refresh_probe.py # H30 Stage B 正式入口</code></pre>
+
+  <p class="small">本文件是行为与验收设计，不代表实现或测试已经完成。实施计划必须在用户审核本设计后，基于原 2026-07-17 计划做增量修订。</p>
+</main>
+</body>
+</html>
