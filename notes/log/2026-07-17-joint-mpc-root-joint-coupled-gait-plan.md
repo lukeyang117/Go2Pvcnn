@@ -9,11 +9,11 @@
 
 ## Structure
 
-- Stage A tasks 1-8: shared JointMetrics, complete FK Jacobian, correct coupled LQ, stance equality, horizon command/touchdown, foot-leading-root, scenario-metric Cartesian gate, and full behavior closure.
-- Stage B tasks 9-12: frozen workload profile, exact batched EDT or coupled Schur optimization according to measured bottleneck, and formal `<=5s` closure.
-- Stage C task 13: fresh behavior plus performance rerun on one final candidate.
+- Stage A tasks 1-9: shared JointMetrics, complete FK Jacobian, correct coupled LQ, stance equality, horizon command/touchdown, foot-leading-root, scenario-metric Cartesian gate, H16-H50 full-cycle/RTI-direction exploration, and full behavior closure on the shortest passing `H_selected`.
+- Stage B tasks 10-13: frozen selected-horizon profile, exact batched EDT when field dominates, MPX-referenced associative TVLQR/root-Schur/parallel-line-search optimization, and formal `1024 x H_selected x 1000 <=5s` closure.
+- Stage C task 14: fresh behavior plus performance rerun on one final candidate and the same `H_selected`.
 
 ## Result
 
-- Plan self-review passes with 13 concrete tasks and no placeholders.
+- Plan amendment self-review passes with 14 concrete tasks and no placeholders.
 - User already authorized inline execution after the plan.
