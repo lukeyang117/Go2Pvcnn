@@ -88,7 +88,7 @@
     <code>docs/superpowers/specs/2026-07-16-joint-mpc-rti-joint-order-stance-grounding-design.md</code>
     和
     <code>docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html</code>
-    的连续增量。它保留 H16、dt=0.02、fixed trot、真实 x0 注入、只发布 x1、世界坐标单高程图、signed small/large field、连续语义 loss、strict cross、stop-support、全身零碰撞、任意环境数封装和 viewer/PPO 边界；不另起 planner 后端。
+    的连续增量。它保留 H16 作为行为与性能基线，并保持 dt=0.02、fixed trot、真实 x0 注入、只发布 x1、世界坐标单高程图、signed small/large field、连续语义 loss、strict cross、stop-support、全身零碰撞、任意环境数封装和 viewer/PPO 边界；阶段 A 允许在同一后端内联合增加 horizon 与 half-cycle，为 swing/stance 提供更多运动学调整时间，但不另起 planner 后端。
   </div>
 
   <div class="warn">
@@ -122,7 +122,7 @@
       <h3>非目标</h3>
       <ul>
         <li>不增加质心动力学、接触力、摩擦锥、关节力矩或执行器模型。</li>
-        <li>不优化 gait topology、per-leg phase offset 或 swing duration。</li>
+        <li>不优化 gait topology 或 per-leg phase offset；不把每腿 swing duration 增加为在线自由优化变量，但阶段 A 可按 <code>Horizon = 2 x half_cycle_steps</code> 探索全局固定周期。</li>
         <li>不添加 <code>crossable_small</code>、指定跨越腿或固定绕行侧。</li>
         <li>不通过发布后 IK snapping、root 修补或轨迹投影掩盖求解器问题。</li>
         <li>不在步态行为尚未通过时同时改写 exact signed EDT；性能优化排在联合行为指标通过之后。</li>
@@ -432,24 +432,38 @@ back-substitute each leg delta</code></pre>
     </tbody>
   </table>
 
+  <h3>15.1 Stage A 周期长度与原优化方向联合探索</h3>
+  <p>当前 H16、<code>half_cycle_steps=8</code>、<code>dt=0.02s</code> 对应单次 swing 约 160ms、完整 stance-swing-stance 约 320ms。现有 crossing 总成功率较高，但 foot/calf 碰撞、stance-on-small 和 line-search 回退仍存在，因此“给 swing 更多时间”作为 Stage A 的补充优化方向，不预先固定最终周期。</p>
+  <ul>
+    <li>探索范围为 H16 至 H50 内的固定 shape 候选；每个候选始终满足 <code>Horizon = 2 x half_cycle_steps</code>，确保每条腿的规划窗口覆盖一次完整 stance-swing-stance。</li>
+    <li><code>dt=0.02s</code>、真实 x0、rolling RTI 和只发布 x1 不变；增加 horizon 不能改变 50Hz 闭环接口。</li>
+    <li>周期候选必须运行同一 JointMetrics 笛卡尔积，联合检查 cross、分部位零碰撞、stance-on-small、stop support、stance grounding/slip、root tracking、swing active motion、foot-leading-root、joint step/velocity 和 line-search <code>alpha=0</code> 回退率。</li>
+    <li>选择规则不是“越长越好”，而是先要求全部 Stage A 新旧指标同时通过，再从通过者中选择周期最短、动作稳定性最好且计算开销最低的候选。</li>
+    <li>若延长周期只改善 clearance，却破坏 command tracking、stop support、stance grounding、主动摆动或旧 viewer 指标，则该候选失败；不能用更慢的步态掩盖耦合或落足问题。</li>
+  </ul>
+  <p>原有优化方向必须继续探索，不能把周期增长当作唯一修复：量化并约束过大的 LQ <code>delta_control</code>、joint step 和 joint velocity；检查碰撞 warm-start 被 line search 回退选中的原因；评估更密但仍并行的 alpha 集合；继续保持 collision、foot-over、terrain clearance、touchdown、stance equality 在 merit 与 LQ 中的适用相位和方向一致。每次只改变一个原因，先跑 focused cell，再跑完整 Stage A 联合门。</p>
+
   <h2>16. 性能基线、目标与实施顺序</h2>
   <div class="warn">
     <strong>当前真实性能基线：</strong>空闲 GPU、1024 环境、H16、1000 次同步 refresh、每环境 small <code>11x11</code> footprint 加 large <code>41x41</code> footprint 的正式结果为 <code>7402.55ms</code>。其中 field 平均 <code>4.5884ms/次</code>，MPC 平均 <code>2.8416ms/次</code>，完整 refresh 平均 <code>7.4025ms/次</code>，P95 <code>7.4742ms</code>，峰值显存约 <code>1127.79MiB</code>，nonfinite 为 0。旧单像素 <code>4768ms</code> 命中了非真实快速路径，继续明确拒绝作为验收结果。
   </div>
   <p>最终性能合同继续继承 2026-07-15 和 2026-07-16 设计，不放宽：</p>
   <ul>
-    <li><code>1024 x H16 x 1000</code> 次同步 exact signed field + MPC 总耗时 <code>&lt;=5.0s</code>。</li>
+    <li>Stage A 选定最终 horizon <code>H_selected</code> 后，<code>1024 x H_selected x 1000</code> 次同步 exact signed field + MPC 总耗时 <code>&lt;=5.0s</code>；阈值不因 <code>H_selected</code> 从 H16 增长到 H24/H40/H50 而放宽。</li>
     <li>平均完整 refresh <code>&lt;=5.0ms</code>，并报告 P50、P95、P99、最大值和峰值显存。</li>
     <li>计时包含 realistic multi-cell small/large signed field、field 发布、完整耦合 GGN/LQ、line search 和 x1 发布。</li>
     <li>不能通过单像素地图、减少环境数、缩短 H、删除碰撞几何、关闭 JointMetrics 对应优化合同或排除 field 计时通过。</li>
   </ul>
   <p>实施严格分成两个修复阶段和一个最终联合复验阶段：</p>
   <ol>
-    <li><strong>阶段 A：行为正确性。</strong>完成 root-joint 耦合、stance equality、command touchdown、足端先于 root 和统一 JointMetrics；平地、小物体、大障碍、地形、stop、viewer、rolling 和旧回归全部通过。阶段 A 只报告性能变化，不以 5 秒门阻止定位行为问题。</li>
-    <li><strong>阶段 B：性能收口。</strong>冻结阶段 A 的 loss、constraint、几何、阈值和场景合同，再优化 exact EDT、耦合 Schur/Riccati、kernel fusion、workspace、编译和 CUDA Graph，直到 realistic full-refresh <code>&lt;=5s</code>。任何性能修改都必须重新运行阶段 A 的完整联合矩阵。</li>
+    <li><strong>阶段 A：行为正确性。</strong>完成 root-joint 耦合、stance equality、command touchdown、足端先于 root 和统一 JointMetrics，同时探索 H16-H50 的全局固定周期以及原 solver/loss 优化方向；选定一个全部行为门通过的最终 <code>H_selected</code>。平地、小物体、大障碍、地形、stop、viewer、rolling 和旧回归全部通过。阶段 A 只报告性能变化，不以 5 秒门阻止定位行为问题。</li>
+    <li><strong>阶段 B：性能收口。</strong>冻结阶段 A 选定的 <code>H_selected</code>、loss、constraint、几何、阈值和场景合同，再参考 <code>raw/mpx</code> 优化 exact EDT、时间并行 TVLQR/Riccati、root-centered Schur、parallel line search、multiple-shooting 式节点并行线性化、packed geometry query、kernel fusion、workspace、固定 shape 编译和 CUDA Graph，直到该真实 <code>H_selected</code> 的 realistic full-refresh <code>&lt;=5s</code>。不能用 H16 性能替代更长最终 horizon；任何性能修改都必须重新运行阶段 A 的完整联合矩阵。</li>
     <li><strong>阶段 C：最终联合复验。</strong>阶段 B 达标后，从同一个最终候选提交和干净运行状态重新执行完整阶段 A 行为/安全/旧回归矩阵，再执行阶段 B realistic 性能验收。不得引用阶段 A 修复完成时的旧行为结果，也不得引用性能优化前的旧性能结果；两个门必须在同一最终代码上同时通过。</li>
   </ol>
-  <p>新增 root-joint 交叉块可能使 MPC 时间高于当前 <code>2.8416ms</code>；因此性能优化必须同时给出 field、linearization、coupled solve、line search 和完整 refresh 的分项，先确认新增成本位于哪个阶段，再做结构优化。不得在行为修复过程中用 diagonal solver 临时恢复速度，因为那会重新制造本设计要消除的解耦。</p>
+  <p>新增 root-joint 交叉块和更长 horizon 可能使 MPC 时间高于当前 H16 的 <code>2.8416ms</code>；因此性能优化必须同时给出 field、linearization、coupled solve、line search 和完整 refresh 的分项，先确认新增成本位于哪个阶段，再做结构优化。不得在行为修复过程中用 diagonal solver 临时恢复速度，因为那会重新制造本设计要消除的解耦。</p>
+  <div class="note">
+    <strong>MPX 迁移边界：</strong><code>raw/mpx</code> 仅作为并行求解结构参考，不成为运行依赖。可迁移原则包括：按环境和时间节点向量化、固定 shape JIT/Graph、并行 alpha 评估、基于 associative scan 的时间并行 TVLQR、multiple-shooting defect 和 KKT 组合。实现继续使用 PyTorch/CUDA，并保持当前 signed field、完整连续 loss、Root-Joint cross block、真实 x0 和 x1 发布合同。
+  </div>
 
   <h2>17. 风险与控制</h2>
   <table>
@@ -461,13 +475,14 @@ back-substitute each leg delta</code></pre>
       <tr><td>touchdown step 过大导致 joint 饱和</td><td>连续 reach/joint barrier、速度相关步长界和完整 FK Jacobian共同限制。</td></tr>
       <tr><td>结构化 solver 再次丢失耦合</td><td>每次改动都与 dense 基线对齐，并以 cross-Hessian和 coupled-direction 指标作为硬回归。</td></tr>
       <tr><td>新场景指标改善但旧场景退化</td><td>所有场景使用同一 JointMetrics，按每单元 worst-case 联合失败，不允许仅看总平均。</td></tr>
+      <tr><td>延长周期使动作变慢或掩盖优化缺陷</td><td>每个周期候选联合检查 root tracking、主动摆动、foot-leading-root、stop support 和 line-search 回退；只选择全部行为门通过者中最短的稳定周期。</td></tr>
       <tr><td>耦合求解使当前 7.4025ms 基线进一步变慢</td><td>行为合同通过后分解 field/linearization/solve/line-search 时间，优先优化结构化 Schur、kernel fusion、workspace 和固定图；不得退回解耦近似。</td></tr>
     </tbody>
   </table>
 
   <h2>18. 完成定义</h2>
   <div class="ok">
-    完成必须按三步顺序判定。第一步单独修复并通过行为门：完整 root-joint Jacobian、stance equality、command-conditioned touchdown、耦合 LQ、启动足端领先，以及平地、小物体 crossing/stop、大障碍、上下台阶、真实 viewer、rolling RTI、动态环境数的全部适用新旧 JointMetrics。第二步冻结行为合同，单独修复性能门：把空闲 GPU realistic multi-cell 的 1024 x H16 x 1000 同步 field + MPC 从当前 7.4025s 优化到不超过 5.0s。第三步在同一个最终候选提交上从头联合重跑第一门和第二门；只有最新行为结果和最新性能结果同时通过才算最终完成，阶段 A 或阶段 B 的历史通过记录不能替代最终联合复验。任何只修某个场景主指标、依赖全局平均掩盖、把 N/A 当成功、关闭旧 loss、修改 detector、恢复解耦 solver、使用单像素性能场景或在输出后修补轨迹的结果都不算完成。
+    完成必须按三步顺序判定。第一步单独修复并通过行为门：完整 root-joint Jacobian、stance equality、command-conditioned touchdown、耦合 LQ、启动足端领先，联合探索周期长度与原 solver/loss 优化方向，并选定最终 <code>H_selected</code>；平地、小物体 crossing/stop、大障碍、上下台阶、真实 viewer、rolling RTI、动态环境数的全部适用新旧 JointMetrics 必须同时通过。第二步冻结行为合同和 <code>H_selected</code>，参考 MPX 并行结构单独修复性能门：把空闲 GPU realistic multi-cell 的 <code>1024 x H_selected x 1000</code> 同步 field + MPC 优化到不超过 5.0s，阈值不因 horizon 变长而放宽。第三步在同一个最终候选提交上从头联合重跑第一门和第二门；只有最新行为结果和最新性能结果同时通过才算最终完成，阶段 A 或阶段 B 的历史通过记录不能替代最终联合复验。任何只修某个场景主指标、依赖全局平均掩盖、把 N/A 当成功、关闭旧 loss、修改 detector、恢复解耦 solver、用更短 horizon 代替最终 <code>H_selected</code>、使用单像素性能场景或在输出后修补轨迹的结果都不算完成。
   </div>
 </main>
 </body>

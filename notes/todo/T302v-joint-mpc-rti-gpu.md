@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `joint_mpc`; baseline commit: `cb2fff4`.
-- Rolling contract: inject measured `x0`, optimize `H=16`, publish only `x1` to PPO reference rewards.
+- Rolling contract: inject measured `x0`, optimize one fixed-shape full stance-swing-stance horizon, publish only `x1` to PPO reference rewards. H16 remains the baseline; Stage A may explore H16-H50 with `Horizon = 2 * half_cycle_steps` before selecting `H_selected`.
 - Production profile: compiled fixed-horizon rollout/objective/query, packed geometry queries, diagonal GGN Riccati, `(1.0, 0.25)` line search, CUDA Graph replay.
 - Signed-field performance remains open after strengthening the probe from single cells to realistic multi-cell footprints. The earlier `4768.28ms` result is rejected because it hit a single-cell fast path; `11x11` small plus `41x41` large maps remain above the `5s` full-refresh gate even after MPC compilation.
 - Current functional verification: joint MPC `119 passed`; old MPC/reward/viewer `213 passed`; public factory/cache batches `1/40/512/1024` are finite and version-correct.
@@ -14,13 +14,13 @@
 - Real nine-command viewer verification remains green on the current candidate: `passed=true`, joint-order error `0`, stance gap max `0.0114493m`, joint step max `0.185368rad`, actual/planner foot error max `5.24e-7m`, and zero-command root drift remains numerical zero.
 - T302v performance continuation compiles the fixed-shape LQ/query/rollout path, reducing MPC to about `2.55-2.85ms` without changing losses or geometry. Exact signed EDT remains the blocker on realistic multi-cell maps. See [full design revalidation](../log/2026-07-17-joint-mpc-rti-full-design-revalidation.md).
 - T302v.7 root/foot propulsion-order diagnostics confirm the viewer observation: across eight flat rolling commands, consecutive-stance feet move by `1.040x` the signed root step on average, only `4.02%` stay within `1mm/frame`, and swing motion relative to root contributes only `7.0%` of root progress on average. The root is independently command-integrated while the phase-only swing target has no command-conditioned foothold. See [root/foot quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
-- T302v.7 Chinese HTML design is approved with a three-stage completion rule. It inherits all three prior Joint MPC designs, specifies complete root-joint FK/GGN cross blocks, scheduled stance equality, horizon command progress, command-conditioned touchdown, 20-80ms foot-leading-root startup, arrowhead/Schur Riccati, and one scenario-metric JointMetrics contract. Stage A closes walking/safety, Stage B freezes behavior and reduces the idle-GPU realistic baseline from `7.4025s/1000` to `<=5.0s/1000`, and Stage C reruns both complete gates on the same final candidate. See [design log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md).
+- T302v.7 Chinese HTML design is approved with a three-stage completion rule. It inherits all three prior Joint MPC designs, specifies complete root-joint FK/GGN cross blocks, scheduled stance equality, horizon command progress, command-conditioned touchdown, 20-80ms foot-leading-root startup, arrowhead/Schur Riccati, and one scenario-metric JointMetrics contract. Stage A jointly explores H16-H50 fixed periods and the original solver/loss directions, then selects the shortest stable `H_selected` passing every behavior metric. Stage B freezes that exact horizon and uses MPX-referenced temporal/state-space GPU parallelism to reach `<=5.0s/1000` without relaxing the threshold for longer trajectories. Stage C reruns both complete gates on the same final candidate. See [design log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md).
 - The 13-task TDD implementation plan is written and inline execution is authorized. Tasks 1-8 close Stage A behavior, tasks 9-12 close Stage B performance, and task 13 performs the mandatory same-candidate joint rerun. See [plan log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-plan.md).
 
 ## Open Children
 
 - T302v.7 support-driven gait quality: define and implement a contract for near-zero world-frame stance slip, command-conditioned swing touchdown lead, and root progress coupled to established support. Current grounding-Z/collision metrics do not detect root-carried feet.
-- Realistic multi-cell signed-field performance: `1024 x H16 x 1000 <=5s` is not met with `11x11` small and `41x41` large footprints. Single-cell results must not be used as acceptance. Local exact-EDT variants were exhausted; next progress requires a new batched exact EDT architecture or an explicit contract change.
+- Realistic multi-cell signed-field performance: the final contract is `1024 x H_selected x 1000 <=5s` with Stage A's selected horizon and unchanged `11x11` small plus `41x41` large footprints. The current H16 baseline misses this gate; single-cell results must not be used as acceptance. Stage B starts only after Stage A and may use MPX-style temporal associative scans, multiple shooting, parallel line search and state-space Schur structure in addition to exact-EDT work.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
 ## Closed Children Archive
@@ -66,7 +66,7 @@
 
 ## Next Step
 
-Write and execute the implementation plan: Stage A closes all old/new JointMetrics, Stage B closes the realistic `7.4025s -> <=5.0s` performance gate, and Stage C reruns both complete gates on the same final candidate.
+Amend and execute the implementation plan: Stage A explores period length plus the existing solver/loss directions and closes all old/new JointMetrics on one selected `H_selected`; Stage B then closes `1024 x H_selected x 1000 <=5.0s` using MPX-referenced GPU parallelism; Stage C reruns both complete gates on the same final candidate.
 
 ## Node Details
 
