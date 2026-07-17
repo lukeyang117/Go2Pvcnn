@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a truly coupled root-joint rolling RTI gait, select the shortest H16-H50 full-cycle horizon that passes every old/new behavior metric, then make the realistic 1024-env synchronous field+selected-horizon MPC complete 1000 updates in at most 5.0s and freshly rerun both gates on one final candidate.
+**Goal:** Build a truly coupled H30 root-joint rolling RTI gait with adaptive per-leg touchdown and bounded root assistance, pass every inherited/new Stage A behavior metric, then make the realistic 1024-env synchronous field+H30 MPC complete 1000 updates in at most 5.0s and freshly rerun both gates on one final candidate.
 
-**Architecture:** Keep `dt=0.02`, fixed trot, measured x0 and published x1. Add complete `3x18` FK Jacobians, augmented-Lagrangian stance equalities, command-conditioned touchdown, horizon command progress, startup foot lead, a correct dense coupled solver followed by a Schur production solver, and one shared JointMetrics accumulator. Stage A explores fixed shapes with `Horizon = 2 * half_cycle_steps` from H16 through H50 together with bounded RTI/parallel-line-search improvements; Stage B freezes the selected `H_selected` and ports MPX-style temporal associative scans and state-space parallelism without relaxing the five-second gate.
+**Architecture:** Keep `dt=0.02`, measured x0 and published x1, but fix production shape to `H=30`, nominal stance/swing to 15 frames each, and line-search alphas to `(1.0,0.5,0.25,0.1)`. Add per-leg contact/extension/recovery state, grounded-and-full-body-safe touchdown confirmation, complete root-joint/full-body GGN directions, continuously released root lateral/RPY assistance with per-frame and cumulative clamps, and one shared JointMetrics accumulator over the 275-command Cartesian matrix. Stage A must pass first; Stage B then freezes this exact H30 behavior and optimizes the realistic synchronous pipeline without relaxing the five-second gate; Stage C freshly reruns Stage A and Stage B on one final candidate.
 
 **Tech Stack:** Python 3.10, PyTorch, torch.compile, CUDA/C++, SQP-RTI/GGN/Riccati, pytest, Isaac Lab in `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`.
 
@@ -20,13 +20,148 @@
 - Create `Go2Pvcnn/tests/joint_mpc_rti/test_joint_metrics.py` and `test_coupled_gait.py`.
 - Modify `config.py`, `types.py`, `model/go2_kinematics.py`, `losses/command.py`, `losses/contact.py`, `planner.py`, `solver/primal_dual_ilqr.py`, `solver/sqp_rti.py`.
 - Refactor existing crossing/stop/behavior probes to consume the shared metrics.
-- Stage B may modify `terrain/csrc/work_efficient_edt_cuda.cu`, `terrain/cuda_edt.py` and the coupled solver only after Stage A selects `H_selected` and profiling identifies the largest component.
+- Stage B may modify `terrain/csrc/work_efficient_edt_cuda.cu`, `terrain/cuda_edt.py` and the coupled solver only after fixed-H30 Stage A passes and H30 profiling identifies the largest component.
 
 ## Execution Status At Amendment
 
 - Tasks 1-3 are committed as `b78d392`, `08a00a7`, `635eaad`.
 - Tasks 4-5 have focused coupled tests passing but remain open until the inherited crossing/stop/packed-query gates recover.
 - Tasks 6-7 and every Stage B/C task remain open.
+
+## 2026-07-18 H30 Adaptive-Contact Amendment
+
+This section supersedes the horizon-selection portions of Tasks 8-9 and every later reference to a variable `H_selected`. Tasks 1-7 remain inherited correctness work. The production and acceptance horizon is now exactly H30 with `half_cycle_steps=15`; H16 is diagnostic history only. Implementation must follow the approved Chinese HTML design at `docs/superpowers/specs/2026-07-18-joint-mpc-rti-h30-adaptive-contact-root-assist-design.html`.
+
+The mandatory completion order is:
+
+1. Stage A: make H30 behavior, safety, JointMetrics, real viewer and all inherited regressions pass together.
+2. Stage B: only after Stage A is green, make realistic idle-GPU `1024 x H30 x 1000 <=5000ms` pass without changing Stage A contracts.
+3. Stage C: on one final candidate, freshly rerun complete Stage A and complete Stage B; both latest results must pass.
+
+### Task 8A: Fix The Production H30 Contract
+
+**Files:** modify `Go2Pvcnn/extension/joint_mpc_rti/config.py`, `Go2Pvcnn/tests/joint_mpc_rti/test_horizon_exploration.py`, `Go2Pvcnn/tests/joint_mpc_rti/test_solver.py`.
+
+- [ ] Write RED assertions:
+
+```python
+def test_production_horizon_is_h30_full_cycle():
+    cfg = JointMpcRtiCfg()
+    assert cfg.runtime.horizon_steps == 30
+    assert cfg.gait.half_cycle_steps == 15
+    assert cfg.runtime.horizon_steps == 2 * cfg.gait.half_cycle_steps
+    assert cfg.solver.line_search_alphas == (1.0, 0.5, 0.25, 0.1)
+```
+
+- [ ] Run:
+
+```bash
+PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest \
+  Go2Pvcnn/tests/joint_mpc_rti/test_horizon_exploration.py \
+  Go2Pvcnn/tests/joint_mpc_rti/test_solver.py -q
+```
+
+Expected before implementation: the H30 production-default assertion fails.
+
+- [ ] Set the exact H30/15/15/four-alpha defaults. Remove production selection of shorter candidates; retain exploration helpers only as diagnostic utilities.
+- [ ] Run the same tests and require pass. Commit `feat: fix joint mpc production horizon to h30`.
+
+### Task 8B: Per-Leg Contact State And Fixed-Shape Schedule
+
+**Files:** modify `Go2Pvcnn/extension/joint_mpc_rti/types.py`, `model/gait_schedule.py`, `planner.py`; create/modify `Go2Pvcnn/tests/joint_mpc_rti/test_coupled_gait.py`.
+
+- [ ] Write RED tests that construct `[B,4]` contact, phase age, extension age, stance age and recovery tensors and require a fixed `[B,31,4]` mask. Verify one diagonal leg can confirm stance while its mate remains swing, and that a future liftoff is blocked when it would leave fewer than two reliable stance legs.
+- [ ] Run `pytest Go2Pvcnn/tests/joint_mpc_rti/test_coupled_gait.py -k 'per_leg or liftoff_guard' -q`; expect failure because solver state and scheduler are global-phase only.
+- [ ] Extend `JointMpcRtiSolverState` with:
+
+```python
+contact_state: Tensor | None = None
+phase_age: Tensor | None = None
+swing_extension_age: Tensor | None = None
+stance_age: Tensor | None = None
+recovery_state: Tensor | None = None
+```
+
+- [ ] Implement tensor-only schedule generation; no Python branching by environment. Preserve fixed shapes for CUDA Graph. Run focused tests and commit `feat: add per leg joint mpc contact scheduler`.
+
+### Task 8C: Grounded And Full-Body-Safe Touchdown
+
+**Files:** modify `planner.py`, `types.py`, `runtime/cuda_graph.py`, `model/go2_kinematics.py`; modify `test_coupled_gait.py`, `test_rolling_runtime.py`, `test_losses.py`.
+
+- [ ] Write RED cases for: airborne scheduled touchdown; grounded foot on small semantic; foot safe but knee/calf/thigh collision; foot/leg safe but base collision; safe current touchdown with x1/x2 collision; and fully safe touchdown.
+- [ ] Require the first five cases to remain non-stance without an anchor update. Require the safe case to set `anchor_xy=current_foot_xy` and `anchor_z=terrain_height+foot_contact_offset`.
+- [ ] Require independent touchdown, extension ages `1..10`, no forced stance at age 10, grounded-but-unsafe recovery, and root progress scale `clamp(1-age/10,0,1)`.
+- [ ] Add graph-safe clone/copy/reset handling for all new solver-state tensors.
+- [ ] Run focused contact/runtime/CUDA Graph tests and commit `feat: confirm safe joint mpc touchdown`.
+
+### Task 8D: Bounded Root Lateral And RPY Assistance
+
+**Files:** modify `config.py`, `planner.py`, `losses/posture.py`; modify `test_coupled_gait.py`, `test_solver.py`.
+
+- [ ] Write RED finite-difference/LQ tests proving small-obstacle residuals can generate root lateral, roll, pitch and yaw directions while root Z remains excluded. Verify early swing uses less root assistance than mid-swing and reduced joint margin continuously increases assistance.
+- [ ] Add exact config bounds:
+
+```python
+root_lateral_offset_limit_m = 0.06
+root_lateral_velocity_error_limit_mps = 0.20
+root_roll_pitch_limit_rad = math.radians(6.0)
+root_roll_pitch_rate_limit_rps = 0.6
+root_yaw_error_limit_rad = math.radians(10.0)
+root_yaw_rate_error_limit_rps = 0.8
+```
+
+- [ ] Replace pure command-axis root XY projection with `P_parallel + w_assist * P_lateral`; scale root RPY collision Jacobians by the same continuous SDF/phase/reachability weight.
+- [ ] Project every line-search candidate through per-frame control clamps and integrated nominal-relative state clamps before nonlinear FK/merit evaluation. Run focused tests and commit `feat: plan bounded root obstacle assistance`.
+
+### Task 8E: Full-Body Small-Obstacle LQ Directions
+
+**Files:** modify `model/go2_kinematics.py`, `planner.py`, `losses/semantic.py`, `losses/rollout_objective.py`; modify `test_kinematics_gait.py`, `test_losses.py`, `test_solver.py`.
+
+- [ ] Write RED tests for nonzero, finite and correctly directed foot/knee/calf/thigh/base signed-distance gradients and Gauss-Newton blocks. Verify each part changes the LQ direction, not only final merit.
+- [ ] Add explicit knee and base sample Jacobians to the packed geometry query and small-obstacle linearization. Use the same radii/top-height overlap detector in LQ, merit, line-search violation and JointMetrics.
+- [ ] Verify root-leg cross blocks remain symmetric and dense parity stays within `2e-5`. Commit `feat: optimize all joint mpc body clearances`.
+
+### Task 8F: Complete JointMetrics And 275-Command Matrix
+
+**Files:** modify `Go2Pvcnn/tests/joint_mpc_rti/joint_metrics.py`; create/modify `acceptance_thresholds.py`, `scenario_matrix.py`, `run_joint_acceptance.py`, `test_joint_metrics.py`, `small_obstacle_attitude_probe.py`.
+
+- [ ] Write RED contract tests requiring exactly:
+
+```python
+VX = (0.0, -0.2, 0.2, -0.4, 0.4, -0.6, 0.6, -0.8, 0.8, -1.0, 1.0)
+VY = (0.0, -0.3, 0.3, -0.5, 0.5)
+YAW = (0.0, -0.5, 0.5, -1.0, 1.0)
+assert len(tuple(product(VX, VY, YAW))) == 275
+```
+
+- [ ] Extend `JointMetricTrace` and the accumulator with every field in design section 7, including root roll/pitch mean/P95/abs-max, root lateral/yaw deviations, touchdown readiness/extension/recovery, reliable support/liftoff guard, foot/knee/calf/thigh/base phase collisions, joint/root clamp hits and alpha histograms/rejection reasons.
+- [ ] Require small-obstacle per-cell root roll/pitch abs max `<=6deg`, every part collision rate `0`, airborne/unsafe/forced touchdown `0`, alpha=0 global `<=5%`, per-cell `<=10%`, consecutive run `<=2`, plus all inherited thresholds.
+- [ ] Ensure reports carry raw `(vx,vy,yaw_rate)`, numerator, denominator, valid count, N/A reason and worst key. Run metric tests and commit `test: unify h30 adaptive contact metrics`.
+
+### Task 9A: Close Stage A On Fixed H30
+
+**Files:** only files implicated by focused RED failures; update `run_joint_acceptance.py` and create a Stage A evidence log.
+
+- [ ] Run focused tests after each single-cause change, then run the entire fixed-H30 matrix. No H16/H20 fallback is allowed.
+- [ ] Require all 275 commands in every applicable flat/small/stop/large/terrain matrix, all five small shapes, phase/placement/recovery coverage, and no omitted universal metric.
+- [ ] Run all joint MPC tests, all inherited legacy MPC/reward/viewer tests, real Isaac nine-command plus high-speed/mixed playback, and manager construction for `1/40/512/1024`.
+- [ ] Record every worst metric and failure cell. Stage A passes only when the complete latest run is green. Commit `fix: close h30 joint mpc stage a`.
+
+### Task 10A: Stage B H30 Performance Gate
+
+This task is blocked until Task 9A passes. It supersedes every Stage B reference to `H_selected` with H30 and preserves the recorded CUDA Graph/Triton progress.
+
+- [ ] On idle GPU run realistic synchronous exact signed field + H30 MPC for 1024 environments and 1000 updates with 11x11/41x41 footprints, four alpha candidates and all Stage A geometry/losses.
+- [ ] Require total `<=5000ms`, mean `<=5ms`, field version `+1000`, nonfinite `0`, stable memory. Optimize only measured bottlenecks and rerun Stage A after every accepted performance change.
+
+### Task 14A: Final Same-Candidate Joint Verification
+
+This task is blocked until Task 10A passes.
+
+- [ ] Record final HEAD and fixed H30 configuration.
+- [ ] Freshly rerun complete Stage A.
+- [ ] Freshly rerun complete Stage B on the same HEAD.
+- [ ] Mark completion only if both latest reports pass; otherwise return to the failing stage and later rerun both.
 
 ## Stage A — Behavior And Joint Metrics
 
@@ -167,6 +302,8 @@ r_progress = v_avg_body - command_xy
 - [ ] Run all `Go2Pvcnn/tests/joint_mpc_rti` tests; commit `test: joint all mpc scenario metrics`.
 
 ### Task 8: Full-Cycle Horizon And RTI Direction Exploration
+
+> **Superseded audit section:** Task 8 through the original Task 14 below are retained only to explain the 2026-07-17 plan history. Do not execute their H16-H50 selection or variable `H_selected` instructions. Execute Tasks 8A-9A, then blocked Tasks 10A and 14A from the 2026-07-18 amendment instead.
 
 **Files:** create `horizon_exploration.py`, `test_horizon_exploration.py`; modify `config.py`, `solver/line_search.py`, `solver/sqp_rti.py`, `test_solver.py` only when a focused RED identifies that component.
 

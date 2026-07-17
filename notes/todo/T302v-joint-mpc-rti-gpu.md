@@ -60,6 +60,7 @@
 - [Root-joint coupled gait implementation plan](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-plan.md)
 - [Stage A constrained RTI diagnostics](../log/2026-07-17-joint-mpc-stage-a-constrained-rti-diagnostics.md)
 - [H30 adaptive contact and root assist design](../log/2026-07-18-joint-mpc-h30-adaptive-contact-root-assist-design.md)
+- [H30 implementation plan amendment](../log/2026-07-18-joint-mpc-h30-implementation-plan-amendment.md)
 
 ## Git Refs
 
