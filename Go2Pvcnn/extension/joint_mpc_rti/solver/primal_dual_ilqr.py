@@ -71,9 +71,10 @@ def solve_lq_subproblem(problem: LqProblem, *, regularization: float) -> LqSolut
         control_hessian = stage_r + torch.matmul(b_transpose, torch.matmul(value_matrix_next, stage_b)) + regularizer
         control_state = stage_s + torch.matmul(b_transpose, torch.matmul(value_matrix_next, stage_a))
         control_vector = stage_vector_r + torch.matmul(b_transpose, value_affine.unsqueeze(-1)).squeeze(-1)
-        control_diagonal = control_hessian.diagonal(dim1=-2, dim2=-1).clamp_min(float(regularization))
-        solve_state = control_state / control_diagonal.unsqueeze(-1)
-        solve_vector = control_vector / control_diagonal
+        control_hessian = 0.5 * (control_hessian + control_hessian.transpose(-1, -2))
+        cholesky = torch.linalg.cholesky(control_hessian)
+        solve_state = torch.cholesky_solve(control_state, cholesky)
+        solve_vector = torch.cholesky_solve(control_vector.unsqueeze(-1), cholesky).squeeze(-1)
         feedback = -solve_state
         feedforward = -solve_vector
         value_matrix = stage_q + torch.matmul(a_transpose, torch.matmul(value_matrix_next, stage_a)) - torch.matmul(
@@ -182,7 +183,6 @@ def _solve_go2_block_tensors(
             stage_b_t,
             torch.matmul(root_value_matrix, stage_b),
         ) + float(regularization) * torch.eye(6, dtype=matrix_a.dtype, device=matrix_a.device)
-        control_diagonal = control_hessian.diagonal(dim1=-2, dim2=-1).clamp_min(float(regularization))
         control_state = root_s[:, index] + torch.matmul(
             stage_b_t,
             torch.matmul(root_value_matrix, stage_a),
@@ -191,8 +191,10 @@ def _solve_go2_block_tensors(
             stage_b_t,
             value_affine.unsqueeze(-1),
         ).squeeze(-1)
-        solve_state = control_state / control_diagonal.unsqueeze(-1)
-        solve_vector = control_vector / control_diagonal
+        control_hessian = 0.5 * (control_hessian + control_hessian.transpose(-1, -2))
+        cholesky = torch.linalg.cholesky(control_hessian)
+        solve_state = torch.cholesky_solve(control_state, cholesky)
+        solve_vector = torch.cholesky_solve(control_vector.unsqueeze(-1), cholesky).squeeze(-1)
         root_feedback_reverse.append(-solve_state)
         root_feedforward_reverse.append(-solve_vector)
         root_value_matrix = root_q[:, index] + torch.matmul(

@@ -956,6 +956,7 @@ def step(
         regularization=float(cfg.solver.regularization),
         alphas=tuple(cfg.solver.line_search_alphas),
         diagonal_state_riccati=bool(cfg.solver.diagonal_state_riccati),
+        coupled_state_riccati=bool(cfg.solver.coupled_state_riccati),
         base_merit=base_merit,
     )
     rollout = _select_candidate_rollout(

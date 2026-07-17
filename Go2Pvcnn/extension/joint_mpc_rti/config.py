@@ -25,7 +25,8 @@ class JointMpcRtiSolverCfg:
     joint_trust_scale: float = 0.25
     compile_kernels: bool = False
     emit_loss_breakdown: bool = True
-    diagonal_state_riccati: bool = True
+    diagonal_state_riccati: bool = False
+    coupled_state_riccati: bool = True
     use_cuda_graph: bool = False
 
 

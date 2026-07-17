@@ -93,6 +93,42 @@ def test_ilqr_matches_dense_scalar_integrator_solution() -> None:
     torch.testing.assert_close(result.delta_control, expected, atol=3.0e-4, rtol=3.0e-4)
 
 
+def test_dense_ilqr_preserves_coupled_control_hessian_direction() -> None:
+    from extension.joint_mpc_rti.solver.primal_dual_ilqr import LqProblem, solve_lq_subproblem
+
+    terminal_q = torch.tensor([[[2.0, 1.0], [1.0, 2.0]]])
+    matrix_r = 0.5 * torch.eye(2).reshape(1, 1, 2, 2)
+    vector_r = torch.tensor([[[-1.0, 0.0]]])
+    problem = LqProblem(
+        matrix_a=torch.zeros(1, 1, 2, 2),
+        matrix_b=torch.eye(2).reshape(1, 1, 2, 2),
+        matrix_q=torch.zeros(1, 1, 2, 2),
+        matrix_r=matrix_r,
+        vector_q=torch.zeros(1, 1, 2),
+        vector_r=vector_r,
+        terminal_q=terminal_q,
+        terminal_vector=torch.zeros(1, 2),
+        initial_state=torch.zeros(1, 2),
+        affine_dynamics=torch.zeros(1, 1, 2),
+        matrix_s=torch.zeros(1, 1, 2, 2),
+    )
+
+    result = solve_lq_subproblem(problem, regularization=1.0e-8)
+    expected = -torch.linalg.solve(matrix_r[0, 0] + terminal_q[0], vector_r[0, 0])
+
+    torch.testing.assert_close(result.delta_control[0, 0], expected, atol=1.0e-6, rtol=1.0e-6)
+    assert abs(float(result.delta_control[0, 0, 1])) > 0.1
+
+
+def test_default_solver_keeps_full_coupled_state_blocks() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+
+    cfg = JointMpcRtiCfg()
+
+    assert cfg.solver.coupled_state_riccati
+    assert not cfg.solver.diagonal_state_riccati
+
+
 def test_go2_block_ilqr_matches_generic_structured_solution() -> None:
     from extension.joint_mpc_rti.solver.primal_dual_ilqr import (
         LqProblem,

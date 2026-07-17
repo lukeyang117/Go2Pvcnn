@@ -38,10 +38,13 @@ def sqp_rti_update(
     regularization: float,
     alphas: tuple[float, ...],
     diagonal_state_riccati: bool = False,
+    coupled_state_riccati: bool = False,
     base_merit: Tensor | None = None,
 ) -> SqpRtiUpdate:
     base = torch.as_tensor(base_control)
-    if bool(diagonal_state_riccati):
+    if bool(coupled_state_riccati):
+        lq_solution = solve_lq_subproblem(lq_problem, regularization=regularization)
+    elif bool(diagonal_state_riccati):
         lq_solution = solve_diagonal_lq_subproblem(lq_problem, regularization=regularization)
     elif int(base.shape[-1]) == 18:
         lq_solution = solve_go2_block_lq_subproblem(lq_problem, regularization=regularization)
