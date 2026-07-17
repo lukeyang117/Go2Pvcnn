@@ -13,9 +13,11 @@
 - T302v.5 stop-on-small support recovery is implemented and verified without hard command/semantic gates: RTI root warm starts re-base to the current command, foot-over is mid-swing shaped, safe landing/support use internally matched continuous margins, and native collision probes use queried local shape height. The final 65-case stop matrix is `65/65`, maximum consecutive zero-support `1`, root drift `0`, stance-on-small `0`, and all per-part collision frames `0`; the 160-step crossing matrix is `100%` overall/per case with the same zero-collision result.
 - Real nine-command viewer verification remains green on the current candidate: `passed=true`, joint-order error `0`, stance gap max `0.0114493m`, joint step max `0.185368rad`, actual/planner foot error max `5.24e-7m`, and zero-command root drift remains numerical zero.
 - T302v performance continuation compiles the fixed-shape LQ/query/rollout path, reducing MPC to about `2.55-2.85ms` without changing losses or geometry. Exact signed EDT remains the blocker on realistic multi-cell maps. See [full design revalidation](../log/2026-07-17-joint-mpc-rti-full-design-revalidation.md).
+- T302v.7 root/foot propulsion-order diagnostics confirm the viewer observation: across eight flat rolling commands, consecutive-stance feet move by `1.040x` the signed root step on average, only `4.02%` stay within `1mm/frame`, and swing motion relative to root contributes only `7.0%` of root progress on average. The root is independently command-integrated while the phase-only swing target has no command-conditioned foothold. See [root/foot quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
 
 ## Open Children
 
+- T302v.7 support-driven gait quality: define and implement a contract for near-zero world-frame stance slip, command-conditioned swing touchdown lead, and root progress coupled to established support. Current grounding-Z/collision metrics do not detect root-carried feet.
 - Realistic multi-cell signed-field performance: `1024 x H16 x 1000 <=5s` is not met with `11x11` small and `41x41` large footprints. Single-cell results must not be used as acceptance. Local exact-EDT variants were exhausted; next progress requires a new batched exact EDT architecture or an explicit contract change.
 - Real IsaacLab 1024-env physics + RayCaster-ray timing remains a separate end-to-end boundary; planner acceptance now includes scanner buffers, exact field publication, RTI and x1, but excludes physics/raycast generation itself.
 
@@ -49,6 +51,7 @@
 - [Stop-on-small floating reproduction](../log/2026-07-16-joint-mpc-rti-stop-on-small-floating-reproduction.md)
 - [Stop-on-small support recovery](../log/2026-07-16-joint-mpc-rti-stop-on-small-support-recovery.md)
 - [Full design revalidation and signed performance closure](../log/2026-07-17-joint-mpc-rti-full-design-revalidation.md)
+- [Root/foot propulsion-order quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md)
 
 ## Git Refs
 
@@ -59,7 +62,7 @@
 
 ## Next Step
 
-Choose a new exact batched EDT architecture, relax field update/performance contract, or explicitly scope the five-second workload. Do not continue local kernel variants without that architectural decision.
+Performance work is deferred. First design the T302v.7 support-driven gait contract and its acceptance thresholds; do not change gait behavior until root/stance/swing coupling is agreed.
 
 ## Node Details
 
