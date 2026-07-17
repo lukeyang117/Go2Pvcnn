@@ -443,10 +443,11 @@ back-substitute each leg delta</code></pre>
     <li>计时包含 realistic multi-cell small/large signed field、field 发布、完整耦合 GGN/LQ、line search 和 x1 发布。</li>
     <li>不能通过单像素地图、减少环境数、缩短 H、删除碰撞几何、关闭 JointMetrics 对应优化合同或排除 field 计时通过。</li>
   </ul>
-  <p>实施严格分成两个顺序阶段：</p>
+  <p>实施严格分成两个修复阶段和一个最终联合复验阶段：</p>
   <ol>
     <li><strong>阶段 A：行为正确性。</strong>完成 root-joint 耦合、stance equality、command touchdown、足端先于 root 和统一 JointMetrics；平地、小物体、大障碍、地形、stop、viewer、rolling 和旧回归全部通过。阶段 A 只报告性能变化，不以 5 秒门阻止定位行为问题。</li>
     <li><strong>阶段 B：性能收口。</strong>冻结阶段 A 的 loss、constraint、几何、阈值和场景合同，再优化 exact EDT、耦合 Schur/Riccati、kernel fusion、workspace、编译和 CUDA Graph，直到 realistic full-refresh <code>&lt;=5s</code>。任何性能修改都必须重新运行阶段 A 的完整联合矩阵。</li>
+    <li><strong>阶段 C：最终联合复验。</strong>阶段 B 达标后，从同一个最终候选提交和干净运行状态重新执行完整阶段 A 行为/安全/旧回归矩阵，再执行阶段 B realistic 性能验收。不得引用阶段 A 修复完成时的旧行为结果，也不得引用性能优化前的旧性能结果；两个门必须在同一最终代码上同时通过。</li>
   </ol>
   <p>新增 root-joint 交叉块可能使 MPC 时间高于当前 <code>2.8416ms</code>；因此性能优化必须同时给出 field、linearization、coupled solve、line search 和完整 refresh 的分项，先确认新增成本位于哪个阶段，再做结构优化。不得在行为修复过程中用 diagonal solver 临时恢复速度，因为那会重新制造本设计要消除的解耦。</p>
 
@@ -466,7 +467,7 @@ back-substitute each leg delta</code></pre>
 
   <h2>18. 完成定义</h2>
   <div class="ok">
-    完成分为有顺序的两个门：先通过完整 root-joint Jacobian、stance equality、command-conditioned touchdown、耦合 LQ、启动足端领先，以及平地、小物体 crossing/stop、大障碍、上下台阶、真实 viewer、rolling RTI、动态环境数的全部适用新旧 JointMetrics；再在冻结这些行为合同后，把空闲 GPU realistic multi-cell 的 1024 x H16 x 1000 同步 field + MPC 从当前 7.4025s 优化到不超过 5.0s。两个门都通过才算最终完成。任何只修某个场景主指标、依赖全局平均掩盖、把 N/A 当成功、关闭旧 loss、修改 detector、恢复解耦 solver、使用单像素性能场景或在输出后修补轨迹的结果都不算完成。
+    完成必须按三步顺序判定。第一步单独修复并通过行为门：完整 root-joint Jacobian、stance equality、command-conditioned touchdown、耦合 LQ、启动足端领先，以及平地、小物体 crossing/stop、大障碍、上下台阶、真实 viewer、rolling RTI、动态环境数的全部适用新旧 JointMetrics。第二步冻结行为合同，单独修复性能门：把空闲 GPU realistic multi-cell 的 1024 x H16 x 1000 同步 field + MPC 从当前 7.4025s 优化到不超过 5.0s。第三步在同一个最终候选提交上从头联合重跑第一门和第二门；只有最新行为结果和最新性能结果同时通过才算最终完成，阶段 A 或阶段 B 的历史通过记录不能替代最终联合复验。任何只修某个场景主指标、依赖全局平均掩盖、把 N/A 当成功、关闭旧 loss、修改 detector、恢复解耦 solver、使用单像素性能场景或在输出后修补轨迹的结果都不算完成。
   </div>
 </main>
 </body>

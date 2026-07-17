@@ -22,6 +22,7 @@
 - The old single-cell `4768ms` result remains rejected.
 - Stage A first closes all old/new walking and safety metrics.
 - Stage B then freezes the behavior contract and optimizes exact field plus coupled MPC to `<=5.0s/1000`; every performance change reruns Stage A.
+- Stage C finally reruns both complete gates from the same final candidate; historical Stage A/Stage B passes cannot substitute for the joint final verification.
 
 ## Result
 

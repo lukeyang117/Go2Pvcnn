@@ -14,7 +14,7 @@
 - Real nine-command viewer verification remains green on the current candidate: `passed=true`, joint-order error `0`, stance gap max `0.0114493m`, joint step max `0.185368rad`, actual/planner foot error max `5.24e-7m`, and zero-command root drift remains numerical zero.
 - T302v performance continuation compiles the fixed-shape LQ/query/rollout path, reducing MPC to about `2.55-2.85ms` without changing losses or geometry. Exact signed EDT remains the blocker on realistic multi-cell maps. See [full design revalidation](../log/2026-07-17-joint-mpc-rti-full-design-revalidation.md).
 - T302v.7 root/foot propulsion-order diagnostics confirm the viewer observation: across eight flat rolling commands, consecutive-stance feet move by `1.040x` the signed root step on average, only `4.02%` stay within `1mm/frame`, and swing motion relative to root contributes only `7.0%` of root progress on average. The root is independently command-integrated while the phase-only swing target has no command-conditioned foothold. See [root/foot quantification](../log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
-- T302v.7 Chinese HTML design is written for review. It inherits all three prior Joint MPC designs, specifies complete root-joint FK/GGN cross blocks, scheduled stance equality, horizon command progress, command-conditioned touchdown, 20-80ms foot-leading-root startup, arrowhead/Schur Riccati, and one scenario-metric JointMetrics contract. Work is sequenced: all walking/safety metrics first, then freeze behavior and reduce the idle-GPU realistic baseline from `7.4025s/1000` to `<=5.0s/1000`. See [design log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md).
+- T302v.7 Chinese HTML design is approved with a three-stage completion rule. It inherits all three prior Joint MPC designs, specifies complete root-joint FK/GGN cross blocks, scheduled stance equality, horizon command progress, command-conditioned touchdown, 20-80ms foot-leading-root startup, arrowhead/Schur Riccati, and one scenario-metric JointMetrics contract. Stage A closes walking/safety, Stage B freezes behavior and reduces the idle-GPU realistic baseline from `7.4025s/1000` to `<=5.0s/1000`, and Stage C reruns both complete gates on the same final candidate. See [design log](../log/2026-07-17-joint-mpc-root-joint-coupled-gait-design.md).
 
 ## Open Children
 
@@ -64,7 +64,7 @@
 
 ## Next Step
 
-User reviews the T302v.7 HTML design. After approval, write the implementation plan: Stage A closes all old/new JointMetrics; Stage B freezes behavior and closes the realistic `7.4025s -> <=5.0s` performance gate.
+Write and execute the implementation plan: Stage A closes all old/new JointMetrics, Stage B closes the realistic `7.4025s -> <=5.0s` performance gate, and Stage C reruns both complete gates on the same final candidate.
 
 ## Node Details
 
