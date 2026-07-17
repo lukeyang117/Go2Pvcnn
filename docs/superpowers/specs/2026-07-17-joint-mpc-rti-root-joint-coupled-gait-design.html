@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joint MPC RTI Root-Joint 耦合步态与联合指标设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212a;
+      --muted: #5d6873;
+      --line: #d7dee5;
+      --panel: #f5f7f9;
+      --blue: #1f5f86;
+      --blue-soft: #eef6fa;
+      --green: #28724b;
+      --green-soft: #eef8f2;
+      --amber: #8a5a00;
+      --amber-soft: #fff8e9;
+      --red: #9b352d;
+      --red-soft: #fff1ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.68;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 38px 30px 72px; }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.28; letter-spacing: 0; }
+    h2 { margin: 36px 0 12px; padding-top: 22px; border-top: 1px solid var(--line); font-size: 22px; line-height: 1.32; letter-spacing: 0; }
+    h3 { margin: 23px 0 8px; font-size: 18px; line-height: 1.38; letter-spacing: 0; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 15px 25px; padding: 0; }
+    li { margin: 5px 0; }
+    code {
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.93em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 12px 0 18px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      line-height: 1.52;
+    }
+    pre code { padding: 0; border: 0; background: transparent; }
+    table { width: 100%; margin: 12px 0 20px; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 9px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--panel); }
+    .meta { margin-bottom: 22px; color: var(--muted); font-size: 14px; }
+    .note, .ok, .warn, .danger {
+      margin: 14px 0;
+      padding: 12px 14px;
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+    }
+    .ok { border-left-color: var(--green); background: var(--green-soft); }
+    .warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .danger { border-left-color: var(--red); background: var(--red-soft); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+    .card { padding: 13px 15px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+    .card h3 { margin-top: 0; }
+    .small { color: var(--muted); font-size: 13px; }
+    @media (max-width: 760px) {
+      main { padding: 26px 18px 50px; }
+      .grid { grid-template-columns: 1fr; }
+      table { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Joint MPC RTI Root-Joint 耦合步态与联合指标设计</h1>
+  <p class="meta">日期：2026-07-17 ｜ 主线：T302v.7 ｜ 目标路径：<code>Go2Pvcnn/extension/joint_mpc_rti/</code> ｜ 分支：<code>joint_mpc</code></p>
+
+  <div class="note">
+    <strong>继承关系：</strong>本设计是
+    <code>docs/superpowers/specs/2026-07-15-joint-mpc-rti-gpu-design.html</code>、
+    <code>docs/superpowers/specs/2026-07-16-joint-mpc-rti-joint-order-stance-grounding-design.md</code>
+    和
+    <code>docs/superpowers/specs/2026-07-16-joint-mpc-rti-small-obstacle-crossing-design.html</code>
+    的连续增量。它保留 H16、dt=0.02、fixed trot、真实 x0 注入、只发布 x1、世界坐标单高程图、signed small/large field、连续语义 loss、strict cross、stop-support、全身零碰撞、任意环境数封装和 viewer/PPO 边界；不另起 planner 后端。
+  </div>
+
+  <div class="warn">
+    <strong>对旧设计的明确修正：</strong>2026-07-16 stance 设计只把足端残差通过每腿 <code>3x3</code> joint Jacobian写入 joint block；当前生产 LQ 又使用 root block + 逐关节对角块求解。结果是 root 与关节虽位于同一 state tensor，优化方向仍然解耦。本设计以完整 root-joint FK Jacobian、非零交叉 Hessian和结构化耦合求解覆盖该近似，不允许只提高 <code>stance_xy_lock</code> 权重代替结构修复。
+  </div>
+
+  <h2>1. 问题证据</h2>
+  <p>64 次 rolling x1、八组平移 command 的量化结果表明：</p>
+  <ul>
+    <li>consecutive stance 足沿 command 的平均位移是 root step 的 <code>1.040x</code>。</li>
+    <li>只有 <code>4.02%</code> 的 stance 样本保持在 <code>1mm/frame</code> 以内。</li>
+    <li>swing 足相对 root 的主动推进平均只有 root progress 的 <code>7.0%</code>，八组命令中六组不超过 <code>10%</code>。</li>
+    <li>root 从第一个 20ms 发布帧按 command 移动；固定相位 joint target 主要负责抬腿，没有 command-conditioned touchdown XY。</li>
+  </ul>
+  <p>因此当前轨迹是 root-driven kinematics：root 先由独立速度积分产生路径，关节围绕这条路径补偿。足端世界运动大部分来自 root 携带，而不是 stance 锚定、swing 主动迈步和 touchdown 支撑切换。</p>
+
+  <h2>2. 设计目标与非目标</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>目标</h3>
+      <ul>
+        <li>scheduled stance 足在世界系成为真正的运动学等式约束。</li>
+        <li>stance residual 同时对 root pose 和对应腿关节产生优化方向。</li>
+        <li>非零平移 command 下，swing 足具有方向、大小相关的 touchdown lead。</li>
+        <li>启动时 swing 足主动运动至少领先 root 一个 20ms 发布帧。</li>
+        <li>root 用 horizon progress 跟踪 command，不再逐帧锁死完整命令速度。</li>
+        <li>每个场景同时检查全部通用 JointMetrics，禁止场景选择性漏检。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>非目标</h3>
+      <ul>
+        <li>不增加质心动力学、接触力、摩擦锥、关节力矩或执行器模型。</li>
+        <li>不优化 gait topology、per-leg phase offset 或 swing duration。</li>
+        <li>不添加 <code>crossable_small</code>、指定跨越腿或固定绕行侧。</li>
+        <li>不通过发布后 IK snapping、root 修补或轨迹投影掩盖求解器问题。</li>
+        <li>不在步态行为尚未通过时同时改写 exact signed EDT；性能优化排在联合行为指标通过之后。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>3. 动画与在线轨迹优化参考</h2>
+  <p>本设计参考动画和在线轨迹优化中的共同原则，而不复制其完整动力学：</p>
+  <table>
+    <thead><tr><th>工作</th><th>采用的原则</th><th>本设计中的落点</th></tr></thead>
+    <tbody>
+      <tr><td>Mordatch, Todorov, Popovic, <em>Discovery of Complex Behaviors through Contact-Invariant Optimization</em>, SIGGRAPH 2012, DOI 10.1145/2185520.2185539</td><td>接触必须参与轨迹优化模型，不能只在最终评分中观察。</td><td>fixed scheduler 不再优化 contact activation，但 scheduled stance 进入等式约束和 LQ/GGN。</td></tr>
+      <tr><td>Mordatch et al., <em>Synthesis and Stabilization of Complex Behaviors through Online Trajectory Optimization</em>, IROS 2012, DOI 10.1109/IROS.2012.6386025</td><td>滚动使用最新状态，在线修正未来整段轨迹。</td><td>保持真实 x0、shifted warm start、单次 RTI 和 x1 闭环。</td></tr>
+      <tr><td>de Lasa, Mordatch, Hertzmann, <em>Feature-Based Locomotion Controllers</em>, SIGGRAPH 2010, DOI 10.1145/1833349.1781157</td><td>root/COM、end-effector 和姿态特征必须在同一个控制问题中协调。</td><td>command progress、stance anchor、swing touchdown 和 joint posture共享完整 Jacobian与二次子问题。</td></tr>
+      <tr><td>da Silva, Abe, Popovic, <em>Interactive Simulation of Stylized Human Locomotion</em>, SIGGRAPH 2008, DOI 10.1145/1399504.1360681</td><td>全局运动与局部姿态不能靠独立播放自然拼接。</td><td>root 不再作为先验匀速轨迹，足端接触和局部关节共同决定可发布 root motion。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>4. 方案比较与选择</h2>
+  <table>
+    <thead><tr><th>方案</th><th>优点</th><th>缺点</th><th>决策</th></tr></thead>
+    <tbody>
+      <tr><td>继续增大 stance/swing loss 权重</td><td>改动最小。</td><td>root-joint 交叉方向仍不存在，容易关节饱和、line search 停滞。</td><td>不采用。</td></tr>
+      <tr><td>先规划足端，再对每帧执行 IK/root 投影</td><td>动画效果容易快速改善。</td><td>两阶段结果与 merit/warm start 不一致，不是真正 joint MPC。</td><td>不采用主线。</td></tr>
+      <tr><td>完整 FK Jacobian + stance equality + command touchdown + 耦合 Schur/Riccati</td><td>保持运动学 RTI，直接修复根因，可批量 GPU 化。</td><td>求解器复杂度和单步成本上升。</td><td><strong>采用。</strong></td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. 优化变量与完整运动学耦合</h2>
+  <p>状态和控制 ABI 保持不变：</p>
+  <pre><code>x_t = [root_pos_w(3), root_rpy_w(3), joint_pos(12)]
+u_t = [root_lin_vel_b(3), root_ang_vel_b(3), joint_vel(12)]</code></pre>
+  <p>第 l 条腿的世界足端为：</p>
+  <pre><code>p_foot_l(x) = p_root + R(root_rpy) * p_foot_body_l(q_l)</code></pre>
+  <p>线性化必须使用完整 Jacobian：</p>
+  <pre><code>J_foot_l = [
+  I_3,                                  # root translation
+  -R * skew(p_foot_body_l) * E_rpy,     # root rotation
+  0 ... R * J_leg_l ... 0               # corresponding leg joints
+]</code></pre>
+  <p>任一足端 residual 的 GGN 均构造：</p>
+  <pre><code>g += J_foot_l^T * W * r
+H += J_foot_l^T * W * J_foot_l</code></pre>
+  <p>因此 <code>H[root, joint_l]</code> 和 <code>H[joint_l, root]</code> 必须非零。stance 足滑动时，求解器能够同时选择 root 减速/转动和对应髋膝关节补偿，而不是只让关节追逐已经走远的 root。</p>
+
+  <h2>6. 修改约束</h2>
+  <div class="danger">
+    <strong>约束边界：</strong>以下硬约束只定义运动学一致性、fixed contact 和启动时序，不依据 small/large 语义选择跨越或绕行。语义行为继续由连续 height/signed-distance residual 决定。
+  </div>
+  <table>
+    <thead><tr><th>约束</th><th>定义</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td>真实起点</td><td><code>X[:,0] = measured_state</code></td><td>保持 rolling MPC 闭环。</td></tr>
+      <tr><td>运动学转移</td><td><code>X[t+1] = f(X[t],U[t])</code></td><td>保持 multiple-shooting 一致性。</td></tr>
+      <tr><td>scheduled stance world anchor</td><td><code>FK_l(X[t]) = anchor_l</code>，至少约束 XY；Z 等于同一高程图表面加 foot radius。</td><td>禁止 stance 足被 root 携带。</td></tr>
+      <tr><td>joint bounds</td><td>position/velocity 位于 Go2 允许范围。</td><td>禁止通过极端关节姿态满足锚点。</td></tr>
+      <tr><td>启动足端领先</td><td>零/近零平移转为非零平移时，首个发布帧 root command-axis 位移不超过 <code>0.5mm</code>，scheduled swing 足必须先形成至少 <code>1mm</code> 的 relative-root 主动位移。</td><td>保证足端先动，root 后动。</td></tr>
+      <tr><td>地图和数据有效性</td><td>field/env/version/world pose 对齐，非有限或越界显式 invalid。</td><td>不让无效数据进入发布结果。</td></tr>
+    </tbody>
+  </table>
+  <p>stance equality 在 swing→stance 时使用安全 touchdown 的世界位置建立新 anchor；连续 stance 段保持同一 anchor。若计划 touchdown 位于语义风险内，连续 touchdown avoidance 必须在进入 stance 之前把它移到安全区域，不能在约束层临时 snap。</p>
+
+  <h2>7. Command、Swing 与 Touchdown</h2>
+  <h3>7.1 Command 从逐帧锁定改为 horizon 任务</h3>
+  <p>删除“每个节点都强制 root 速度等于完整 command”的主导作用。主要平移任务改为：</p>
+  <pre><code>v_avg_body = Rz(-yaw0) * (root_xy[H] - root_xy[0]) / (H * dt)
+L_command_progress = ||v_avg_body - command_xy||^2
+L_root_smooth = ||delta root_velocity||^2</code></pre>
+  <p>可以保留较弱的局部速度 residual，但它不能压过 stance equality、启动足端领先和 touchdown coordination。这样 root 的瞬时速度可以随 stance/swing 相位变化，而 horizon 平均进度仍跟踪 command。</p>
+
+  <h3>7.2 Command-conditioned Touchdown</h3>
+  <p>固定相位 joint target 继续提供弱姿态先验，但不再单独决定 swing XY。每条 swing 腿生成连续 touchdown reference：</p>
+  <pre><code>touchdown_ref_l =
+  hip_world_l
+  Rz(yaw) * nominal_footprint_l
+  k_step * command_world_xy * remaining_swing_time
+  + continuous terrain / signed-distance correction</code></pre>
+  <ul>
+    <li>前进、后退、横移和斜向命令自然得到不同 touchdown lead。</li>
+    <li>速度越大，允许的步长参考越大，但受 reach、joint bounds、smoothness 和 terrain safety 限制。</li>
+    <li>纯 yaw 使用围绕 root 的切向 touchdown reference，不把 yaw 错误转成平移。</li>
+    <li>touchdown 仍由最终 root/joint FK 实现，不新增一条与 FK 脱离的可发布足端轨迹。</li>
+  </ul>
+
+  <h3>7.3 启动足端领先</h3>
+  <p>运动启动事件定义为平移 command 从 norm 不超过配置 deadband 转为非零，或方向发生足够大的改变。事件状态按环境独立存入 solver/runtime state，不跨环境共享。</p>
+  <pre><code>t_foot = first t where
+  delta(foot_world - root_world) dot command_direction >= 1mm
+
+t_root = first t where
+  delta(root_world) dot command_direction >= 0.5mm
+
+foot_root_lead_time = (t_root - t_foot) * dt</code></pre>
+  <p>首帧 root hold 属于已批准的启动运动学约束；后续使用连续 progress/smoothness恢复 command。稳定 trot 不要求 root 每个 half-cycle 完全停住，因为已有另一对 stance 足提供世界锚点；稳定阶段由 stance slip、swing active motion 和 touchdown lead 约束协同。</p>
+
+  <h2>8. Loss、Constraint、Merit 与 LQ 一致性</h2>
+  <p>所有场景使用同一套目标与约束，不按 terrain row、shape 或测试名称切换 loss：</p>
+  <pre><code>task:
+  horizon command progress, direction, yaw
+
+contact / gait:
+  stance equality, swing touchdown reference, swing shape,
+  touchdown velocity, support viability, foot-leads-root startup
+
+terrain / semantic:
+  stance ground, terrain clearance, signed small/large clearance,
+  safe landing, full-body collision margins
+
+regularization:
+  posture, joint limits, root/joint velocity and acceleration,
+  first-control and rolling continuity</code></pre>
+  <ul>
+    <li>同一 residual 的几何、mask、normalization、margin 和权重在 GGN/LQ 与 full nonlinear merit 中必须一致。</li>
+    <li>line search 只能选择步长，不能承担创造 root-joint 耦合方向的职责。</li>
+    <li>scheduled stance equality 进入 SQP constraint system；对应 residual 仍可进入 merit 作为 constraint violation 评分和诊断，但不靠调普通 loss 权重实现。</li>
+    <li>所有旧 terrain、small/large、support、smoothness、terminal 项继续存在，不能为了新 gait 指标关闭旧安全项。</li>
+  </ul>
+
+  <h2>9. 耦合 LQ 求解器</h2>
+  <p>现有 diagonal state Riccati 和 root/逐关节独立 block solver不能用于新生产路径，因为它们会丢弃 <code>H[root,joint]</code>。采用 root-centered arrowhead 结构：</p>
+  <pre><code>[ Hrr  Hr1  Hr2  Hr3  Hr4 ]
+[ H1r  H11   0    0    0  ]
+[ H2r   0   H22   0    0  ]
+[ H3r   0    0   H33   0  ]
+[ H4r   0    0    0   H44 ]
+
+root block: 6x6
+leg block:  3x3 each</code></pre>
+  <p>每个时间节点用 batched Schur complement 消去四条腿：</p>
+  <pre><code>S_root = Hrr - sum_l Hrl * inv(Hll) * Hlr
+solve root delta from S_root
+back-substitute each leg delta</code></pre>
+  <p>实现必须使用稳定的 batched Cholesky/LDLT 或解析小块 solve，不显式构造 matrix inverse。若时间递推导致腿间间接耦合不能保持 arrowhead，则允许使用完整 <code>18x18</code> batched Riccati 作为正确性基线；生产结构化近似必须与完整基线的方向和 merit 改善一致，不能为了速度再次丢弃交叉块。</p>
+
+  <h2>10. Rolling RTI 数据流</h2>
+  <pre><code>measured x0 + command + field + previous solver state
+  -> update per-env command-start state
+  -> fixed trot contact schedule
+  -> command-conditioned touchdown references
+  -> shifted warm start
+  -> full root-joint FK / link geometry / field queries
+  -> residuals + stance equalities + complete Jacobians
+  -> coupled GGN + arrowhead/Schur Riccati
+  -> parallel line search with full merit and constraint violation
+  -> publish x1 only
+  -> update stance anchors, gait phase, command-start state
+</code></pre>
+  <p>环境 reset 清空对应环境的 stance anchor、warm start、dual、pending reference 和 command-start state；其他环境不受影响。环境数量继续由上层 <code>num_envs=N</code> 构建，底层不写死 1024。</p>
+
+  <h2>11. JointMetrics 统一数据合同</h2>
+  <div class="ok">
+    <strong>联合原则：</strong>场景只负责产生 terrain、command、phase 和事件，不得选择计算哪些通用指标。所有 rolling 场景调用同一个 JointMetrics accumulator。任何指标的改善都不能以另一个场景中旧指标退化为代价。
+  </div>
+  <p>原始指标保留维度：</p>
+  <pre><code>[scenario, command, phase, environment, time, leg_or_body_part]</code></pre>
+
+  <h3>11.1 Root</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th><th>适用范围</th></tr></thead>
+    <tbody>
+      <tr><td><code>root_velocity_error</code></td><td>发布 root pose 差分速度与 command 的误差，不读取 optimizer control 自证正确。</td><td>所有 command。</td></tr>
+      <tr><td><code>root_direction_error</code></td><td>root XY 进度与 command XY 的夹角。</td><td>非零平移。</td></tr>
+      <tr><td><code>root_yaw_rate_error</code></td><td>发布 yaw 差分角速度与 yaw command 误差。</td><td>全部，重点 yaw/mixed。</td></tr>
+      <tr><td><code>root_drift</code></td><td>零 command 后的 root XY/yaw 累计偏移。</td><td>零速和 stop。</td></tr>
+      <tr><td><code>root_step_jump</code></td><td>相邻发布帧 root XY/Z/RPY 最大跳变。</td><td>所有场景。</td></tr>
+      <tr><td><code>root_progress</code></td><td>root 沿 command 方向累计进度。</td><td>非零平移。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>11.2 Stance 与支撑</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th></tr></thead>
+    <tbody>
+      <tr><td><code>stance_xy_slip</code></td><td>同一腿连续 stance 发布帧的世界 XY 位移。</td></tr>
+      <tr><td><code>stance_xy_slip_rate</code></td><td>stance slip 超过门槛的有效 stance 样本比例。</td></tr>
+      <tr><td><code>stance_ground_gap/error/penetration</code></td><td>足底相对统一 height surface 的有符号间隙、绝对误差和负向穿入。</td></tr>
+      <tr><td><code>stance_anchor_residual</code></td><td>完整 FK 足端与 scheduled world anchor 的等式残差。</td></tr>
+      <tr><td><code>safe_support_count</code></td><td>同时满足贴地、语义安全、无碰撞的实际支撑足数量。</td></tr>
+      <tr><td><code>zero_support_run</code></td><td>连续 safe support 数量为零的最长帧数。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>11.3 Swing 与 Touchdown</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th></tr></thead>
+    <tbody>
+      <tr><td><code>swing_surface_clearance</code></td><td>swing 足底到当前位置 height surface 的距离。</td></tr>
+      <tr><td><code>mid_swing_clearance</code></td><td>摆动中段的最小和峰值净空，避免 early/late 接地样本稀释。</td></tr>
+      <tr><td><code>swing_relative_root_progress</code></td><td>liftoff→touchdown 的 <code>delta(foot-root)</code> 在 command 方向的投影。</td></tr>
+      <tr><td><code>swing_world_progress</code></td><td>同一 swing 足世界系总进度，用于和 relative progress 对照。</td></tr>
+      <tr><td><code>touchdown_lead/gain</code></td><td>touchdown 足相对 root 的 command-axis 位置，以及相对 liftoff 的增量。</td></tr>
+      <tr><td><code>touchdown_direction_error</code></td><td>touchdown lead 与 command 方向夹角。</td></tr>
+      <tr><td><code>touchdown_velocity</code></td><td>touchdown 前一发布帧的足端世界速度。</td></tr>
+      <tr><td><code>swing_duration</code></td><td>liftoff 到 touchdown 的实际发布帧数。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>11.4 Root-Joint 耦合</h3>
+  <table>
+    <thead><tr><th>指标</th><th>定义</th><th>失败含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>root_joint_cross_hessian_norm</code></td><td>stance/touchdown GGN 中 root 与对应腿 joint 交叉块范数。</td><td>为零表示仍是伪 joint 优化。</td></tr>
+      <tr><td><code>root_joint_coupled_direction</code></td><td>注入 stance 误差后，LQ 方向是否同时修正 root 和对应腿且降低残差。</td><td>只有 joint 或只有 root 响应。</td></tr>
+      <tr><td><code>root_motion_without_support</code></td><td>safe support 为零或 stance equality 不合格期间的 root 累计位移。</td><td>身体无支撑滑动。</td></tr>
+      <tr><td><code>stance_root_carry_ratio</code></td><td>stance 足 command-axis 世界位移除以同期 root 位移。</td><td>接近 1 表示足被 root 携带。</td></tr>
+      <tr><td><code>swing_active_motion_ratio</code></td><td>swing relative-root progress 除以同期 root progress。</td><td>不为正表示足没有主动迈步。</td></tr>
+      <tr><td><code>foot_motion_explained_by_root</code></td><td>root 帧间位移对足端世界位移的最小二乘解释系数，stance/swing 分开。</td><td>stance 接近 1 表示整体平移假走路。</td></tr>
+      <tr><td><code>foot_root_lead_time</code></td><td><code>(t_root-t_foot)*dt</code>，正值表示 swing 足相对 root 主动移动先发生。</td><td>零或负值表示 root 同时或更早启动。</td></tr>
+      <tr><td><code>root_leak_before_foot</code></td><td>达到 foot onset 前 root 已沿 command 移动的距离。</td><td>root 在足端启动前提前滑走。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>11.5 几何、连续性、RTI 与语义</h3>
+  <table>
+    <thead><tr><th>组</th><th>指标</th></tr></thead>
+    <tbody>
+      <tr><td>全身几何</td><td><code>foot/calf/thigh/base_collision_frames</code>、各部位 valid denominator、collision rate、<code>penetration_by_part</code>、<code>terrain_query_invalid</code>。</td></tr>
+      <tr><td>关节连续性</td><td><code>joint_limit_violation</code>、<code>joint_velocity_violation</code>、<code>joint_step</code>、<code>joint_acceleration</code>、<code>foot_step_jump</code>、<code>nonfinite_count</code>。</td></tr>
+      <tr><td>Rolling RTI</td><td><code>x0_injection_error</code>、<code>published_x1_error</code>、<code>replan_boundary_error</code>、<code>warm_start_shift_error</code>、<code>phase_continuity_error</code>、<code>cycle_drift</code>。</td></tr>
+      <tr><td>Small semantic</td><td><code>stance_on_small</code>、<code>cross_opportunity</code>、<code>cross_success/rate</code>、<code>small_clearance_by_part</code>、<code>bypass_failure</code>。</td></tr>
+      <tr><td>Large obstacle</td><td><code>large_obstacle_clearance</code>、<code>large_avoidance_progress</code> 和全身 large collision。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>12. 场景与指标必须做笛卡尔联合</h2>
+  <p>每个场景均计算 Root、Stance、Swing、Coupling、Geometry、Continuity 和 RTI 通用组。事件型指标只有在数学上不适用时才为 <code>N/A</code>：</p>
+  <table>
+    <thead><tr><th>场景</th><th>通用指标</th><th>事件指标</th></tr></thead>
+    <tbody>
+      <tr><td>平地零速、前后、横移、斜向、yaw、mixed</td><td>全部计算。</td><td>非零平移计算 touchdown/lead；零速方向指标 N/A。</td></tr>
+      <tr><td>小物体五 shape × 三速度 × 多 gait phase</td><td>全部计算，不能只看 cross/collision。</td><td>cross opportunity 存在时计算 strict success；coverage 单独验收。</td></tr>
+      <tr><td>接近小物体后 stop</td><td>全部计算，不能只看 support recovery。</td><td>stop drift、support recovery 和重新启动 lead。</td></tr>
+      <tr><td>大障碍左右偏置与正前方</td><td>全部计算，不能只看 root 绕行。</td><td>large clearance、avoidance progress。</td></tr>
+      <tr><td>上台阶、下台阶、坡面和局部高差</td><td>全部计算，包含耦合、滑移和碰撞。</td><td>terrain touchdown 和 root Z continuity。</td></tr>
+    </tbody>
+  </table>
+  <div class="danger">
+    <strong>禁止平均掩盖：</strong>验收必须同时检查每个 <code>scenario x command x phase x shape</code> 单元、每类场景 worst case 和全局汇总。总体均值通过不能覆盖任一单元失败。N/A 不计为成功；cross、stop、command-start 等事件必须另有最小 opportunity coverage。
+  </div>
+
+  <h2>13. 验收阈值</h2>
+  <h3>13.1 新增耦合与步态阈值</h3>
+  <table>
+    <thead><tr><th>指标</th><th>目标</th></tr></thead>
+    <tbody>
+      <tr><td><code>stance_xy_slip_max</code></td><td><code>&lt;= 0.5mm/frame</code></td></tr>
+      <tr><td><code>stance_xy_slip_mean</code></td><td><code>&lt;= 0.2mm/frame</code></td></tr>
+      <tr><td>stance 样本 <code>&lt;=1mm/frame</code> 比例</td><td><code>100%</code></td></tr>
+      <tr><td><code>stance_anchor_residual_max</code></td><td><code>&lt;= 0.5mm</code></td></tr>
+      <tr><td><code>stance_root_carry_ratio</code></td><td>每个非零场景单元绝对值 <code>&lt;=0.10</code></td></tr>
+      <tr><td><code>swing_relative_root_progress</code></td><td>每个完整非零平移 swing event <code>&gt;0</code></td></tr>
+      <tr><td><code>swing_active_motion_ratio</code></td><td>每个非零场景单元平均 <code>&gt;=0.50</code></td></tr>
+      <tr><td><code>root_joint_cross_hessian_norm</code></td><td>有效 stance/touchdown residual 下有限且严格非零；方向与有限差分一致。</td></tr>
+      <tr><td><code>root_motion_without_support</code></td><td>单事件 <code>&lt;=0.5mm</code></td></tr>
+      <tr><td><code>foot_root_lead_time</code></td><td>所有 motion-start event 为 <code>20-80ms</code></td></tr>
+      <tr><td><code>root_leak_before_foot</code></td><td><code>&lt;=0.5mm</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>13.2 继承且不得放宽的旧阈值</h3>
+  <ul>
+    <li>strict cross 总体 <code>&gt;=95%</code>，每个 shape-speed 单元 <code>&gt;=90%</code>，并保持有效 opportunity coverage。</li>
+    <li>foot/calf/thigh/base collision frame rate 总体和每个 shape-speed 单元均为 <code>0%</code>；最大穿入 <code>&lt;=1mm</code>。</li>
+    <li><code>stance_on_small=0</code>，terrain query invalid 和 nonfinite 均为 0。</li>
+    <li>stance ground gap <code>&lt;=0.012m</code>，stance penetration <code>&lt;=0.001m</code>。</li>
+    <li>stop-on-small recovery <code>100%</code>，最长连续零支撑 <code>&lt;=4</code>，stop root drift <code>&lt;=0.015m</code>。</li>
+    <li>零 command root XY/yaw drift 保持既有数值级；joint order error <code>&lt;1e-6rad</code>；planner/actual foot readback 保持数值容差。</li>
+    <li><code>num_envs=1/40/512/1024</code> 的 state、field、solver、reference shape 和版本合同保持正确。</li>
+    <li>旧 MPC/reward/viewer 与 joint MPC 既有功能回归全部继续通过。</li>
+  </ul>
+  <p>root command 验收改为发布 pose 的 horizon/rolling 平均速度和方向，不再要求每个 20ms 帧严格等于 command；耦合后允许步态相位内速度变化，但不能通过长期停走满足足端指标。</p>
+
+  <h2>14. 统一指标实现边界</h2>
+  <pre><code>Go2Pvcnn/tests/joint_mpc_rti/
+├── joint_metrics.py             # one shared tensor accumulator and definitions
+├── scenario_matrix.py           # flat/small/stop/large/terrain scenario factories
+├── acceptance_thresholds.py     # metric applicability and thresholds
+├── run_joint_acceptance.py      # one entry, per-cell + worst-case + global report
+├── small_obstacle_crossing_probe.py
+├── small_obstacle_stop_probe.py
+└── ... existing focused tests
+</code></pre>
+  <ul>
+    <li>现有 probe 可以继续负责生成场景，但不得继续维护互相不同的碰撞、stance、support 或连续性定义。</li>
+    <li><code>joint_metrics.py</code> 从同一 rolling state/FK/query/contact/event stream 一次计算全部指标。</li>
+    <li>阈值与 applicability 独立于 metric 数值计算，禁止 detector 根据目标阈值改变几何。</li>
+    <li>报告必须包含每个指标的 numerator、denominator、valid count、N/A 原因、worst-case key 和原始最大穿入/滑移。</li>
+    <li>统一入口的总退出码由所有适用单元的联合结果决定；不能在 runner 中覆盖失败。</li>
+  </ul>
+
+  <h2>15. 必须达到的测试结果</h2>
+  <table>
+    <thead><tr><th>验证层</th><th>必须达到的结果</th></tr></thead>
+    <tbody>
+      <tr><td>完整 FK Jacobian</td><td>root translation、root rotation和对应腿 joint 的解析方向导数与有限差分一致；无关腿 block 为零。</td></tr>
+      <tr><td>GGN 交叉块</td><td>stance/touchdown 残差产生对称、有限、非零的 root-leg 交叉 Hessian；注入误差后的 coupled direction 降低同一残差。</td></tr>
+      <tr><td>耦合求解器</td><td>结构化 Schur/Riccati 与完整 dense 基线在小批随机正定问题上的 state/control direction 和目标改善一致。</td></tr>
+      <tr><td>stance equality</td><td>连续 stance、多 phase、不同 command 和地形下 anchor residual、XY slip、Z gap 同时达标，不通过 postprocess 修改输出。</td></tr>
+      <tr><td>command touchdown</td><td>前后、左右、斜向和不同速度下 touchdown lead 方向正确，步长随 command 连续变化，joint/reach 不越界。</td></tr>
+      <tr><td>足端先于 root</td><td>每个 motion-start event 中 scheduled swing 足 relative-root motion 领先 root 20-80ms，提前 root leak 不超过 0.5mm；同期 stance anchor 有效。</td></tr>
+      <tr><td>联合场景矩阵</td><td>每个场景单元都生成全部通用 JointMetrics；故意注入任一旧指标退化时，即使该场景主指标改善，总结果仍失败并定位具体单元。</td></tr>
+      <tr><td>平地与真实 viewer</td><td>九命令 root 平均速度/方向、stance XY/Z、swing 主动推进、joint/foot 连续性和 actual readback 同时达标。</td></tr>
+      <tr><td>small crossing/stop</td><td>原 strict cross、零分部位碰撞、stance-on-small、stop support/root drift 全部通过，同时新 coupling/slip/lead 指标不退化。</td></tr>
+      <tr><td>large/terrain</td><td>绕行、上下台阶和粗糙地形继续安全推进，并同时满足 stance anchor、全身碰撞、joint、RTI 和 root-foot coupling 指标。</td></tr>
+      <tr><td>动态环境数</td><td><code>1/40/512/1024</code> 由同一上层参数构建；metric accumulator、scenario key、solver和报告不依赖固定 batch。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>16. 性能基线、目标与实施顺序</h2>
+  <div class="warn">
+    <strong>当前真实性能基线：</strong>空闲 GPU、1024 环境、H16、1000 次同步 refresh、每环境 small <code>11x11</code> footprint 加 large <code>41x41</code> footprint 的正式结果为 <code>7402.55ms</code>。其中 field 平均 <code>4.5884ms/次</code>，MPC 平均 <code>2.8416ms/次</code>，完整 refresh 平均 <code>7.4025ms/次</code>，P95 <code>7.4742ms</code>，峰值显存约 <code>1127.79MiB</code>，nonfinite 为 0。旧单像素 <code>4768ms</code> 命中了非真实快速路径，继续明确拒绝作为验收结果。
+  </div>
+  <p>最终性能合同继续继承 2026-07-15 和 2026-07-16 设计，不放宽：</p>
+  <ul>
+    <li><code>1024 x H16 x 1000</code> 次同步 exact signed field + MPC 总耗时 <code>&lt;=5.0s</code>。</li>
+    <li>平均完整 refresh <code>&lt;=5.0ms</code>，并报告 P50、P95、P99、最大值和峰值显存。</li>
+    <li>计时包含 realistic multi-cell small/large signed field、field 发布、完整耦合 GGN/LQ、line search 和 x1 发布。</li>
+    <li>不能通过单像素地图、减少环境数、缩短 H、删除碰撞几何、关闭 JointMetrics 对应优化合同或排除 field 计时通过。</li>
+  </ul>
+  <p>实施严格分成两个顺序阶段：</p>
+  <ol>
+    <li><strong>阶段 A：行为正确性。</strong>完成 root-joint 耦合、stance equality、command touchdown、足端先于 root 和统一 JointMetrics；平地、小物体、大障碍、地形、stop、viewer、rolling 和旧回归全部通过。阶段 A 只报告性能变化，不以 5 秒门阻止定位行为问题。</li>
+    <li><strong>阶段 B：性能收口。</strong>冻结阶段 A 的 loss、constraint、几何、阈值和场景合同，再优化 exact EDT、耦合 Schur/Riccati、kernel fusion、workspace、编译和 CUDA Graph，直到 realistic full-refresh <code>&lt;=5s</code>。任何性能修改都必须重新运行阶段 A 的完整联合矩阵。</li>
+  </ol>
+  <p>新增 root-joint 交叉块可能使 MPC 时间高于当前 <code>2.8416ms</code>；因此性能优化必须同时给出 field、linearization、coupled solve、line search 和完整 refresh 的分项，先确认新增成本位于哪个阶段，再做结构优化。不得在行为修复过程中用 diagonal solver 临时恢复速度，因为那会重新制造本设计要消除的解耦。</p>
+
+  <h2>17. 风险与控制</h2>
+  <table>
+    <thead><tr><th>风险</th><th>控制方式</th></tr></thead>
+    <tbody>
+      <tr><td>stance equality 过强导致无可行解</td><td>touchdown 在进入 stance 前满足 terrain/semantic/reach；使用 SQP constraint regularization和明确 infeasible status，不在发布后 snap。</td></tr>
+      <tr><td>root 平均 command 跟踪变慢</td><td>用 horizon progress、terminal progress 和 rolling 平均速度验收；不恢复逐帧强锁定。</td></tr>
+      <tr><td>启动先摆腿导致原地等待</td><td>lead 上限 80ms，随后由 progress loss恢复；稳定 trot 不重复强制 root 停止。</td></tr>
+      <tr><td>touchdown step 过大导致 joint 饱和</td><td>连续 reach/joint barrier、速度相关步长界和完整 FK Jacobian共同限制。</td></tr>
+      <tr><td>结构化 solver 再次丢失耦合</td><td>每次改动都与 dense 基线对齐，并以 cross-Hessian和 coupled-direction 指标作为硬回归。</td></tr>
+      <tr><td>新场景指标改善但旧场景退化</td><td>所有场景使用同一 JointMetrics，按每单元 worst-case 联合失败，不允许仅看总平均。</td></tr>
+      <tr><td>耦合求解使当前 7.4025ms 基线进一步变慢</td><td>行为合同通过后分解 field/linearization/solve/line-search 时间，优先优化结构化 Schur、kernel fusion、workspace 和固定图；不得退回解耦近似。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>18. 完成定义</h2>
+  <div class="ok">
+    完成分为有顺序的两个门：先通过完整 root-joint Jacobian、stance equality、command-conditioned touchdown、耦合 LQ、启动足端领先，以及平地、小物体 crossing/stop、大障碍、上下台阶、真实 viewer、rolling RTI、动态环境数的全部适用新旧 JointMetrics；再在冻结这些行为合同后，把空闲 GPU realistic multi-cell 的 1024 x H16 x 1000 同步 field + MPC 从当前 7.4025s 优化到不超过 5.0s。两个门都通过才算最终完成。任何只修某个场景主指标、依赖全局平均掩盖、把 N/A 当成功、关闭旧 loss、修改 detector、恢复解耦 solver、使用单像素性能场景或在输出后修补轨迹的结果都不算完成。
+  </div>
+</main>
+</body>
+</html>
