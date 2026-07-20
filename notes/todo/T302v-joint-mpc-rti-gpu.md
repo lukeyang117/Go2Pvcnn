@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Pure-kinematic Task 3 is GREEN: closed-form IK handles full `[B,31,4,3]` targets without time/leg loops or joint clipping, reports reachability separately, and keeps complete FK/Jacobian regression at `10 passed`. See [Task 3 analytic IK log](../log/2026-07-20-joint-mpc-rti-kinematic-task03-analytic-ik.md).
 - Pure-kinematic Task 2 is GREEN: gait is one broadcasted `[B,31,4]` 24-frame diagonal schedule with exact 12 swing/12 stance and no recovery/extension state; gait plus FK/Jacobian regression is `10 passed`. See [Task 2 gait log](../log/2026-07-20-joint-mpc-rti-kinematic-task02-gait.md).
 - Pure-kinematic Task 1 is GREEN: production defaults are H30, 24/12+12 gait, one RTI, five alphas, seven top-level losses, and compact trajectory-only solver state. See [Task 1 contract log](../log/2026-07-20-joint-mpc-rti-kinematic-task01-contract.md).
 - Pure-kinematic implementation is active in isolated branch `work/joint-mpc-kinematic` from `9168f1d`. The focused host baseline is `62 passed, 13 skipped`; the GPU-visible attempt reached 13 CUDA allocation failures because the current device was out of memory. See [worktree baseline](../log/2026-07-20-joint-mpc-rti-kinematic-worktree-baseline.md).

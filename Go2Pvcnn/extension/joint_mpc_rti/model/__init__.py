@@ -1,6 +1,7 @@
 """Kinematic model and fixed gait schedule for joint MPC RTI."""
 
 from .dynamics import kinematic_step
+from .analytic_ik import go2_analytic_ik
 from .gait_schedule import fixed_trot_schedule
 from .go2_kinematics import Go2Geometry, foot_jacobian_joint, foot_jacobian_leg, go2_fk
 from .rollout import JointMpcRollout, rollout_controls
@@ -9,6 +10,7 @@ __all__ = [
     "Go2Geometry",
     "JointMpcRollout",
     "fixed_trot_schedule",
+    "go2_analytic_ik",
     "foot_jacobian_joint",
     "foot_jacobian_leg",
     "go2_fk",

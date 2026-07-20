@@ -40,11 +40,11 @@ class Go2LinkJacobians:
 def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
     """Return body-to-world rotation matrices for XYZ fixed-axis RPY."""
     rpy = torch.as_tensor(root_rpy_w)
-    if rpy.ndim != 2 or int(rpy.shape[-1]) != 3:
-        raise ValueError("root_rpy_w must have shape [B,3]")
-    roll = rpy[:, 0]
-    pitch = rpy[:, 1]
-    yaw = rpy[:, 2]
+    if rpy.ndim < 2 or int(rpy.shape[-1]) != 3:
+        raise ValueError("root_rpy_w must have shape [...,3]")
+    roll = rpy[..., 0]
+    pitch = rpy[..., 1]
+    yaw = rpy[..., 2]
     cr = torch.cos(roll)
     sr = torch.sin(roll)
     cp = torch.cos(pitch)
@@ -188,7 +188,19 @@ def _body_collision_samples(dtype: torch.dtype, device: torch.device) -> Tensor:
 
 def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geometry:
     """Compute planner-order foot, knee, shank, and body samples in world coordinates."""
-    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    root_input = torch.as_tensor(root_pos_w)
+    root_rpy_input = torch.as_tensor(root_rpy_w, dtype=root_input.dtype, device=root_input.device)
+    joint_input = torch.as_tensor(joint_pos, dtype=root_input.dtype, device=root_input.device)
+    if root_input.ndim < 2 or root_input.shape[-1] != 3:
+        raise ValueError("root_pos_w must have shape [...,3]")
+    if root_rpy_input.shape != root_input.shape:
+        raise ValueError("root_rpy_w must match root_pos_w")
+    if joint_input.shape != root_input.shape[:-1] + (12,):
+        raise ValueError("joint_pos must have shape [...,12]")
+    leading_shape = root_input.shape[:-1]
+    root_pos = root_input.reshape(-1, 3)
+    root_rpy = root_rpy_input.reshape(-1, 3)
+    joint = joint_input.reshape(-1, 12)
     upper_body, knee_body, foot_body = _leg_points_body(joint)
     alpha = constant_like(joint, "shank_sample_alpha", (0.25, 0.5, 0.75)).view(1, 1, 3, 1)
     shank_body = knee_body.unsqueeze(2) * (1.0 - alpha) + foot_body.unsqueeze(2) * alpha
@@ -201,20 +213,33 @@ def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geom
     thigh_world = torch.einsum("bij,bkqj->bkqi", rotation, thigh_body) + root_pos[:, None, None, :]
     body_world = torch.einsum("bij,bkj->bki", rotation, body_samples) + root_pos.unsqueeze(1)
     return Go2Geometry(
-        foot_pos_w=foot_world,
-        knee_pos_w=knee_world,
-        shank_samples_w=shank_world,
-        thigh_samples_w=thigh_world,
-        body_samples_w=body_world,
+        foot_pos_w=foot_world.reshape(*leading_shape, 4, 3),
+        knee_pos_w=knee_world.reshape(*leading_shape, 4, 3),
+        shank_samples_w=shank_world.reshape(*leading_shape, 4, 3, 3),
+        thigh_samples_w=thigh_world.reshape(*leading_shape, 4, 3, 3),
+        body_samples_w=body_world.reshape(*leading_shape, body_world.shape[-2], 3),
     )
 
 
 def go2_foot_pos(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
     """Compute only planner-order foot positions for nominal-shape references."""
-    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    root_input = torch.as_tensor(root_pos_w)
+    root_rpy_input = torch.as_tensor(root_rpy_w, dtype=root_input.dtype, device=root_input.device)
+    joint_input = torch.as_tensor(joint_pos, dtype=root_input.dtype, device=root_input.device)
+    if root_input.ndim < 2 or root_input.shape[-1] != 3:
+        raise ValueError("root_pos_w must have shape [...,3]")
+    if root_rpy_input.shape != root_input.shape:
+        raise ValueError("root_rpy_w must match root_pos_w")
+    if joint_input.shape != root_input.shape[:-1] + (12,):
+        raise ValueError("joint_pos must have shape [...,12]")
+    leading_shape = root_input.shape[:-1]
+    root_pos = root_input.reshape(-1, 3)
+    root_rpy = root_rpy_input.reshape(-1, 3)
+    joint = joint_input.reshape(-1, 12)
     _, _, foot_body = _leg_points_body(joint)
     rotation = rpy_to_rotation_matrix(root_rpy)
-    return torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
+    foot_world = torch.einsum("bij,bkj->bki", rotation, foot_body) + root_pos.unsqueeze(1)
+    return foot_world.reshape(*leading_shape, 4, 3)
 
 
 def foot_jacobian_leg(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
@@ -431,6 +456,11 @@ def complete_link_sample_jacobians(
 __all__ = [
     "Go2Geometry",
     "Go2LinkJacobians",
+    "CALF_LENGTH",
+    "HIP_OFFSETS",
+    "HIP_OFFSET_Y",
+    "LEG_SIDE_SIGNS",
+    "THIGH_LENGTH",
     "complete_foot_jacobian",
     "complete_knee_jacobian",
     "complete_body_sample_jacobian",
