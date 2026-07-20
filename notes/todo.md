@@ -5,7 +5,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 ## Start Here
 
 - Current focus: **T302v joint MPC RTI GPU**.
-- 2026-07-20 replacement design is awaiting user review: pure-kinematic H30, gait `24/12+12`, vectorized nominal, seven frozen losses, joint-bound/trust KKT, H30/32 associative scan, five-alpha loss-only line search, flat then small-obstacle behavior gates, and unchanged Stage B `1024 x H30 x 1000 <=5s`. The old 15+15 adaptive-contact/recovery architecture and its implementation plan are no longer the production direction. See [design log](log/2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md).
+- The approved 2026-07-20 replacement design now has a 16-task implementation plan. Execution order is contract -> fixed gait/IK/nominal/field -> seven losses/direct-Z QP/H30 scan/five-alpha search -> new RTI and old-code deletion -> monitored metrics -> flat -> small -> joint rerun -> Stage B -> final same-candidate rerun. See [plan log](log/2026-07-20-joint-mpc-rti-kinematic-flat-small-plan.md).
+- The 2026-07-20 replacement design is approved: pure-kinematic H30, gait `24/12+12`, vectorized nominal, seven frozen losses, joint-bound/trust KKT, H30/32 associative scan, five-alpha loss-only line search, flat then small-obstacle behavior gates, and unchanged Stage B `1024 x H30 x 1000 <=5s`. The old 15+15 adaptive-contact/recovery architecture and its implementation plan are no longer the production direction. See [design log](log/2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md).
 - Active branch page: [T302v](todo/T302v-joint-mpc-rti-gpu.md).
 - Active implementation plan: [Joint MPC RTI small-obstacle crossing plan](../docs/superpowers/plans/2026-07-16-joint-mpc-rti-small-obstacle-crossing-implementation-plan.md).
 - Background reward implementation plan: [T302r Go2 geometry clearance reward plan](todo/T302r-go2-geometry-clearance-reward-plan.md).

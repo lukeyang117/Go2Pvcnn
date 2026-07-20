@@ -112,7 +112,39 @@ Z = [z_0, ..., z_30] in R^(31 x 18)</code></pre>
   <p>感知仍是二维高程图和二维语义图，不构造三维体素：</p>
   <pre><code>H[x,y] : elevation
 S[x,y] : semantic label
-A_s[x,y], A_l[x,y] : small/large 膨胀和平滑占用层</code></pre>
+A_s[x,y], A_l[x,y] : small/large 卷积软占用层
+H_s[x,y], H_l[x,y] : 卷积传播后的分类障碍高度
+G_s[x,y], G_l[x,y] : 卷积软占用层的显式 XY 梯度</code></pre>
+  <div class="note"><strong>可导对象：</strong>语义标签本身仍是离散观测；MPC 需要的是 terrain loss 对轨迹查询坐标 <code>p=(x,y)</code> 可导。禁止直接把 <code>semantic_id == class</code> 的硬跳变送入 LQ/GGN。</div>
+
+  <h3>3.1 固定卷积软语义场</h3>
+  <p>先从离散语义图生成 small/large 二值 mask：</p>
+  <pre><code>M_s(x,y) = 1[S(x,y) == small]
+M_l(x,y) = 1[S(x,y) == large]</code></pre>
+  <p>每类使用固定的世界尺度高斯核：</p>
+  <pre><code>K_c(dx,dy) = exp(-(dx^2 + dy^2) / (2 sigma_c^2))
+C_c = K_c * M_c
+A_c = 1 - exp(-lambda_c C_c)</code></pre>
+  <p><code>sigma_c</code> 控制连续影响范围，<code>lambda_c</code> 控制占用饱和速度。核大小、padding 和 sigma 在图捕获前固定；small/large mask 使用固定通道 grouped <code>conv2d</code> 一次处理整个 batch，不按环境、像素或类别使用 Python 循环。</p>
+
+  <h3>3.2 卷积传播分类障碍高度</h3>
+  <p>语义范围扩展到物体外侧时，必须同时传播该类物体高度，不能重新读到外侧地面高度：</p>
+  <pre><code>N_c = K_c * (M_c H)
+H_c = N_c / (C_c + epsilon)</code></pre>
+  <p><code>H_c</code> 只作为该类障碍的连续局部高度；原始 elevation <code>H</code> 仍是普通地面和接触面的依据。</p>
+
+  <h3>3.3 显式梯度与双线性查询</h3>
+  <p>使用固定 Scharr 卷积核生成空间梯度：</p>
+  <pre><code>G_c,x = K_x * A_c
+G_c,y = K_y * A_c</code></pre>
+  <p>轨迹节点使用双线性采样：</p>
+  <pre><code>a_c(p_k) = bilinear(A_c, p_k)
+grad_p a_c(p_k) = bilinear([G_c,x, G_c,y], p_k)</code></pre>
+  <p>LQ/GGN 通过链式法则得到对 18 维状态的方向：</p>
+  <pre><code>dJ/dz_k = (dJ/da_c) (da_c/dp_k) (dp_k/dz_k)</code></pre>
+  <p>最后一项由 foot/knee/calf/thigh/base 的完整 FK Jacobian 给出。卷积、Scharr 和 packed bilinear query 必须保持固定形状并可进入 <code>torch.compile</code> 与 CUDA Graph。</p>
+
+  <h3>3.4 Phase-aware 有效高度</h3>
   <p>查询时根据部位和 gait phase 构造统一的有效高度/代价：</p>
   <table>
     <thead><tr><th>语义</th><th>Swing foot/link</th><th>Touchdown/Stance foot</th><th>Root/leg</th></tr></thead>
@@ -122,7 +154,14 @@ A_s[x,y], A_l[x,y] : small/large 膨胀和平滑占用层</code></pre>
       <tr><td>Large</td><td>虚拟墙</td><td>虚拟墙</td><td>虚拟墙</td></tr>
     </tbody>
   </table>
+  <p>small swing 使用传播后的真实物体高度：</p>
+  <pre><code>H_small_swing(p) = (1-a_s(p)) H(p) + a_s(p) H_s(p)
+r_swing = a_s(p) softplus(H_s(p) + radius_part + margin - z_part)</code></pre>
+  <p>small touchdown/stance 和所有 large 查询使用连续虚拟墙：</p>
+  <pre><code>H_small_stance(p) = (1-a_s(p)) H(p) + a_s(p) h_wall
+H_large(p) = (1-a_l(p)) H(p) + a_l(p) h_wall</code></pre>
   <p>第一阶段只正式验收 flat 与 small；large 层保留数据合同和 Stage B realistic workload，但不在本阶段声称大障碍行为通过。每轮 RTI 的地图点必须组成固定形状 packed query，不允许按节点或部位发起 Python 查询循环。</p>
+  <p>允许直接调节的卷积参数只有 <code>small_sigma_m</code>、<code>large_sigma_m</code>、<code>small_gain</code>、<code>large_gain</code> 和 <code>h_wall</code>。验收 detector 必须继续使用原始语义、原始 elevation 和物理几何，不能使用模糊场降低碰撞或 touchdown-on-small 判定标准。</p>
 
   <h2>4. Nominal 一次生成</h2>
   <div class="ok"><strong>硬合同：</strong>一次调用生成完整 <code>[B,31,18]</code> nominal。禁止按环境、31 个节点或四条腿使用 Python <code>for</code>。允许使用广播、<code>gather</code>、<code>where</code>、<code>cumsum</code> 和固定形状 batched analytic IK。</div>
@@ -231,6 +270,7 @@ Z_alpha = Z_bar + alpha * delta_Z</code></pre>
     <tbody>
       <tr><td>七项主权重与已定义子权重</td><td>增加、删除、分场景切换 loss</td></tr>
       <tr><td>W1/W2、h_swing、clearance margin、平滑温度</td><td>缩小物理碰撞几何或修改 detector 通过测试</td></tr>
+      <tr><td>small/large sigma、gain 与 h_wall</td><td>绕过卷积软场、使用离散语义硬分支或用模糊场替代验收 detector</td></tr>
       <tr><td>command/step reference 尺度、posture reference</td><td>H30、24 周期、12/12、优化变量</td></tr>
       <tr><td>trust-region 大小、measurement mismatch 衰减</td><td>五个 alpha、三项过滤和七 loss argmin</td></tr>
     </tbody>
@@ -332,7 +372,7 @@ command_count = 11 * 5 * 5 = 275</code></pre>
 |- config.py                 # 固定合同与允许调参
 |- planner.py                # 一次 RTI 编排，不承载隐藏 repair
 |- model/                    # gait、batched FK/IK、kinematic rollout
-|- terrain/                  # H/S -> unified field，packed query
+|- terrain/                  # grouped conv 软语义/传播高度/Scharr 梯度，packed query
 |- losses/                   # 仅七项 loss
 |- solver/                   # LQ/KKT、H30/32 associative scan、line search
 |- runtime/                  # shifted warm start、fixed-shape manager/CUDA Graph
@@ -349,7 +389,7 @@ Go2Pvcnn/tests/joint_mpc_rti/
 
   <h2>17. 完成定义</h2>
   <div class="ok">
-    第一阶段完成要求：新纯运动学 H30/24/12+12 架构与本设计一致；nominal 一次张量生成；一次 SQP/RTI 使用七项 loss、批准的 KKT、H30/32 associative scan 和五候选 line search；flat 全部适用指标通过；small 全部适用指标和严格跨越门通过；同一候选联合复验通过；无静默失控测试；Stage B 在冻结行为下通过 <code>1024 x H30 x 1000 &lt;=5.0 s</code>；最终同一 HEAD 重新通过行为与性能。
+    第一阶段完成要求：新纯运动学 H30/24/12+12 架构与本设计一致；nominal 一次张量生成；离散语义通过固定 grouped conv、传播高度、Scharr 梯度和双线性查询形成对轨迹坐标可导的软场；一次 SQP/RTI 使用七项 loss、批准的 KKT、H30/32 associative scan 和五候选 line search；flat 全部适用指标通过；small 全部适用指标和严格跨越门通过；同一候选联合复验通过；无静默失控测试；Stage B 在冻结行为下通过 <code>1024 x H30 x 1000 &lt;=5.0 s</code>；最终同一 HEAD 重新通过行为与性能。
   </div>
   <p>以下均不算完成：只在 planner 内部 state 通过；只通过 crossing 主指标；用 root 大偏移代替足端跨越；用 clamp 饱和维持行为；修改 nominal/loss/line search 追测试；缩小 detector；引用旧结果；保留无限运行无输出进程；性能优化后不重跑行为。</p>
 

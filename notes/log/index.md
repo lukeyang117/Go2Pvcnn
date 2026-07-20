@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI pure-kinematic flat-small implementation plan | replacement planning / approved design | 16-task TDD plan written; no production code changed | direct Z; vectorized nominal; seven losses; H30/32 scan; flat -> small -> Stage B; final same-candidate rerun | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-flat-small-plan.md](2026-07-20-joint-mpc-rti-kinematic-flat-small-plan.md) |
+
 | 2026-07-20 | Joint MPC RTI pure-kinematic flat-small design | replacement design / user review | Chinese HTML written; no production code changed | H30; gait `24/12+12`; vectorized nominal; seven losses; five alphas; flat then small; Stage B `1024 x H30 x 1000 <=5s` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md](2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md) |
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |

@@ -30,3 +30,7 @@ The document explicitly supersedes the old 15+15 adaptive-contact/recovery produ
 ## Next Step
 
 User reviews the written design. After explicit approval, write a replacement implementation plan; do not continue the old 2026-07-17 plan as-is.
+
+## Approved Amendment
+
+After initial approval, the user identified that semantic differentiability must explicitly come from convolution. The design now requires fixed grouped Gaussian `conv2d` over small/large masks and semantic-weighted height, smooth occupancy `1-exp(-gain*mass)`, propagated class height, fixed Scharr XY gradients, and bilinear trajectory queries. Raw semantic ids remain acceptance-detector inputs only and may not create hard optimizer branches.
