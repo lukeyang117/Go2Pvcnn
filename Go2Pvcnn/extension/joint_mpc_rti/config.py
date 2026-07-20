@@ -34,7 +34,16 @@ class JointMpcRtiGaitCfg:
     swing_steps: int = 12
     stance_steps: int = 12
     h_swing: float = 0.08
+    foot_contact_offset: float = 0.022
     nominal_joint_pos: tuple[float, ...] = (0.0, 0.8, -1.5) * 4
+
+
+@dataclass
+class JointMpcRtiNominalCfg:
+    command_scale: float = 1.0
+    step_reference_scale: float = 1.0
+    unreachable_step_scale: float = 0.5
+    measurement_decay_nodes: int = 6
 
 
 @dataclass
@@ -65,6 +74,7 @@ class JointMpcRtiCfg:
     runtime: JointMpcRtiRuntimeCfg = field(default_factory=JointMpcRtiRuntimeCfg)
     solver: JointMpcRtiSolverCfg = field(default_factory=JointMpcRtiSolverCfg)
     gait: JointMpcRtiGaitCfg = field(default_factory=JointMpcRtiGaitCfg)
+    nominal: JointMpcRtiNominalCfg = field(default_factory=JointMpcRtiNominalCfg)
     losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
 
 
@@ -72,6 +82,7 @@ __all__ = [
     "JointMpcRtiCfg",
     "JointMpcRtiGaitCfg",
     "JointMpcRtiLossCfg",
+    "JointMpcRtiNominalCfg",
     "JointMpcRtiRuntimeCfg",
     "JointMpcRtiSolverCfg",
 ]
