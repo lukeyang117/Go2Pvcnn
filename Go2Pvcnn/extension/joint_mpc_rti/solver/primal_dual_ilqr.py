@@ -11,6 +11,27 @@ from torch._higher_order_ops.scan import scan
 from extension.joint_mpc_rti.solver.fixed_spd import fixed_spd_solve
 
 
+def joint_kkt_compile_budget(*, constraint_rows: int, state_dim: int = 18) -> dict[str, int]:
+    rows = int(constraint_rows)
+    if rows < 0 or rows > 32:
+        raise ValueError("constraint rows must be between 0 and 32")
+    padded_rows = 1 if rows == 0 else 1 << (rows - 1).bit_length()
+    combined_rhs = int(state_dim) + rows
+    block_r = 1 << max(0, combined_rhs - 1).bit_length()
+    if padded_rows > 32:
+        raise ValueError("padded constraint rows must not exceed 32")
+    if combined_rhs > 51:
+        raise ValueError("combined KKT right-hand side must not exceed 51")
+    if block_r > 64:
+        raise ValueError("KKT BLOCK_R must not exceed 64")
+    return {
+        "constraint_rows": rows,
+        "padded_constraint_rows": padded_rows,
+        "combined_rhs": combined_rhs,
+        "block_r": block_r,
+    }
+
+
 @dataclass(frozen=True)
 class LqProblem:
     matrix_a: Tensor

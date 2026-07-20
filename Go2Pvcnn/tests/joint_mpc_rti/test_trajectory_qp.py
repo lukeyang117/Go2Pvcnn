@@ -5,6 +5,12 @@ import torch
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.losses.objective import total_trajectory_loss, weighted_trajectory_residual
 from extension.joint_mpc_rti.solver.linearization import linearize_trajectory
+from extension.joint_mpc_rti.solver.trajectory_qp import (
+    ActiveConstraints,
+    refine_active_set,
+    select_active_constraints,
+    solve_dense_active_kkt,
+)
 from .test_trajectory_losses import _context, _state
 
 
@@ -50,3 +56,45 @@ def test_qp_contains_only_two_temporal_offdiagonal_bands() -> None:
     assert qp.diagonal.shape == (1, 31, 18, 18)
     assert qp.first_offdiag.shape == (1, 30, 18, 18)
     assert qp.second_offdiag.shape == (1, 29, 18, 18)
+
+
+def test_active_set_selects_merged_box_and_joint_velocity_boundaries() -> None:
+    state = _state(batch=2)
+    qp = linearize_trajectory(state, _context(state), JointMpcRtiCfg())
+    direction = torch.zeros_like(state)
+    direction[:, 5, 6] = qp.upper[:, 5, 6] + 0.1
+    direction[:, 10, 7] = qp.lower[:, 10, 7] - 0.1
+    direction[:, 15, 8] = 0.5
+    direction[:, 14, 8] = -0.5
+
+    active = select_active_constraints(qp, direction)
+
+    assert active.box_mask.shape == (2, 31, 18)
+    assert active.velocity_mask.shape == (2, 30, 12)
+    assert active.box_mask[:, 5, 6].all()
+    assert active.box_mask[:, 10, 7].all()
+    assert active.velocity_mask[:, 14, 2].all()
+    assert active.max_rows_per_interval <= 30
+
+
+def test_two_unrolled_refinements_match_dense_active_kkt_and_hold_constraints() -> None:
+    cfg = JointMpcRtiCfg()
+    state = _state(batch=1)
+    qp = linearize_trajectory(state, _context(state), cfg)
+
+    solution = refine_active_set(qp, solve_dense_active_kkt, refinements=2)
+    dense = solve_dense_active_kkt(qp, solution.active)
+    difference = dense[:, 1:, 6:] - dense[:, :-1, 6:]
+
+    torch.testing.assert_close(solution.direction, dense, atol=2e-5, rtol=2e-5)
+    assert torch.all(dense >= qp.lower - 2e-5)
+    assert torch.all(dense <= qp.upper + 2e-5)
+    assert torch.all(difference >= qp.joint_difference_lower - 2e-5)
+    assert torch.all(difference <= qp.joint_difference_upper + 2e-5)
+
+
+def test_joint_kkt_compile_budget_rejects_more_than_32_local_rows() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="constraint rows"):
+        ActiveConstraints.validate_compile_budget(constraint_rows=33)

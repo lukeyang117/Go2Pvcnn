@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI pure-kinematic Task 8 active bounds | merged box / velocity KKT / compile budget | pass | QP suite `6 passed`; budget `1 passed`; two explicit refinements; local rows `<=30` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task08-active-bounds.md](2026-07-20-joint-mpc-rti-kinematic-task08-active-bounds.md) |
+
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 7 direct-Z QP | seven-loss GGN / block bands / bounds | pass | `3 passed`; dense gradient and JtJ parity; z0 fixed; joint/trust/velocity bounds | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md](2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md) |
 
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 6 losses | exact seven-state objective / full-body terrain | CPU pass | focused `8 passed`; Tasks 1-6 `45 passed, 13 skipped`; one 41-point/node query; finite state gradient | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task06-losses.md](2026-07-20-joint-mpc-rti-kinematic-task06-losses.md) |

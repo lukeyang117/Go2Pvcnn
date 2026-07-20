@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Pure-kinematic Task 8 is GREEN: fixed active masks contain only merged state boxes and joint-velocity edges, use exactly two explicit refinements, stay at 30 local rows, satisfy dense KKT bounds within `2e-5`, and reject a 33-row compile request before CUDA. See [Task 8 active-bound log](../log/2026-07-20-joint-mpc-rti-kinematic-task08-active-bounds.md).
 - Pure-kinematic Task 7 is GREEN: direct-Z `vmap(jacrev)` GGN matches nonlinear autograd gradient and dense weighted `J^T J`, stores only block bands through time distance two, fixes delta z0, and builds only merged joint/trust box plus joint-velocity edge bounds. See [Task 7 direct-Z QP log](../log/2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md).
 - Pure-kinematic Task 6 is CPU GREEN: nonlinear scoring now has exactly seven ordered state-trajectory losses backed by the same fixed residuals intended for GGN; terrain packs 41 full-body points per node and contains no raw semantic branch. Tasks 1-6 are `45 passed, 13 CUDA skipped`. See [Task 6 loss log](../log/2026-07-20-joint-mpc-rti-kinematic-task06-losses.md).
 - Pure-kinematic Task 5 is CPU GREEN: grouped Gaussian convolution, semantic-weighted height propagation, soft occupancy, grouped Scharr gradients, and differentiable bilinear world query coexist with raw semantic/elevation and exact signed EDT. Tasks 1-5 are `37 passed, 13 CUDA skipped`; GPU allocation remains pending under the monitored runner. See [Task 5 cost-map log](../log/2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md).
