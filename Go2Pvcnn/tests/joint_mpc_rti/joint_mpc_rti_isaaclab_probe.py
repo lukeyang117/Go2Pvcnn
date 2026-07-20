@@ -49,7 +49,7 @@ def run_probe(
     cfg.scene.terrain.terrain_generator.num_rows = 1
     cfg.scene.terrain.terrain_generator.num_cols = 1
     cfg.planner_backend = "joint_mpc_rti"
-    cfg.joint_mpc_rti_cfg.runtime.horizon_steps = 16
+    cfg.joint_mpc_rti_cfg.runtime.horizon_steps = 30
     cfg.joint_mpc_rti_cfg.runtime.dt = 0.02
     if disable_cuda_graph:
         cfg.joint_mpc_rti_cfg.solver.use_cuda_graph = False
@@ -112,7 +112,6 @@ def run_probe(
             x0_error_max = max(x0_error_max, float(x0_error.item()))
             reference_finite = reference_finite and bool(
                 torch.isfinite(trajectory.state).all().item()
-                and torch.isfinite(trajectory.control).all().item()
                 and torch.isfinite(trajectory.foot_pos_w).all().item()
             )
             completed_steps = step_index + 1

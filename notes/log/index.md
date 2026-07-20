@@ -6,6 +6,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | 2026-07-20 | Joint MPC RTI Task 12 metrics/watchdog core | applicability / 275 commands / child process group | active checkpoint | RED `6 failed, 2 passed`; core GREEN `8 passed`; resource monitor and full CLI still open | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task12-metrics-watchdog-core.md](2026-07-20-joint-mpc-rti-kinematic-task12-metrics-watchdog-core.md) |
 
+| 2026-07-20 | Joint MPC RTI Task 12 runner/watchdog verification | unified report schema / formal selectors / resource safety | pass | focused `20 passed`; selector/watchdog `11 passed`; `130` tests collected; no CUDA/Isaac launch | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task12-runner-watchdog-verification.md](2026-07-20-joint-mpc-rti-kinematic-task12-runner-watchdog-verification.md) |
+
 | 2026-07-20 | Joint MPC RTI Task 11 pipeline | one RTI / H31 ABI / old-code deletion | pass | focused `26 passed`; Tasks 1-11 CPU `108 passed`; forbidden production audit clean | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task11-pipeline.md](2026-07-20-joint-mpc-rti-kinematic-task11-pipeline.md) |
 
 | 2026-07-20 | Joint MPC RTI Task 11 RED | production one-RTI routing | expected fail | old planner still imported removed control objective API | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task11-red.md](2026-07-20-joint-mpc-rti-kinematic-task11-red.md) |

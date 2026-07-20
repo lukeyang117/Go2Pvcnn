@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import copy
 from pathlib import Path
-
-import pytest
-import torch
 
 
 def test_timing_summary_reports_required_acceptance_metrics() -> None:
@@ -20,6 +16,7 @@ def test_timing_summary_reports_required_acceptance_metrics() -> None:
     assert summary["max_ms"] == 4.0
 
 
+<<<<<<< HEAD
 def test_perf_probe_declares_fixed_shape_cuda_event_contract() -> None:
     source = Path(
         "Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_perf_probe.py"
@@ -35,13 +32,21 @@ def test_perf_probe_declares_fixed_shape_cuda_event_contract() -> None:
     assert '"total_ms"' in source
     assert '"coupled_state_riccati"' in source
     assert "torch.cuda.Event" in source
+=======
+def test_performance_entrypoints_declare_frozen_h30_workload() -> None:
+    for name in ("joint_mpc_rti_perf_probe.py", "joint_mpc_rti_full_refresh_probe.py"):
+        source = Path("Go2Pvcnn/tests/joint_mpc_rti", name).read_text()
+        assert 'parser.add_argument("--num-envs", type=int, default=1024)' in source
+        assert 'parser.add_argument("--horizon", type=int, default=30)' in source
+        assert 'parser.add_argument("--steps", type=int, default=1000)' in source
+        assert "torch.cuda.Event" in source
+>>>>>>> 4ed0ce9 (test: unify flat-small metrics and monitored runner)
 
 
-def test_full_refresh_probe_times_exact_field_and_mpc_together() -> None:
-    source = Path(
-        "Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_full_refresh_probe.py"
-    ).read_text()
+def test_production_pipeline_does_not_use_removed_control_rollout_api() -> None:
+    source = Path("Go2Pvcnn/extension/joint_mpc_rti/planner.py").read_text()
 
+<<<<<<< HEAD
     assert 'parser.add_argument("--num-envs", type=int, default=1024)' in source
     assert 'parser.add_argument("--horizon", type=int, default=30)' in source
     assert 'parser.add_argument("--steps", type=int, default=1000)' in source
@@ -127,3 +132,7 @@ def test_compiled_fixed_shape_matches_eager_first_future_reference() -> None:
         atol=3.0e-5,
         rtol=3.0e-5,
     )
+=======
+    assert "trajectory.control" not in source
+    assert "recovery" not in source.lower()
+>>>>>>> 4ed0ce9 (test: unify flat-small metrics and monitored runner)

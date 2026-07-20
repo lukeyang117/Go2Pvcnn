@@ -54,7 +54,9 @@ def run_probe(args: argparse.Namespace) -> dict[str, object]:
     batch = int(args.num_envs)
     grid_size = 151
     cfg = JointMpcRtiCfg()
-    cfg.runtime.horizon_steps = int(args.horizon)
+    if int(args.horizon) != 30:
+        raise ValueError("the full-refresh probe is fixed to H30")
+    cfg.runtime.horizon_steps = 30
     cfg.solver.compile_kernels = True
     cfg.solver.emit_loss_breakdown = False
     cfg.solver.line_search_alphas = (1.0, 0.25)

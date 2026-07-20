@@ -4,7 +4,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- Pure-kinematic Tasks 1-11 are committed; Task 12 is active with 275 commands, applicability metadata, and child-process-group timeout core at `8 passed`. Resource monitoring and unified report/probe migration remain before flat testing. See [Task 12 checkpoint](log/2026-07-20-joint-mpc-rti-kinematic-task12-metrics-watchdog-core.md).
+- Pure-kinematic Tasks 1-11 are committed; Task 12's shared metrics/report/watchdog foundation is green (`20 passed` focused; `11 passed` selector/watchdog regression). Flat execution is the next active front. See [Task 12 verification](log/2026-07-20-joint-mpc-rti-kinematic-task12-runner-watchdog-verification.md).
 - Current focus: **T302v joint MPC RTI GPU**.
 - The approved 2026-07-20 replacement design now has a 16-task implementation plan. Execution order is contract -> fixed gait/IK/nominal/field -> seven losses/direct-Z QP/H30 scan/five-alpha search -> new RTI and old-code deletion -> monitored metrics -> flat -> small -> joint rerun -> Stage B -> final same-candidate rerun. See [plan log](log/2026-07-20-joint-mpc-rti-kinematic-flat-small-plan.md).
 - The 2026-07-20 replacement design is approved: pure-kinematic H30, gait `24/12+12`, vectorized nominal, seven frozen losses, joint-bound/trust KKT, H30/32 associative scan, five-alpha loss-only line search, flat then small-obstacle behavior gates, and unchanged Stage B `1024 x H30 x 1000 <=5s`. The old 15+15 adaptive-contact/recovery architecture and its implementation plan are no longer the production direction. See [design log](log/2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md).

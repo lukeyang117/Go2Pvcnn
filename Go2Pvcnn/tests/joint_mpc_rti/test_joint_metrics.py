@@ -19,16 +19,24 @@ def _root_carried_trace():
     contact = torch.tensor([[[True, False, False, True]]] * 4).reshape(1, 4, 4)
     command = torch.tensor([[[0.2, 0.0, 0.0]]] * 4).reshape(1, 4, 3)
     zeros = torch.zeros(1, 4, 4)
+    joint = torch.tensor((0.0, 0.8, -1.5) * 4).view(1, 1, 12).expand(1, 4, 12).clone()
     return JointMetricTrace(
         root_pos_w=root_pos,
         root_rpy_w=torch.zeros(1, 4, 3),
+        joint_pos=joint,
         foot_pos_w=foot,
         contact_state=contact,
         command_body=command,
+        gait_phase=torch.arange(4).view(1, 4),
         foot_height_w=zeros,
         foot_small_distance_m=torch.ones(1, 4, 4),
-        part_collision={part: torch.zeros(1, 4, dtype=torch.bool) for part in ("foot", "calf", "thigh", "base")},
+        part_collision={part: torch.zeros(1, 4, dtype=torch.bool) for part in ("foot", "knee", "calf", "thigh", "base")},
+        line_alpha=torch.ones(1, 4),
+        nominal_root_pos_w=root_pos.clone(),
+        nominal_root_rpy_w=torch.zeros(1, 4, 3),
         valid=torch.ones(1, 4, dtype=torch.bool),
+        map_valid=torch.ones(1, 4, dtype=torch.bool),
+        timestamps=0.02 * torch.arange(4).view(1, 4),
         dt=0.02,
     )
 

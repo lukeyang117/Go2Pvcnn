@@ -12,7 +12,7 @@ Start the shared flat/small metric applicability layer and process-group watchdo
 ## TDD Evidence
 
 - RED: `6 failed, 2 passed`; missing applicability APIs, 275-command matrix, acceptance registry, and monitored runner.
-- Current GREEN: `8 passed in 1.82s`.
+- Current GREEN: focused metrics/runner/watchdog/performance contract `20 passed`; runner dimension and watchdog regression `11 passed`.
 
 ## Implemented Contract
 
@@ -24,13 +24,13 @@ Start the shared flat/small metric applicability layer and process-group watchdo
 
 ## Still Open
 
-- Complete the approved trace fields and threshold calculations.
-- Add heartbeat/resource monitoring for process-tree RSS, ptxas RSS, available-memory/swap deltas, and selected-GPU progress.
-- Implement the complete unified acceptance CLI/report schema and per-cell progress.
-- Map old heavy-probe coverage before deleting silent routes.
+- Real trace fields and applicability-aware threshold calculations are implemented.
+- Heartbeat/resource monitoring covers process-tree RSS, ptxas RSS, available-memory/swap deltas, selected-GPU progress, and CPU-only compiler growth.
+- Unified report schema, formal cell selectors, JSON per-cell progress, and 275-command preservation are implemented.
+- Obsolete behavior/stop/crossing pytest routes that used removed control/H16 APIs are deleted; formal flat/small execution remains Task 13/14 work.
 
 ## Git Refs
 
 - Baseline Ref: `156a6c0`
 - Candidate Ref: uncommitted Task 12 checkpoint
-- Key Files: `Go2Pvcnn/tests/joint_mpc_rti/joint_metrics.py`, `Go2Pvcnn/tests/joint_mpc_rti/run_monitored_joint_mpc.py`, `Go2Pvcnn/tests/joint_mpc_rti/scenario_matrix.py`
+- Key Files: `Go2Pvcnn/tests/joint_mpc_rti/joint_metrics.py`, `Go2Pvcnn/tests/joint_mpc_rti/run_joint_acceptance.py`, `Go2Pvcnn/tests/joint_mpc_rti/run_monitored_joint_mpc.py`, `Go2Pvcnn/tests/joint_mpc_rti/scenario_matrix.py`

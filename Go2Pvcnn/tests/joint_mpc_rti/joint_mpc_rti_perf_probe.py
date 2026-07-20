@@ -23,8 +23,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--compile-kernels", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cuda-graph", action=argparse.BooleanOptionalAction, default=True)
+<<<<<<< HEAD
     parser.add_argument("--line-search-alphas", type=float, nargs="+", default=(1.0, 0.5, 0.25))
     parser.add_argument("--coupled-state-riccati", action=argparse.BooleanOptionalAction, default=True)
+=======
+    parser.add_argument("--line-search-alphas", type=float, nargs="+", default=(1.0, 0.5, 0.25, 0.125, 0.0))
+>>>>>>> 4ed0ce9 (test: unify flat-small metrics and monitored runner)
     parser.add_argument("--diagonal-state-riccati", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--profile", action="store_true")
     return parser.parse_args()
@@ -93,7 +97,9 @@ def run_probe(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("CUDA is required")
     device = torch.device("cuda")
     cfg = JointMpcRtiCfg()
-    cfg.runtime.horizon_steps = int(args.horizon)
+    if int(args.horizon) != 30:
+        raise ValueError("the production performance probe is fixed to H30")
+    cfg.runtime.horizon_steps = 30
     cfg.solver.compile_kernels = bool(args.compile_kernels)
     cfg.solver.emit_loss_breakdown = False
     cfg.solver.line_search_alphas = tuple(float(value) for value in args.line_search_alphas)
