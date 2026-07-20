@@ -63,6 +63,28 @@ class JointMpcRtiTerrainCfg:
 
 
 @dataclass
+class JointMpcRtiLossTermsCfg:
+    command_linear: float = 1.0
+    command_yaw: float = 0.5
+    step_xy: float = 1.0
+    step_z: float = 0.5
+    contact_anchor_xy: float = 4.0
+    contact_ground: float = 4.0
+    swing_speed_margin: float = 0.002
+    terrain_temperature: float = 0.015
+    terrain_foot_margin: float = 0.01
+    terrain_link_margin: float = 0.015
+    terrain_base_margin: float = 0.025
+    terrain_touchdown_avoidance: float = 1.0
+    posture_root_clearance: float = 0.34
+    posture_root_height: float = 1.0
+    posture_roll_pitch: float = 1.0
+    posture_joint: float = 0.1
+    smooth_first: float = 0.02
+    smooth_second: float = 1.0
+
+
+@dataclass
 class JointMpcRtiLossCfg:
     command: float = 1.0
     step: float = 1.0
@@ -92,6 +114,7 @@ class JointMpcRtiCfg:
     gait: JointMpcRtiGaitCfg = field(default_factory=JointMpcRtiGaitCfg)
     nominal: JointMpcRtiNominalCfg = field(default_factory=JointMpcRtiNominalCfg)
     terrain: JointMpcRtiTerrainCfg = field(default_factory=JointMpcRtiTerrainCfg)
+    loss_terms: JointMpcRtiLossTermsCfg = field(default_factory=JointMpcRtiLossTermsCfg)
     losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
 
 
@@ -99,6 +122,7 @@ __all__ = [
     "JointMpcRtiCfg",
     "JointMpcRtiGaitCfg",
     "JointMpcRtiLossCfg",
+    "JointMpcRtiLossTermsCfg",
     "JointMpcRtiNominalCfg",
     "JointMpcRtiRuntimeCfg",
     "JointMpcRtiSolverCfg",

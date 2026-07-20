@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Pure-kinematic Task 6 is CPU GREEN: nonlinear scoring now has exactly seven ordered state-trajectory losses backed by the same fixed residuals intended for GGN; terrain packs 41 full-body points per node and contains no raw semantic branch. Tasks 1-6 are `45 passed, 13 CUDA skipped`. See [Task 6 loss log](../log/2026-07-20-joint-mpc-rti-kinematic-task06-losses.md).
 - Pure-kinematic Task 5 is CPU GREEN: grouped Gaussian convolution, semantic-weighted height propagation, soft occupancy, grouped Scharr gradients, and differentiable bilinear world query coexist with raw semantic/elevation and exact signed EDT. Tasks 1-5 are `37 passed, 13 CUDA skipped`; GPU allocation remains pending under the monitored runner. See [Task 5 cost-map log](../log/2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md).
 - Pure-kinematic Task 4 is GREEN and the nominal structure is frozen: cold/warm `[B,31,18]` construction passes B=1/40/512/1024, uses packed terrain heights without semantic XY search, and applies shift/SE(2)-rebase/fixed measurement decay with exact measured z0. Tasks 1-4 combined are `23 passed`. See [Task 4 nominal log](../log/2026-07-20-joint-mpc-rti-kinematic-task04-nominal.md).
 - Pure-kinematic Task 3 is GREEN: closed-form IK handles full `[B,31,4,3]` targets without time/leg loops or joint clipping, reports reachability separately, and keeps complete FK/Jacobian regression at `10 passed`. See [Task 3 analytic IK log](../log/2026-07-20-joint-mpc-rti-kinematic-task03-analytic-ik.md).
