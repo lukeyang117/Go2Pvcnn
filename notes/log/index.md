@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI pure-kinematic Task 2 gait | fixed tensor trot / FK regression | pass | RED 3 interface failures; GREEN `10 passed`; exact 24/12+12 diagonal schedule | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task02-gait.md](2026-07-20-joint-mpc-rti-kinematic-task02-gait.md) |
+
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 1 contract | H30 config / compact solver state | pass | RED 3 expected failures; GREEN `3 passed`; H30, 24/12+12, five alphas, seven losses | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task01-contract.md](2026-07-20-joint-mpc-rti-kinematic-task01-contract.md) |
 
 | 2026-07-20 | Joint MPC RTI pure-kinematic worktree baseline | isolated implementation / CPU baseline | host baseline pass; CUDA availability blocked by external OOM | `62 passed, 13 skipped`; GPU-visible 13 allocation failures; clean `9168f1d` worktree | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-worktree-baseline.md](2026-07-20-joint-mpc-rti-kinematic-worktree-baseline.md) |

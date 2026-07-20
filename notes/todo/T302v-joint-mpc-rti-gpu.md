@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Pure-kinematic Task 2 is GREEN: gait is one broadcasted `[B,31,4]` 24-frame diagonal schedule with exact 12 swing/12 stance and no recovery/extension state; gait plus FK/Jacobian regression is `10 passed`. See [Task 2 gait log](../log/2026-07-20-joint-mpc-rti-kinematic-task02-gait.md).
 - Pure-kinematic Task 1 is GREEN: production defaults are H30, 24/12+12 gait, one RTI, five alphas, seven top-level losses, and compact trajectory-only solver state. See [Task 1 contract log](../log/2026-07-20-joint-mpc-rti-kinematic-task01-contract.md).
 - Pure-kinematic implementation is active in isolated branch `work/joint-mpc-kinematic` from `9168f1d`. The focused host baseline is `62 passed, 13 skipped`; the GPU-visible attempt reached 13 CUDA allocation failures because the current device was out of memory. See [worktree baseline](../log/2026-07-20-joint-mpc-rti-kinematic-worktree-baseline.md).
 - The approved 2026-07-20 replacement design now has a 16-task TDD implementation plan. It supersedes the 2026-07-17 plan for execution and enforces flat-before-small, joint behavior before Stage B, and a final same-candidate behavior/performance rerun. See [plan log](../log/2026-07-20-joint-mpc-rti-kinematic-flat-small-plan.md) and [plan](../../docs/superpowers/plans/2026-07-20-joint-mpc-rti-kinematic-flat-small-obstacle-implementation-plan.md).

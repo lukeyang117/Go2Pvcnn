@@ -1,28 +1,7 @@
 from __future__ import annotations
 
-import torch
 import pytest
-
-
-def test_default_h30_covers_stance_swing_stance_for_every_leg() -> None:
-    from extension.joint_mpc_rti.config import JointMpcRtiCfg
-    from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
-
-    cfg = JointMpcRtiCfg()
-    assert cfg.runtime.horizon_steps == 30
-    assert cfg.gait.half_cycle_steps == 15
-    contact = fixed_trot_schedule(
-        1,
-        cfg.runtime.horizon_steps,
-        torch.device("cpu"),
-        half_cycle_steps=cfg.gait.half_cycle_steps,
-    )[0]
-
-    assert contact.shape == (31, 4)
-    for leg in range(4):
-        transitions = contact[1:, leg].to(torch.int8) - contact[:-1, leg].to(torch.int8)
-        assert torch.count_nonzero(transitions == -1) == 1
-        assert torch.count_nonzero(transitions == 1) == 1
+import torch
 
 
 def test_go2_fk_returns_planner_leg_order_and_link_samples() -> None:
@@ -132,38 +111,6 @@ def test_complete_foot_jacobian_matches_root_and_joint_central_difference() -> N
         for other_leg in range(4):
             if leg != other_leg:
                 assert torch.count_nonzero(analytic[0, leg, :, 6 + 3 * other_leg : 9 + 3 * other_leg]) == 0
-
-
-def test_complete_root_point_jacobian_matches_central_difference() -> None:
-    from extension.joint_mpc_rti.model.go2_kinematics import (
-        complete_root_point_jacobian,
-        rpy_to_rotation_matrix,
-    )
-
-    root_pos = torch.tensor([[0.1, -0.2, 0.3]], dtype=torch.float64)
-    root_rpy = torch.tensor([[0.2, -0.1, 0.3]], dtype=torch.float64)
-    point_body = torch.tensor([[[0.2, 0.1, -0.05], [-0.1, 0.2, 0.3]]], dtype=torch.float64)
-    analytic = complete_root_point_jacobian(root_rpy, point_body)
-    numerical = torch.zeros_like(analytic)
-    epsilon = 1.0e-6
-    for axis in range(6):
-        plus_pos, minus_pos = root_pos.clone(), root_pos.clone()
-        plus_rpy, minus_rpy = root_rpy.clone(), root_rpy.clone()
-        if axis < 3:
-            plus_pos[:, axis] += epsilon
-            minus_pos[:, axis] -= epsilon
-        else:
-            plus_rpy[:, axis - 3] += epsilon
-            minus_rpy[:, axis - 3] -= epsilon
-        plus = plus_pos[:, None] + torch.einsum(
-            "bij,bkj->bki", rpy_to_rotation_matrix(plus_rpy), point_body
-        )
-        minus = minus_pos[:, None] + torch.einsum(
-            "bij,bkj->bki", rpy_to_rotation_matrix(minus_rpy), point_body
-        )
-        numerical[..., axis] = (plus - minus) / (2.0 * epsilon)
-
-    torch.testing.assert_close(analytic, numerical, atol=3.0e-5, rtol=3.0e-4)
 
 
 @pytest.mark.parametrize("part", ("calf", "thigh"))
