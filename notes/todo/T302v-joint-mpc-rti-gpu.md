@@ -2,6 +2,8 @@
 
 ## Current State
 
+- Pure-kinematic Task 1 is GREEN: production defaults are H30, 24/12+12 gait, one RTI, five alphas, seven top-level losses, and compact trajectory-only solver state. See [Task 1 contract log](../log/2026-07-20-joint-mpc-rti-kinematic-task01-contract.md).
+- Pure-kinematic implementation is active in isolated branch `work/joint-mpc-kinematic` from `9168f1d`. The focused host baseline is `62 passed, 13 skipped`; the GPU-visible attempt reached 13 CUDA allocation failures because the current device was out of memory. See [worktree baseline](../log/2026-07-20-joint-mpc-rti-kinematic-worktree-baseline.md).
 - The approved 2026-07-20 replacement design now has a 16-task TDD implementation plan. It supersedes the 2026-07-17 plan for execution and enforces flat-before-small, joint behavior before Stage B, and a final same-candidate behavior/performance rerun. See [plan log](../log/2026-07-20-joint-mpc-rti-kinematic-flat-small-plan.md) and [plan](../../docs/superpowers/plans/2026-07-20-joint-mpc-rti-kinematic-flat-small-obstacle-implementation-plan.md).
 - The 2026-07-20 replacement design is approved. It replaces the old 15+15 adaptive-contact/recovery production architecture with pure-kinematic H30, gait 24/12+12, one vectorized nominal, seven frozen losses, joint-bound/trust KKT, H30/32 associative scan, and five-alpha loss-only line search. The first behavior milestone is flat then small-obstacle with one applicability-aware JointMetrics contract; Stage B remains `1024 x H30 x 1000 <=5.0s`. See [design log](../log/2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md) and [Chinese HTML](../../docs/superpowers/specs/2026-07-20-joint-mpc-rti-kinematic-flat-small-obstacle-design.html).
 - Branch: `joint_mpc`; baseline commit: `cb2fff4`.
@@ -68,7 +70,7 @@
 
 - Last Feature Commit: `9e71ac1`.
 - Last Verified Commit: `9e71ac1` (functional gates pass; realistic multi-cell signed performance blocked).
-- Current Work Ref: `joint_mpc`
+- Current Work Ref: `work/joint-mpc-kinematic` at baseline `9168f1d`.
 - Key Files: `planner.py`, `runtime/cuda_graph.py`, `runtime/manager.py`, `solver/primal_dual_ilqr.py`, `joint_mpc_rti_perf_probe.py`.
 
 ## Next Step

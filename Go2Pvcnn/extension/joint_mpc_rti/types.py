@@ -59,12 +59,13 @@ class JointMpcRtiState:
 @dataclass(frozen=True)
 class JointMpcRtiTrajectory:
     state: Tensor
-    control: Tensor
+    derived_velocity: Tensor
     foot_pos_w: Tensor
     contact_state: Tensor
     valid: Tensor
     fallback: Tensor
     status: Tensor
+    line_search_alpha: Tensor
     loss_breakdown: dict[str, Tensor] = field(default_factory=dict)
 
 
@@ -77,21 +78,9 @@ class JointMpcRtiStepResult:
 
 @dataclass(frozen=True)
 class JointMpcRtiSolverState:
-    state: Tensor
-    control: Tensor
-    dual: Tensor | None
-    previous_control: Tensor
-    gait_phase: Tensor | None = None
-    stance_anchor_w: Tensor | None = None
-    stance_dual: Tensor | None = None
-    command_start_age: Tensor | None = None
-    command_start_origin_w: Tensor | None = None
-    previous_command_body: Tensor | None = None
-    contact_state: Tensor | None = None
-    phase_age: Tensor | None = None
-    swing_extension_age: Tensor | None = None
-    stance_age: Tensor | None = None
-    recovery_state: Tensor | None = None
+    trajectory: Tensor
+    gait_phase: Tensor
+    valid: Tensor
 
 
 @dataclass(frozen=True)
