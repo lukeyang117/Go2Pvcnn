@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI pure-kinematic Task 5 cost map | grouped convolution / propagated height / Scharr / query | CPU pass; CUDA pending memory | RED 4; focused GREEN 4; Tasks 1-5 `37 passed, 13 skipped`; XY autograd nonzero | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md](2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md) |
+
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 4 nominal | cold/warm B31 nominal / rolling rebase | pass | focused `7 passed`; Tasks 1-4 `23 passed`; B1024; no nominal loop or semantic XY rewrite | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task04-nominal.md](2026-07-20-joint-mpc-rti-kinematic-task04-nominal.md) |
 
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 3 analytic IK | batched IK / complete FK geometry | pass | RED missing module; GREEN `10 passed`; B31 FK/IK parity `2e-5`; no IK loop | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task03-analytic-ik.md](2026-07-20-joint-mpc-rti-kinematic-task03-analytic-ik.md) |

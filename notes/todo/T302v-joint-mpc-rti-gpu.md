@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Pure-kinematic Task 5 is CPU GREEN: grouped Gaussian convolution, semantic-weighted height propagation, soft occupancy, grouped Scharr gradients, and differentiable bilinear world query coexist with raw semantic/elevation and exact signed EDT. Tasks 1-5 are `37 passed, 13 CUDA skipped`; GPU allocation remains pending under the monitored runner. See [Task 5 cost-map log](../log/2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md).
 - Pure-kinematic Task 4 is GREEN and the nominal structure is frozen: cold/warm `[B,31,18]` construction passes B=1/40/512/1024, uses packed terrain heights without semantic XY search, and applies shift/SE(2)-rebase/fixed measurement decay with exact measured z0. Tasks 1-4 combined are `23 passed`. See [Task 4 nominal log](../log/2026-07-20-joint-mpc-rti-kinematic-task04-nominal.md).
 - Pure-kinematic Task 3 is GREEN: closed-form IK handles full `[B,31,4,3]` targets without time/leg loops or joint clipping, reports reachability separately, and keeps complete FK/Jacobian regression at `10 passed`. See [Task 3 analytic IK log](../log/2026-07-20-joint-mpc-rti-kinematic-task03-analytic-ik.md).
 - Pure-kinematic Task 2 is GREEN: gait is one broadcasted `[B,31,4]` 24-frame diagonal schedule with exact 12 swing/12 stance and no recovery/extension state; gait plus FK/Jacobian regression is `10 passed`. See [Task 2 gait log](../log/2026-07-20-joint-mpc-rti-kinematic-task02-gait.md).

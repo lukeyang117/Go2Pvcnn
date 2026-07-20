@@ -108,6 +108,12 @@ class JointMpcTerrainField:
     timestamp: Tensor
     version: Tensor
     resolution: float
+    small_occupancy: Tensor | None = None
+    large_occupancy: Tensor | None = None
+    small_propagated_height: Tensor | None = None
+    large_propagated_height: Tensor | None = None
+    small_occupancy_gradient_xy: Tensor | None = None
+    large_occupancy_gradient_xy: Tensor | None = None
 
 
 __all__ = [

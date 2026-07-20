@@ -47,6 +47,22 @@ class JointMpcRtiNominalCfg:
 
 
 @dataclass
+class JointMpcRtiTerrainCfg:
+    small_sigma_m: float = 0.04
+    large_sigma_m: float = 0.10
+    small_gain: float = 1.0
+    large_gain: float = 1.0
+    h_wall: float = 0.35
+    kernel_radius_cells: int = 20
+    small_ids: tuple[int, ...] = (1,)
+    large_ids: tuple[int, ...] = (2,)
+
+    @property
+    def virtual_wall_height(self) -> float:
+        return float(self.h_wall)
+
+
+@dataclass
 class JointMpcRtiLossCfg:
     command: float = 1.0
     step: float = 1.0
@@ -75,6 +91,7 @@ class JointMpcRtiCfg:
     solver: JointMpcRtiSolverCfg = field(default_factory=JointMpcRtiSolverCfg)
     gait: JointMpcRtiGaitCfg = field(default_factory=JointMpcRtiGaitCfg)
     nominal: JointMpcRtiNominalCfg = field(default_factory=JointMpcRtiNominalCfg)
+    terrain: JointMpcRtiTerrainCfg = field(default_factory=JointMpcRtiTerrainCfg)
     losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
 
 
@@ -85,4 +102,5 @@ __all__ = [
     "JointMpcRtiNominalCfg",
     "JointMpcRtiRuntimeCfg",
     "JointMpcRtiSolverCfg",
+    "JointMpcRtiTerrainCfg",
 ]

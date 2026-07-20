@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.config import JointMpcRtiTerrainCfg
+from extension.joint_mpc_rti.terrain.cost_map import build_soft_semantic_fields
 from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
 from extension.joint_mpc_rti.types import JointMpcTerrainField
 
@@ -19,10 +21,12 @@ class JointMpcTerrainFieldCache:
         resolution: float = 0.01,
         small_ids: tuple[int, ...] = (1,),
         large_ids: tuple[int, ...] = (2,),
+        terrain_cfg: JointMpcRtiTerrainCfg | None = None,
     ) -> None:
         self.resolution = float(resolution)
         self.small_ids = tuple(small_ids)
         self.large_ids = tuple(large_ids)
+        self.terrain_cfg = JointMpcRtiTerrainCfg() if terrain_cfg is None else terrain_cfg
         shape = (int(num_envs), int(grid_size), int(grid_size))
         maximum_distance = self.resolution * ((2.0 * float(grid_size - 1) ** 2) ** 0.5)
         self.height_w = torch.zeros(shape, dtype=torch.float32, device=device)
@@ -35,6 +39,12 @@ class JointMpcTerrainFieldCache:
         zero_gradient = torch.zeros(1, 1, 1, 2, dtype=torch.float32, device=device)
         self.small_gradient_xy = zero_gradient.expand(*shape, 2)
         self.large_gradient_xy = zero_gradient.expand(*shape, 2)
+        self.small_occupancy = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.large_occupancy = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.small_propagated_height = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.large_propagated_height = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.small_occupancy_gradient_xy = torch.zeros(*shape, 2, dtype=torch.float32, device=device)
+        self.large_occupancy_gradient_xy = torch.zeros(*shape, 2, dtype=torch.float32, device=device)
         self.valid_mask = torch.zeros(shape, dtype=torch.bool, device=device)
         self.origin_w = torch.zeros(int(num_envs), 3, dtype=torch.float32, device=device)
         self.yaw_w = torch.zeros(int(num_envs), dtype=torch.float32, device=device)
@@ -90,6 +100,20 @@ class JointMpcTerrainFieldCache:
                 large_ids=self.large_ids,
                 resolution=self.resolution,
             )
+            soft = build_soft_semantic_fields(
+                height,
+                semantic,
+                self.terrain_cfg,
+                resolution=self.resolution,
+                small_ids=self.small_ids,
+                large_ids=self.large_ids,
+            )
+            self.small_occupancy.copy_(soft.small_occupancy[:, 0])
+            self.large_occupancy.copy_(soft.large_occupancy[:, 0])
+            self.small_propagated_height.copy_(soft.small_height[:, 0])
+            self.large_propagated_height.copy_(soft.large_height[:, 0])
+            self.small_occupancy_gradient_xy.copy_(soft.small_gradient_xy.permute(0, 2, 3, 1))
+            self.large_occupancy_gradient_xy.copy_(soft.large_gradient_xy.permute(0, 2, 3, 1))
             if self._height_stream is not None:
                 current_stream.wait_stream(self._height_stream)
             return
@@ -107,12 +131,19 @@ class JointMpcTerrainFieldCache:
             resolution=self.resolution,
             small_ids=self.small_ids,
             large_ids=self.large_ids,
+            terrain_cfg=self.terrain_cfg,
         )
         for name in (
             "height_w",
             "semantic_id",
             "small_distance_m",
             "large_distance_m",
+            "small_occupancy",
+            "large_occupancy",
+            "small_propagated_height",
+            "large_propagated_height",
+            "small_occupancy_gradient_xy",
+            "large_occupancy_gradient_xy",
             "valid_mask",
             "origin_w",
             "yaw_w",
@@ -137,6 +168,12 @@ class JointMpcTerrainFieldCache:
             timestamp=self.timestamp,
             version=self.version,
             resolution=self.resolution,
+            small_occupancy=self.small_occupancy,
+            large_occupancy=self.large_occupancy,
+            small_propagated_height=self.small_propagated_height,
+            large_propagated_height=self.large_propagated_height,
+            small_occupancy_gradient_xy=self.small_occupancy_gradient_xy,
+            large_occupancy_gradient_xy=self.large_occupancy_gradient_xy,
         )
 
 

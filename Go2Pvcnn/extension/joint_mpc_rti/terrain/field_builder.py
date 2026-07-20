@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.config import JointMpcRtiTerrainCfg
+from extension.joint_mpc_rti.terrain.cost_map import build_soft_semantic_fields
 from extension.joint_mpc_rti.terrain.distance_field import distance_gradient, semantic_mask, signed_boundary_distance
 from extension.joint_mpc_rti.types import JointMpcTerrainField
 
@@ -20,6 +22,7 @@ def build_field_batch(
     resolution: float,
     small_ids: tuple[int, ...],
     large_ids: tuple[int, ...],
+    terrain_cfg: JointMpcRtiTerrainCfg | None = None,
 ) -> JointMpcTerrainField:
     height = torch.as_tensor(height_w, dtype=torch.float32)
     semantic = torch.as_tensor(semantic_id, dtype=torch.long, device=height.device)
@@ -53,6 +56,14 @@ def build_field_batch(
         large_distance = signed_boundary_distance(large_mask, resolution=resolution)
         small_gradient = distance_gradient(small_distance, resolution=resolution)
         large_gradient = distance_gradient(large_distance, resolution=resolution)
+    soft = build_soft_semantic_fields(
+        height,
+        semantic,
+        JointMpcRtiTerrainCfg() if terrain_cfg is None else terrain_cfg,
+        resolution=resolution,
+        small_ids=small_ids,
+        large_ids=large_ids,
+    )
     return JointMpcTerrainField(
         height_w=height.contiguous(),
         semantic_id=semantic.contiguous(),
@@ -66,6 +77,12 @@ def build_field_batch(
         timestamp=stamp.contiguous(),
         version=field_version.contiguous(),
         resolution=float(resolution),
+        small_occupancy=soft.small_occupancy[:, 0].contiguous(),
+        large_occupancy=soft.large_occupancy[:, 0].contiguous(),
+        small_propagated_height=soft.small_height[:, 0].contiguous(),
+        large_propagated_height=soft.large_height[:, 0].contiguous(),
+        small_occupancy_gradient_xy=soft.small_gradient_xy.permute(0, 2, 3, 1).contiguous(),
+        large_occupancy_gradient_xy=soft.large_gradient_xy.permute(0, 2, 3, 1).contiguous(),
     )
 
 

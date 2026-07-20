@@ -9,6 +9,99 @@ import pytest
 import torch
 
 
+def test_small_is_real_height_for_swing_and_virtual_wall_for_touchdown() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.terrain.cost_map import effective_surface
+
+    cfg = JointMpcRtiCfg()
+    query = SimpleNamespace(
+        height_w=torch.tensor([0.0]),
+        small_occupancy=torch.tensor([1.0]),
+        large_occupancy=torch.tensor([0.0]),
+        small_propagated_height=torch.tensor([0.08]),
+        large_propagated_height=torch.tensor([0.0]),
+    )
+
+    swing = effective_surface(query, body_part="foot", stance=False, cfg=cfg)
+    stance = effective_surface(query, body_part="foot", stance=True, cfg=cfg)
+
+    assert swing.height_w.item() == pytest.approx(0.08)
+    assert stance.height_w.item() == pytest.approx(cfg.terrain.h_wall)
+
+
+def test_large_is_virtual_wall_for_all_parts_and_phases() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.terrain.cost_map import effective_surface
+
+    cfg = JointMpcRtiCfg()
+    query = SimpleNamespace(
+        height_w=torch.tensor([0.0]),
+        small_occupancy=torch.tensor([0.0]),
+        large_occupancy=torch.tensor([1.0]),
+        small_propagated_height=torch.tensor([0.0]),
+        large_propagated_height=torch.tensor([0.20]),
+    )
+
+    for part in ("foot", "knee", "calf", "thigh", "base"):
+        for stance in (False, True):
+            surface = effective_surface(query, body_part=part, stance=stance, cfg=cfg)
+            assert surface.height_w.item() == pytest.approx(cfg.terrain.h_wall)
+
+
+def test_convolution_propagates_small_height_and_nonzero_boundary_gradient() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.terrain.cost_map import build_soft_semantic_fields
+
+    cfg = JointMpcRtiCfg()
+    size = 51
+    center = size // 2
+    height = torch.zeros(1, size, size)
+    height[:, center - 1 : center + 2, center - 1 : center + 2] = 0.08
+    semantic = torch.zeros(1, size, size, dtype=torch.long)
+    semantic[:, center - 1 : center + 2, center - 1 : center + 2] = 1
+
+    fields = build_soft_semantic_fields(height, semantic, cfg.terrain, resolution=0.01)
+    offset = cfg.terrain.kernel_radius_cells - 1
+    boundary = fields.small_occupancy[:, :, center, center + offset]
+    gradient = fields.small_gradient_xy[:, :, center, center + offset]
+
+    assert torch.all(boundary > 0.0)
+    assert torch.all(torch.linalg.vector_norm(gradient, dim=1) > 0.0)
+    assert fields.small_height[:, :, center, center + 1].item() == pytest.approx(0.08)
+
+
+def test_soft_semantic_query_is_differentiable_with_respect_to_xy() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
+    from extension.joint_mpc_rti.terrain.query import query_world
+
+    cfg = JointMpcRtiCfg()
+    size = 51
+    semantic = torch.zeros(1, size, size, dtype=torch.long)
+    semantic[:, 24:27, 24:27] = 1
+    height = torch.zeros(1, size, size)
+    height[:, 24:27, 24:27] = 0.08
+    field = build_field_batch(
+        height_w=height,
+        semantic_id=semantic,
+        origin_w=torch.zeros(1, 3),
+        yaw_w=torch.zeros(1),
+        timestamp=torch.zeros(1),
+        version=torch.ones(1, dtype=torch.long),
+        resolution=0.01,
+        small_ids=(1,),
+        large_ids=(2,),
+        terrain_cfg=cfg.terrain,
+    )
+    point_xy = torch.tensor([[[0.055, 0.0]]], requires_grad=True)
+
+    risk = query_world(field, point_xy).small_occupancy.sum()
+    risk.backward()
+
+    assert torch.isfinite(point_xy.grad).all()
+    assert point_xy.grad.abs().sum() > 0.0
+
+
 def _build_semantic_field_for_signed_test(semantic: torch.Tensor):
     from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
 

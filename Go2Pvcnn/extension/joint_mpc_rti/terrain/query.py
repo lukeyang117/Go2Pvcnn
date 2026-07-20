@@ -18,7 +18,13 @@ class JointMpcTerrainQuery:
     small_gradient_w: Tensor
     large_gradient_w: Tensor
     valid: Tensor
-    height_gradient_w: Tensor | None = None
+    small_occupancy: Tensor
+    large_occupancy: Tensor
+    small_propagated_height: Tensor
+    large_propagated_height: Tensor
+    small_occupancy_gradient_w: Tensor
+    large_occupancy_gradient_w: Tensor
+    semantic_id: Tensor
 
 
 def _gather_grid(grid: Tensor, flat_index: Tensor) -> Tensor:
@@ -131,20 +137,31 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
             dim=-1,
         )
 
-    height_w, height_gradient_local = _bilinear_scalar_with_gradient(
-        field.height_w,
-        index_x,
-        index_y,
-        resolution=field.resolution,
-    )
+    zero_scalar = torch.zeros_like(field.height_w)
+    zero_vector = torch.zeros(*field.height_w.shape, 2, dtype=field.height_w.dtype, device=field.height_w.device)
+    small_occupancy_grid = zero_scalar if field.small_occupancy is None else field.small_occupancy
+    large_occupancy_grid = zero_scalar if field.large_occupancy is None else field.large_occupancy
+    small_height_grid = field.height_w if field.small_propagated_height is None else field.small_propagated_height
+    large_height_grid = field.height_w if field.large_propagated_height is None else field.large_propagated_height
+    small_soft_gradient = zero_vector if field.small_occupancy_gradient_xy is None else field.small_occupancy_gradient_xy
+    large_soft_gradient = zero_vector if field.large_occupancy_gradient_xy is None else field.large_occupancy_gradient_xy
+    nearest_x = torch.round(index_x).to(dtype=torch.long).clamp(0, nx - 1)
+    nearest_y = torch.round(index_y).to(dtype=torch.long).clamp(0, ny - 1)
+
     return JointMpcTerrainQuery(
-        height_w=height_w,
+        height_w=_bilinear(field.height_w, index_x, index_y),
         small_distance_m=small_distance,
         large_distance_m=large_distance,
         small_gradient_w=rotate_gradient(small_gradient_local),
         large_gradient_w=rotate_gradient(large_gradient_local),
         valid=valid,
-        height_gradient_w=rotate_gradient(height_gradient_local),
+        small_occupancy=_bilinear(small_occupancy_grid, index_x, index_y),
+        large_occupancy=_bilinear(large_occupancy_grid, index_x, index_y),
+        small_propagated_height=_bilinear(small_height_grid, index_x, index_y),
+        large_propagated_height=_bilinear(large_height_grid, index_x, index_y),
+        small_occupancy_gradient_w=rotate_gradient(_bilinear(small_soft_gradient, index_x, index_y)),
+        large_occupancy_gradient_w=rotate_gradient(_bilinear(large_soft_gradient, index_x, index_y)),
+        semantic_id=_gather_grid(field.semantic_id, nearest_x * ny + nearest_y),
     )
 
 
