@@ -8,6 +8,12 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | 2026-07-20 | Joint MPC RTI Task 12 runner/watchdog verification | unified report schema / formal selectors / resource safety | pass | focused `20 passed`; selector/watchdog `11 passed`; `130` tests collected; no CUDA/Isaac launch | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task12-runner-watchdog-verification.md](2026-07-20-joint-mpc-rti-kinematic-task12-runner-watchdog-verification.md) |
 
+| 2026-07-20 | Joint MPC RTI Task 13 flat ranked CPU watchdog stop | first real flat trace execution | blocked for resource path; no acceptance result | short trace works; 3-cell x 24-step CPU run emitted no progress for about 45s and was terminated; child cleaned up | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-flat-ranked-cpu-watchdog-stop.md](2026-07-20-joint-mpc-rti-kinematic-flat-ranked-cpu-watchdog-stop.md) |
+
+| 2026-07-20 | Joint MPC RTI Task 13 flat ranked CUDA gate | actual rolling trace / flat metrics | failed behavior gate; resource pass | monitored CUDA `13.2s`; 3 cells finite; zero drift `8.4e-5m`; stance slip about `0.134m`; alpha-zero run and tracking/swing failures | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-flat-ranked-cuda.md](2026-07-20-joint-mpc-rti-kinematic-flat-ranked-cuda.md) |
+
+| 2026-07-20 | Joint MPC RTI nominal anchor correction | current stance phase anchor / warm references / body-frame metrics | partial behavior improvement; flat still open | nominal RED then `9 passed`; monitored rerun reduces stance slip `0.134m -> <0.001m`; root velocity false failures removed; residual drift/swing/backward failures remain | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-nominal-anchor-fix.md](2026-07-20-joint-mpc-rti-kinematic-nominal-anchor-fix.md) |
+
 | 2026-07-20 | Joint MPC RTI Task 11 pipeline | one RTI / H31 ABI / old-code deletion | pass | focused `26 passed`; Tasks 1-11 CPU `108 passed`; forbidden production audit clean | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task11-pipeline.md](2026-07-20-joint-mpc-rti-kinematic-task11-pipeline.md) |
 
 | 2026-07-20 | Joint MPC RTI Task 11 RED | production one-RTI routing | expected fail | old planner still imported removed control objective API | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task11-red.md](2026-07-20-joint-mpc-rti-kinematic-task11-red.md) |

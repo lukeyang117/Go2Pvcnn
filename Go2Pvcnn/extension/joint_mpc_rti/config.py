@@ -21,7 +21,7 @@ class JointMpcRtiSolverCfg:
     regularization: float = 1.0e-4
     line_search_alphas: tuple[float, ...] = (1.0, 0.5, 0.25, 0.125, 0.0)
     line_search_tie_tolerance: float = 1.0e-7
-    root_position_trust: float = 0.05
+    root_position_trust: float = 0.005
     root_orientation_trust: float = 0.10
     joint_trust: float = 0.25
     active_set_refinements: int = 2
@@ -70,7 +70,7 @@ class JointMpcRtiLossTermsCfg:
     command_yaw: float = 0.5
     step_xy: float = 1.0
     step_z: float = 0.5
-    contact_anchor_xy: float = 4.0
+    contact_anchor_xy: float = 100.0
     contact_ground: float = 4.0
     swing_speed_margin: float = 0.002
     terrain_temperature: float = 0.015
@@ -90,7 +90,7 @@ class JointMpcRtiLossTermsCfg:
 class JointMpcRtiLossCfg:
     command: float = 1.0
     step: float = 1.0
-    contact: float = 1.0
+    contact: float = 100.0
     swing_speed: float = 1.0
     terrain: float = 1.0
     posture: float = 1.0

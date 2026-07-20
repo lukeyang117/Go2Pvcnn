@@ -217,6 +217,8 @@ def applicable_metrics(scenario: str, command: tuple[float, float, float] | None
         metrics.discard("foot_root_lead_time_min_ms")
         metrics.discard("foot_root_lead_time_max_ms")
         metrics.discard("root_leak_before_foot_m")
+    else:
+        metrics.discard("root_zero_drift_m")
     return frozenset(metrics)
 
 
@@ -228,6 +230,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     contact = torch.as_tensor(trace.contact_state, dtype=torch.bool, device=root.device)
     command = torch.as_tensor(trace.command_body, dtype=root.dtype, device=root.device)
     valid = torch.as_tensor(trace.valid, dtype=torch.bool, device=root.device)
+    future_node = valid & (torch.as_tensor(trace.timestamps, device=root.device) > 0.0)
     if root.ndim != 3 or joint.shape[:2] != root.shape[:2] or foot.shape[:2] != root.shape[:2]:
         raise ValueError("invalid JointMetricTrace shapes")
     valid_edge = valid[:, 1:] & valid[:, :-1]
@@ -467,15 +470,25 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     velocity = joint_step / float(trace.dt)
     acceleration = (velocity[:, 1:] - velocity[:, :-1]) / float(trace.dt)
     root_velocity = root_step / float(trace.dt)
-    velocity_error = torch.linalg.vector_norm(root_velocity - command_edge[..., :2], dim=-1)
+    yaw0 = rpy[:, :-1, 2]
+    root_velocity_body = torch.stack(
+        (
+            torch.cos(yaw0) * root_velocity[..., 0] + torch.sin(yaw0) * root_velocity[..., 1],
+            -torch.sin(yaw0) * root_velocity[..., 0] + torch.cos(yaw0) * root_velocity[..., 1],
+        ),
+        dim=-1,
+    )
+    velocity_error = torch.linalg.vector_norm(root_velocity_body - command_edge[..., :2], dim=-1)
     yaw_rate = (rpy[:, 1:, 2] - rpy[:, :-1, 2]) / float(trace.dt)
     yaw_error = torch.abs(yaw_rate - command_edge[..., 2])
     movement_norm = torch.linalg.vector_norm(root_step, dim=-1)
     command_norm = torch.linalg.vector_norm(command_edge[..., :2], dim=-1)
-    cosine = (root_step * command_edge[..., :2]).sum(dim=-1) / (movement_norm * command_norm).clamp_min(1.0e-8)
+    cosine = (root_velocity_body * command_edge[..., :2]).sum(dim=-1) / (
+        torch.linalg.vector_norm(root_velocity_body, dim=-1) * command_norm
+    ).clamp_min(1.0e-8)
     direction_error = torch.acos(cosine.clamp(-1.0, 1.0))
     stance_surface_error = foot[..., 2] - torch.as_tensor(trace.foot_height_w, dtype=root.dtype, device=root.device) - 0.022
-    stance_mask = contact & valid[..., None]
+    stance_mask = contact & future_node[..., None]
     swing_clearance = foot[..., 2] - torch.as_tensor(trace.foot_height_w, dtype=root.dtype, device=root.device) - 0.022
     nominal_pos = torch.as_tensor(trace.nominal_root_pos_w, dtype=root.dtype, device=root.device)
     nominal_rpy = torch.as_tensor(trace.nominal_root_rpy_w, dtype=root.dtype, device=root.device)
@@ -512,7 +525,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "root_roll_pitch_rate_max_rps": _masked_max(torch.abs((rpy[:, 1:, :2] - rpy[:, :-1, :2]) / float(trace.dt)).amax(dim=-1), valid_edge),
         "stance_ground_gap": _masked_max(torch.clamp_min(stance_surface_error, 0.0), stance_mask),
         "stance_ground_penetration": _masked_max(torch.clamp_min(-stance_surface_error, 0.0), stance_mask),
-        "swing_surface_clearance_min_m": -_masked_max(-swing_clearance, (~contact) & valid[..., None]),
+        "swing_surface_clearance_min_m": -_masked_max(-swing_clearance, (~contact) & future_node[..., None]),
         "line_alpha_zero_ratio": _masked_mean((torch.as_tensor(trace.line_alpha, device=root.device) == 0).to(root.dtype), valid),
         "line_alpha_zero_run": _max_true_run((torch.as_tensor(trace.line_alpha, device=root.device) == 0) & valid),
         "nonfinite_count": int((~torch.isfinite(root)).sum().item() + (~torch.isfinite(joint)).sum().item() + (~torch.isfinite(foot)).sum().item()),
@@ -520,7 +533,11 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     }
     anchor = trace.stance_anchor_w
     output["stance_anchor_residual"] = 0.0 if anchor is None else _masked_max(
-        torch.linalg.vector_norm(foot - torch.as_tensor(anchor, dtype=root.dtype, device=root.device), dim=-1), stance_mask
+        torch.linalg.vector_norm(
+            foot[..., :2] - torch.as_tensor(anchor, dtype=root.dtype, device=root.device)[..., :2],
+            dim=-1,
+        ),
+        stance_mask,
     )
     for name, tensor in (
         ("x0_injection_error", trace.x0_injection_error),

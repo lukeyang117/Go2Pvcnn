@@ -92,3 +92,11 @@ def test_small_includes_every_flat_metric_plus_small_metrics() -> None:
     from .joint_metrics import applicable_metrics
 
     assert applicable_metrics("flat") < applicable_metrics("small")
+
+
+def test_nonzero_translation_does_not_apply_zero_drift_metric() -> None:
+    from .joint_metrics import applicable_metrics
+
+    metrics = applicable_metrics("flat", (0.2, 0.0, 0.0))
+
+    assert "root_zero_drift_m" not in metrics

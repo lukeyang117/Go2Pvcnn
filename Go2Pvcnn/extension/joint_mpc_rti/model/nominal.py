@@ -151,7 +151,7 @@ def _build_foot_references(
         lift_xy_event,
     )
     stance_xy = torch.where(
-        (stance_raw < 0)[..., None],
+        ((stance_raw < 0) | (lift_raw < 0))[..., None],
         measured_foot[:, None, :, :2],
         stance_xy_event,
     )
@@ -184,7 +184,11 @@ def _build_foot_references(
         inferred_lift_z.expand(-1, nodes, -1),
         lift_z_event,
     )
-    stance_z = torch.where(stance_raw < 0, measured_foot[:, None, :, 2], stance_z_event)
+    stance_z = torch.where(
+        (stance_raw < 0) | (lift_raw < 0),
+        measured_foot[:, None, :, 2],
+        stance_z_event,
+    )
     tau = schedule.swing_tau
     swing_xy = (1.0 - tau[..., None]) * lift_xy + tau[..., None] * touchdown_xy
     swing_z = (
@@ -259,7 +263,7 @@ def _build_warm_nominal(
         cfg,
         step_scale=1.0,
     )
-    foot = go2_fk(state[..., :3], state[..., 3:6], state[..., 6:]).foot_pos_w
+    foot = references.foot
     valid = previous.valid & references.valid & torch.isfinite(state).all(dim=(1, 2))
     return NominalTrajectory(state, foot, references.touchdown, schedule.stance, previous.valid, valid)
 

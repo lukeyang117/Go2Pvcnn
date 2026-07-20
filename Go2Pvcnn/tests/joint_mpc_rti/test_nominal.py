@@ -119,6 +119,46 @@ def test_warm_nominal_is_shift_rebase_and_measurement_decay() -> None:
     torch.testing.assert_close(result.state[:, 5, :2], expected_xy)
 
 
+def test_warm_nominal_uses_current_measured_stance_reference() -> None:
+    cfg = JointMpcRtiCfg()
+    measured = _measured(1)
+    phase = torch.zeros(1, dtype=torch.long)
+    cold = build_nominal(
+        measured,
+        torch.tensor((0.25, 0.0, 0.2)).view(1, 3),
+        _field(1),
+        phase,
+        previous=_invalid_previous(measured, phase),
+        cfg=cfg,
+    )
+    measured_next = JointMpcRtiState(
+        root_pos_w=measured.root_pos_w,
+        root_rpy_w=measured.root_rpy_w,
+        joint_pos=measured.joint_pos + 0.02,
+        root_lin_vel_b=measured.root_lin_vel_b,
+        root_ang_vel_b=measured.root_ang_vel_b,
+        joint_vel=measured.joint_vel,
+    )
+    previous = JointMpcRtiSolverState(cold.state, phase, torch.ones(1, dtype=torch.bool))
+    result = build_nominal(
+        measured_next,
+        torch.tensor((0.25, 0.0, 0.2)).view(1, 3),
+        _field(1),
+        phase + 1,
+        previous=previous,
+        cfg=cfg,
+    )
+
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+
+    measured_foot = go2_fk(
+        measured_next.root_pos_w, measured_next.root_rpy_w, measured_next.joint_pos
+    ).foot_pos_w
+    # At phase one, legs 1/2 remain in the current stance through the next lift.
+    expected = measured_foot[:, None, 1:3, :2].expand(-1, 11, -1, -1)
+    torch.testing.assert_close(result.foot_reference_w[:, :11, 1:3, :2], expected)
+
+
 def test_cold_nominal_does_not_use_semantics_to_modify_xy() -> None:
     cfg = JointMpcRtiCfg()
     measured = _measured(3)
@@ -132,6 +172,27 @@ def test_cold_nominal_does_not_use_semantics_to_modify_xy() -> None:
     torch.testing.assert_close(flat.state[..., :2], semantic.state[..., :2])
     torch.testing.assert_close(flat.foot_reference_w[..., :2], semantic.foot_reference_w[..., :2])
     torch.testing.assert_close(flat.touchdown_reference_w[..., :2], semantic.touchdown_reference_w[..., :2])
+
+
+def test_current_stance_nominal_anchor_starts_at_measured_foot() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+
+    cfg = JointMpcRtiCfg()
+    measured = _measured(1)
+    phase = torch.zeros(1, dtype=torch.long)
+    result = build_nominal(
+        measured,
+        torch.tensor((1.0, 0.5, 1.0)).view(1, 3),
+        _field(1),
+        phase,
+        previous=_invalid_previous(measured, phase),
+        cfg=cfg,
+    )
+    measured_foot = go2_fk(measured.root_pos_w, measured.root_rpy_w, measured.joint_pos).foot_pos_w
+
+    # Phase zero has diagonal swing legs 0/3 and stance legs 1/2.
+    expected = measured_foot[:, None, 1:3, :2].expand(-1, 12, -1, -1)
+    torch.testing.assert_close(result.foot_reference_w[:, :12, 1:3, :2], expected)
 
 
 def test_nominal_source_has_no_for_or_while() -> None:
