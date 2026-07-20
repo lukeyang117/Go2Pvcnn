@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joint MPC RTI 纯运动学平地与小障碍设计</title>
+  <style>
+    :root {
+      --ink: #182027;
+      --muted: #5f6b73;
+      --line: #d8dee2;
+      --paper: #ffffff;
+      --page: #f3f5f6;
+      --blue: #1769aa;
+      --blue-soft: #edf6fc;
+      --green: #1f7a4d;
+      --green-soft: #edf8f2;
+      --amber: #9a5a00;
+      --amber-soft: #fff7e8;
+      --red: #aa2e2e;
+      --red-soft: #fff1f1;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--page); font: 15px/1.68 system-ui, sans-serif; }
+    main { max-width: 1120px; margin: 0 auto; padding: 42px 42px 72px; background: var(--paper); }
+    h1, h2, h3 { line-height: 1.3; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin-top: 38px; padding-bottom: 7px; border-bottom: 1px solid var(--line); font-size: 22px; }
+    h3 { margin-top: 24px; font-size: 17px; }
+    p, li { max-width: 92ch; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    code { color: #243b4a; }
+    pre { overflow: auto; padding: 14px 16px; border: 1px solid var(--line); background: #f8fafb; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; }
+    th, td { padding: 9px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f5f7f8; }
+    .meta { color: var(--muted); }
+    .note, .ok, .warn, .danger { margin: 16px 0; padding: 12px 15px; border-left: 4px solid; }
+    .note { border-left-color: var(--blue); background: var(--blue-soft); }
+    .ok { border-left-color: var(--green); background: var(--green-soft); }
+    .warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .danger { border-left-color: var(--red); background: var(--red-soft); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card { padding: 13px 15px; border: 1px solid var(--line); border-radius: 7px; }
+    .small { color: var(--muted); font-size: 13px; }
+    @media (max-width: 760px) {
+      main { padding: 26px 18px 50px; }
+      .grid { grid-template-columns: 1fr; }
+      table { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Joint MPC RTI 纯运动学平地与小障碍设计</h1>
+  <p class="meta">日期：2026-07-20 ｜ 目标目录：<code>Go2Pvcnn/extension/joint_mpc_rti/</code> ｜ 第一阶段：flat + small obstacle</p>
+
+  <div class="danger">
+    <strong>替代关系：</strong>本设计是 <code>joint_mpc_rti</code> 下一版实现的主合同。2026-07-17 与 2026-07-18 的 root-joint coupled、adaptive contact、recovery 和 15+15 设计仅作为问题证据、指标来源与资源事故记录，不再定义生产架构。新实现不得恢复旧 startup/recovery/progress 修补链，也不得把旧 32 行 KKT 的组成照搬回来。
+  </div>
+
+  <h2>1. 目标、范围与完成顺序</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>本阶段目标</h3>
+      <ul>
+        <li>使用纯运动学状态和一次 SQP/RTI，生成可发布的 H30 root-joint 轨迹。</li>
+        <li>先通过全部平地指标，再通过全部小障碍跨越指标。</li>
+        <li>平地和小障碍共享同一套 trace、指标公式、阈值系统与真实状态来源。</li>
+        <li>固定形状 GPU 并行，可扩展到 1024 个训练环境。</li>
+        <li>保留未来接入强化学习 reference 的清晰输出接口。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>本阶段非目标</h3>
+      <ul>
+        <li>不引入动力学、接触力、力矩或独立速度优化变量。</li>
+        <li>暂不验收上楼梯、下楼梯、坡地和大障碍绕行行为。</li>
+        <li>不在线优化 gait topology、摆动顺序或接触时刻。</li>
+        <li>不增加第八类 loss，不使用输出后的 IK 或碰撞修补。</li>
+        <li>不在 nominal 阶段通过语义搜索候选落脚轨迹。</li>
+      </ul>
+    </div>
+  </div>
+  <pre><code>Stage 0: 数值与固定形状合同
+  -> Stage 1: flat 全指标门
+  -> Stage 2: small obstacle 全指标门
+  -> Stage 3: 同一候选 flat + small 联合复验
+  -> Stage B: 1024 x H30 x 1000 性能门</code></pre>
+
+  <h2>2. 固定时间、Gait 与状态合同</h2>
+  <pre><code>dt = 0.02 s
+horizon_steps = 30
+state_nodes = 31
+prediction_time = 0.60 s
+gait_period = 24 frames = 0.48 s
+swing = 12 frames
+stance = 12 frames
+gait = diagonal trot</code></pre>
+  <p>每个节点只优化：</p>
+  <pre><code>z_k = [p_B,k, theta_B,k, q_k] in R^18
+Z = [z_0, ..., z_30] in R^(31 x 18)</code></pre>
+  <ul>
+    <li><code>p_B</code>：root 世界位置，3 维。</li>
+    <li><code>theta_B</code>：root roll、pitch、yaw，3 维。</li>
+    <li><code>q</code>：Go2 的 12 个关节角。</li>
+    <li>足端、膝、calf、thigh 与 base 几何全部由 <code>FK(p_B, theta_B, q)</code> 得到。</li>
+    <li>不引入独立 <code>nu_k</code>、接触力、关节力矩或刚体动力学状态。</li>
+  </ul>
+
+  <h2>3. 感知场合同</h2>
+  <p>感知仍是二维高程图和二维语义图，不构造三维体素：</p>
+  <pre><code>H[x,y] : elevation
+S[x,y] : semantic label
+A_s[x,y], A_l[x,y] : small/large 膨胀和平滑占用层</code></pre>
+  <p>查询时根据部位和 gait phase 构造统一的有效高度/代价：</p>
+  <table>
+    <thead><tr><th>语义</th><th>Swing foot/link</th><th>Touchdown/Stance foot</th><th>Root/leg</th></tr></thead>
+    <tbody>
+      <tr><td>普通地面</td><td>真实高程</td><td>真实高程</td><td>真实高程与几何 clearance</td></tr>
+      <tr><td>Small</td><td>真实物体高度，允许从上方跨越</td><td>虚拟墙，禁止踩踏</td><td>按真实高度与部位半径检查碰撞</td></tr>
+      <tr><td>Large</td><td>虚拟墙</td><td>虚拟墙</td><td>虚拟墙</td></tr>
+    </tbody>
+  </table>
+  <p>第一阶段只正式验收 flat 与 small；large 层保留数据合同和 Stage B realistic workload，但不在本阶段声称大障碍行为通过。每轮 RTI 的地图点必须组成固定形状 packed query，不允许按节点或部位发起 Python 查询循环。</p>
+
+  <h2>4. Nominal 一次生成</h2>
+  <div class="ok"><strong>硬合同：</strong>一次调用生成完整 <code>[B,31,18]</code> nominal。禁止按环境、31 个节点或四条腿使用 Python <code>for</code>。允许使用广播、<code>gather</code>、<code>where</code>、<code>cumsum</code> 和固定形状 batched analytic IK。</div>
+
+  <h3>4.1 Gait schedule</h3>
+  <pre><code>K = [0, 1, ..., 30]
+phi_b,k = (phi_b,0 + K_k) mod 24
+phi_b,k,i = (phi_b,k + leg_offset_i) mod 24
+M_swing = [phi_b,k,i &lt; 12]
+M_stance = 1 - M_swing</code></pre>
+  <p>一次得到 <code>[B,31,4]</code> gait mask。</p>
+
+  <h3>4.2 Cold start</h3>
+  <ol>
+    <li>固定 <code>z_bar[:,0] = z_measured</code>。</li>
+    <li>由 command 一次产生全部 yaw，并用世界系位移的 <code>cumsum</code> 产生 31 个 root XY 节点。</li>
+    <li>root z、roll、pitch 从 measured/support nominal 初始化。</li>
+    <li>touchdown XY 只由 command、gait phase 和 nominal footprint 产生，不根据语义地图搜索或改写。</li>
+    <li>所有 touchdown XY 打包查询真实高程，得到 touchdown z。</li>
+    <li>所有 swing 足使用解析插值和同一个基础摆高参数：</li>
+  </ol>
+  <pre><code>p_foot_xy(tau) = (1-tau) p_lift_xy + tau p_td_xy
+z_foot(tau) = (1-tau) z_lift + tau z_td + h_swing 4 tau (1-tau)</code></pre>
+  <p><code>h_swing</code> 是可调参数，建议初值 0.08 m；它不等于每个查询点的 terrain clearance，后者仍由地形高度和部位安全余量决定。最后用 batched analytic IK 一次得到 <code>[B,31,4,3]</code> 关节角。</p>
+
+  <h3>4.3 Rolling warm start</h3>
+  <pre><code>Z_shift[:,0:30] = Z_prev_star[:,1:31]
+q_shift[:,30] = q_shift[:,6]  # 相差一个 24-frame gait 周期</code></pre>
+  <p>用 measured state 与上一轮预测 <code>x1</code> 的误差一次性重定位全部 root 节点：</p>
+  <pre><code>delta_p = p_measured - p_prev_star[1]
+delta_yaw = wrap(yaw_measured - yaw_prev_star[1])
+p_bar_B,k = p_measured + Rz(delta_yaw) (p_shift_B,k - p_shift_B,0)
+yaw_bar_k = yaw_shift_k + delta_yaw</code></pre>
+  <p>关节 measurement mismatch 使用固定衰减向量修正前几帧：</p>
+  <pre><code>q_bar_k = q_shift_k + beta_k (q_measured - q_shift_0)
+beta_0 = 1, beta_k -> 0 in the first configured nodes</code></pre>
+  <p>最后严格覆盖 <code>z_bar[:,0]=z_measured</code>，重新生成 gait/reference 和 packed map query。新地图进入后续 loss/Jacobian，不通过 hidden repair 改写 nominal XY。</p>
+
+  <h2>5. 七项固定 Loss</h2>
+  <pre><code>J = w_cmd J_cmd
+  + w_step J_step
+  + w_contact J_contact
+  + w_swing J_swing_speed
+  + w_terrain J_terrain
+  + w_posture J_posture
+  + w_smooth J_smooth</code></pre>
+  <table>
+    <thead><tr><th>Loss</th><th>职责</th><th>跨时间关系</th></tr></thead>
+    <tbody>
+      <tr><td>Command</td><td>由相邻 root pose 差分跟踪 XY 速度和 yaw rate command。</td><td><code>k,k+1</code></td></tr>
+      <tr><td>Step</td><td>跟踪 command-conditioned touchdown reference；不做 terrain XY 搜索。</td><td>由 gait event reference 连接时刻</td></tr>
+      <tr><td>Contact</td><td>stance 足世界位置不滑并贴真实地面。</td><td>相邻 stance 节点</td></tr>
+      <tr><td>Swing speed</td><td>swing 中要求足端 XY 速度大于 root XY 速度，并保持相对主动推进。</td><td><code>k,k+1</code></td></tr>
+      <tr><td>Terrain</td><td>统一处理 foot/link/root clearance、small 禁踩与全身碰撞。</td><td>节点代价，地图空间梯度耦合轨迹</td></tr>
+      <tr><td>Posture</td><td>root height、roll/pitch 与默认关节姿态。</td><td>节点代价</td></tr>
+      <tr><td>Smooth</td><td>抑制 root 和关节的一阶、二阶跳变。</td><td><code>k-1,k,k+1</code></td></tr>
+    </tbody>
+  </table>
+  <pre><code>J_smooth = sum ||z_(k+1)-z_k||^2_W1
+         + sum ||z_(k+1)-2z_k+z_(k-1)||^2_W2</code></pre>
+  <div class="danger"><strong>禁止扩展：</strong>不得增加 recovery、startup、detour、foot-lead、progress、特殊楼梯等第八类 loss；不得针对场景切换另一套目标函数；不得在 nonlinear score 中加入 LQ/GGN 看不到的隐藏目标。</div>
+
+  <h2>6. 一次 SQP/RTI、LQ 与 KKT</h2>
+  <p>每个控制周期只执行一次 SQP iteration：</p>
+  <pre><code>measured/map/command
+  -> vectorized nominal/warm start
+  -> 七项 nonlinear loss 在 nominal 处线性化/GGN 二次化
+  -> constrained LQ/QP
+  -> associative scan 求方向 delta_Z
+  -> parallel line search
+  -> 接受 Z_star 并只发布 x1</code></pre>
+  <p>KKT 只承载已批准的硬约束：</p>
+  <ul>
+    <li><code>z_0=z_measured</code>：固定或从变量中消元。</li>
+    <li>joint position bounds。</li>
+    <li><code>-qdot_max dt &lt;= q_(k+1)-q_k &lt;= qdot_max dt</code>。</li>
+    <li>SQP trust region。</li>
+  </ul>
+  <p>stance、terrain、collision、small touchdown 不进入新的 general KKT 行，由固定七项 loss 统一处理。旧设计的 32 行是资源上限而不是新设计目标，禁止重新用 startup/recovery/collision 分支填满。</p>
+
+  <h2>7. Associative Scan</h2>
+  <p>二阶 smooth 使原始 QP 呈 block-pentadiagonal。求解器内部使用 separator：</p>
+  <pre><code>y_k = [delta_z_(k-1), delta_z_k] in R^36</code></pre>
+  <p>它只是 Gaussian/KKT factor composition 的内部表示，不是新增优化变量。30 个 interval pad 到 32，使用 5 层固定 H30/32 combine tree。不得依赖当前 PyTorch 2.7 已知会在 symbolic-vmap matmul 失败的通用 <code>associative_scan</code> 路径。</p>
+  <p>生产接入前必须满足：</p>
+  <pre><code>||delta_Z_scan - delta_Z_dense||_inf &lt; 2e-5</code></pre>
+  <p>并分别验证 combine 结合律、active bound 固定形状、梯度/解有限性和 H30 padding 不改变原问题。</p>
+
+  <h2>8. Parallel Line Search</h2>
+  <pre><code>alpha = [1.0, 0.5, 0.25, 0.125, 0.0]
+Z_alpha = Z_bar + alpha * delta_Z</code></pre>
+  <p>五个候选在固定 <code>[B,5,31,18]</code> 张量中并行生成。只允许依次过滤：</p>
+  <ol>
+    <li>NaN/Inf；</li>
+    <li>joint position violation；</li>
+    <li>joint velocity violation。</li>
+  </ol>
+  <p>剩余候选只按同一套七项 nonlinear total loss 选择：</p>
+  <pre><code>alpha_star = argmin_(alpha in feasible) J_seven_losses(Z_alpha)</code></pre>
+  <p>近似同分选择更大的 alpha；<code>alpha=0</code> 是 nominal fallback。禁止 nominal safe/unsafe 分支、collision hard gate、foot-on-small hard gate、额外 merit/violation 排序、recovery candidate 和输出后 projection。</p>
+
+  <h2>9. 冻结边界与允许调参</h2>
+  <div class="warn"><strong>冻结时点：</strong>新代码完成并与本设计一致后，除非存在可证明的原则性实现错误，否则 nominal、loss 类别/公式、line-search 候选与选择流程不得修改。行为测试失败不是结构变更理由。</div>
+  <table>
+    <thead><tr><th>允许调节</th><th>禁止通过调节改变</th></tr></thead>
+    <tbody>
+      <tr><td>七项主权重与已定义子权重</td><td>增加、删除、分场景切换 loss</td></tr>
+      <tr><td>W1/W2、h_swing、clearance margin、平滑温度</td><td>缩小物理碰撞几何或修改 detector 通过测试</td></tr>
+      <tr><td>command/step reference 尺度、posture reference</td><td>H30、24 周期、12/12、优化变量</td></tr>
+      <tr><td>trust-region 大小、measurement mismatch 衰减</td><td>五个 alpha、三项过滤和七 loss argmin</td></tr>
+    </tbody>
+  </table>
+  <p>原则性错误仅包括：公式实现不一致、坐标系/phase/joint order/地图语义错误、非一次张量生成、FK/IK 数学错误、finite-difference 或 dense parity 证明错误。任何结构修订必须先形成设计 amendment。</p>
+
+  <h2>10. 统一 JointMetrics 与适用性</h2>
+  <p>flat 和 small 使用同一份 trace schema：</p>
+  <pre><code>[scenario, command, phase, shape, offset, environment, time, leg_or_body_part]</code></pre>
+  <p>每个指标保存 value、numerator、denominator、valid count、N/A 原因、worst-case key 和 pass/fail。场景适用性为：</p>
+  <pre><code>Pass(scenario) = AND over metrics where applicability(scenario, metric) = true</code></pre>
+  <ul>
+    <li>flat 没有 small object，因此 small collision、touchdown-on-small、strict crossing 为 N/A。</li>
+    <li>zero translation command 的方向误差数学上 N/A，但 drift、yaw tracking、stance、joint 和数值指标仍适用。</li>
+    <li>正式 small crossing 场景必须构造真实 crossing opportunity；不能用 opportunity 缺失记成功。</li>
+    <li>不同测试可突出不同指标，但所有适用指标必须同时检查。</li>
+  </ul>
+
+  <h2>11. Stage 1：Flat 全指标门</h2>
+  <p>正式 command 笛卡尔积沿用 275 个带符号组合：</p>
+  <pre><code>vx in {0, +/-0.2, +/-0.4, +/-0.6, +/-0.8, +/-1.0} m/s
+vy in {0, +/-0.3, +/-0.5} m/s
+yaw_rate in {0, +/-0.5, +/-1.0} rad/s
+command_count = 11 * 5 * 5 = 275</code></pre>
+  <p>每个 command 运行多个完整 gait 周期。重点与门如下：</p>
+  <table>
+    <thead><tr><th>组</th><th>核心指标</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td>Joint</td><td>position/velocity violation、safe margin、step/velocity/acceleration</td><td>violation=0；safe margin &gt;=0.1 rad；不得持续 clamp 饱和</td></tr>
+      <tr><td>Foot before root</td><td>lead time、root leak、swing/root speed、relative progress</td><td>lead 20-80 ms；leak &lt;=0.5 mm；swing active progress 为正</td></tr>
+      <tr><td>Root tracking</td><td>velocity、direction、yaw rate、zero drift、step jump</td><td>继承旧 JointMetrics 门，H30 不放宽</td></tr>
+      <tr><td>Stance</td><td>XY slip、stationary ratio、ground gap/penetration、anchor residual</td><td>max/mean &lt;=0.5/0.2 mm/frame；stationary 100%；gap &lt;=12 mm；penetration &lt;=1 mm；residual &lt;=0.5 mm</td></tr>
+    </tbody>
+  </table>
+  <p>同时必须检查 swing clearance、touchdown surface error、root RPY、joint continuity、line-search alpha 分布、warm-start continuity、x0 injection、published x1、map validity 和 nonfinite。flat 的全部适用指标通过后才允许进入 small。</p>
+
+  <h2>12. Stage 2：Small Obstacle 全指标门</h2>
+  <p>覆盖 sphere、cuboid、cylinder、capsule、cone，不同进入 phase、横向偏置和正式 command。指标集合为：</p>
+  <pre><code>M_small = M_flat + M_small_obstacle</code></pre>
+  <table>
+    <thead><tr><th>组</th><th>定义</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td>Root offset</td><td>相对 command nominal 的 roll/pitch、横向位置/速度和 yaw</td><td>roll/pitch &lt;=6 deg；lateral &lt;=0.06 m；lateral velocity &lt;=0.20 m/s；yaw &lt;=10 deg；RP rate &lt;=0.6 rad/s</td></tr>
+      <tr><td>Full-body collision</td><td>foot、knee、calf、thigh、base，按 swing/stance 分解</td><td>每部位每有效单元 collision rate=0；penetration &lt;=1 mm</td></tr>
+      <tr><td>Strict crossing</td><td>足从一侧开始、经过 obstacle footprint、从上方净空通过并在另一侧安全 touchdown</td><td>总体 success &gt;=95%；每 shape-speed &gt;=90%；不能把绕开或停止记为跨越</td></tr>
+      <tr><td>Small semantic</td><td>touchdown/stance on small、airborne touchdown</td><td>全部为 0</td></tr>
+    </tbody>
+  </table>
+  <p>flat 中的 joint、foot-before-root、root tracking、stance、touchdown、RTI、line search 和 numerical 门在 small 中仍全部适用。不能以 crossing 成功掩盖碰撞、悬空、关节触限或 root 跟踪失败。</p>
+
+  <h2>13. Stage 3：Flat + Small 联合复验</h2>
+  <p>Stage 1 和 Stage 2 分别通过后，冻结所有参数，在同一 HEAD 重新运行：</p>
+  <pre><code>Pass_behavior = Pass(flat full matrix) AND Pass(small full matrix)</code></pre>
+  <p>每个 <code>scenario x command x phase x shape x offset</code> 单元、每类 worst case 和全局汇总必须同时通过。禁止平均掩盖、修改阈值、减少 command、缩小几何、替换 detector 或引用历史局部结果。</p>
+
+  <h2>14. 测试进程与编译资源安全</h2>
+  <div class="danger"><strong>事故继承：</strong>旧 65-row KKT 使 Triton Schur/RHS padding 到 128，<code>ptxas</code> 吃满 2 GiB swap。该路径永久拒绝。新设计虽然不使用这些 collision KKT 行，仍保留静态资源上限和编译前 guard。</div>
+  <ul>
+    <li>general KKT rows &lt;=32；<code>BLOCK_N&lt;=32</code>。</li>
+    <li>combined RHS &lt;=51；<code>BLOCK_R&lt;=64</code>。</li>
+    <li>H30、五个 line-search candidates、separator 和 static loop 维度在编译前验证。</li>
+    <li>静态维度增加必须先做资源 amendment，不能直接启动长 GPU probe。</li>
+  </ul>
+  <pre><code>静态 shape/padding audit
+  -> CPU contracts
+  -> one-step B=1 compile smoke
+  -> short rolling
+  -> ranked 1-3 cells
+  -> small matrix
+  -> formal 275-command behavior</code></pre>
+  <p>删除或改写所有会长时间运行、无进度输出、无 hard timeout 的旧测试入口。普通 pytest 只负责短单测/合同；重测试由统一 runner 在独立进程组执行。父进程至少每 5 秒输出 stage、cell、wall time、CPU/RSS、GPU memory/utilization 和 child <code>ptxas</code> RSS。</p>
+  <table>
+    <thead><tr><th>触发条件</th><th>动作</th></tr></thead>
+    <tbody>
+      <tr><td>B=1 compile smoke 超过 120 s</td><td>终止本任务进程组并记录诊断</td></tr>
+      <tr><td>ptxas RSS &gt;8 GiB</td><td>立即终止本任务进程组</td></tr>
+      <tr><td>任务树 RSS &gt;16 GiB</td><td>立即终止本任务进程组</td></tr>
+      <tr><td>available memory 下降 &gt;16 GiB 或 swap 增长 &gt;256 MiB</td><td>立即终止本任务进程组</td></tr>
+      <tr><td>CPU/compiler 持续增长 &gt;30 s 且目标 GPU 无本任务进展</td><td>终止并禁止扩大规模重试</td></tr>
+    </tbody>
+  </table>
+  <p>只能终止本任务进程组，禁止 kill 其他用户进程。旧 probe 的有效覆盖必须先迁移到统一 JointMetrics/runner，才能删除旧文件。</p>
+
+  <h2>15. Stage B 性能合同</h2>
+  <p>只有 Stage 3 通过后才能开始 Stage B。行为配置、nominal、七项 loss、KKT、line search、地图语义、几何与阈值全部冻结。</p>
+  <div class="ok"><strong>正式性能门：</strong>空闲目标 GPU，1024 environments，H30，1000 次 synchronous exact signed field + 完整 MPC refresh，总耗时不超过 5.0 s，平均不超过 5 ms/update。</div>
+  <ul>
+    <li>使用固定 H30/31、associative scan 和五个 line-search candidates。</li>
+    <li>七项 loss、完整 FK 几何、packed terrain query 全部保留。</li>
+    <li>保留 realistic small 11x11 与 large 41x41 field/query workload。</li>
+    <li>field version 正确增加 1000，<code>nonfinite_count=0</code>。</li>
+    <li>允许做数学等价的 custom scan、kernel fusion、workspace reuse、packed query、CUDA Graph 和内存布局优化。</li>
+    <li>禁止通过减少环境数、缩短 H、减少候选、跳过 field、减少几何或修改行为合同通过性能。</li>
+  </ul>
+  <p>Stage B 通过后，在同一个最终候选上重新运行 Stage 3 与 Stage B；最新行为和最新性能必须同时通过。</p>
+
+  <h2>16. 文件边界与旧代码删除</h2>
+  <pre><code>Go2Pvcnn/extension/joint_mpc_rti/
+|- config.py                 # 固定合同与允许调参
+|- planner.py                # 一次 RTI 编排，不承载隐藏 repair
+|- model/                    # gait、batched FK/IK、kinematic rollout
+|- terrain/                  # H/S -> unified field，packed query
+|- losses/                   # 仅七项 loss
+|- solver/                   # LQ/KKT、H30/32 associative scan、line search
+|- runtime/                  # shifted warm start、fixed-shape manager/CUDA Graph
+`- integration/              # viewer/Isaac/RL reference 边界
+
+Go2Pvcnn/tests/joint_mpc_rti/
+|- joint_metrics.py          # 唯一 trace/metric 定义
+|- acceptance_thresholds.py  # applicability 与统一阈值
+|- scenario_matrix.py        # flat/small 正式矩阵
+|- run_joint_acceptance.py   # 有心跳、timeout、watchdog 的唯一重测试入口
+|- test_*                    # 短单测与合同
+`- *_probe.py                # 只保留受 runner 管理且仍有独立价值的 probe</code></pre>
+  <p>复用当前目录和外部 adapter，不创建并行 backend。模块替换后删除旧 startup/recovery/progress、15+15 scheduler、post-LQ IK projection、旧 line-search selector、冲突 loss、死 helper 和旧行为测试。删除必须基于调用图与测试覆盖，不得顺手删除仍被外部消费者使用的接口。</p>
+
+  <h2>17. 完成定义</h2>
+  <div class="ok">
+    第一阶段完成要求：新纯运动学 H30/24/12+12 架构与本设计一致；nominal 一次张量生成；一次 SQP/RTI 使用七项 loss、批准的 KKT、H30/32 associative scan 和五候选 line search；flat 全部适用指标通过；small 全部适用指标和严格跨越门通过；同一候选联合复验通过；无静默失控测试；Stage B 在冻结行为下通过 <code>1024 x H30 x 1000 &lt;=5.0 s</code>；最终同一 HEAD 重新通过行为与性能。
+  </div>
+  <p>以下均不算完成：只在 planner 内部 state 通过；只通过 crossing 主指标；用 root 大偏移代替足端跨越；用 clamp 饱和维持行为；修改 nominal/loss/line search 追测试；缩小 detector；引用旧结果；保留无限运行无输出进程；性能优化后不重跑行为。</p>
+
+  <p class="small">本文件是经用户分段批准后的中文设计合同。下一步应先由用户审阅本文，再基于本文编写新的实施计划；当前文件本身不授权修改生产代码。</p>
+</main>
+</body>
+</html>

@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI pure-kinematic flat-small design | replacement design / user review | Chinese HTML written; no production code changed | H30; gait `24/12+12`; vectorized nominal; seven losses; five alphas; flat then small; Stage B `1024 x H30 x 1000 <=5s` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md](2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md) |
+
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-07-18 | Joint MPC H30 implementation plan amendment | T302v.8 planning | original plan amended; Stage A execution next | fixed H30; Tasks 8A-9A Stage A; H30 Stage B blocked until green; final same-candidate rerun | [T302v.8](../todo/T302v-joint-mpc-rti-gpu.md) | [plan amendment](2026-07-18-joint-mpc-h30-implementation-plan-amendment.md) |

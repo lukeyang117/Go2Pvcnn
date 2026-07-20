@@ -2,6 +2,7 @@
 
 ## Current State
 
+- 2026-07-20 replacement design is written and awaits user review before implementation planning. It replaces the old 15+15 adaptive-contact/recovery production architecture with pure-kinematic H30, gait 24/12+12, one vectorized nominal, seven frozen losses, joint-bound/trust KKT, H30/32 associative scan, and five-alpha loss-only line search. The first behavior milestone is flat then small-obstacle with one applicability-aware JointMetrics contract; Stage B remains `1024 x H30 x 1000 <=5.0s`. See [design log](../log/2026-07-20-joint-mpc-rti-kinematic-flat-small-design.md) and [Chinese HTML](../../docs/superpowers/specs/2026-07-20-joint-mpc-rti-kinematic-flat-small-obstacle-design.html).
 - Branch: `joint_mpc`; baseline commit: `cb2fff4`.
 - Rolling contract: inject measured `x0`, optimize one fixed-shape full stance-swing-stance horizon, publish only `x1` to PPO reference rewards. H16 remains the baseline; Stage A may explore H16-H50 with `Horizon = 2 * half_cycle_steps` before selecting `H_selected`.
 - Production profile: compiled fixed-horizon rollout/objective/query, packed geometry queries, diagonal GGN Riccati, `(1.0, 0.25)` line search, CUDA Graph replay.
