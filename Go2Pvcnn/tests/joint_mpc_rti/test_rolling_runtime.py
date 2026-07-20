@@ -71,7 +71,11 @@ def test_cuda_graph_runtime_flag_falls_back_cleanly_on_cpu() -> None:
 
     result = manager.plan_from_tensors(make_state(2), make_command(2), make_flat_field(2))
 
+<<<<<<< HEAD
     assert result.full_trajectory.state.shape == (2, cfg.runtime.horizon_steps + 1, 18)
+=======
+    assert result.full_trajectory.state.shape == (2, 31, 18)
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     assert manager._graph_runner is None
 
 

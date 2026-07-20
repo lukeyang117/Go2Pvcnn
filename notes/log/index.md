@@ -4,6 +4,10 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI Task 11 pipeline | one RTI / H31 ABI / old-code deletion | pass | focused `26 passed`; Tasks 1-11 CPU `108 passed`; forbidden production audit clean | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task11-pipeline.md](2026-07-20-joint-mpc-rti-kinematic-task11-pipeline.md) |
+
+| 2026-07-20 | Joint MPC RTI Task 11 RED | production one-RTI routing | expected fail | old planner still imported removed control objective API | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task11-red.md](2026-07-20-joint-mpc-rti-kinematic-task11-red.md) |
+
 | 2026-07-20 | Joint MPC RTI Task 10 line search | five state candidates / loss-only selection | pass | focused `7 passed`; contract+scan regression `21 passed`; exactly three filters | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task10-line-search.md](2026-07-20-joint-mpc-rti-kinematic-task10-line-search.md) |
 
 | 2026-07-20 | Joint MPC RTI Task 10 RED | five-candidate state line search | expected fail | old module lacks frozen filters and new state API | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task10-red.md](2026-07-20-joint-mpc-rti-kinematic-task10-red.md) |

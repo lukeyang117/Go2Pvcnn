@@ -1,13 +1,12 @@
-"""Pure-tensor one-step rolling planner API."""
+"""Pure-kinematic H30 joint MPC RTI orchestration."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass, replace
 
 import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
+<<<<<<< HEAD
 from extension.joint_mpc_rti.integration.command import body_linear_velocity_to_world
 from extension.joint_mpc_rti.losses.barriers import (
     localized_relaxed_barrier_derivative,
@@ -40,6 +39,14 @@ from extension.joint_mpc_rti.solver.primal_dual_ilqr import LqProblem, solve_lq_
 from extension.joint_mpc_rti.solver.sqp_rti import sqp_rti_update
 from extension.joint_mpc_rti.terrain.query import JointMpcTerrainQuery, query_world, query_world_maybe_compiled
 from extension.joint_mpc_rti.tensor_constants import constant_like
+=======
+from extension.joint_mpc_rti.losses.objective import LossContext
+from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
+from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+from extension.joint_mpc_rti.model.nominal import NominalTrajectory, build_nominal
+from extension.joint_mpc_rti.solver.sqp_rti import sqp_rti_update
+from extension.joint_mpc_rti.terrain.query import query_world
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
 from extension.joint_mpc_rti.types import (
     JointMpcPendingReference,
     JointMpcRtiSolverState,
@@ -50,6 +57,7 @@ from extension.joint_mpc_rti.types import (
 )
 
 
+<<<<<<< HEAD
 def _query_world(field: JointMpcTerrainField, points_w: Tensor, cfg: JointMpcRtiCfg):
     return query_world(field, points_w)
 
@@ -268,8 +276,15 @@ def _measured_touchdown_readiness(
 
 def _query_linearization_geometry(
     rollout: JointMpcRollout,
+=======
+def build_loss_context(
+    nominal: NominalTrajectory,
+    command_body: Tensor,
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     terrain_field: JointMpcTerrainField,
+    gait_phase: Tensor,
     cfg: JointMpcRtiCfg,
+<<<<<<< HEAD
 ) -> _LinearizationQueries:
     batch, nodes = int(rollout.state.shape[0]), int(rollout.state.shape[1])
     shank = rollout.shank_samples_w.reshape(batch, nodes, 12, 3)
@@ -314,23 +329,29 @@ def _query_linearization_geometry(
         shank=section(knee_stop, shank_stop),
         thigh=section(shank_stop, thigh_stop),
         root=section(thigh_stop, thigh_stop + 1),
+=======
+) -> LossContext:
+    schedule = fixed_trot_schedule(gait_phase, horizon_steps=int(cfg.runtime.horizon_steps))
+    support_height = query_world(terrain_field, nominal.state[..., :2]).height_w
+    return LossContext(
+        command_body=command_body,
+        touchdown_reference_w=nominal.touchdown_reference_w,
+        schedule=schedule,
+        terrain=terrain_field,
+        stance_anchor_w=nominal.foot_reference_w,
+        support_height=support_height,
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     )
 
 
-def _repeat_state(state: JointMpcRtiState, repeats: int) -> JointMpcRtiState:
-    def repeat(tensor: Tensor) -> Tensor:
-        return tensor[:, None].expand(-1, repeats, *tensor.shape[1:]).reshape(
-            tensor.shape[0] * repeats, *tensor.shape[1:]
-        )
-
-    return JointMpcRtiState(
-        root_pos_w=repeat(state.root_pos_w),
-        root_rpy_w=repeat(state.root_rpy_w),
-        joint_pos=repeat(state.joint_pos),
-        root_lin_vel_b=repeat(state.root_lin_vel_b),
-        root_ang_vel_b=repeat(state.root_ang_vel_b),
-        joint_vel=repeat(state.joint_vel),
+def _foot_positions(state: Tensor) -> Tensor:
+    batch, nodes = state.shape[:2]
+    geometry = go2_fk(
+        state[..., :3].reshape(batch * nodes, 3),
+        state[..., 3:6].reshape(batch * nodes, 3),
+        state[..., 6:].reshape(batch * nodes, 12),
     )
+<<<<<<< HEAD
 
 
 def _select_candidate_rollout(
@@ -4410,6 +4431,9 @@ _COMPILED_ROLLOUT_CONTROLS = torch.compile(
 
 def _linearization_function(eager, compiled, enabled: bool):
     return compiled if bool(enabled) else eager
+=======
+    return geometry.foot_pos_w.reshape(batch, nodes, 4, 3)
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
 
 
 def step(
@@ -4424,6 +4448,7 @@ def step(
         raise ValueError("command_body must have shape [B,3]")
     if int(terrain_field.height_w.shape[0]) != measured_state.batch_size:
         raise ValueError("terrain_field batch must match measured state")
+<<<<<<< HEAD
     command_speed = torch.linalg.vector_norm(command[:, :2], dim=1)
     command_active = command_speed > float(cfg.gait.zero_translation_command_deadband)
     previous_command = (
@@ -4575,11 +4600,25 @@ def step(
         cfg,
     )
     nominal_state = rollout_state_sequence(
+=======
+    if solver_state is None:
+        previous = JointMpcRtiSolverState(
+            trajectory=measured_state.as_vector()[:, None].expand(-1, 31, -1).clone(),
+            gait_phase=torch.zeros(measured_state.batch_size, dtype=torch.long, device=measured_state.device),
+            valid=torch.zeros(measured_state.batch_size, dtype=torch.bool, device=measured_state.device),
+        )
+    else:
+        previous = solver_state
+    nominal = build_nominal(
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
         measured_state,
-        desired_control,
-        dt=float(cfg.runtime.dt),
-        compile_kernels=bool(cfg.solver.compile_kernels),
+        command,
+        terrain_field,
+        previous.gait_phase,
+        previous=previous,
+        cfg=cfg,
     )
+<<<<<<< HEAD
     batch, nodes = int(nominal_state.shape[0]), int(nominal_state.shape[1])
     nominal_foot_pos_w = go2_foot_pos(
         nominal_state[..., :3].reshape(batch * nodes, 3),
@@ -5295,14 +5334,25 @@ def step(
         )
     finite = torch.isfinite(rollout.state).all(dim=(1, 2)) & torch.isfinite(rollout.control).all(dim=(1, 2))
     status = torch.where(finite, torch.zeros_like(finite, dtype=torch.long), torch.ones_like(finite, dtype=torch.long))
+=======
+    context = build_loss_context(nominal, command, terrain_field, previous.gait_phase, cfg)
+    update = sqp_rti_update(nominal.state, context, cfg)
+    state = update.state
+    foot_pos_w = _foot_positions(state)
+    derived_velocity = (state[:, 1:] - state[:, :-1]) / float(cfg.runtime.dt)
+    finite = torch.isfinite(state).all(dim=(1, 2)) & torch.isfinite(foot_pos_w).all(dim=(1, 2, 3))
+    valid = nominal.valid & finite
+    status = torch.where(valid, update.status, torch.ones_like(update.status))
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     trajectory = JointMpcRtiTrajectory(
-        state=rollout.state,
-        control=rollout.control,
-        foot_pos_w=rollout.foot_pos_w,
-        contact_state=contact,
-        valid=finite,
-        fallback=torch.logical_not(finite),
+        state=state,
+        derived_velocity=derived_velocity,
+        foot_pos_w=foot_pos_w,
+        contact_state=nominal.contact_state,
+        valid=valid,
+        fallback=update.used_nominal,
         status=status,
+<<<<<<< HEAD
         loss_breakdown={
             **final_losses,
             "merit_before": update.merit_before,
@@ -5311,14 +5361,18 @@ def step(
             "collision_violation_before": update.base_constraint_violation,
             "collision_violation_after": update.constraint_violation,
         },
+=======
+        line_search_alpha=update.alpha,
+        loss_breakdown=update.loss_breakdown,
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     )
     pending = JointMpcPendingReference(
-        root_pos_w=rollout.state[:, 1, :3],
-        root_rpy_w=rollout.state[:, 1, 3:6],
-        joint_angles=rollout.state[:, 1, 6:],
-        foot_pos_w=rollout.foot_pos_w[:, 1],
-        contact_state=contact[:, 1],
-        valid=finite,
+        root_pos_w=state[:, 1, :3],
+        root_rpy_w=state[:, 1, 3:6],
+        joint_angles=state[:, 1, 6:],
+        foot_pos_w=foot_pos_w[:, 1],
+        contact_state=nominal.contact_state[:, 1],
+        valid=valid,
         target_step=1,
     )
     x1_equality_error = torch.cat(
@@ -5413,6 +5467,7 @@ def step(
             next_recovery_state,
         ) = _reconcile_published_contact_state(scheduler_advance, contact[:, 1])
     next_solver_state = JointMpcRtiSolverState(
+<<<<<<< HEAD
         state=rollout.state,
         control=rollout.control,
         dual=update.lq_solution.dual,
@@ -5428,6 +5483,11 @@ def step(
         swing_extension_age=next_extension_age,
         stance_age=next_stance_age,
         recovery_state=next_recovery_state,
+=======
+        trajectory=state,
+        gait_phase=torch.remainder(previous.gait_phase + 1, int(cfg.gait.period_steps)),
+        valid=valid,
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     )
     return JointMpcRtiStepResult(
         full_trajectory=trajectory,
@@ -5436,4 +5496,4 @@ def step(
     )
 
 
-__all__ = ["step"]
+__all__ = ["build_loss_context", "step"]

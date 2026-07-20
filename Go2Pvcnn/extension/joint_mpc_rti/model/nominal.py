@@ -140,6 +140,11 @@ def _build_foot_references(
     tau0 = schedule.swing_tau[:, :1]
     denominator = (1.0 - tau0).clamp_min(1.0e-4)
     inferred_lift_xy = (measured_foot[:, None, :, :2] - tau0[..., None] * touchdown_xy[:, :1]) / denominator[..., None]
+    inferred_lift_xy = torch.where(
+        schedule.swing[:, :1, :, None],
+        inferred_lift_xy,
+        measured_foot[:, None, :, :2],
+    )
     lift_xy = torch.where(
         (lift_raw < 0)[..., None],
         inferred_lift_xy.expand(-1, nodes, -1, -1),
@@ -173,6 +178,7 @@ def _build_foot_references(
         - tau0 * touchdown_z[:, :1]
         - float(cfg.gait.h_swing) * 4.0 * tau0 * (1.0 - tau0)
     ) / denominator
+    inferred_lift_z = torch.where(schedule.swing[:, :1], inferred_lift_z, measured_foot[:, None, :, 2])
     lift_z = torch.where(
         lift_raw < 0,
         inferred_lift_z.expand(-1, nodes, -1),

@@ -41,50 +41,7 @@ def combine_conditional_value_factors(
     return matrix_a, vector_c, matrix_c, vector_p, matrix_p
 
 
-def _compose_affine(left: tuple[Tensor, Tensor], right: tuple[Tensor, Tensor]) -> tuple[Tensor, Tensor]:
-    matrix_left, bias_left = left
-    matrix_right, bias_right = right
-    return matrix_right @ matrix_left, (matrix_right @ bias_left.unsqueeze(-1)).squeeze(-1) + bias_right
-
-
-def _interleave_prefix(
-    previous: tuple[Tensor, Tensor],
-    source: tuple[Tensor, Tensor],
-    stride: int,
-) -> tuple[Tensor, Tensor]:
-    matrix, bias = previous
-    left = (matrix[:, :-stride], bias[:, :-stride])
-    right = (source[0][:, stride:], source[1][:, stride:])
-    composed = _compose_affine(left, right)
-    return (
-        torch.cat((matrix[:, :stride], composed[0]), dim=1),
-        torch.cat((bias[:, :stride], composed[1]), dim=1),
-    )
-
-
-def affine_scan(matrix: Tensor, bias: Tensor, initial: Tensor | None = None) -> Tensor:
-    """Apply a fixed H16 affine prefix scan without the generic HOP scan."""
-    matrix_tensor = torch.as_tensor(matrix)
-    bias_tensor = torch.as_tensor(bias, dtype=matrix_tensor.dtype, device=matrix_tensor.device)
-    if matrix_tensor.ndim != 4 or matrix_tensor.shape[1] != 16:
-        raise ValueError("matrix must have fixed shape [B,16,N,N]")
-    if bias_tensor.shape != matrix_tensor.shape[:-1]:
-        raise ValueError("bias must have shape [B,16,N]")
-    level_1 = _interleave_prefix((matrix_tensor, bias_tensor), (matrix_tensor, bias_tensor), 1)
-    level_2 = _interleave_prefix(level_1, level_1, 2)
-    level_3 = _interleave_prefix(level_2, level_2, 4)
-    level_4 = _interleave_prefix(level_3, level_3, 8)
-    matrix_prefix, bias_prefix = level_4
-    if initial is None:
-        return bias_prefix
-    initial_tensor = torch.as_tensor(initial, dtype=matrix_tensor.dtype, device=matrix_tensor.device)
-    if initial_tensor.shape != bias_tensor[:, 0].shape:
-        raise ValueError("initial must have shape [B,N]")
-    return (matrix_prefix @ initial_tensor[:, None, :, None]).squeeze(-1) + bias_prefix
-
-
 __all__ = [
     "ConditionalValueFactor",
-    "affine_scan",
     "combine_conditional_value_factors",
 ]

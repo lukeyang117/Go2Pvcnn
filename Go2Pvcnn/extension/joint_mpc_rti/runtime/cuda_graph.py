@@ -51,6 +51,7 @@ class JointMpcCudaGraphRunner:
         self._field = terrain_field
         self._field_height_ptr = int(terrain_field.height_w.data_ptr())
         self._solver_state = JointMpcRtiSolverState(
+<<<<<<< HEAD
             state=solver_state.state.clone(),
             control=solver_state.control.clone(),
             dual=_clone_optional(solver_state.dual),
@@ -66,6 +67,11 @@ class JointMpcCudaGraphRunner:
             swing_extension_age=_clone_optional(solver_state.swing_extension_age),
             stance_age=_clone_optional(solver_state.stance_age),
             recovery_state=_clone_optional(solver_state.recovery_state),
+=======
+            trajectory=solver_state.trajectory.clone(),
+            gait_phase=solver_state.gait_phase.clone(),
+            valid=solver_state.valid.clone(),
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
         )
         warm = planner_step(self._state, self._command, self._field, self._solver_state, self._cfg)
         torch.cuda.synchronize(device=measured_state.device)
@@ -79,6 +85,7 @@ class JointMpcCudaGraphRunner:
                 self._solver_state,
                 self._cfg,
             )
+<<<<<<< HEAD
             self._solver_state.state.copy_(self._result.solver_state.state)
             self._solver_state.control.copy_(self._result.solver_state.control)
             _copy_optional(self._solver_state.dual, self._result.solver_state.dual)
@@ -103,6 +110,11 @@ class JointMpcCudaGraphRunner:
             )
             _copy_optional(self._solver_state.stance_age, self._result.solver_state.stance_age)
             _copy_optional(self._solver_state.recovery_state, self._result.solver_state.recovery_state)
+=======
+            self._solver_state.trajectory.copy_(self._result.solver_state.trajectory)
+            self._solver_state.gait_phase.copy_(self._result.solver_state.gait_phase)
+            self._solver_state.valid.copy_(self._result.solver_state.valid)
+>>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
         self._graph.replay()
 
     @property

@@ -84,10 +84,10 @@ def test_task_joint_backend_uses_verified_realtime_solver_profile() -> None:
     source = Path("Go2Pvcnn/go2_pvcnn/tasks/teacher_elevation_trajectory_mpc_semantic_env_cfg.py").read_text()
 
     assert "self.joint_mpc_rti_cfg.solver.compile_kernels = True" in source
-    assert "self.joint_mpc_rti_cfg.solver.emit_loss_breakdown = False" in source
-    assert "self.joint_mpc_rti_cfg.solver.diagonal_state_riccati = True" in source
-    assert "self.joint_mpc_rti_cfg.solver.line_search_alphas = (1.0, 0.25)" in source
+    assert "self.joint_mpc_rti_cfg.solver.line_search_alphas = (1.0, 0.5, 0.25, 0.125, 0.0)" in source
     assert "self.joint_mpc_rti_cfg.solver.use_cuda_graph = True" in source
+    assert "emit_loss_breakdown" not in source
+    assert "diagonal_state_riccati" not in source
 
 
 def test_factory_creates_joint_mpc_rti_manager() -> None:
@@ -135,24 +135,25 @@ def test_reference_adapter_preserves_full_horizon_and_future_frame_one() -> None
     from extension.joint_mpc_rti.integration.reference_adapter import trajectory_to_reference_cache
     from extension.joint_mpc_rti.types import JointMpcRtiTrajectory
 
-    state = torch.zeros(2, 17, 18)
+    state = torch.zeros(2, 31, 18)
     state[:, 1, 0] = torch.tensor([0.1, -0.2])
     state[:, 1, 6:] = 0.3
-    foot = torch.zeros(2, 17, 4, 3)
-    contact = torch.ones(2, 17, 4, dtype=torch.bool)
+    foot = torch.zeros(2, 31, 4, 3)
+    contact = torch.ones(2, 31, 4, dtype=torch.bool)
     trajectory = JointMpcRtiTrajectory(
         state=state,
-        control=torch.zeros(2, 16, 18),
+        derived_velocity=torch.zeros(2, 30, 18),
         foot_pos_w=foot,
         contact_state=contact,
         valid=torch.ones(2, dtype=torch.bool),
         fallback=torch.zeros(2, dtype=torch.bool),
         status=torch.zeros(2, dtype=torch.long),
+        line_search_alpha=torch.zeros(2),
     )
 
     cache = trajectory_to_reference_cache(trajectory)
 
-    assert cache.horizon_length() == 17
+    assert cache.horizon_length() == 31
     torch.testing.assert_close(cache.root_pos_w[:, 1], state[:, 1, :3])
     torch.testing.assert_close(cache.joint_angles[:, 1], state[:, 1, 6:])
     assert torch.equal(cache.phase_index[:, 1], torch.ones(2, dtype=torch.long))
@@ -163,16 +164,17 @@ def test_reward_frame_selection_uses_manager_frame_one_for_joint_backend() -> No
     from extension.joint_mpc_rti.types import JointMpcRtiTrajectory
     from extension.mdp.rewards_reference import _select_reference_frame
 
-    state = torch.zeros(2, 17, 18)
+    state = torch.zeros(2, 31, 18)
     cache = trajectory_to_reference_cache(
         JointMpcRtiTrajectory(
             state=state,
-            control=torch.zeros(2, 16, 18),
-            foot_pos_w=torch.zeros(2, 17, 4, 3),
-            contact_state=torch.ones(2, 17, 4, dtype=torch.bool),
+            derived_velocity=torch.zeros(2, 30, 18),
+            foot_pos_w=torch.zeros(2, 31, 4, 3),
+            contact_state=torch.ones(2, 31, 4, dtype=torch.bool),
             valid=torch.ones(2, dtype=torch.bool),
             fallback=torch.zeros(2, dtype=torch.bool),
             status=torch.zeros(2, dtype=torch.long),
+            line_search_alpha=torch.zeros(2),
         )
     )
     manager = SimpleNamespace(
@@ -266,7 +268,7 @@ def test_viewer_cli_accepts_joint_mpc_rti() -> None:
 def test_joint_viewer_applies_only_first_future_frame() -> None:
     from extension.joint_mpc_rti.integration.viewer_adapter import JointMpcRtiViewerAdapter
 
-    trajectory = SimpleNamespace(state=torch.zeros(1, 17, 18))
+    trajectory = SimpleNamespace(state=torch.zeros(1, 31, 18))
     adapter = JointMpcRtiViewerAdapter.for_test(trajectory)
 
     assert adapter.next_playback_frame().frame_index == 1
