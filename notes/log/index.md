@@ -4,6 +4,14 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI Task 9 trajectory scan | H30/32 conditional factors / active KKT | pass | `12 passed`; CUDA B1 compile pass; B1/7/40 error far below `2e-5` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task09-trajectory-scan.md](2026-07-20-joint-mpc-rti-kinematic-task09-trajectory-scan.md) |
+
+| 2026-07-20 | Joint MPC RTI Task 9 legacy suite audit | migration debt / old solver tests | expected transitional failures | `27 passed, 7 failed`; all failures map to Task 10/11 old API deletion | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task09-legacy-suite-audit.md](2026-07-20-joint-mpc-rti-kinematic-task09-legacy-suite-audit.md) |
+
+| 2026-07-20 | Joint MPC RTI Task 9 RED | H30/32 associative scan | expected fail | missing conditional combine export and trajectory scan module | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task09-red.md](2026-07-20-joint-mpc-rti-kinematic-task09-red.md) |
+
+| 2026-07-20 | Joint MPC RTI Task 8 resume baseline | active bounds / compile budget | pass | `6 passed, 17 deselected`; clean baseline before Task 9 | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task08-resume-baseline.md](2026-07-20-joint-mpc-rti-kinematic-task08-resume-baseline.md) |
+
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 8 active bounds | merged box / velocity KKT / compile budget | pass | QP suite `6 passed`; budget `1 passed`; two explicit refinements; local rows `<=30` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task08-active-bounds.md](2026-07-20-joint-mpc-rti-kinematic-task08-active-bounds.md) |
 
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 7 direct-Z QP | seven-loss GGN / block bands / bounds | pass | `3 passed`; dense gradient and JtJ parity; z0 fixed; joint/trust/velocity bounds | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md](2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md) |
