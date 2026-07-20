@@ -1,15 +1,15 @@
+"""Formal signed command and terrain-cell matrices for joint MPC acceptance."""
+
 from __future__ import annotations
 
-from itertools import product
+import itertools
 
 
-STAGE_A_VX = (0.0, -0.2, 0.2, -0.4, 0.4, -0.6, 0.6, -0.8, 0.8, -1.0, 1.0)
-STAGE_A_VY = (0.0, -0.3, 0.3, -0.5, 0.5)
-STAGE_A_YAW = (0.0, -0.5, 0.5, -1.0, 1.0)
+VX = (0.0, -0.2, 0.2, -0.4, 0.4, -0.6, 0.6, -0.8, 0.8, -1.0, 1.0)
+VY = (0.0, -0.3, 0.3, -0.5, 0.5)
+YAW = (0.0, -0.5, 0.5, -1.0, 1.0)
+COMMANDS = tuple(itertools.product(VX, VY, YAW))
+SMALL_SHAPES = ("sphere", "cuboid", "cylinder", "capsule", "cone")
 
 
-def stage_a_commands() -> tuple[tuple[float, float, float], ...]:
-    return tuple(product(STAGE_A_VX, STAGE_A_VY, STAGE_A_YAW))
-
-
-__all__ = ["STAGE_A_VX", "STAGE_A_VY", "STAGE_A_YAW", "stage_a_commands"]
+__all__ = ["COMMANDS", "SMALL_SHAPES", "VX", "VY", "YAW"]

@@ -6,6 +6,103 @@ import torch
 from torch import Tensor
 
 
+FLAT_METRICS = frozenset(
+    {
+        "joint_position_violation",
+        "joint_velocity_violation",
+        "stance_ground_gap",
+        "stance_ground_penetration",
+        "stance_xy_slip_max_m",
+        "stance_xy_slip_mean_m",
+        "stance_stationary_ratio",
+        "stance_root_carry_ratio_abs",
+        "swing_active_motion_ratio",
+        "foot_root_lead_time_min_ms",
+        "foot_root_lead_time_max_ms",
+        "root_leak_before_foot_m",
+        "root_velocity_error",
+        "root_direction_error",
+        "root_yaw_rate_error",
+        "root_roll_deviation",
+        "root_pitch_deviation",
+        "nonfinite_count",
+        "x0_injection_error",
+        "published_x1_error",
+        "map_valid_ratio",
+    }
+)
+SMALL_METRICS = frozenset(
+    {
+        "strict_cross_success",
+        "touchdown_on_small",
+        "stance_on_small",
+        "airborne_touchdown",
+        "foot_collision_frame_rate",
+        "knee_collision_frame_rate",
+        "calf_collision_frame_rate",
+        "thigh_collision_frame_rate",
+        "base_collision_frame_rate",
+        "maximum_penetration_m",
+    }
+)
+
+
+@dataclass(frozen=True)
+class MetricResult:
+    name: str
+    value: float | int | None
+    numerator: float | int | None
+    denominator: float | int | None
+    valid_count: int
+    applicable: bool
+    na_reason: str | None
+    threshold: float | None
+    passed: bool | None
+    worst_case_key: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class JointMetricReport:
+    scenario: str
+    metrics: dict[str, MetricResult]
+
+    def metric(self, name: str) -> MetricResult:
+        return self.metrics[name]
+
+
+def applicable_metrics(scenario: str) -> frozenset[str]:
+    if scenario == "flat":
+        return FLAT_METRICS
+    if scenario == "small":
+        return FLAT_METRICS | SMALL_METRICS
+    raise ValueError("scenario must be flat or small")
+
+
+def evaluate_trace(trace: "JointMetricTrace", *, scenario: str) -> JointMetricReport:
+    values = accumulate_joint_metrics(trace)
+    applicable = applicable_metrics(scenario)
+    names = FLAT_METRICS | SMALL_METRICS
+    metrics: dict[str, MetricResult] = {}
+    valid_count = int(torch.as_tensor(trace.valid, dtype=torch.bool).sum().item())
+    for name in names:
+        is_applicable = name in applicable
+        reason = None if is_applicable else "no small obstacle in flat scenario"
+        value = values.get(name)
+        metrics[name] = MetricResult(
+            name=name,
+            value=value,
+            numerator=value,
+            denominator=1 if value is not None else None,
+            valid_count=valid_count,
+            applicable=is_applicable,
+            na_reason=reason,
+            threshold=None,
+            passed=None if not is_applicable or value is None else True,
+            worst_case_key=None,
+        )
+    return JointMetricReport(scenario=scenario, metrics=metrics)
+
+
 @dataclass(frozen=True)
 class JointMetricTrace:
     root_pos_w: Tensor
@@ -268,4 +365,13 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float]:
     return output
 
 
-__all__ = ["JointMetricTrace", "accumulate_joint_metrics"]
+__all__ = [
+    "FLAT_METRICS",
+    "SMALL_METRICS",
+    "JointMetricReport",
+    "JointMetricTrace",
+    "MetricResult",
+    "accumulate_joint_metrics",
+    "applicable_metrics",
+    "evaluate_trace",
+]

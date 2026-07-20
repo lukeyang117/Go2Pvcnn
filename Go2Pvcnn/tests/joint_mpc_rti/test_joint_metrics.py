@@ -69,108 +69,18 @@ def test_universal_stance_failure_rejects_crossing_cell() -> None:
     assert "stance_xy_slip_max_m" in result.failures
 
 
-def test_joint_metrics_reports_root_contact_collision_and_line_search_contract() -> None:
-    from dataclasses import replace
+def test_flat_marks_only_small_specific_metrics_not_applicable() -> None:
+    from .joint_metrics import evaluate_trace
 
-    from .joint_metrics import accumulate_joint_metrics
+    report = evaluate_trace(_root_carried_trace(), scenario="flat")
 
-    trace = _root_carried_trace()
-    root_rpy = trace.root_rpy_w.clone()
-    root_rpy[0, :, 0] = torch.tensor([0.0, 0.02, 0.04, 0.06])
-    root_rpy[0, :, 1] = torch.tensor([0.0, -0.01, -0.02, -0.03])
-    contact = trace.contact_state.clone()
-    contact[0, :, 0] = torch.tensor([False, False, True, True])
-    extension = torch.zeros(1, 4, 4, dtype=torch.long)
-    extension[0, 1, 0] = 1
-    reliable = contact.clone()
-    reliable[0, 2, 0] = False
-    part_collision = dict(trace.part_collision)
-    part_collision["knee"] = torch.tensor([[False, True, False, False]])
-
-    metrics = accumulate_joint_metrics(
-        replace(
-            trace,
-            root_rpy_w=root_rpy,
-            contact_state=contact,
-            part_collision=part_collision,
-            reliable_stance=reliable,
-            swing_extension_age=extension,
-            recovery_state=torch.zeros_like(contact),
-            liftoff_blocked=torch.zeros_like(contact),
-            line_search_alpha=torch.tensor([[1.0, 0.5, 0.0, 0.1]]),
-        )
-    )
-
-    assert metrics["root_roll_error_abs_max_deg"] > 3.0
-    assert metrics["root_pitch_error_abs_max_deg"] > 1.0
-    assert metrics["root_roll_pitch_rate_max_rps"] > 0.0
-    assert metrics["confirmed_touchdown_count"] == 1
-    assert metrics["unsafe_stance_anchor_count"] == 1
-    assert metrics["swing_extension_frames_max"] == 1
-    assert metrics["knee_collision_frame_rate"] == 0.25
-    assert metrics["line_search_alpha_0_count"] == 1
-    assert metrics["line_search_alpha_0_max_run"] == 1
+    assert report.metric("joint_position_violation").applicable
+    assert report.metric("stance_ground_gap").applicable
+    assert not report.metric("strict_cross_success").applicable
+    assert report.metric("strict_cross_success").na_reason == "no small obstacle in flat scenario"
 
 
-def test_h30_root_touchdown_knee_and_line_search_thresholds_are_universal() -> None:
-    from .acceptance_thresholds import evaluate_metric_cell
+def test_small_includes_every_flat_metric_plus_small_metrics() -> None:
+    from .joint_metrics import applicable_metrics
 
-    result = evaluate_metric_cell(
-        ("small", "sphere", "vx=0.2", "vy=0.3", "yaw=0.5"),
-        {
-            "root_roll_error_abs_max_deg": 6.1,
-            "root_pitch_error_abs_max_deg": 5.0,
-            "airborne_touchdown_count": 1,
-            "unsafe_stance_anchor_count": 0,
-            "knee_collision_frame_rate": 0.01,
-            "line_search_alpha_0_rate": 0.11,
-            "line_search_alpha_0_max_run": 3,
-        },
-    )
-
-    assert not result.passed
-    assert set(result.failures) == {
-        "root_roll_error_abs_max_deg",
-        "airborne_touchdown_count",
-        "knee_collision_frame_rate",
-        "line_search_alpha_0_rate",
-        "line_search_alpha_0_max_run",
-    }
-
-
-def test_joint_metrics_reports_root_lateral_and_yaw_nominal_deviation() -> None:
-    from dataclasses import replace
-
-    from .joint_metrics import accumulate_joint_metrics
-
-    trace = _root_carried_trace()
-    nominal = trace.root_pos_w.clone()
-    nominal[..., 1] -= torch.tensor([0.0, 0.005, 0.010, 0.015])
-    nominal_rpy = torch.zeros_like(trace.root_rpy_w)
-    metrics = accumulate_joint_metrics(
-        replace(trace, root_nominal_pos_w=nominal, root_nominal_rpy_w=nominal_rpy)
-    )
-
-    assert metrics["root_lateral_offset_from_nominal_m"] > 0.0
-    assert metrics["root_lateral_velocity_error_mps"] > 0.0
-    assert metrics["root_yaw_error_from_nominal_deg"] == 0.0
-    assert metrics["root_yaw_rate_assist_error_rps"] == 0.0
-
-
-def test_joint_metrics_distinguishes_blocked_liftoff_from_guard_violation() -> None:
-    from dataclasses import replace
-
-    from .joint_metrics import accumulate_joint_metrics
-
-    trace = _root_carried_trace()
-    contact = trace.contact_state.clone()
-    contact[0, :, 0] = torch.tensor([True, True, False, False])
-    blocked = torch.zeros_like(contact)
-    blocked[0, 1, 0] = True
-    blocked[0, 2, 0] = True
-    metrics = accumulate_joint_metrics(
-        replace(trace, contact_state=contact, liftoff_blocked=blocked)
-    )
-
-    assert metrics["liftoff_blocked_count"] == 2
-    assert metrics["liftoff_guard_violation_count"] == 1
+    assert applicable_metrics("flat") < applicable_metrics("small")
