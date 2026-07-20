@@ -4,6 +4,10 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI Task 10 line search | five state candidates / loss-only selection | pass | focused `7 passed`; contract+scan regression `21 passed`; exactly three filters | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task10-line-search.md](2026-07-20-joint-mpc-rti-kinematic-task10-line-search.md) |
+
+| 2026-07-20 | Joint MPC RTI Task 10 RED | five-candidate state line search | expected fail | old module lacks frozen filters and new state API | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task10-red.md](2026-07-20-joint-mpc-rti-kinematic-task10-red.md) |
+
 | 2026-07-20 | Joint MPC RTI Task 9 trajectory scan | H30/32 conditional factors / active KKT | pass | `12 passed`; CUDA B1 compile pass; B1/7/40 error far below `2e-5` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task09-trajectory-scan.md](2026-07-20-joint-mpc-rti-kinematic-task09-trajectory-scan.md) |
 
 | 2026-07-20 | Joint MPC RTI Task 9 legacy suite audit | migration debt / old solver tests | expected transitional failures | `27 passed, 7 failed`; all failures map to Task 10/11 old API deletion | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task09-legacy-suite-audit.md](2026-07-20-joint-mpc-rti-kinematic-task09-legacy-suite-audit.md) |

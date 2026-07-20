@@ -20,6 +20,7 @@ class JointMpcRtiRuntimeCfg:
 class JointMpcRtiSolverCfg:
     regularization: float = 1.0e-4
     line_search_alphas: tuple[float, ...] = (1.0, 0.5, 0.25, 0.125, 0.0)
+    line_search_tie_tolerance: float = 1.0e-7
     root_position_trust: float = 0.05
     root_orientation_trust: float = 0.10
     joint_trust: float = 0.25

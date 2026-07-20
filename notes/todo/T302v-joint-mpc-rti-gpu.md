@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Pure-kinematic Task 10 is GREEN: line search builds exactly five `[B,5,31,18]` state candidates, filters only finite/joint-position/joint-velocity, scores only the seven-loss objective, prefers larger alpha on ties, and uses alpha zero as nominal fallback. Focused tests are `7 passed`; contract plus Task 9 CPU regression is `21 passed`. See [Task 10 log](../log/2026-07-20-joint-mpc-rti-kinematic-task10-line-search.md).
 - Pure-kinematic Task 9 is GREEN: the direct-Z block-pentadiagonal QP is represented by 36D separator factors, padded from 30 to 32 with two identity/no-cost factors, composed by an explicit five-level tree, and recovered with active box/velocity semantics. Focused tests are `12 passed`; monitored CUDA B1 compile passes; B=1/7/40 dense errors are at float64 roundoff and float32 stays below `2e-5`. See [Task 9 scan log](../log/2026-07-20-joint-mpc-rti-kinematic-task09-trajectory-scan.md).
 - The broad historical solver audit has `27 passed, 7 failed`; all failures are old control/dynamics/planner contracts that the approved plan removes in Tasks 10/11. They must not be restored into the direct-Z architecture. See [legacy suite audit](../log/2026-07-20-joint-mpc-rti-kinematic-task09-legacy-suite-audit.md).
 - Task 8 resume baseline remains GREEN at `3f5fb2d`: active-bound and compile-budget selection is `6 passed, 17 deselected`. See [resume baseline](../log/2026-07-20-joint-mpc-rti-kinematic-task08-resume-baseline.md).

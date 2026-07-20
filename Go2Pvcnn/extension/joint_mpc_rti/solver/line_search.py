@@ -1,4 +1,4 @@
-"""Parallel fixed-candidate line search."""
+"""Five-candidate loss-only line search for direct state trajectories."""
 
 from __future__ import annotations
 
@@ -8,149 +8,77 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.tensor_constants import constant_like
+
+ALPHAS = (1.0, 0.5, 0.25, 0.125, 0.0)
+FILTER_NAMES = ("finite", "joint_position", "joint_velocity")
 
 
 @dataclass(frozen=True)
 class LineSearchResult:
-    control: Tensor
-    merit: Tensor
-    base_merit: Tensor
+    state: Tensor
+    candidates: Tensor
+    alphas: Tensor
+    candidate_loss: Tensor
+    selected_loss: Tensor
     alpha: Tensor
     selected_index: Tensor
-    used_base: Tensor
-    constraint_violation: Tensor
-    base_constraint_violation: Tensor
+    valid: Tensor
+    used_nominal: Tensor
 
 
 def parallel_line_search(
-    base_control: Tensor,
-    delta_control: Tensor,
-    merit_fn: Callable[[Tensor], Tensor | tuple[Tensor, Tensor]],
+    nominal: Tensor,
+    direction: Tensor,
+    objective: Callable[[Tensor], Tensor],
     *,
-    alphas: tuple[float, ...],
-    base_merit: Tensor | None = None,
-    base_constraint_violation: Tensor | None = None,
-    delta_limit: Tensor | None = None,
-    constraint_tolerance: Tensor | None = None,
-    required_control: Tensor | None = None,
+    joint_lower: Tensor,
+    joint_upper: Tensor,
+    joint_velocity_limit: Tensor | float,
+    dt: float,
+    tie_tolerance: float = 1.0e-7,
 ) -> LineSearchResult:
-    base = torch.as_tensor(base_control)
-    delta = torch.as_tensor(delta_control, dtype=base.dtype, device=base.device)
-    if delta_limit is not None:
-        limit = torch.as_tensor(delta_limit, dtype=base.dtype, device=base.device)
-        if limit.shape != (base.shape[-1],):
-            raise ValueError("delta_limit must be positive with shape [control_dim]")
-        capturing = limit.is_cuda and torch.cuda.is_current_stream_capturing()
-        if not capturing and torch.any(limit <= 0.0):
-            raise ValueError("delta_limit must be positive with shape [control_dim]")
-        delta = torch.clamp(delta, min=-limit, max=limit)
-    required = (
-        torch.zeros_like(delta)
-        if required_control is None
-        else torch.as_tensor(required_control, dtype=base.dtype, device=base.device)
-    )
-    if required.shape != base.shape:
-        raise ValueError("required_control must match base_control shape")
-    alpha_tensor = constant_like(base, "line_search_alphas_" + "_".join(map(str, alphas)), alphas)
-    candidate_count = int(alpha_tensor.shape[0])
-    candidate = (
-        base[:, None]
-        + required[:, None]
-        + alpha_tensor[None, :, None, None] * delta[:, None]
-    )
-    if base_merit is None:
-        evaluated = torch.cat((candidate, base[:, None]), dim=1)
-        batch, evaluated_count = int(evaluated.shape[0]), int(evaluated.shape[1])
-        evaluated_result = merit_fn(evaluated.reshape(batch * evaluated_count, *evaluated.shape[2:]))
-        if isinstance(evaluated_result, tuple):
-            evaluated_merit, evaluated_violation = evaluated_result
-        else:
-            evaluated_merit = evaluated_result
-            evaluated_violation = torch.zeros_like(evaluated_merit).unsqueeze(-1)
-        all_merit = evaluated_merit.reshape(batch, evaluated_count)
-        all_violation_components = evaluated_violation.reshape(batch, evaluated_count, -1)
-        candidate_merit = all_merit[:, :candidate_count]
-        candidate_violation_components = all_violation_components[:, :candidate_count]
-        base_value = all_merit[:, candidate_count]
-        base_violation_components = all_violation_components[:, candidate_count]
-    else:
-        batch = int(candidate.shape[0])
-        evaluated_result = merit_fn(candidate.reshape(batch * candidate_count, *candidate.shape[2:]))
-        if isinstance(evaluated_result, tuple):
-            evaluated_merit, evaluated_violation = evaluated_result
-        else:
-            evaluated_merit = evaluated_result
-            evaluated_violation = torch.zeros_like(evaluated_merit).unsqueeze(-1)
-        candidate_merit = evaluated_merit.reshape(batch, candidate_count)
-        candidate_violation_components = evaluated_violation.reshape(batch, candidate_count, -1)
-        base_value = torch.as_tensor(base_merit, dtype=base.dtype, device=base.device)
-        if base_constraint_violation is None:
-            base_violation_components = torch.zeros_like(base_value).unsqueeze(-1)
-        else:
-            base_violation_components = torch.as_tensor(
-                base_constraint_violation, dtype=base.dtype, device=base.device
-            ).reshape(batch, -1)
-    candidate_violation = candidate_violation_components.amax(dim=-1)
-    base_violation = base_violation_components.amax(dim=-1)
-    if constraint_tolerance is None:
-        tolerance = base.new_full((candidate_violation_components.shape[-1],), 1.0e-9)
-    else:
-        tolerance = torch.as_tensor(
-            constraint_tolerance, dtype=base.dtype, device=base.device
-        )
-        if tolerance.shape != (candidate_violation_components.shape[-1],):
-            raise ValueError("constraint_tolerance must have shape [constraint_components]")
-        capturing = tolerance.is_cuda and torch.cuda.is_current_stream_capturing()
-        if not capturing and torch.any(tolerance < 0.0):
-            raise ValueError("constraint_tolerance must be nonnegative")
-    improvement_epsilon = 1.0e-9
-    finite = torch.logical_and(
-        torch.isfinite(candidate_merit),
-        torch.isfinite(candidate_violation_components).all(dim=-1),
-    )
-    candidate_feasible = (candidate_violation_components <= tolerance).all(dim=-1)
-    base_feasible = (base_violation_components <= tolerance).all(dim=-1)
-    merit_improving = torch.logical_and(candidate_feasible, candidate_merit < base_value[:, None])
-    no_component_worse = (
-        candidate_violation_components
-        <= base_violation_components[:, None, :] + tolerance[None, None, :]
-    ).all(dim=-1)
-    component_improves = (
-        candidate_violation_components
-        < base_violation_components[:, None, :] - improvement_epsilon
-    ).any(dim=-1)
-    restores = torch.logical_and(
-        no_component_worse,
-        component_improves,
-    )
-    improving = torch.logical_and(
-        finite,
-        torch.where(base_feasible[:, None], merit_improving, restores),
-    )
-    selection_score = torch.where(
-        base_feasible[:, None],
-        candidate_merit,
-        candidate_violation,
-    )
-    selectable = torch.where(improving, selection_score, torch.full_like(selection_score, float("inf")))
-    _, best_index = selectable.min(dim=1)
-    any_improving = improving.any(dim=1)
-    gather_index = best_index[:, None, None, None].expand(batch, 1, *base.shape[1:])
-    selected_control = torch.gather(candidate, 1, gather_index).squeeze(1)
-    selected_alpha = alpha_tensor.index_select(0, best_index)
-    selected_merit = torch.gather(candidate_merit, 1, best_index[:, None]).squeeze(1)
-    selected_violation = torch.gather(candidate_violation, 1, best_index[:, None]).squeeze(1)
+    """Select the lowest seven-loss candidate after the three approved filters."""
+    base = torch.as_tensor(nominal)
+    delta = torch.as_tensor(direction, dtype=base.dtype, device=base.device)
+    if base.ndim != 3 or base.shape[1:] != (31, 18) or delta.shape != base.shape:
+        raise ValueError("nominal and direction must have shape [B,31,18]")
+    alphas = base.new_tensor(ALPHAS)
+    candidates = base[:, None] + alphas[None, :, None, None] * delta[:, None]
+    batch = int(base.shape[0])
+    candidate_loss = objective(candidates.reshape(batch * 5, 31, 18)).reshape(batch, 5)
+
+    finite = torch.isfinite(candidates).all(dim=(2, 3)) & torch.isfinite(candidate_loss)
+    lower = torch.as_tensor(joint_lower, dtype=base.dtype, device=base.device)
+    upper = torch.as_tensor(joint_upper, dtype=base.dtype, device=base.device)
+    joints = candidates[..., 6:]
+    position_ok = ((joints >= lower) & (joints <= upper)).all(dim=(2, 3))
+    velocity_limit = torch.as_tensor(joint_velocity_limit, dtype=base.dtype, device=base.device)
+    joint_step = joints[:, :, 1:] - joints[:, :, :-1]
+    velocity_ok = (joint_step.abs() <= velocity_limit * float(dt)).all(dim=(2, 3))
+    valid = finite & position_ok & velocity_ok
+
+    selectable = torch.where(valid, candidate_loss, torch.full_like(candidate_loss, float("inf")))
+    minimum = selectable.amin(dim=1, keepdim=True)
+    tie = selectable <= minimum + float(tie_tolerance)
+    selected_index = tie.to(torch.int64).argmax(dim=1)
+    any_valid = valid.any(dim=1)
+    nominal_index = torch.full_like(selected_index, len(ALPHAS) - 1)
+    selected_index = torch.where(any_valid, selected_index, nominal_index)
+    row = torch.arange(batch, device=base.device)
+    state = candidates[row, selected_index]
+    selected_loss = candidate_loss[row, selected_index]
+    alpha = alphas[selected_index]
     return LineSearchResult(
-        control=torch.where(any_improving[:, None, None], selected_control, base),
-        merit=torch.where(any_improving, selected_merit, base_value),
-        base_merit=base_value,
-        alpha=torch.where(any_improving, selected_alpha, torch.zeros_like(selected_alpha)),
-        selected_index=best_index,
-        used_base=torch.logical_not(any_improving),
-        constraint_violation=torch.where(any_improving, selected_violation, base_violation),
-        base_constraint_violation=base_violation,
+        state=state,
+        candidates=candidates,
+        alphas=alphas,
+        candidate_loss=candidate_loss,
+        selected_loss=selected_loss,
+        alpha=alpha,
+        selected_index=selected_index,
+        valid=valid,
+        used_nominal=selected_index == len(ALPHAS) - 1,
     )
 
 
-__all__ = ["LineSearchResult", "parallel_line_search"]
+__all__ = ["ALPHAS", "FILTER_NAMES", "LineSearchResult", "parallel_line_search"]
