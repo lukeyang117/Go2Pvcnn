@@ -24,6 +24,7 @@ class JointMpcRtiSolverCfg:
     root_orientation_trust: float = 0.10
     joint_trust: float = 0.25
     active_set_refinements: int = 2
+    joint_velocity_limit: float = 30.0
     compile_kernels: bool = False
     use_cuda_graph: bool = False
 

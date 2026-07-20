@@ -1,58 +1,167 @@
-"""Analytic local linearization of the kinematic shooting dynamics."""
+"""Gauss-Newton linearization directly in the H30 state trajectory Z."""
 
 from __future__ import annotations
 
 import torch
 from torch import Tensor
 
-
-def dynamics_jacobians(state: Tensor, control: Tensor, *, dt: float) -> tuple[Tensor, Tensor]:
-    """Return exact Jacobians of ``kinematic_step`` with respect to state and control."""
-    state_tensor = torch.as_tensor(state)
-    control_tensor = torch.as_tensor(control, dtype=state_tensor.dtype, device=state_tensor.device)
-    if state_tensor.ndim != 2 or int(state_tensor.shape[-1]) != 18 or control_tensor.shape != state_tensor.shape:
-        raise ValueError("state and control must have shape [B,18]")
-    batch = int(state_tensor.shape[0])
-    matrix_a = torch.eye(18, dtype=state_tensor.dtype, device=state_tensor.device).unsqueeze(0).expand(batch, -1, -1).clone()
-    matrix_b = torch.zeros(batch, 18, 18, dtype=state_tensor.dtype, device=state_tensor.device)
-    step = float(dt)
-    roll = state_tensor[:, 3]
-    pitch = state_tensor[:, 4]
-    yaw = state_tensor[:, 5]
-    vx = control_tensor[:, 0]
-    vy = control_tensor[:, 1]
-    wy = control_tensor[:, 4]
-    wz = control_tensor[:, 5]
-    sine_yaw = torch.sin(yaw)
-    cosine_yaw = torch.cos(yaw)
-    matrix_a[:, 0, 5] = step * (-sine_yaw * vx - cosine_yaw * vy)
-    matrix_a[:, 1, 5] = step * (cosine_yaw * vx - sine_yaw * vy)
-    matrix_b[:, 0, 0] = step * cosine_yaw
-    matrix_b[:, 0, 1] = -step * sine_yaw
-    matrix_b[:, 1, 0] = step * sine_yaw
-    matrix_b[:, 1, 1] = step * cosine_yaw
-    matrix_b[:, 2, 2] = step
-    sine_roll = torch.sin(roll)
-    cosine_roll = torch.cos(roll)
-    sine_pitch = torch.sin(pitch)
-    cosine_pitch = torch.cos(pitch).clamp_min(1.0e-4)
-    tangent_pitch = sine_pitch / cosine_pitch
-    secant_sq = 1.0 / (cosine_pitch * cosine_pitch)
-    matrix_a[:, 3, 3] += step * (cosine_roll * tangent_pitch * wy - sine_roll * tangent_pitch * wz)
-    matrix_a[:, 3, 4] = step * (sine_roll * wy + cosine_roll * wz) * secant_sq
-    matrix_a[:, 4, 3] = step * (-sine_roll * wy - cosine_roll * wz)
-    matrix_a[:, 5, 3] = step * (cosine_roll * wy - sine_roll * wz) / cosine_pitch
-    matrix_a[:, 5, 4] = step * (sine_roll * wy + cosine_roll * wz) * sine_pitch * secant_sq
-    matrix_b[:, 3, 3] = step
-    matrix_b[:, 3, 4] = step * sine_roll * tangent_pitch
-    matrix_b[:, 3, 5] = step * cosine_roll * tangent_pitch
-    matrix_b[:, 4, 4] = step * cosine_roll
-    matrix_b[:, 4, 5] = -step * sine_roll
-    matrix_b[:, 5, 4] = step * sine_roll / cosine_pitch
-    matrix_b[:, 5, 5] = step * cosine_roll / cosine_pitch
-    joint_identity = torch.eye(12, dtype=state_tensor.dtype, device=state_tensor.device).unsqueeze(0).expand(batch, -1, -1)
-    matrix_b[:, 6:, 6:] = step * joint_identity
-    return matrix_a, matrix_b
+from extension.joint_mpc_rti.config import JointMpcRtiCfg
+from extension.joint_mpc_rti.losses.objective import LossContext, weighted_trajectory_residual
+from extension.joint_mpc_rti.model.gait_schedule import FixedTrotSchedule
+from extension.joint_mpc_rti.solver.trajectory_qp import TrajectoryQp, trajectory_bounds
+from extension.joint_mpc_rti.types import JointMpcTerrainField
 
 
-__all__ = ["dynamics_jacobians"]
+def _single_residual(
+    state: Tensor,
+    command: Tensor,
+    touchdown: Tensor,
+    phase: Tensor,
+    swing: Tensor,
+    stance: Tensor,
+    swing_tau: Tensor,
+    terrain_tensors: tuple[Tensor, ...],
+    stance_anchor: Tensor,
+    support_height: Tensor,
+    *,
+    resolution: float,
+    cfg: JointMpcRtiCfg,
+) -> Tensor:
+    (
+        height,
+        semantic,
+        small_distance,
+        large_distance,
+        small_gradient,
+        large_gradient,
+        valid_mask,
+        origin,
+        yaw,
+        timestamp,
+        version,
+        small_occupancy,
+        large_occupancy,
+        small_propagated_height,
+        large_propagated_height,
+        small_occupancy_gradient,
+        large_occupancy_gradient,
+    ) = terrain_tensors
+    field = JointMpcTerrainField(
+        height_w=height.unsqueeze(0),
+        semantic_id=semantic.unsqueeze(0),
+        small_distance_m=small_distance.unsqueeze(0),
+        large_distance_m=large_distance.unsqueeze(0),
+        small_gradient_xy=small_gradient.unsqueeze(0),
+        large_gradient_xy=large_gradient.unsqueeze(0),
+        valid_mask=valid_mask.unsqueeze(0),
+        origin_w=origin.unsqueeze(0),
+        yaw_w=yaw.unsqueeze(0),
+        timestamp=timestamp.unsqueeze(0),
+        version=version.unsqueeze(0),
+        resolution=resolution,
+        small_occupancy=small_occupancy.unsqueeze(0),
+        large_occupancy=large_occupancy.unsqueeze(0),
+        small_propagated_height=small_propagated_height.unsqueeze(0),
+        large_propagated_height=large_propagated_height.unsqueeze(0),
+        small_occupancy_gradient_xy=small_occupancy_gradient.unsqueeze(0),
+        large_occupancy_gradient_xy=large_occupancy_gradient.unsqueeze(0),
+    )
+    schedule = FixedTrotSchedule(
+        phase=phase.unsqueeze(0),
+        swing=swing.unsqueeze(0),
+        stance=stance.unsqueeze(0),
+        swing_tau=swing_tau.unsqueeze(0),
+    )
+    context = LossContext(
+        command_body=command.unsqueeze(0),
+        touchdown_reference_w=touchdown.unsqueeze(0),
+        schedule=schedule,
+        terrain=field,
+        stance_anchor_w=stance_anchor.unsqueeze(0),
+        support_height=support_height.unsqueeze(0),
+    )
+    return weighted_trajectory_residual(state.unsqueeze(0), context, cfg)[0]
+
+
+def _terrain_tensor_tuple(field: JointMpcTerrainField) -> tuple[Tensor, ...]:
+    if any(
+        value is None
+        for value in (
+            field.small_occupancy,
+            field.large_occupancy,
+            field.small_propagated_height,
+            field.large_propagated_height,
+            field.small_occupancy_gradient_xy,
+            field.large_occupancy_gradient_xy,
+        )
+    ):
+        raise ValueError("trajectory linearization requires populated soft semantic fields")
+    return (
+        field.height_w,
+        field.semantic_id,
+        field.small_distance_m,
+        field.large_distance_m,
+        field.small_gradient_xy,
+        field.large_gradient_xy,
+        field.valid_mask,
+        field.origin_w,
+        field.yaw_w,
+        field.timestamp,
+        field.version,
+        field.small_occupancy,
+        field.large_occupancy,
+        field.small_propagated_height,
+        field.large_propagated_height,
+        field.small_occupancy_gradient_xy,
+        field.large_occupancy_gradient_xy,
+    )
+
+
+def linearize_trajectory(state: Tensor, context: LossContext, cfg: JointMpcRtiCfg) -> TrajectoryQp:
+    """Build block-pentadiagonal GGN bands and approved trajectory bounds."""
+    nominal = torch.as_tensor(state)
+    if nominal.ndim != 3 or nominal.shape[1:] != (31, 18):
+        raise ValueError("state must have shape [B,31,18]")
+    terrain = _terrain_tensor_tuple(context.terrain)
+    single = lambda *args: _single_residual(
+        *args,
+        resolution=float(context.terrain.resolution),
+        cfg=cfg,
+    )
+    jacobian_fn = torch.func.jacrev(single, argnums=0)
+    jacobian = torch.func.vmap(
+        jacobian_fn,
+        in_dims=(0, 0, 0, 0, 0, 0, 0, tuple(0 for _ in terrain), 0, 0),
+    )(
+        nominal,
+        context.command_body,
+        context.touchdown_reference_w,
+        context.schedule.phase,
+        context.schedule.swing,
+        context.schedule.stance,
+        context.schedule.swing_tau,
+        terrain,
+        context.stance_anchor_w,
+        context.support_height,
+    )
+    residual = weighted_trajectory_residual(nominal, context, cfg)
+    gradient = torch.einsum("brki,br->bki", jacobian, residual)
+    diagonal = torch.einsum("brki,brkj->bkij", jacobian, jacobian)
+    first_offdiag = torch.einsum("brki,brkj->bkij", jacobian[:, :, :-1], jacobian[:, :, 1:])
+    second_offdiag = torch.einsum("brki,brkj->bkij", jacobian[:, :, :-2], jacobian[:, :, 2:])
+    identity = torch.eye(18, dtype=nominal.dtype, device=nominal.device).view(1, 1, 18, 18)
+    diagonal = diagonal + float(cfg.solver.regularization) * identity
+    lower, upper, difference_lower, difference_upper = trajectory_bounds(nominal, cfg)
+    return TrajectoryQp(
+        diagonal=diagonal,
+        first_offdiag=first_offdiag,
+        second_offdiag=second_offdiag,
+        gradient=gradient,
+        lower=lower,
+        upper=upper,
+        joint_difference_lower=difference_lower,
+        joint_difference_upper=difference_upper,
+    )
+
+
+__all__ = ["linearize_trajectory"]

@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-20 | Joint MPC RTI pure-kinematic Task 7 direct-Z QP | seven-loss GGN / block bands / bounds | pass | `3 passed`; dense gradient and JtJ parity; z0 fixed; joint/trust/velocity bounds | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md](2026-07-20-joint-mpc-rti-kinematic-task07-direct-z-qp.md) |
+
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 6 losses | exact seven-state objective / full-body terrain | CPU pass | focused `8 passed`; Tasks 1-6 `45 passed, 13 skipped`; one 41-point/node query; finite state gradient | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task06-losses.md](2026-07-20-joint-mpc-rti-kinematic-task06-losses.md) |
 
 | 2026-07-20 | Joint MPC RTI pure-kinematic Task 5 cost map | grouped convolution / propagated height / Scharr / query | CPU pass; CUDA pending memory | RED 4; focused GREEN 4; Tasks 1-5 `37 passed, 13 skipped`; XY autograd nonzero | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md](2026-07-20-joint-mpc-rti-kinematic-task05-cost-map.md) |
