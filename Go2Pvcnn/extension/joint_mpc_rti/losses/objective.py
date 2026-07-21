@@ -35,7 +35,7 @@ class LossContext:
 
 def trajectory_residuals(state: Tensor, context: LossContext, cfg: JointMpcRtiCfg) -> dict[str, Tensor]:
     return {
-        "command": command_residual(state, context.command_body, cfg),
+        "command": command_residual(state, context.command_body, context.schedule, cfg),
         "step": step_residual(state, context.touchdown_reference_w, context.schedule, cfg),
         "contact": contact_residual(state, context, cfg),
         "swing_speed": swing_speed_residual(state, context.schedule, cfg),

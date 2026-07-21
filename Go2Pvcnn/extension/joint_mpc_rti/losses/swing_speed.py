@@ -24,6 +24,10 @@ def swing_speed_residual(state: Tensor, schedule, cfg: JointMpcRtiCfg) -> Tensor
         root_step[..., None],
         margin=float(cfg.loss_terms.swing_speed_margin),
     ) * swing
+    early_phase = (1.0 - schedule.swing_tau[:, :-1]).to(trajectory.dtype) * swing
+    early_weight = float(cfg.loss_terms.swing_speed_early)
+    phase_weight = 1.0 + (early_weight - 1.0) * early_phase
+    penalty = penalty * phase_weight.clamp_min(0.0).sqrt()
     denominator = swing.sum(dim=(1, 2)).clamp_min(1.0).sqrt()
     return penalty.flatten(1) / denominator[:, None]
 

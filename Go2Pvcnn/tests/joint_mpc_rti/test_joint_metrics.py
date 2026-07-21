@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 
 
@@ -100,3 +102,55 @@ def test_nonzero_translation_does_not_apply_zero_drift_metric() -> None:
     metrics = applicable_metrics("flat", (0.2, 0.0, 0.0))
 
     assert "root_zero_drift_m" not in metrics
+
+
+def test_any_invalid_trajectory_node_fails_universal_validity_metric() -> None:
+    from .joint_metrics import evaluate_trace
+
+    trace = _root_carried_trace()
+    valid = trace.valid.clone()
+    valid[:, -1] = False
+    report = evaluate_trace(replace(trace, valid=valid), scenario="flat")
+
+    metric = report.metric("trajectory_valid_ratio")
+    assert metric.applicable
+    assert metric.value == 0.75
+    assert metric.threshold == 1.0
+    assert metric.passed is False
+    assert not report.passed
+
+
+def test_all_true_validity_ratios_are_exactly_one_for_long_float32_trace() -> None:
+    from .joint_metrics import accumulate_joint_metrics
+
+    trace = _root_carried_trace()
+    nodes = 97
+    expanded = replace(
+        trace,
+        root_pos_w=trace.root_pos_w[:, :1].expand(-1, nodes, -1).clone(),
+        root_rpy_w=trace.root_rpy_w[:, :1].expand(-1, nodes, -1).clone(),
+        joint_pos=trace.joint_pos[:, :1].expand(-1, nodes, -1).clone(),
+        foot_pos_w=trace.foot_pos_w[:, :1].expand(-1, nodes, -1, -1).clone(),
+        contact_state=trace.contact_state[:, :1].expand(-1, nodes, -1).clone(),
+        command_body=trace.command_body[:, :1].expand(-1, nodes, -1).clone(),
+        gait_phase=torch.arange(nodes).view(1, nodes) % 24,
+        foot_height_w=trace.foot_height_w[:, :1].expand(-1, nodes, -1).clone(),
+        foot_small_distance_m=trace.foot_small_distance_m[:, :1].expand(-1, nodes, -1).clone(),
+        line_alpha=torch.ones(1, nodes),
+        nominal_root_pos_w=trace.nominal_root_pos_w[:, :1].expand(-1, nodes, -1).clone(),
+        nominal_root_rpy_w=trace.nominal_root_rpy_w[:, :1].expand(-1, nodes, -1).clone(),
+        valid=torch.ones(1, nodes, dtype=torch.bool),
+        map_valid=torch.ones(1, nodes, dtype=torch.bool),
+        timestamps=0.02 * torch.arange(nodes).view(1, nodes),
+    )
+
+    metrics = accumulate_joint_metrics(expanded)
+
+    assert metrics["trajectory_valid_ratio"] == 1.0
+    assert metrics["map_valid_ratio"] == 1.0
+
+    invalid = expanded.valid.clone()
+    invalid[:, -1] = False
+    partially_valid = replace(expanded, valid=invalid)
+    partial_metrics = accumulate_joint_metrics(partially_valid)
+    assert partial_metrics["trajectory_valid_ratio"] == 96.0 / 97.0

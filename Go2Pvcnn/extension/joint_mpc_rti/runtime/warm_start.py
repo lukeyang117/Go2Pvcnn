@@ -35,7 +35,7 @@ def shift_rebase_trajectory(previous: Tensor, measured: Tensor, *, decay_nodes: 
         raise ValueError("measured must have shape [B,18]")
 
     terminal_root = trajectory[:, -1, :6] + (trajectory[:, -1, :6] - trajectory[:, -2, :6])
-    terminal = torch.cat((terminal_root, trajectory[:, 7, 6:]), dim=-1)
+    terminal = torch.cat((terminal_root, trajectory[:, -1, 6:]), dim=-1)
     shifted = torch.cat((trajectory[:, 1:], terminal[:, None]), dim=1)
 
     delta_yaw = wrap_angle(measured_state[:, 5] - shifted[:, 0, 5])

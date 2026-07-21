@@ -5,9 +5,11 @@ import inspect
 import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
+from extension.joint_mpc_rti.losses.command import command_residual
 from extension.joint_mpc_rti.losses.objective import LossContext, total_trajectory_loss, trajectory_loss_breakdown
+from extension.joint_mpc_rti.losses.step import step_residual
 from extension.joint_mpc_rti.losses.smoothness import smooth_loss
-from extension.joint_mpc_rti.losses.swing_speed import swing_speed_penalty
+from extension.joint_mpc_rti.losses.swing_speed import swing_speed_penalty, swing_speed_residual
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
@@ -67,6 +69,23 @@ def test_objective_has_exactly_seven_losses() -> None:
     assert all(torch.isfinite(value).all() for value in breakdown.values())
 
 
+def test_step_event_targets_tau_one_swing_endpoint_not_first_stance_node() -> None:
+    cfg = JointMpcRtiCfg()
+    state = _state(batch=1)
+    schedule = fixed_trot_schedule(torch.zeros(1, dtype=torch.long))
+    target = go2_fk(state[..., :3], state[..., 3:6], state[..., 6:]).foot_pos_w.detach()
+    endpoint = state.clone()
+    endpoint[:, 11, 0] += 0.01
+    first_stance = state.clone()
+    first_stance[:, 12, 0] += 0.01
+
+    endpoint_residual = step_residual(endpoint, target, schedule, cfg)
+    first_stance_residual = step_residual(first_stance, target, schedule, cfg)
+
+    assert endpoint_residual.square().sum() > 0.0
+    assert first_stance_residual.square().sum() == 0.0
+
+
 def test_swing_speed_penalizes_foot_not_faster_than_root() -> None:
     slow = swing_speed_penalty(
         foot_step=torch.tensor(0.01), root_step=torch.tensor(0.02), margin=0.002
@@ -76,6 +95,71 @@ def test_swing_speed_penalizes_foot_not_faster_than_root() -> None:
     )
 
     assert slow > fast
+
+
+def test_command_early_swing_subweight_reduces_early_root_pressure() -> None:
+    cfg = JointMpcRtiCfg()
+    cfg.loss_terms.command_early_swing = 0.0
+    state = _state(batch=1)
+    schedule = fixed_trot_schedule(torch.zeros(1, dtype=torch.long))
+
+    residual = command_residual(
+        state,
+        torch.tensor(((1.0, 0.0, 0.0),)),
+        schedule,
+        cfg,
+    )
+    per_edge = residual.reshape(1, 30, 3).square().sum(dim=-1)
+
+    assert per_edge[0, 0] == 0.0
+    assert per_edge[0, 1] > per_edge[0, 0]
+
+
+def test_command_early_swing_keeps_future_transition_pressure_while_moving() -> None:
+    cfg = JointMpcRtiCfg()
+    cfg.loss_terms.command_early_swing = 0.0
+    state = _state(batch=1)
+    state[0, :, 0] = torch.arange(31) * cfg.runtime.dt
+    state[0, 13:, 0] -= cfg.runtime.dt
+    schedule = fixed_trot_schedule(torch.zeros(1, dtype=torch.long))
+
+    residual = command_residual(
+        state,
+        torch.tensor(((1.0, 0.0, 0.0),)),
+        schedule,
+        cfg,
+    ).reshape(1, 30, 3)
+
+    assert residual[0, 12].square().sum() > 0.0
+
+
+def test_command_early_swing_does_not_relax_zero_command_hold() -> None:
+    cfg = JointMpcRtiCfg()
+    cfg.loss_terms.command_early_swing = 0.0
+    state = _state(batch=1)
+    state[0, 1:, 0] = 0.01
+    schedule = fixed_trot_schedule(torch.zeros(1, dtype=torch.long))
+
+    residual = command_residual(
+        state,
+        torch.zeros(1, 3),
+        schedule,
+        cfg,
+    ).reshape(1, 30, 3)
+
+    assert residual[0, 0].square().sum() > 0.0
+
+
+def test_swing_speed_early_subweight_increases_early_foot_pressure() -> None:
+    cfg = JointMpcRtiCfg()
+    cfg.loss_terms.swing_speed_early = 4.0
+    state = _state(batch=1)
+    state[:, :, 0] = torch.linspace(0.0, 0.3, 31)
+    schedule = fixed_trot_schedule(torch.zeros(1, dtype=torch.long))
+
+    residual = swing_speed_residual(state, schedule, cfg).reshape(1, 30, 4)
+
+    assert residual[0, 0, 0] > residual[0, 10, 0]
 
 
 def test_smooth_loss_contains_first_and_second_state_differences() -> None:

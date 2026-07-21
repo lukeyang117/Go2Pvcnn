@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def _metric(name: str, passed: bool | None, *, applicable: bool = True):
     from .joint_metrics import MetricResult
@@ -61,3 +63,17 @@ def test_flat_simulator_returns_x0_to_x1_trace_without_control_variable() -> Non
     assert trace.contact_state.shape == (1, 3, 4)
     assert trace.x0_injection_error is not None
     assert float(trace.x0_injection_error.max()) <= 1.0e-6
+
+
+def test_acceptance_initial_state_matches_configured_flat_contact_geometry() -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+
+    from .helpers import make_state
+
+    cfg = JointMpcRtiCfg()
+    state = make_state(1)
+    foot = go2_fk(state.root_pos_w, state.root_rpy_w, state.joint_pos).foot_pos_w
+
+    assert float(state.root_pos_w[0, 2]) == pytest.approx(cfg.loss_terms.posture_root_clearance)
+    assert float(foot[..., 2].min()) >= cfg.gait.foot_contact_offset

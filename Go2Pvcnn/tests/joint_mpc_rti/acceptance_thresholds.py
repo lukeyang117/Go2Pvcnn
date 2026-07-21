@@ -49,6 +49,7 @@ THRESHOLDS: dict[str, tuple[str, float]] = {
     "line_alpha_zero_ratio": ("le", 0.05),
     "line_alpha_zero_run": ("le", 2.0),
     "warm_start_jump_max": ("le", 0.05),
+    "trajectory_valid_ratio": ("ge", 1.0),
     "nonfinite_count": ("le", 0.0),
     "x0_injection_error": ("le", 1.0e-6),
     "published_x1_error": ("le", 1.0e-6),

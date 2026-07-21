@@ -143,7 +143,8 @@ def sqp_rti_update(
 >>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     )
     finite = torch.isfinite(search.state).all(dim=(1, 2)) & torch.isfinite(search.selected_loss)
-    status = torch.where(finite, torch.zeros_like(finite, dtype=torch.long), torch.ones_like(finite, dtype=torch.long))
+    solved = finite & search.selected_feasible
+    status = torch.where(solved, torch.zeros_like(solved, dtype=torch.long), torch.ones_like(solved, dtype=torch.long))
     return SqpRtiUpdate(
 <<<<<<< HEAD
         control=search.control,

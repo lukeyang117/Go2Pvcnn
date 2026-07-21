@@ -123,12 +123,24 @@ def _build_foot_references(
     lift_raw = node - schedule.phase
     touchdown_raw = lift_raw + int(cfg.gait.swing_steps)
     stance_raw = node - (schedule.phase - int(cfg.gait.swing_steps))
-    lift_index = lift_raw.clamp(0, nodes - 1)
+    previous_touchdown_raw = lift_raw - int(cfg.gait.stance_steps)
+    previous_touchdown_index = previous_touchdown_raw.clamp(0, nodes - 1)
     touchdown_index = touchdown_raw.clamp(0, nodes - 1)
     stance_index = stance_raw.clamp(0, nodes - 1)
 
     lift_xy_event = _event_placement_xy(
-        root_pos, root_rpy, footprint_xy, command, lift_index, cfg, step_scale=step_scale
+        root_pos,
+        root_rpy,
+        footprint_xy,
+        command,
+        previous_touchdown_index,
+        cfg,
+        step_scale=step_scale,
+    )
+    lift_xy_event = torch.where(
+        (previous_touchdown_raw <= 0)[..., None],
+        measured_foot[:, None, :, :2],
+        lift_xy_event,
     )
     touchdown_xy = _event_placement_xy(
         root_pos, root_rpy, footprint_xy, command, touchdown_index, cfg, step_scale=step_scale
@@ -146,9 +158,7 @@ def _build_foot_references(
         measured_foot[:, None, :, :2],
     )
     lift_xy = torch.where(
-        (lift_raw < 0)[..., None],
-        inferred_lift_xy.expand(-1, nodes, -1, -1),
-        lift_xy_event,
+        (lift_raw <= 0)[..., None], inferred_lift_xy.expand(-1, nodes, -1, -1), lift_xy_event
     )
     stance_xy = torch.where(
         ((stance_raw < 0) | (lift_raw < 0))[..., None],
@@ -179,10 +189,13 @@ def _build_foot_references(
         - float(cfg.gait.h_swing) * 4.0 * tau0 * (1.0 - tau0)
     ) / denominator
     inferred_lift_z = torch.where(schedule.swing[:, :1], inferred_lift_z, measured_foot[:, None, :, 2])
-    lift_z = torch.where(
-        lift_raw < 0,
-        inferred_lift_z.expand(-1, nodes, -1),
+    lift_z_event = torch.where(
+        previous_touchdown_raw <= 0,
+        measured_foot[:, None, :, 2],
         lift_z_event,
+    )
+    lift_z = torch.where(
+        lift_raw <= 0, inferred_lift_z.expand(-1, nodes, -1), lift_z_event
     )
     stance_z = torch.where(
         (stance_raw < 0) | (lift_raw < 0),

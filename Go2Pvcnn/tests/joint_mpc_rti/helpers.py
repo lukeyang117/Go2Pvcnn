@@ -4,10 +4,11 @@ import torch
 
 
 def make_state(batch: int, *, device: str = "cpu", dtype: torch.dtype = torch.float32):
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
     from extension.joint_mpc_rti.types import JointMpcRtiState
 
     root_pos = torch.zeros(batch, 3, device=device, dtype=dtype)
-    root_pos[:, 2] = 0.32
+    root_pos[:, 2] = JointMpcRtiCfg().loss_terms.posture_root_clearance
     joint = torch.tensor([0.0, 0.8, -1.5] * 4, device=device, dtype=dtype).expand(batch, -1).clone()
     return JointMpcRtiState(
         root_pos_w=root_pos,

@@ -199,6 +199,10 @@ yaw_bar_k = yaw_shift_k + delta_yaw</code></pre>
   <pre><code>q_bar_k = q_shift_k + beta_k (q_measured - q_shift_0)
 beta_0 = 1, beta_k -> 0 in the first configured nodes</code></pre>
   <p>最后严格覆盖 <code>z_bar[:,0]=z_measured</code>，重新生成 gait/reference 和 packed map query。新地图进入后续 loss/Jacobian，不通过 hidden repair 改写 nominal XY。</p>
+  <p><strong>2026-07-21 stance-anchor 一致性 amendment：</strong>当前 horizon 起点已经处于 stance 的足，anchor 取 measured/warm <code>z0</code> 的 FK；horizon 内未来发生的 stance onset，anchor 必须取同一事件的 <code>touchdown_reference</code> 并保持到 liftoff。禁止把未来 onset 的 shifted warm FK 当作 anchor，因为 warm <code>q</code> 按合同不经 IK 重建，它可能与新生成 touchdown reference 不一致，从而使 Step 与 Contact 在同一事件互相冲突。</p>
+  <pre><code>a_i(k_onset) = FK_i(z0),                         current stance at k=0
+a_i(k_onset) = p_i_touchdown_reference(k_onset), future stance onset k&gt;0
+a_i(k)       = a_i(k_onset),                     until liftoff</code></pre>
 
   <h2>5. 七项固定 Loss</h2>
   <pre><code>J = w_cmd J_cmd
@@ -212,8 +216,8 @@ beta_0 = 1, beta_k -> 0 in the first configured nodes</code></pre>
     <thead><tr><th>Loss</th><th>职责</th><th>跨时间关系</th></tr></thead>
     <tbody>
       <tr><td>Command</td><td>由相邻 root pose 差分跟踪 XY 速度和 yaw rate command。</td><td><code>k,k+1</code></td></tr>
-      <tr><td>Step</td><td>跟踪 command-conditioned touchdown reference；不做 terrain XY 搜索。</td><td>由 gait event reference 连接时刻</td></tr>
-      <tr><td>Contact</td><td>stance 足世界位置不滑并贴真实地面。</td><td>相邻 stance 节点</td></tr>
+      <tr><td>Step</td><td>在 swing 的 <code>tau=1</code> 节点（phase 11）跟踪 command-conditioned touchdown reference；不做 terrain XY 搜索。</td><td>由 gait event reference 连接时刻</td></tr>
+      <tr><td>Contact</td><td>stance 足世界位置不滑并贴真实地面；当前 stance 锁 measured FK，未来 stance 锁同事件 touchdown reference。</td><td>相邻 stance 节点</td></tr>
       <tr><td>Swing speed</td><td>swing 中要求足端 XY 速度大于 root XY 速度，并保持相对主动推进。</td><td><code>k,k+1</code></td></tr>
       <tr><td>Terrain</td><td>统一处理 foot/link/root clearance、small 禁踩与全身碰撞。</td><td>节点代价，地图空间梯度耦合轨迹</td></tr>
       <tr><td>Posture</td><td>root height、roll/pitch 与默认关节姿态。</td><td>节点代价</td></tr>
@@ -223,6 +227,14 @@ beta_0 = 1, beta_k -> 0 in the first configured nodes</code></pre>
   <pre><code>J_smooth = sum ||z_(k+1)-z_k||^2_W1
          + sum ||z_(k+1)-2z_k+z_(k-1)||^2_W2</code></pre>
   <div class="danger"><strong>禁止扩展：</strong>不得增加 recovery、startup、detour、foot-lead、progress、特殊楼梯等第八类 loss；不得针对场景切换另一套目标函数；不得在 nonlinear score 中加入 LQ/GGN 看不到的隐藏目标。</div>
+
+  <h3>5.1 Early command 的滚动一致性 amendment</h3>
+  <p>早期摆动 command 子权重只用于当前待发布的第一条 edge，不用于 horizon 内未来的每个 swing 边界：</p>
+  <pre><code>c = 1 - exp(-||v_cmd||^2 / s_cmd^2)
+e_0 = max_i [ (1-tau_{0,i}) 1[swing_{0,i} and swing_{1,i}] ]
+w_cmd,0 = 1 - (1-w_early) c e_0
+w_cmd,k = 1, k=1,...,29</code></pre>
+  <p>其中 <code>s_cmd</code> 是固定的小 activity scale。它是连续的：零命令时 <code>c=0</code>，因此 zero-command hold 不会被放松；非零命令的当前第一条 swing edge 才允许让 foot 先启动。未来 edge 保持完整 command 压力，避免一个尚未发布的 gait 边界被优化成 kink，再由 rolling warm shift 推入 <code>x1</code>。这仍属于 command loss 的已批准 subweight，不增加 loss、状态变量、KKT 行、candidate 或 filter，也不增加跨时间 Jacobian 带宽。</p>
 
   <h2>6. 一次 SQP/RTI、LQ 与 KKT</h2>
   <p>每个控制周期只执行一次 SQP iteration：</p>
@@ -275,7 +287,7 @@ Z_alpha = Z_bar + alpha * delta_Z</code></pre>
       <tr><td>trust-region 大小、measurement mismatch 衰减</td><td>五个 alpha、三项过滤和七 loss argmin</td></tr>
     </tbody>
   </table>
-  <p>原则性错误仅包括：公式实现不一致、坐标系/phase/joint order/地图语义错误、非一次张量生成、FK/IK 数学错误、finite-difference 或 dense parity 证明错误。任何结构修订必须先形成设计 amendment。</p>
+  <p>原则性错误仅包括：公式实现不一致、坐标系/phase/joint order/地图语义错误、滚动时间语义造成 future kink、非一次张量生成、FK/IK 数学错误、finite-difference 或 dense parity 证明错误。任何结构修订必须先形成设计 amendment。</p>
 
   <h2>10. 统一 JointMetrics 与适用性</h2>
   <p>flat 和 small 使用同一份 trace schema：</p>

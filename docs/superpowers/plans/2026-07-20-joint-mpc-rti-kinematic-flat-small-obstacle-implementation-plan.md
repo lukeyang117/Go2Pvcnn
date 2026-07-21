@@ -422,6 +422,10 @@ Cold nominal must reduce the configured command step scale with one batch mask i
 
 Use tensor slicing for `previous[:,1:31]`, gait-period terminal joint copy `q30=q6`, SE(2) root rebase from old predicted `x1` to measured root, and one fixed `beta[31]` measurement mismatch vector. Query new terrain references after rebase; do not rebuild warm `q` through IK.
 
+2026-07-21 amendment: when building Contact context, use FK at node zero for a stance segment already active at the horizon start, but use the matching `touchdown_reference_w` at every future stance onset and tensorially hold it until liftoff. Add a RED test where shifted warm FK deliberately differs from the regenerated touchdown target. This is a Step/Contact reference-consistency correction, not warm IK repair or a new constraint/loss.
+
+The Step event must be the `tau=1` swing endpoint, phase `swing_steps-1` (`11`), not the first stance node phase `12`. Contact starts at phase `12` with the same touchdown anchor, giving a continuous target across the phase boundary.
+
 - [ ] **Step 5: Run GREEN at B=1,40,512,1024**
 
 ```bash
@@ -611,7 +615,7 @@ def trajectory_loss_breakdown(state: Tensor, context: LossContext, cfg: JointMpc
     }
 ```
 
-Each function must return `[B]` nonlinear cost and expose residual/Jacobian helpers used by Task 7. Derive root, joint, and foot velocities only from adjacent state nodes. `terrain_loss` must query all foot/knee/calf/thigh/base samples in one packed call, use convolution occupancy/propagated height/Scharr gradients, and include small touchdown avoidance without a hard gate. Add a source test that rejects `semantic_id ==`, `semantic_id.eq`, or class-mask branching inside `losses/terrain.py`; raw semantic ids are detector-only.
+Each function must return `[B]` nonlinear cost and expose residual/Jacobian helpers used by Task 7. Derive root, joint, and foot velocities only from adjacent state nodes. `terrain_loss` must query all foot/knee/calf/thigh/base samples in one packed call, use convolution occupancy/propagated height/Scharr gradients, and include small touchdown avoidance without a hard gate. The existing `command_early_swing` subweight applies only to the current first edge, with continuous command activity `1-exp(-||v_cmd||^2/s_cmd^2)`; future swing edges retain full command pressure so rolling warm shifts cannot publish a future phase kink. Add tests for zero-command hold and future-transition command pressure. Add a source test that rejects `semantic_id ==`, `semantic_id.eq`, or class-mask branching inside `losses/terrain.py`; raw semantic ids are detector-only.
 
 - [ ] **Step 4: Run loss tests and finite-difference Jacobian tests**
 

@@ -338,7 +338,9 @@ def build_loss_context(
         touchdown_reference_w=nominal.touchdown_reference_w,
         schedule=schedule,
         terrain=terrain_field,
-        stance_anchor_w=nominal.foot_reference_w,
+        stance_anchor_w=_stance_anchors_from_state(
+            nominal.state, nominal.touchdown_reference_w, schedule
+        ),
         support_height=support_height,
 >>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     )
@@ -4436,6 +4438,19 @@ def _linearization_function(eager, compiled, enabled: bool):
 >>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
 
 
+def _stance_anchors_from_state(state: Tensor, touchdown_reference_w: Tensor, schedule) -> Tensor:
+    foot = _foot_positions(state)
+    touchdown = torch.as_tensor(touchdown_reference_w, dtype=foot.dtype, device=foot.device)
+    stance = schedule.stance
+    previous_stance = torch.cat((torch.zeros_like(stance[:, :1]), stance[:, :-1]), dim=1)
+    onset = stance & ~previous_stance
+    node = torch.arange(state.shape[1], device=state.device).view(1, -1, 1)
+    onset_index = torch.where(onset, node, torch.zeros_like(node))
+    anchor_index = torch.cummax(onset_index, dim=1).values
+    event_anchor = torch.where((onset & node.eq(0))[..., None], foot, touchdown)
+    return torch.gather(event_anchor, 1, anchor_index[..., None].expand(-1, -1, -1, 3))
+
+
 def step(
     measured_state: JointMpcRtiState,
     command_body: Tensor,
@@ -5341,7 +5356,8 @@ def step(
     foot_pos_w = _foot_positions(state)
     derived_velocity = (state[:, 1:] - state[:, :-1]) / float(cfg.runtime.dt)
     finite = torch.isfinite(state).all(dim=(1, 2)) & torch.isfinite(foot_pos_w).all(dim=(1, 2, 3))
-    valid = nominal.valid & finite
+    accepted = nominal.valid | ~update.used_nominal
+    valid = accepted & finite & (update.status == 0)
     status = torch.where(valid, update.status, torch.ones_like(update.status))
 >>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     trajectory = JointMpcRtiTrajectory(

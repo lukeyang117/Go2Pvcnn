@@ -42,6 +42,7 @@ FLAT_METRICS = frozenset(
         "line_alpha_zero_ratio",
         "line_alpha_zero_run",
         "warm_start_jump_max",
+        "trajectory_valid_ratio",
         "nonfinite_count",
         "x0_injection_error",
         "published_x1_error",
@@ -196,6 +197,13 @@ def _masked_max(value: Tensor, mask: Tensor, default: float = 0.0) -> float:
 def _masked_mean(value: Tensor, mask: Tensor, default: float = 0.0) -> float:
     selected = value[mask]
     return default if selected.numel() == 0 else float(selected.mean().item())
+
+
+def _masked_bool_ratio(value: Tensor, mask: Tensor, default: float = 0.0) -> float:
+    selected = value[mask].to(dtype=torch.int64)
+    if selected.numel() == 0:
+        return default
+    return float(selected.sum().item()) / float(selected.numel())
 
 
 def _max_true_run(mask: Tensor) -> int:
@@ -497,6 +505,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     lateral = ((root[..., :2] - nominal_pos[..., :2]) * lateral_axis).sum(dim=-1)
 
     output: dict[str, float | int] = {
+        "trajectory_valid_ratio": _masked_bool_ratio(valid, torch.ones_like(valid, dtype=torch.bool)),
         "joint_position_violation": int((((joint < lower) | (joint > upper)) & valid[..., None]).sum().item()),
         "joint_velocity_violation": int(((velocity.abs() > 30.0) & valid_edge[..., None]).sum().item()),
         "joint_safe_margin_min_rad": float(
@@ -529,7 +538,9 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "line_alpha_zero_ratio": _masked_mean((torch.as_tensor(trace.line_alpha, device=root.device) == 0).to(root.dtype), valid),
         "line_alpha_zero_run": _max_true_run((torch.as_tensor(trace.line_alpha, device=root.device) == 0) & valid),
         "nonfinite_count": int((~torch.isfinite(root)).sum().item() + (~torch.isfinite(joint)).sum().item() + (~torch.isfinite(foot)).sum().item()),
-        "map_valid_ratio": _masked_mean(torch.as_tensor(trace.map_valid, dtype=root.dtype, device=root.device), valid),
+        "map_valid_ratio": _masked_bool_ratio(
+            torch.as_tensor(trace.map_valid, dtype=torch.bool, device=root.device), valid
+        ),
     }
     anchor = trace.stance_anchor_w
     output["stance_anchor_residual"] = 0.0 if anchor is None else _masked_max(

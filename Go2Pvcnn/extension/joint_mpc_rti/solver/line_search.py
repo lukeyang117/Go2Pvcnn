@@ -23,6 +23,7 @@ class LineSearchResult:
     alpha: Tensor
     selected_index: Tensor
     valid: Tensor
+    selected_feasible: Tensor
     used_nominal: Tensor
 
 
@@ -68,6 +69,7 @@ def parallel_line_search(
     state = candidates[row, selected_index]
     selected_loss = candidate_loss[row, selected_index]
     alpha = alphas[selected_index]
+    selected_feasible = valid[row, selected_index]
     return LineSearchResult(
         state=state,
         candidates=candidates,
@@ -77,6 +79,7 @@ def parallel_line_search(
         alpha=alpha,
         selected_index=selected_index,
         valid=valid,
+        selected_feasible=selected_feasible,
         used_nominal=selected_index == len(ALPHAS) - 1,
     )
 

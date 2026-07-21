@@ -68,8 +68,9 @@ class ActiveConstraints:
 
     @classmethod
     def empty(cls, qp: TrajectoryQp) -> "ActiveConstraints":
+        fixed = qp.lower == qp.upper
         return cls(
-            box_low=torch.zeros_like(qp.lower, dtype=torch.bool),
+            box_low=fixed,
             box_high=torch.zeros_like(qp.upper, dtype=torch.bool),
             velocity_low=torch.zeros_like(qp.joint_difference_lower, dtype=torch.bool),
             velocity_high=torch.zeros_like(qp.joint_difference_upper, dtype=torch.bool),
@@ -191,26 +192,62 @@ def refine_active_set(
 ) -> ActiveSetSolution:
     if int(refinements) != 2:
         raise ValueError("the production active-set refinement count is fixed at two")
-    free = solve_fn(qp, ActiveConstraints.empty(qp))
-    free_active = select_active_constraints(qp, free)
-    first_active = ActiveConstraints(
-        box_low=free_active.box_low,
-        box_high=free_active.box_high,
-        velocity_low=torch.zeros_like(free_active.velocity_low),
-        velocity_high=torch.zeros_like(free_active.velocity_high),
-    )
-    first = solve_fn(qp, first_active)
-    remaining = select_active_constraints(qp, first)
-    merged_box_low = first_active.box_low | remaining.box_low
-    merged_velocity_low = remaining.velocity_low
-    second_active = ActiveConstraints(
-        box_low=merged_box_low,
-        box_high=(first_active.box_high | remaining.box_high) & ~merged_box_low,
-        velocity_low=merged_velocity_low,
-        velocity_high=remaining.velocity_high & ~merged_velocity_low,
-    )
-    second = solve_fn(qp, second_active)
-    return ActiveSetSolution(direction=second, active=second_active)
+    def feasible_step(
+        current: Tensor, target: Tensor, active_constraints: ActiveConstraints
+    ) -> Tensor:
+        step = target - current
+        infinity = torch.full_like(step, float("inf"))
+        box_ratio = torch.where(
+            step > 0.0,
+            (qp.upper - current) / step,
+            torch.where(step < 0.0, (qp.lower - current) / step, infinity),
+        )
+        box_ratio = torch.where(active_constraints.box_mask, infinity, box_ratio)
+        current_difference = current[:, 1:, 6:] - current[:, :-1, 6:]
+        target_difference = target[:, 1:, 6:] - target[:, :-1, 6:]
+        difference_step = target_difference - current_difference
+        difference_infinity = torch.full_like(difference_step, float("inf"))
+        velocity_ratio = torch.where(
+            difference_step > 0.0,
+            (qp.joint_difference_upper - current_difference) / difference_step,
+            torch.where(
+                difference_step < 0.0,
+                (qp.joint_difference_lower - current_difference) / difference_step,
+                difference_infinity,
+            ),
+        )
+        velocity_ratio = torch.where(
+            active_constraints.velocity_mask, difference_infinity, velocity_ratio
+        )
+        fraction = torch.minimum(
+            box_ratio.amin(dim=(1, 2)), velocity_ratio.amin(dim=(1, 2))
+        ).clamp(0.0, 1.0)
+        return current + fraction[:, None, None] * step
+
+    def merge(left: ActiveConstraints, right: ActiveConstraints) -> ActiveConstraints:
+        box_low = left.box_low | right.box_low
+        velocity_low = left.velocity_low | right.velocity_low
+        return ActiveConstraints(
+            box_low=box_low,
+            box_high=(left.box_high | right.box_high) & ~box_low,
+            velocity_low=velocity_low,
+            velocity_high=(left.velocity_high | right.velocity_high) & ~velocity_low,
+        )
+
+    active = ActiveConstraints.empty(qp)
+    direction = torch.zeros_like(qp.gradient)
+    free = solve_fn(qp, active)
+    direction = feasible_step(direction, free, active)
+    active = merge(active, select_active_constraints(qp, direction, tolerance=1.0e-5))
+
+    first = solve_fn(qp, active)
+    direction = feasible_step(direction, first, active)
+    active = merge(active, select_active_constraints(qp, direction, tolerance=1.0e-5))
+
+    second = solve_fn(qp, active)
+    direction = feasible_step(direction, second, active)
+    active = merge(active, select_active_constraints(qp, direction, tolerance=1.0e-5))
+    return ActiveSetSolution(direction=direction, active=active)
 
 
 def trajectory_bounds(nominal: Tensor, cfg) -> tuple[Tensor, Tensor, Tensor, Tensor]:

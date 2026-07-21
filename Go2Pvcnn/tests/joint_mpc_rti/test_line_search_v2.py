@@ -141,3 +141,23 @@ def test_equal_loss_prefers_larger_alpha() -> None:
         tie_tolerance=1.0e-7,
     )
     assert result.alpha.eq(1.0).all()
+
+
+def test_all_filtered_candidates_report_selected_candidate_infeasible() -> None:
+    nominal = _nominal(1)
+    nominal[..., 6] = float(JOINT_UPPER[0]) + 0.1
+    lower, upper, velocity = _limits(nominal)
+
+    result = parallel_line_search(
+        nominal,
+        torch.zeros_like(nominal),
+        objective=lambda state: state.square().mean(dim=(1, 2)),
+        joint_lower=lower,
+        joint_upper=upper,
+        joint_velocity_limit=velocity,
+        dt=0.02,
+    )
+
+    assert result.alpha.item() == 0.0
+    assert not result.valid.any()
+    assert not result.selected_feasible.item()

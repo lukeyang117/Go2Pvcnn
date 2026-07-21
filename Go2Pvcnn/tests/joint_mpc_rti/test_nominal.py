@@ -9,6 +9,7 @@ import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.model.nominal import build_nominal
+from extension.joint_mpc_rti.runtime.warm_start import shift_rebase_trajectory
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState, JointMpcRtiState, JointMpcTerrainField
 
 
@@ -106,7 +107,7 @@ def test_warm_nominal_is_shift_rebase_and_measurement_decay() -> None:
 
     assert result.used_warm_start.all()
     torch.testing.assert_close(result.state[:, 0], measured_next.as_vector())
-    torch.testing.assert_close(result.state[:, 30, 6:], result.state[:, 6, 6:], atol=1e-6, rtol=0.0)
+    torch.testing.assert_close(result.state[:, 30, 6:], previous.trajectory[:, 30, 6:], atol=1e-6, rtol=0.0)
     delta_yaw = measured_next.root_rpy_w[:, 2] - cold.state[:, 1, 5]
     relative = cold.state[:, 6, :2] - cold.state[:, 1, :2]
     expected_xy = measured_next.root_pos_w[:, :2] + torch.stack(
@@ -117,6 +118,21 @@ def test_warm_nominal_is_shift_rebase_and_measurement_decay() -> None:
         dim=-1,
     )
     torch.testing.assert_close(result.state[:, 5, :2], expected_xy)
+
+
+def test_warm_shift_does_not_create_a_terminal_joint_velocity_violation() -> None:
+    measured = _measured(1)
+    previous = measured.as_vector()[:, None].expand(-1, 31, -1).clone()
+    previous[:, 6, 6] += 0.35
+    previous[:, 7, 6] += 0.70
+    previous[:, 8, 6] += 0.35
+    velocity_step_limit = 30.0 * 0.02
+
+    assert (previous[:, 1:, 6:] - previous[:, :-1, 6:]).abs().amax() <= velocity_step_limit
+
+    shifted = shift_rebase_trajectory(previous, previous[:, 1], decay_nodes=6)
+
+    assert (shifted[:, 1:, 6:] - shifted[:, :-1, 6:]).abs().amax() <= velocity_step_limit
 
 
 def test_warm_nominal_uses_current_measured_stance_reference() -> None:
@@ -193,6 +209,44 @@ def test_current_stance_nominal_anchor_starts_at_measured_foot() -> None:
     # Phase zero has diagonal swing legs 0/3 and stance legs 1/2.
     expected = measured_foot[:, None, 1:3, :2].expand(-1, 12, -1, -1)
     torch.testing.assert_close(result.foot_reference_w[:, :12, 1:3, :2], expected)
+
+
+def test_phase_zero_liftoff_reference_starts_at_measured_foot() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+
+    measured = _measured(1)
+    phase = torch.zeros(1, dtype=torch.long)
+    result = build_nominal(
+        measured,
+        torch.tensor((1.0, 0.5, 1.0)).view(1, 3),
+        _field(1),
+        phase,
+        previous=_invalid_previous(measured, phase),
+        cfg=JointMpcRtiCfg(),
+    )
+    measured_foot = go2_fk(measured.root_pos_w, measured.root_rpy_w, measured.joint_pos).foot_pos_w
+
+    # At phase zero, diagonal legs 0/3 lift from the measured x0 pose.
+    torch.testing.assert_close(result.foot_reference_w[:, 0, (0, 3)], measured_foot[:, (0, 3)])
+
+
+def test_future_liftoff_reference_is_continuous_with_previous_stance() -> None:
+    measured = _measured(1)
+    phase = torch.zeros(1, dtype=torch.long)
+    result = build_nominal(
+        measured,
+        torch.tensor((1.0, 0.5, 1.0)).view(1, 3),
+        _field(1),
+        phase,
+        previous=_invalid_previous(measured, phase),
+        cfg=JointMpcRtiCfg(),
+    )
+    liftoff = result.contact_state[:, :-1] & ~result.contact_state[:, 1:]
+    before = result.foot_reference_w[:, :-1][liftoff]
+    after = result.foot_reference_w[:, 1:][liftoff]
+
+    assert before.numel() > 0
+    torch.testing.assert_close(after, before, atol=1.0e-6, rtol=0.0)
 
 
 def test_nominal_source_has_no_for_or_while() -> None:

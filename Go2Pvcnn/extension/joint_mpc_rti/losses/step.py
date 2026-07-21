@@ -15,7 +15,7 @@ def step_residual(state: Tensor, touchdown_reference_w: Tensor, schedule, cfg: J
     trajectory = torch.as_tensor(state)
     target = torch.as_tensor(touchdown_reference_w, dtype=trajectory.dtype, device=trajectory.device)
     foot = go2_fk(trajectory[..., :3], trajectory[..., 3:6], trajectory[..., 6:]).foot_pos_w
-    event = schedule.phase.eq(int(cfg.gait.swing_steps)).to(trajectory.dtype)
+    event = schedule.phase.eq(int(cfg.gait.swing_steps) - 1).to(trajectory.dtype)
     scale = torch.stack(
         (
             trajectory.new_tensor(math.sqrt(float(cfg.loss_terms.step_xy))),
