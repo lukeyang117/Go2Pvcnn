@@ -236,6 +236,12 @@ w_cmd,0 = 1 - (1-w_early) c e_0
 w_cmd,k = 1, k=1,...,29</code></pre>
   <p>其中 <code>s_cmd</code> 是固定的小 activity scale。它是连续的：零命令时 <code>c=0</code>，因此 zero-command hold 不会被放松；非零命令的当前第一条 swing edge 才允许让 foot 先启动。未来 edge 保持完整 command 压力，避免一个尚未发布的 gait 边界被优化成 kink，再由 rolling warm shift 推入 <code>x1</code>。这仍属于 command loss 的已批准 subweight，不增加 loss、状态变量、KKT 行、candidate 或 filter，也不增加跨时间 Jacobian 带宽。</p>
 
+  <h3>5.2 Zero-command hold 的连续权重 amendment</h3>
+  <p>纯软目标下，零命令的 Command residual 虽以零速度为目标，但 Contact、Posture、Terrain 和 Smooth 仍可通过微小 root 位移降低总损失。为在不增加 hard branch 或 projection 的前提下满足静止合同，Command loss 使用一个仅依赖 command 范数的连续 hold multiplier：</p>
+  <pre><code>m_hold(v_cmd) = 1 + (m_0 - 1) exp(-||v_cmd||^2 / s_cmd^2)
+J_command     = m_hold(v_cmd) J_command_base</code></pre>
+  <p><code>m_0 &gt;= 1</code> 是允许调节的 Command 子权重，<code>s_cmd</code> 与 5.1 使用同一 activity scale。零命令时 multiplier 为 <code>m_0</code>；正式最小非零 command 远大于 <code>s_cmd</code>，multiplier 连续趋近 1，不改变移动命令压力。实现必须通过 residual 的平方根缩放进入 nonlinear loss 与同一 GGN Jacobian，禁止只改 line-search score。</p>
+
   <h2>6. 一次 SQP/RTI、LQ 与 KKT</h2>
   <p>每个控制周期只执行一次 SQP iteration：</p>
   <pre><code>measured/map/command
@@ -296,7 +302,7 @@ Z_alpha = Z_bar + alpha * delta_Z</code></pre>
   <pre><code>Pass(scenario) = AND over metrics where applicability(scenario, metric) = true</code></pre>
   <ul>
     <li>flat 没有 small object，因此 small collision、touchdown-on-small、strict crossing 为 N/A。</li>
-    <li>zero translation command 的方向误差数学上 N/A，但 drift、yaw tracking、stance、joint 和数值指标仍适用。</li>
+    <li>zero translation command 的方向误差、foot/root lead 以及以近零 root 位移为分母的 stance-root-carry ratio 数学上 N/A；drift、yaw tracking、绝对 stance slip/stationary/ground、joint 和数值指标仍适用。</li>
     <li>正式 small crossing 场景必须构造真实 crossing opportunity；不能用 opportunity 缺失记成功。</li>
     <li>不同测试可突出不同指标，但所有适用指标必须同时检查。</li>
   </ul>

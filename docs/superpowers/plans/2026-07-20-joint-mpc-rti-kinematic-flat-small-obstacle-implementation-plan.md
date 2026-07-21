@@ -617,6 +617,8 @@ def trajectory_loss_breakdown(state: Tensor, context: LossContext, cfg: JointMpc
 
 Each function must return `[B]` nonlinear cost and expose residual/Jacobian helpers used by Task 7. Derive root, joint, and foot velocities only from adjacent state nodes. `terrain_loss` must query all foot/knee/calf/thigh/base samples in one packed call, use convolution occupancy/propagated height/Scharr gradients, and include small touchdown avoidance without a hard gate. The existing `command_early_swing` subweight applies only to the current first edge, with continuous command activity `1-exp(-||v_cmd||^2/s_cmd^2)`; future swing edges retain full command pressure so rolling warm shifts cannot publish a future phase kink. Add tests for zero-command hold and future-transition command pressure. Add a source test that rejects `semantic_id ==`, `semantic_id.eq`, or class-mask branching inside `losses/terrain.py`; raw semantic ids are detector-only.
 
+2026-07-21 zero-command amendment: multiply the existing Command residual by the square root of `1 + (command_hold_multiplier - 1) * exp(-||v_cmd||^2 / command_activity_scale^2)`. This must affect nonlinear scoring and GGN through the same residual, remain continuous, equal the configured multiplier at exactly zero, and converge to one for the formal nonzero command range. Add RED tests for those three properties. Do not add command-zero branching, output projection, a new loss key, or a line-search-only score.
+
 - [ ] **Step 4: Run loss tests and finite-difference Jacobian tests**
 
 ```bash
@@ -1146,6 +1148,8 @@ Expected: FAIL because old metrics contain recovery fields and heavy probes lack
 - [ ] **Step 3: Define one trace and per-metric applicability**
 
 The trace must include actual root/joint/foot, command, gait phase, terrain surface, small signed distance, per-part collision, line alpha, nominal root, validity, and timestamps. Remove recovery/extension/liftoff-guard fields. Every metric result stores value, numerator, denominator, valid count, applicability, N/A reason, threshold, pass, and worst-case key.
+
+For exactly zero translation command, `stance_root_carry_ratio_abs` is mathematically N/A because its denominator is near-zero root displacement. Keep absolute stance slip max/mean, stationary ratio, anchor residual, ground gap/penetration, drift, joints, and numerical metrics applicable.
 
 - [ ] **Step 4: Preserve the formal 275 command matrix**
 
