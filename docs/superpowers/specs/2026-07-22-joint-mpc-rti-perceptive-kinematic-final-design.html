@@ -70,7 +70,7 @@
     <strong>历史结果状态：</strong>旧 synthetic fixture、ranked test 或 planner 自身 trace 中报告的 small-cross “通过”全部视为无效证据。现有 viewer 已经观察到 touchdown、swing 和腿部直接穿碰障碍，说明旧 detector 与真实行为不一致。本文实施后，只有实际 root/joint readback 经 FK 得到的世界坐标几何、同帧语义/高程图和完整 crossing event window 同时通过，才允许使用“通过”；Isaac contact sensor 不属于证据来源。
   </div>
   <div class="ok">
-    <strong>最终合同：</strong>纯运动学 H30、每次 planner refresh 重新选择 touchdown、构造局部凸落脚区域和连续 swing nominal，再执行一次 SQP/RTI、一个 LQ/QP 和五候选并行硬安全 line search。小障碍跨越，大障碍绕行；foot、knee、calf、thigh、base 任一碰撞都禁止发布。
+    <strong>最终合同：</strong>纯运动学 H30：对外恰好 30 个未来帧，内部为 measured <code>z0</code> 加 30 个未来节点；固定 24-frame trot 为 swing 12 帧、stance 12 帧。每次 planner refresh 重新选择 touchdown、构造局部凸落脚区域和连续 swing nominal，再执行一次 SQP/RTI、一个 LQ/QP 和五候选并行硬安全 line search。小障碍跨越，大障碍绕行；foot、knee、calf、thigh、base 任一碰撞都禁止发布。
   </div>
 
   <h2>目录</h2>
@@ -155,36 +155,63 @@ Pass_small = AND_(m in M_common union M_small) Pass(small,m)</code></pre>
 
   <h2 id="contract">2. 固定状态、时间与运行合同</h2>
   <pre><code>dt = 0.02 s
-horizon_steps = 30
-state_nodes = 31
-prediction_time = 0.60 s
-gait_period = 24 frames = 0.48 s
-swing_steps = 12
-stance_steps = 12
+N = horizon_intervals = trajectory_future_frames = 30
+state_nodes = N+1 = 31
+prediction_time = N dt = 0.60 s
+gait_period = 24 intervals = 24 frames = 0.48 s
+swing = 12 intervals = 12 frames = 0.24 s
+stance = 12 intervals = 12 frames = 0.24 s
 gait = diagonal trot
 sqp_iterations_per_refresh = 1
 lq_qp_subproblems_per_refresh = 1
 line_search_alphas = [1, 0.5, 0.25, 0.125, 0]</code></pre>
-  <p>节点状态固定为：</p>
+  <h3>2.1 H30 的 node / edge / 输出定义</h3>
+  <p><code>H30</code> 永远表示 30 个未来预测区间，而不是包含当前状态在内的 30 个节点。内部求解保留当前 measured node，所以有 31 个状态节点；对外参考轨迹只返回未来 30 帧：</p>
   <pre><code>z_k = [p_B,k, theta_B,k, q_k] in R^18
 p_B,k     = [x_B,k, y_B,k, z_B,k]
 theta_B,k = [roll_B,k, pitch_B,k, yaw_B,k]
 q_k       = 12 个 Go2 关节角
-Z         = [z_0, ..., z_30] in R^(31 x 18)</code></pre>
+Z_nodes   = [z_0, ..., z_30] in R^(31 x 18)
+Z_future  = [z_1, ..., z_30] in R^(30 x 18)
+
+edge k = [t+k dt, t+(k+1)dt], k=0,...,29
+edge k connects z_k -&gt; z_(k+1)</code></pre>
   <ul>
     <li><code>z_0</code> 是当前 measured state，严格注入，不是可自由改变的动作。</li>
-    <li><code>z_1</code> 是本周期准备发布的下一时刻状态；完整 <code>z_1...z_30</code> 是供下一轮 warm shift 和 RL teacher 使用的预测。</li>
+    <li><code>z_1</code> 是本周期准备发布的下一时刻状态；<code>Z_future=[z_1,...,z_30]</code> 恰好是 30 帧，供 RL teacher 和外部参考使用。</li>
+    <li><code>Z_nodes=[z_0,...,z_30]</code> 只作为 solver、碰撞 sweep、诊断和下一轮 warm cache 的内部轨迹；不得把它误报成“31 帧未来轨迹”。</li>
     <li>足端、膝、calf、thigh、hip 和 base 几何均由 <code>FK(z_k)</code> 得到，不增加独立足端优化变量。</li>
     <li>所有 batch 张量以环境维 <code>B</code> 开头；正式运行固定支持 <code>B=1</code> 和 <code>B=1024</code> 的编译图。</li>
     <li>gait phase、地图尺寸、候选数、碰撞布局、H30/32 scan 树和五个 alpha 在图捕获前固定。</li>
   </ul>
+
+  <h3>2.2 24-frame 固定 trot 与 touchdown 边界</h3>
+  <p>腿顺序固定为 <code>[FL,FR,RL,RR]</code>，对角腿相位偏置固定为 <code>o=[0,12,12,0]</code>。<code>phi_0</code> 是当前 control tick 的全局相位；一次 LQ 或五个 alpha 内都不能推进相位，只有下一个 20 ms control tick 才推进一次：</p>
+  <pre><code>phi_node(i,k) = (phi_0 + k + o_i) mod 24,  k=0,...,30
+phi_edge(i,k) = phi_node(i,k),             k=0,...,29
+
+swing_edge(i,k) = 1[0  &lt;= phi_edge(i,k) &lt; 12]
+stance_edge(i,k)= 1[12 &lt;= phi_edge(i,k) &lt; 24]
+stance_node(i,k)= 1[12 &lt;= phi_node(i,k) &lt; 24]
+
+touchdown_edge(i,k) = 1[phi_node(i,k)=11 AND phi_node(i,k+1)=12]
+touchdown_node       = k+1, the node whose phase is 12
+liftoff_edge(i,k)    = 1[phi_node(i,k)=23 AND phi_node(i,k+1)=0]
+
+phi_0(t+1) = (phi_0(t)+1) mod 24</code></pre>
+  <p>因此 phase <code>11 -&gt; 12</code> 的 edge 是第 12 个 swing interval，touchdown 状态是 phase 12 node，stance XYZ equality 从该 node 开始。Swing reference 在 lift-off node 到 touchdown node 之间跨 12 个 interval：</p>
+  <pre><code>tau(r) = r/12, r=0,...,12
+p_swing(tau=0) = p_lift
+p_swing(tau=1) = p_touchdown at phase-12 node</code></pre>
+  <div class="danger"><strong>禁止旧端点语义：</strong>不得继续使用 <code>swing_tau=phase/11</code> 把 phase 11 node 当作 touchdown。它会让足端提前一帧到终点，再在 phase 12 切换 stance，形成轨迹折点和速度不连续。所有 gait mask、nominal、LQ 约束、line-search sweep、viewer 和指标必须共享上述 node/edge 定义。</div>
+  <p>H30 覆盖 <code>30/24=1.25</code> 个 gait period。每条腿从当前 node 到下一 touchdown 最多 24 个 interval，因此当前 swing 一定有对应 touchdown；若 H30 后段已经开始再下一次 swing、而其 touchdown 超出 node 30，则保存该事件的固定 preview endpoint，并从 node 30 继续检查到真实 phase-12 touchdown，不能把 node 30 当作假 touchdown。</p>
   <div class="danger"><strong>纯运动学硬边界：</strong>优化变量只有 root pose 和 12 个关节角。速度、加速度仅由相邻 pose/关节角做有限差分；不建立质量、惯量、接触力、冲量、力矩、动量、刚体动力学或接触动力学方程。碰撞检测只使用 FK 几何和语义/高程图，不读取 Isaac contact sensor。</div>
 
   <h2 id="pipeline">3. 单次 RTI 完整流程</h2>
   <pre><code>输入同帧 measured z0、command、gait phase、elevation、semantic、T_WG、warm cache
   1. scanner field build：统一 2.5D 安全场与 max_pool2d 膨胀层
   2. warm shift/rebase：上一轮选中轨迹向前滚动并对齐 measured z0
-  3. perceptive preview：large 左/右 body corridor + 四腿下一次 touchdown event
+  3. perceptive preview：large 左/右 body corridor + 四腿 touchdown event/末端 swing tail
   4. touchdown selector：每腿 25 个 hip-frame 候选，GPU 并行筛选与评分
   5. convex region builder：围绕每个选中点构造安全矩形与局部平面
   6. nominal retarget：生成连续 swing、stance anchor 和 batched IK nominal
@@ -192,7 +219,7 @@ Z         = [z_0, ..., z_30] in R^(31 x 18)</code></pre>
   8. one LQ/QP：H30/32 associative scan 求 Delta Z
   9. five-alpha line search：并行真实代价 + 全时域 swept hard safety
  10. publish/cache：只发布安全候选 z1；缓存完整选中轨迹与 touchdown event
-输出 trajectory、region、candidate masks、stop mask、metrics diagnostics</code></pre>
+输出 30-frame future trajectory、31-node internal trajectory、region、candidate masks、stop mask、diagnostics</code></pre>
   <div class="decision"><strong>职责分界：</strong>touchdown selector 决定“落在哪里”；convex region 决定“LQ 可以在多大范围内连续调整”；nominal 决定“从当前脚状态怎样连续走向该区域”；LQ 决定 root 与关节如何协同；line search 决定这次修正是否在真实非线性几何下可以发布。</div>
 
   <h2 id="field">4. Scanner 与统一 2.5D 安全场</h2>
@@ -391,8 +418,13 @@ p_rebase[k] = p_measured + R_z(delta_yaw_phys)(p_shift[k]-p_shift[0])
 yaw_rebase[k] = yaw_shift[k] + delta_yaw_coord
 q_rebase[k] = q_shift[k] + beta_k(q_measured-q_shift[0])
 beta_0=1, beta_k decreases to 0 within n_decay nodes
-z_bar[0] = z_measured exactly</code></pre>
-  <p>上一轮轨迹因此不会被丢弃：其 root、关节、速度趋势、swing 进度和末端事件都先被 shift/rebase；本轮地图只通过 large-only body corridor、重新选择的 touchdown、region、stance anchor 与 swing retarget 做结构化修正。small 场景不改写 root XY nominal；large corridor 激活时，root XY 使用同一 smooth window 从 rebase 轨迹连续混合到 <code>p_B,corridor</code>。</p>
+Z_rebase[0] = z_measured exactly
+
+p_td,new = selector(F_t, command_t, phi_0,t, Z_rebase)
+region_new = region_builder(F_t, p_td,new)
+Z_bar,t = retarget(Z_rebase, p_td,new, region_new, stance_anchor, gait)
+Z_bar,t[0] = z_measured exactly</code></pre>
+  <p>上一轮轨迹因此不会被丢弃：其 root、关节、速度趋势、当前 gait phase、已经进行到一半的 swing 进度、continuing stance anchor 和 terminal trend 都先被 shift/rebase；然后每轮基于当前地图和命令重新运行 selector、region 与 swing/stance IK retarget。<strong>selector rerun、touchdown replanning 和 nominal retarget 都属于 warm start，不是 cold start。</strong>small 场景不改写 root XY nominal；large corridor 激活时，root XY 使用同一 smooth window 从 rebase 轨迹连续混合到 <code>p_B,corridor</code>。</p>
 
   <h3>7.2 Stance 与 swing reference</h3>
   <pre><code>continuing_i(k) = stance_i(k-1) AND stance_i(k)
@@ -400,7 +432,7 @@ onset_i(k)      = NOT stance_i(k-1) AND stance_i(k)
 
 a_i(k) = persistent_anchor_i, current continuing stance
 a_i(k) = selected touchdown on the local plane, future onset/stance</code></pre>
-  <p>stance reference 整段保持 <code>a_i</code>。Swing reference 使用当前 measured foot position/velocity 或预测 lift state作为边界，并按本轮选中 touchdown 重新参数化。若 touchdown 在 H30 外，H30 内仍按绝对 gait phase 走向该目标，不能把 node 30 当作假 touchdown 或冻结脚；node 30 到真实 event 的 preview tail 同时保存并检查。</p>
+  <p>stance reference 整段保持 <code>a_i</code>。Swing reference 使用当前 measured foot position/velocity 或预测 lift state 作为边界，并按本轮选中 touchdown 重新参数化；phase 0 到 phase 12 使用 <code>tau=r/12</code>，在 touchdown node 精确到达目标。若 H30 末端进入再下一次 swing 而其 touchdown 在 H30 外，H30 内仍按绝对 gait phase 走向 preview endpoint，不能把 node 30 当作假 touchdown 或冻结脚；node 30 到真实 event 的 preview tail 同时保存并检查。</p>
 
   <h3>7.3 IK nominal 修正</h3>
   <p>给定 rebase root 与 foot reference，固定 branch 的 batched analytic IK 生成每腿关节 reference：</p>
@@ -553,7 +585,7 @@ alpha = [1,0.5,0.25,0.125,0]</code></pre>
     <li>touchdown sole 完整位于本轮 convex region、安全语义和局部平面。</li>
     <li>每个 swing node 与 node-to-node interval 的 foot sphere、knee、calf/thigh capsule 无碰撞。</li>
     <li>每个 interval 的 base oriented box 无碰撞。</li>
-    <li>small crossing 事件满足越障后方条件；large 轨迹不进入膨胀 forbidden 区。</li>
+    <li>small crossing 使用连续 swept sole 穿过障碍 footprint，满足越障后方、垂直净空和计划 foot/root 同向条件；large 轨迹不进入膨胀 forbidden 区。</li>
     <li>事件在 H30 外时，node 30 到 touchdown 的 preview tail 同样通过 sweep。</li>
   </ol>
   <p>上述所有地图 filter 只能查询当前 refresh 的 <code>F_t/T_GW,t</code>。五个 alpha 共用同一份当前 snapshot；若 snapshot freshness 检查失败，五个候选全部 invalid，而不是读取上一轮 line search 的 field。</p>
@@ -576,7 +608,14 @@ WARM_ONLY     --explicit environment reset--------&gt; UNINITIALIZED</code></pre
     <li>已经 initialized 后 cache 缺失、shape 错误或 nonfinite 是 <code>warm_cache_invariant_fault</code>：停止该环境，不退回 cold，直到显式 reset。</li>
     <li>persistent stance anchor 只在安全发布的 <code>swing -&gt; stance</code> onset 更新；continuing stance 原样保留。</li>
   </ul>
-  <p>Cold build 只从 measured state、reset posture、command、gait 和本轮安全 touchdown 构造首条有限轨迹；它不是运行期恢复策略。</p>
+  <pre><code>WARM:
+  Z_shift = shift(Z*_(t-1))
+  p_td,new = selector(F_t,command_t,phi_0,t,Z_shift)
+  Z_bar,t = retarget(rebase(Z_shift,z_measured,t),p_td,new,region_new)
+
+COLD:
+  Z_bar,t = build_from(measured,reset_posture,gait,command,current_safe_touchdown)</code></pre>
+  <p>Cold build 只发生在显式 reset 后且没有上一轮 accepted trajectory 可供 shift/rebase 时；它不是运行期恢复策略。定义上固定 <code>touchdown replanning != cold</code>、<code>nominal retarget != cold</code>、<code>selector rerun != cold</code>。Warm 的判据是继承并 retarget 上一轮安全轨迹，不是冻结上一轮 touchdown。</p>
 
   <h2 id="rl">13. 强化学习接口与安全 mask</h2>
   <p>Planner 的固定 batch 输入/输出为：</p>
@@ -590,7 +629,8 @@ WARM_ONLY     --explicit environment reset--------&gt; UNINITIALIZED</code></pre
   optional_posture_ref [B,12]
 
 output:
-  trajectory           [B,31,18]
+  trajectory_nodes     [B,31,18]  internal/debug/warm cache, includes measured z0
+  trajectory_future    [B,30,18]  external/RL reference, exactly z1...z30
   published_z1         [B,18]
   touchdown_target     [B,4,3]
   touchdown_region     [B,4,4,3]
@@ -633,6 +673,7 @@ score_RL[NOT candidate_safe_mask] = +infinity</code></pre>
       <tr><td><code>l_region_cap/min</code></td><td>凸矩形最大/最小半边</td><td>落脚矩形面积</td></tr>
       <tr><td><code>latch_phase</code></td><td>后半 swing 锁定开始点</td><td>锁定前候选可变，锁定后 region 固定</td></tr>
       <tr><td><code>m_z</code></td><td>一次 apex 净空</td><td>swing 顶点高度</td></tr>
+      <tr><td><code>v_min</code>、<code>v_forward,min</code></td><td>方向指标适用速度与越障最小同向投影</td><td>障碍上方 interval 的 direction margin 与 reject bit</td></tr>
     </tbody>
   </table>
 
@@ -647,6 +688,59 @@ score_RL[NOT candidate_safe_mask] = +infinity</code></pre>
       <tr><td>Line search</td><td>tie tolerance 与已定义物理 tolerance</td><td>五候选 loss、reject reason、最小 clearance</td></tr>
     </tbody>
   </table>
+
+  <h3>14.4 单次 refresh 的固定诊断合同</h3>
+  <p>下列 tensor 全部由同一次 refresh 的既有中间量归约得到；viewer 不得为显示它们再次运行 selector、IK、LQ 或 line search。计数、索引、reason bit 和 score 分项保持 fixed shape，并可直接用于 B=1024 批量失败定位：</p>
+  <pre><code>selector:
+  candidate_valid_count             [B,4]
+  candidate_reject_reason_count     [B,4,R_candidate]
+  candidate_behind_obstacle_count   [B,4]
+  candidate_sweep_safe_count        [B,4]
+  selected_candidate_index/rank     [B,4]
+  selected_score_components         [B,4,N_score]
+
+region:
+  region_valid                      [B,4]
+  region_area                       [B,4]
+  region_min_half_extent            [B,4]
+  region_plane_residual             [B,4]
+  region_distance_to_forbidden      [B,4]
+
+warm/nominal:
+  warm_shift_rebase_error           [B]
+  touchdown_target_change           [B,4]
+  touchdown_target_change_reason_bits [B,4,4]
+  retarget_trajectory_change        [B]
+  nominal_safe                      [B]
+  nominal_min_clearance             [B,N_part]
+  nominal_stance_anchor_error       [B,4]
+  nominal_touchdown_error           [B,4]
+  nominal_joint_margin              [B,4]
+  unsafe_candidate_retry_count      [B,4]
+
+LQ/QP:
+  kkt_primal_residual               [B]
+  kkt_dual_residual                 [B]
+  delta_z_norm                      [B]
+  slack_max                         [B,N_constraint_type]
+  active_constraint_count           [B,N_constraint_type]
+
+line search:
+  alpha_feasible                    [B,5]
+  alpha_cost                        [B,5]
+  alpha_reject_bits                 [B,5,R_line]
+  alpha_min_clearance               [B,5,N_part]
+  selected_alpha                    [B]</code></pre>
+  <p>核心归约公式固定为：</p>
+  <pre><code>warm_shift_rebase_error = ||Z_rebase[0]-z_measured||_inf
+touchdown_target_change_i = ||p_td,new,i-p_td,previous,i||_2
+retarget_trajectory_change = RMS_(k=1...30) ||Z_bar[k]-Z_rebase[k]||_W
+nominal_min_clearance_b = min_(k,interval) d_b(Z_bar,F_t)
+
+kkt_primal_residual = ||[A Delta Z-b]_+||_inf plus equality residual, row-scaled
+kkt_dual_residual = ||H Delta Z+g+A^T lambda||_inf, variable-scaled
+delta_z_norm = RMS_(k=1...30) ||Delta z_k||_W</code></pre>
+  <p><code>touchdown_target_change_reason_bits</code> 的四位固定为 <code>normal_event</code>、<code>command_change</code>、<code>map_change</code>、<code>unsafe_invalidation</code>。后三位允许同一 refresh 多位同时为 1；仅在三者均为 0 时才使用 <code>normal_event</code>。Latched 是独立状态，不是变化原因。目标变化量用于解释 retarget，不把正常重选直接判成 warm 失败；latched 且仍安全的目标则要求变化量严格为 0。</p>
 
   <h2 id="metrics">15. 完整指标公式、证据来源与阈值</h2>
   <h3>15.1 证据分层和禁止误报</h3>
@@ -681,29 +775,39 @@ ratio(A)  = sum 1[A] / max(N(A),1)</code></pre>
   <div class="decision">
     <strong>Flat/small 双门：</strong>第 15.3 至 15.7、15.10 节全部属于 <code>M_common</code>，必须分别在 flat report 和 small report 中达到相同阈值。第 15.8 节组成 <code>M_small</code>，只在真实 small crossing opportunity 上计算，并与 small 的全部 common 指标做逻辑 AND。任何指标不得因为另一个指标更好而相互抵消。
   </div>
+  <p>表中标出具体阈值的行为/安全项进入对应 Pass；明确标为“报告诊断”的项必须有 finite value、valid count 和 worst-case key，但不单独触发行为失败。这样保留可调试性，同时不把 foot/root lead 风格或正常 touchdown 重选误当作安全门。</p>
   <p>继承指标的实现 ID 冻结为：</p>
   <pre><code>joint_position_violation, joint_velocity_violation,
 joint_safe_margin_min_rad, joint_step_max_rad, joint_acceleration_max_rps2,
+joint_acceleration_mean_rps2, joint_acceleration_p95_rps2, joint_jerk_max_rps3,
 stance_ground_gap, stance_ground_penetration, stance_anchor_residual,
 stance_xy_slip_max_m, stance_xy_slip_mean_m, stance_stationary_ratio,
 stance_root_carry_ratio_abs, swing_surface_clearance_min_m,
 swing_active_motion_ratio, foot_root_lead_time_min_ms,
 foot_root_lead_time_max_ms, root_leak_before_foot_m,
 root_velocity_error, root_direction_error, root_yaw_rate_error,
-root_zero_drift_m, root_step_jump_m, root_roll_deviation_rad,
-root_pitch_deviation_rad, line_alpha_zero_ratio, line_alpha_zero_run,
-warm_start_jump_max, trajectory_valid_ratio, nonfinite_count,
+root_zero_drift_one_gait_m, root_zero_drift_10_gaits_m,
+root_zero_drift_1000_refresh_m, root_step_jump_m, root_roll_deviation_rad,
+root_pitch_deviation_rad, alpha0_selected_ratio, alpha0_selected_max_run,
+line_search_no_feasible_ratio, publish_ratio, stop_ratio,
+warm_shift_rebase_error, retarget_trajectory_change_norm,
+trajectory_valid_ratio, nonfinite_count,
 x0_injection_error, published_x1_error, map_valid_ratio,
 map_age_frames_max, map_state_frame_mismatch_count,
 world_query_transform_error,
 cold_start_count, warm_start_count, unexpected_cold_restart_count,
 warm_cache_invariant_fault_count, strict_cross_success,
 touchdown_on_small, stance_on_small, airborne_touchdown,
+target_change_normal_m, target_change_due_to_command_m,
+target_change_due_to_map_m, target_change_due_to_unsafe_invalidation_m,
+latched_target_drift_m, cross_direction_margin_mps,
 root_lateral_offset_from_nominal_m, root_lateral_velocity_error_mps,
 root_yaw_error_from_nominal_rad, root_roll_pitch_rate_max_rps,
 maximum_penetration_m, foot_collision_frame_rate,
 knee_collision_frame_rate, calf_collision_frame_rate,
-thigh_collision_frame_rate, base_collision_frame_rate</code></pre>
+thigh_collision_frame_rate, base_collision_frame_rate,
+kkt_primal_residual, kkt_dual_residual, nominal_safe_after_retarget,
+nominal_min_clearance_after_retarget</code></pre>
 
   <h3>15.3 Joint、执行一致性与足端连续性</h3>
   <table>
@@ -713,12 +817,14 @@ thigh_collision_frame_rate, base_collision_frame_rate</code></pre>
       <tr><td>joint velocity violation</td><td><code>sum 1[|q_k-q_k-1|/dt&gt;qdot_max]</code></td><td><code>0</code></td><td>P+A</td></tr>
       <tr><td>joint safe margin</td><td><code>min(min(q-q_min,q_max-q))</code></td><td><code>&gt;=0.1 rad</code></td><td>P+A</td></tr>
       <tr><td>joint step max</td><td><code>max_E |q_k-q_k-1|</code></td><td><code>&lt;=0.35 rad</code></td><td>P+A</td></tr>
-      <tr><td>joint acceleration max</td><td><code>max |q_k-2q_k-1+q_k-2|/dt^2</code></td><td><code>&lt;=1500 rad/s^2</code></td><td>P+A</td></tr>
+      <tr><td>joint acceleration max</td><td><code>max |q_k-2q_k-1+q_k-2|/dt^2</code></td><td><code>&lt;=1500 rad/s^2</code> 数值爆炸门</td><td>P+A</td></tr>
+      <tr><td>joint acceleration mean/p95</td><td><code>mean / percentile95 |q_k-2q_k-1+q_k-2|/dt^2</code></td><td>报告诊断，不单独进入 Pass</td><td>P+A</td></tr>
+      <tr><td>joint jerk max</td><td><code>max |a_q,k-a_q,k-1|/dt</code></td><td>报告诊断，不单独进入 Pass</td><td>P+A</td></tr>
       <tr><td>published joint tracking</td><td><code>max ||q_actual(t+1)-q_published,1(t)||_inf</code></td><td><code>&lt;=2e-4 rad</code> direct replay</td><td>A</td></tr>
       <tr><td>swing foot step max</td><td><code>max_SW ||p_foot,k-p_foot,k-1||</code></td><td><code>&lt;=0.08 m/frame</code></td><td>P+A</td></tr>
       <tr><td>swing foot acceleration max</td><td><code>max_SW ||p_k-2p_k-1+p_k-2||/dt^2</code></td><td><code>&lt;=100 m/s^2</code></td><td>P+A</td></tr>
-      <tr><td>target update max</td><td><code>max eligible ||p_td,t-p_td,t-1||</code></td><td><code>&lt;=0.10 m/RTI</code></td><td>P</td></tr>
-      <tr><td>latched target drift</td><td><code>max latched ||p_td,t-p_latched||</code></td><td><code>0</code>，除非本轮明确 invalid</td><td>P</td></tr>
+      <tr><td>target change by reason</td><td><code>max_(reason=r) ||p_td,t-p_td,t-1||</code>，<code>r</code> 为 normal/command/map/unsafe</td><td>分类报告诊断，不把正常重选判失败</td><td>P+M</td></tr>
+      <tr><td>latched target drift</td><td><code>max_(latched AND safe) ||p_td,t-p_latched||</code></td><td>严格 <code>0</code></td><td>P+M</td></tr>
     </tbody>
   </table>
 
@@ -742,7 +848,7 @@ thigh_collision_frame_rate, base_collision_frame_rate</code></pre>
     <tbody>
       <tr><td>swing surface clearance</td><td><code>min_SW(d_foot(F_t)-r_foot)</code></td><td><code>&gt;=0</code></td><td>P+A+M</td></tr>
       <tr><td>swing active motion ratio</td><td><code>sum_SW 1[e_cmd^T Delta p_foot&gt;0]/N(SW)</code></td><td><code>&gt;=0.50</code></td><td>P+A</td></tr>
-      <tr><td>foot/root lead time</td><td><code>t_root_first_progress-t_foot_first_progress</code></td><td><code>20..80 ms</code></td><td>P+A</td></tr>
+      <tr><td>foot/root lead time</td><td><code>t_root_first_progress-t_foot_first_progress</code></td><td>报告诊断；<code>20..80 ms</code> 仅为推荐风格带，不进入 Pass</td><td>P+A</td></tr>
       <tr><td>root leak before foot</td><td><code>max ||p_root(t)-p_root(0)||</code> before first foot progress</td><td><code>&lt;=0.5 mm</code></td><td>P+A</td></tr>
       <tr><td>touchdown response latency</td><td><code>t_selected_changed-t_command_or_map_changed</code>，仅未 latch 腿</td><td><code>&lt;=20 ms</code></td><td>P</td></tr>
       <tr><td>unsafe target invalidation</td><td><code>t_stop_or_safe_reselect-t_became_unsafe</code></td><td><code>&lt;=20 ms</code></td><td>P</td></tr>
@@ -755,9 +861,11 @@ thigh_collision_frame_rate, base_collision_frame_rate</code></pre>
     <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
     <tbody>
       <tr><td>root velocity error</td><td><code>mean_E ||v_root,xy^body-v_cmd,xy||</code></td><td><code>&lt;=0.20 m/s</code></td><td>P+A</td></tr>
-      <tr><td>root direction error</td><td><code>mean acos(clamp(v_root dot v_cmd/(||v_root||||v_cmd||),-1,1))</code></td><td><code>&lt;=10 deg</code></td><td>P+A</td></tr>
+      <tr><td>root direction error</td><td><code>mean acos(clamp(v_root dot v_cmd/(||v_root||||v_cmd||),-1,1))</code> only where both norms <code>&gt;=v_min</code></td><td><code>&lt;=10 deg</code>；其余样本 N/A</td><td>P+A</td></tr>
       <tr><td>root yaw-rate error</td><td><code>mean_E |wrap(Delta yaw)/dt-omega_cmd|</code></td><td><code>&lt;=0.20 rad/s</code></td><td>P+A</td></tr>
-      <tr><td>zero-command drift</td><td><code>max ||p_root,xy(t)-p_root,xy(0)||</code></td><td><code>&lt;=1e-5 m</code></td><td>P</td></tr>
+      <tr><td>zero drift, one gait</td><td><code>max_(0&lt;=t&lt;=24) ||p_root,xy(t)-p_root,xy(0)||</code></td><td><code>&lt;=1e-5 m</code> over 0.48 s</td><td>P+A</td></tr>
+      <tr><td>zero drift, 10 gaits</td><td><code>max_(0&lt;=t&lt;=240) ||p_root,xy(t)-p_root,xy(0)||</code></td><td><code>&lt;=1e-5 m</code> over 4.8 s</td><td>P+A</td></tr>
+      <tr><td>zero drift, 1000 refreshes</td><td><code>max_(0&lt;=t&lt;=1000) ||p_root,xy(t)-p_root,xy(0)||</code></td><td><code>&lt;=1e-5 m</code> over 20 s</td><td>P+A</td></tr>
       <tr><td>root step jump</td><td><code>max_E ||p_root,k,xy-p_root,k-1,xy||</code></td><td><code>&lt;=0.05 m</code></td><td>P+A</td></tr>
       <tr><td>roll/pitch deviation</td><td><code>max |roll-roll_reset|,max |pitch-pitch_reset|</code></td><td><code>&lt;=6 deg</code></td><td>P+A</td></tr>
       <tr><td>root lateral offset</td><td><code>max |e_perp^T(p_root-p_command_nominal)|</code></td><td><code>&lt;=0.06 m</code></td><td>P+A</td></tr>
@@ -797,21 +905,35 @@ collision_b^A(t)   = 1[d_b^A(t)&lt;0] OR semantic_hit_b^A(t)</code></pre>
   <div class="danger"><strong>零碰撞的含义：</strong><code>maximum_penetration&lt;=1mm</code> 只用于报告数值误差大小，不表示允许触碰。只要 planned 或 actual 世界几何在同帧地图上的 signed clearance 小于 0，或覆盖 forbidden semantic，collision frame rate 就非零并直接失败。上一帧地图不能用于证明本帧安全。</div>
 
   <h3>15.8 Strict small-cross 事件</h3>
-  <p>对命令轴 <code>e_cmd</code> 和一次相关 swing event，每个 refresh 都从当前 semantic map 重建 small footprint 的世界坐标集合：</p>
+  <p>对一次相关 swing event，每个 refresh 都从当前 semantic map 重建 small footprint 的世界坐标集合。命令轴只定义 opportunity 和障碍前后；计划候选用计划 root 位移做发布前方向检查，最终验收必须使用 actual root/joint readback：</p>
   <pre><code>O_s,t^W = {project_xy(T_WG,t g) | g is a cell in current M_s,t}
+e_cmd = v_cmd,xy/max(||v_cmd,xy||,epsilon)
 s(x) = e_cmd^T(x-p_lift,xy)
 s_in(t)  = min_(x in O_s,t^W) s(x)
 s_out(t) = max_(x in O_s,t^W) s(x)
 
 before = s(p_lift)&lt;=s_in(t_lift)-d_pre
-over_xy = exists t in swing: sole_xy^W(t) intersects O_s,t^W
-over_z  = min_(t where over_xy)[sole_bottom_z^W(t)-H_small,t^W(sole_xy^W(t))]&gt;=m_cross
+K_obs^X = {k | swept_sole_xy^X[k,k+1] intersects O_s,t^W}, X in {P,A}
+over_xy^X = 1[K_obs^X is nonempty]
+over_z^X  = min_(k in K_obs^X, swept sample u)
+              [sole_bottom_z^X(k,u)-H_small,t^W(sole_xy^X(k,u))] &gt;= m_cross
+
+Delta p_B,xy^X = p_B,xy^X(t_td)-p_B,xy^X(t_lift)
+v_B,event^X = ||Delta p_B,xy^X||/(t_td-t_lift)
+direction_applicable^X = 1[||v_cmd,xy||&gt;=v_min AND v_B,event^X&gt;=v_min]
+e_B^X = Delta p_B,xy^X/max(||Delta p_B,xy^X||,epsilon)
+v_F,xy,k^X = (p_F,xy,k+1^X-p_F,xy,k^X)/dt
+direction_ok^X = direction_applicable^X
+                 AND_(k in K_obs^X) [(v_F,xy,k^X)^T e_B^X &gt;= v_forward,min]
+
 after   = s(p_touchdown)&gt;=s_out(t_touchdown)+d_landing
 land_ok = complete sole on normal ground AND NOT on small/large/unknown
 body_ok = all foot/knee/calf/thigh/base collision flags are false in full event window
 
-strict_cross = opportunity AND before AND over_xy AND over_z AND after AND land_ok AND body_ok</code></pre>
-  <p><code>opportunity</code> 由当前帧地图映射到世界坐标的 obstacle、command corridor 和 gait event 共同定义，不能依赖 planner 是否选择跨越来消失。事件可以保存 world obstacle id/中心用于跨帧关联，但每一帧的 footprint、高程和碰撞都必须重新读取 <code>M_t</code>，不能缓存进入事件时的旧地图。<code>over_xy</code> 明确排除从侧面绕过，<code>after</code> 排除碰到后退回，完整 event window 排除 crossing 当帧截断后隐藏 touchdown 碰撞。</p>
+strict_cross^X = opportunity AND before^X AND over_xy^X AND over_z^X
+                 AND direction_ok^X AND after^X AND land_ok^X AND body_ok^X
+formal_strict_cross = strict_cross^P AND strict_cross^A</code></pre>
+  <p><code>opportunity</code> 由当前帧地图映射到世界坐标的 obstacle、command corridor 和 gait event 共同定义，不能依赖 planner 是否选择跨越来消失。事件可以保存 world obstacle id/中心用于跨帧关联，但每一帧的 footprint、高程和碰撞都必须重新读取 <code>M_t</code>，不能缓存进入事件时的旧地图。<code>K_obs</code> 使用连续 swept sole，不能只检查离散 node；只在这些真正经过障碍上方的 interval 检查 foot/root 同向，因此允许起落脚附近速度接近零和固定外侧偏移。若已有 formal opportunity 但 actual root 速度不足 <code>v_min</code>，方向角本身记 N/A，strict-cross 仍因未完成实际穿越而失败，不能从 denominator 中删除。</p>
   <table>
     <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
     <tbody>
@@ -820,6 +942,7 @@ strict_cross = opportunity AND before AND over_xy AND over_z AND after AND land_
       <tr><td>touchdown on small</td><td><code>sum_onset 1[actual world sole intersects current O_s,t^W]</code></td><td><code>0</code></td><td>A+M</td></tr>
       <tr><td>stance on small</td><td><code>sum_C 1[actual world sole intersects current O_s,t^W]</code></td><td><code>0</code></td><td>A+M</td></tr>
       <tr><td>cross vertical margin</td><td><code>min over_xy(sole_bottom_z^W-H_small,t^W)-m_cross</code></td><td><code>&gt;=0</code></td><td>P+A+M</td></tr>
+      <tr><td>cross direction margin</td><td><code>min_(k in K_obs) v_F,xy,k^T e_B-v_forward,min</code></td><td><code>&gt;=0</code> when applicable</td><td>P+A</td></tr>
       <tr><td>cross denominator loss</td><td><code>N(expected formal opportunities)-N(classified opportunities)</code></td><td><code>0</code></td><td>A+M</td></tr>
     </tbody>
   </table>
@@ -844,9 +967,18 @@ strict_cross = opportunity AND before AND over_xy AND over_z AND after AND land_
   <table>
     <thead><tr><th>指标</th><th>公式</th><th>门</th></tr></thead>
     <tbody>
-      <tr><td>alpha-zero ratio</td><td><code>sum 1[alpha=0]/N(refresh)</code></td><td><code>&lt;=5%</code></td></tr>
-      <tr><td>alpha-zero max run</td><td><code>max consecutive refreshes with alpha=0</code></td><td><code>&lt;=2</code></td></tr>
-      <tr><td>warm-start jump</td><td><code>max ||Z_bar,t[0]-rebase(Z*_t-1[1])||</code></td><td><code>&lt;=0.05</code> normalized state norm</td></tr>
+      <tr><td>alpha0 selected ratio</td><td><code>sum 1[publish AND selected_alpha=0]/N(refresh)</code></td><td><code>&lt;=5%</code></td></tr>
+      <tr><td>alpha0 selected max run</td><td><code>max consecutive published refreshes with selected_alpha=0</code></td><td><code>&lt;=2</code></td></tr>
+      <tr><td>line search no-feasible ratio</td><td><code>sum 1[NOT any_j alpha_feasible_j]/N(refresh)</code></td><td><code>0</code> on formal fresh-map behavior cells</td></tr>
+      <tr><td>publish ratio</td><td><code>sum 1[publish]/N(refresh)</code></td><td><code>1.0</code> on formal fresh-map behavior cells</td></tr>
+      <tr><td>stop ratio</td><td><code>sum 1[stop]/N(refresh)</code></td><td><code>0</code> on formal fresh-map behavior cells；fault injection 另报</td></tr>
+      <tr><td>warm shift/rebase error</td><td><code>max ||Z_rebase,t[0]-z_measured,t||_inf</code></td><td><code>&lt;=1e-6</code></td></tr>
+      <tr><td>retarget trajectory change</td><td><code>RMS_(k=1...30)||Z_bar,t[k]-Z_rebase,t[k]||_W</code></td><td>报告诊断，按 target-change reason 分组</td></tr>
+      <tr><td>nominal safe after retarget</td><td><code>sum 1[nominal_safe]/N(refresh)</code></td><td><code>1.0</code></td></tr>
+      <tr><td>nominal minimum clearance</td><td><code>min_(part,k,interval) d_part(Z_bar,F_t)</code></td><td><code>&gt;=0</code></td></tr>
+      <tr><td>KKT primal residual</td><td><code>max(||Aeq Delta Z-beq||_inf,||[Aineq Delta Z-bineq]_+||_inf)</code> after row scaling</td><td><code>&lt;=1e-4</code></td></tr>
+      <tr><td>KKT dual residual</td><td><code>||H Delta Z+g+A^T lambda||_inf</code> after variable scaling</td><td><code>&lt;=1e-4</code></td></tr>
+      <tr><td>slack/active diagnostics</td><td><code>max s_type</code>；<code>sum 1[row active]</code></td><td>QP 内分类报告；最终 publication 原始约束 violation 必须为 <code>0</code></td></tr>
       <tr><td>trajectory valid ratio</td><td><code>sum valid trajectory nodes/N(all expected nodes)</code></td><td><code>1.0</code></td></tr>
       <tr><td>map valid ratio</td><td><code>sum valid packed queries/N(all required queries)</code></td><td><code>1.0</code></td></tr>
       <tr><td>map age frames max</td><td><code>max_t(t-refresh_id(F_t))</code></td><td><code>0</code></td></tr>
@@ -888,7 +1020,18 @@ W in {flat-only,small-only,realistic-mixed}
 max_W T_total(W) &lt; 5.0 s
 T_refresh(W) = T_total(W)/1000 &lt; 5.0 ms
 throughput(W) = 1024*1000/T_total(W) &gt; 204800 environment-refresh/s</code></pre>
+  <div class="danger"><strong>性能单位：</strong><code>&lt;5 ms</code> 只是由正式总门推导出的“每次包含全部 1024 环境的平均 batch refresh 时间”，不是单环境求解时间，也不是可以替代 <code>1024 x 1000 &lt;5s</code> 的独立验收口径。</div>
   <p>计时包含：每 refresh 的当前语义/高程 field build、max-pool layers、touchdown event/candidates、convex region、nominal retarget/IK、一次 linearization、一次 scan LQ/QP、五 alpha 的 nonlinear cost和完整 swept filters、cache/diagnostics tensor 更新。计时不包含 scanner 上游仿真渲染、首次 import、kernel compilation 和 CUDA Graph capture；同帧地图输入已经位于 GPU，禁止在循环内 host-device copy，也禁止通过复用上一帧 field 降低耗时。</p>
+  <pre><code>T_total approximately = T_field
+                      + T_selector
+                      + T_region
+                      + T_nominal_ik
+                      + T_linearization
+                      + T_scan_qp
+                      + T_line_search_safety
+                      + T_cache_diagnostics
+                      + T_runtime_overhead</code></pre>
+  <p>每组 benchmark 必须同时报告 <code>time_field_build</code>、<code>time_touchdown_selector</code>、<code>time_region_builder</code>、<code>time_nominal_ik</code>、<code>time_linearization</code>、<code>time_scan_qp</code>、<code>time_line_search_safety</code> 和 <code>time_cache_diagnostics</code> 的总计与平均 batch-refresh 时间；阶段计时只包围已有 GPU 工作，不得通过逐环境同步改变被测程序。</p>
   <p>flat-only、small-only 和 realistic-mixed 三个 workload 各自先 warm up 100 次，再独立运行 5 组 <code>1000</code> refresh；每个 workload 的五组均须 <code>&lt;5.0s</code>，并分别报告 median、max、峰值显存和 graph replay 次数。small-only 必须包含五种真实 shape、不同 gait phase/offset 和全部安全检查；realistic-mixed 同时含 flat、small、large，不允许用全零地图或 flat 平均耗时掩盖 small 变慢。性能优化不得减少 25 候选、完整 line-search swept filter 或安全 margin；LQ 采样布局的修改必须保持 exact-detector 方向覆盖和 scan parity。</p>
 
   <h2 id="viewer">17. Viewer 可视化与现场调参合同</h2>
@@ -903,7 +1046,7 @@ throughput(W) = 1024*1000/T_total(W) &gt; 204800 environment-refresh/s</code></p
     <li>stance anchor、真实 sole touchdown、root path 和每节点 gait phase。</li>
     <li>actual root/joint readback 的 FK 世界轨迹与 planned 世界轨迹同时绘制；二者在当前 semantic/elevation map 上的最小 clearance 点按 part/semantic 着色。</li>
   </ul>
-  <p>侧栏按第 14 节分组，只暴露已批准参数。每次调节后在下一个 refresh 立即显示候选 mask、score 分项、region 面积、apex、<code>||Delta foot_k||</code>、约束 active/slack、五 alpha loss/reject bit、selected alpha、各部位 planned/actual 最小 clearance、touchdown response latency、RTI 总耗时和 stop reason。诊断来自同一次求解，不允许为显示再运行一次 SQP。</p>
+  <p>侧栏按第 14 节分组，只暴露已批准参数。每次调节后在下一个 refresh 立即显示候选 valid/reject 计数与 score 分项、region 面积/平面 residual/forbidden 距离、warm shift/rebase error、target-change reason、retarget change、nominal safety、KKT primal/dual residual、约束 active/slack、五 alpha feasibility/loss/reject bit/分部位 clearance、selected alpha、publish/stop reason、各部位 planned/actual 最小 clearance、touchdown response latency、RTI 总耗时和分阶段耗时。诊断来自同一次求解，不允许为显示再运行一次 SQP。</p>
 
   <h2 id="files">18. 文件复用、替换与删除边界</h2>
   <h3>18.1 保留并收紧合同</h3>
@@ -912,7 +1055,7 @@ throughput(W) = 1024*1000/T_total(W) &gt; 204800 environment-refresh/s</code></p
     <tbody>
       <tr><td><code>model/go2_kinematics.py</code></td><td>Go2 FK、完整 Jacobian、link/base 几何；补齐 capsule/OBB detector 接口。</td></tr>
       <tr><td><code>model/analytic_ik.py</code></td><td>固定 branch batched IK 和 reachability。</td></tr>
-      <tr><td><code>model/gait_schedule.py</code></td><td>24 帧 trot、12/12 mask 和闭式 next-event。</td></tr>
+      <tr><td><code>model/gait_schedule.py</code></td><td>24 帧 trot、12/12 edge/node mask、phase 11-&gt;12 touchdown 边、<code>tau=r/12</code> 和闭式 next-event。</td></tr>
       <tr><td><code>terrain/query.py</code></td><td>packed world/grid 双线性查询；扩展固定通道 field。</td></tr>
       <tr><td><code>solver/associative_scan.py</code>、<code>solver/trajectory_scan.py</code></td><td>H30/32 五层 scan 与 dense parity。</td></tr>
       <tr><td><code>solver/fixed_general*.py</code>、<code>solver/fixed_spd*.py</code></td><td>固定小矩阵 GPU solve；只保留最终 scan 调用到的 kernel。</td></tr>
@@ -952,14 +1095,15 @@ throughput(W) = 1024*1000/T_total(W) &gt; 204800 environment-refresh/s</code></p
   <ol>
     <li>生产代码的数据流逐项对应第 3 节，且一次 refresh 只有一次 SQP linearization、一个 LQ/QP 和五个固定 alpha。</li>
     <li>优化和 detector 均保持纯运动学：只有 root pose、joint position、FK 几何和有限差分，不存在动力学状态、接触力、冲量、力矩或 Isaac contact sensor 输入。</li>
-    <li>Touchdown 每轮选择、H30 外 event preview、convex region、continuous swing、full-horizon stance 和 warm-only lifecycle 均有公式级单元测试。</li>
+    <li>H30 严格输出 <code>z1...z30</code> 共 30 帧、内部保持 <code>z0...z30</code> 共 31 nodes；24-frame gait、12/12 interval mask、对角偏置、phase 11-&gt;12 touchdown 与 <code>tau=r/12</code> 均有边界单元测试。</li>
+    <li>Touchdown 每轮选择、H30 外 event preview、convex region、continuous swing、full-horizon stance 和 warm-only retarget lifecycle 均有公式级单元测试。</li>
     <li>max-pool field 与真实 scanner 在 world/grid、语义、native shape 高程、unknown/map boundary 上 parity；每轮 <code>map_age_frames=0</code>，frame mismatch 为 0。</li>
     <li>FK/IK/Jacobian、collision gradient、region plane、LQ residual 用 finite difference 验证；scan/dense 误差小于 <code>2e-5</code>。</li>
-    <li>五 alpha 的每个 hard filter 有 RED/GREEN 测试；任何 foot、knee、calf、thigh、base 或 swept interval 碰撞都不可发布。</li>
+    <li>五 alpha 的每个 hard filter 有 RED/GREEN 测试；必须包含两个端点都安全但中间 segment 穿障碍的 case，任何 foot、knee、calf、thigh、base 或 swept interval 碰撞都不可发布。</li>
     <li>严格按 Gate 0 到 Gate 4 推进：先让 flat 的 <code>M_common</code> 全绿，再让 small 的全部 <code>M_common union M_small</code> 全绿；不得用 crossing 成功率或总体均值掩盖 small 中的 common 回归。</li>
     <li>第 15 节所有适用指标按同一 trace schema 计算，flat 与 small 各自形成完整 report，P/A/M source 同时通过；15 条 canonical small viewer trace 逐条 strict-cross 且零碰撞。</li>
     <li>Viewer 使用生产 backend，一次 SQP，所有调参都可从画面和同次 diagnostics 看出实际变化。</li>
-    <li><code>1024 x 1000</code> 的 flat-only、small-only、realistic-mixed warm refresh 各五组均小于 <code>5.0s</code>，无 host sync、per-env Python loop 或动态分配回归。</li>
+    <li><code>1024 x 1000</code> 的 flat-only、small-only、realistic-mixed warm refresh 各五组均小于 <code>5.0s</code>，八个阶段耗时完整可归因；推导出的 <code>&lt;5ms</code> 只表示 1024 环境的平均 batch refresh，无 host sync、per-env Python loop 或动态分配回归。</li>
     <li>每个无 reset rollout 只有一次 cold；随后 cache/line-search 失败也只走 warm 或 stop，绝不隐式 cold restart。</li>
     <li>旧 repair、soft collision 和重复 solver 不在生产调用图中，已按第 18 节删除；文档、配置、测试和 viewer 不暴露失效参数。</li>
   </ol>
