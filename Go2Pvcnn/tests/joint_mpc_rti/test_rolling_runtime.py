@@ -71,7 +71,7 @@ def test_cuda_graph_runtime_flag_falls_back_cleanly_on_cpu() -> None:
 
     result = manager.plan_from_tensors(make_state(2), make_command(2), make_flat_field(2))
 
-    assert result.full_trajectory.state.shape == (2, 17, 18)
+    assert result.full_trajectory.state.shape == (2, cfg.runtime.horizon_steps + 1, 18)
     assert manager._graph_runner is None
 
 
@@ -80,6 +80,33 @@ def test_cuda_graph_capture_materializes_the_first_result_before_return() -> Non
 
     source = Path("Go2Pvcnn/extension/joint_mpc_rti/runtime/cuda_graph.py").read_text()
     assert source.count("self._graph.replay()") == 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_graph_runner_captures_and_replays_planner_step() -> None:
+    from extension.joint_mpc_rti.planner import step
+    from extension.joint_mpc_rti.runtime.cuda_graph import JointMpcCudaGraphRunner
+
+    device = torch.device("cuda")
+    cfg = JointMpcRtiCfg()
+    cfg.solver.compile_kernels = False
+    cfg.solver.emit_loss_breakdown = False
+    measured = make_state(1, device=device)
+    command = make_command(1, device=device)
+    field = make_flat_field(1, device=device)
+    first = step(measured, command, field, None, cfg)
+    warm = step(measured, command, field, first.solver_state, cfg)
+
+    runner = JointMpcCudaGraphRunner(measured, command, field, warm.solver_state, cfg)
+    replayed = runner.run(measured, command, field)
+    torch.cuda.synchronize()
+
+    assert runner.solver_state.stance_dual is not None
+    assert runner.solver_state.command_start_age is not None
+    assert runner.solver_state.command_start_origin_w is not None
+    assert runner.solver_state.previous_command_body is not None
+    assert torch.isfinite(replayed.full_trajectory.state).all()
+    assert torch.isfinite(replayed.full_trajectory.control).all()
 
 
 def test_manager_requires_rebuild_when_environment_batch_size_changes() -> None:

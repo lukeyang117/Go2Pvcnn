@@ -18,12 +18,13 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT):
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fixed-shape joint MPC RTI CUDA performance probe.")
     parser.add_argument("--num-envs", type=int, default=1024)
-    parser.add_argument("--horizon", type=int, default=16)
+    parser.add_argument("--horizon", type=int, default=30)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--compile-kernels", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cuda-graph", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--line-search-alphas", type=float, nargs="+", default=(1.0, 0.5, 0.25))
+    parser.add_argument("--coupled-state-riccati", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--diagonal-state-riccati", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--profile", action="store_true")
     return parser.parse_args()
@@ -96,6 +97,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, object]:
     cfg.solver.compile_kernels = bool(args.compile_kernels)
     cfg.solver.emit_loss_breakdown = False
     cfg.solver.line_search_alphas = tuple(float(value) for value in args.line_search_alphas)
+    cfg.solver.coupled_state_riccati = bool(args.coupled_state_riccati)
     cfg.solver.diagonal_state_riccati = bool(args.diagonal_state_riccati)
     measured_state = _state(int(args.num_envs), device)
     command = torch.tensor([0.2, 0.0, 0.0], device=device).expand(int(args.num_envs), -1).clone()
@@ -145,6 +147,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, object]:
         "warmup": int(args.warmup),
         "compile_kernels": bool(args.compile_kernels),
         "line_search_alphas": list(cfg.solver.line_search_alphas),
+        "coupled_state_riccati": bool(cfg.solver.coupled_state_riccati),
         "diagonal_state_riccati": bool(cfg.solver.diagonal_state_riccati),
         "nonfinite_count": nonfinite_count(result),
         "peak_allocated_mib": float(torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)),

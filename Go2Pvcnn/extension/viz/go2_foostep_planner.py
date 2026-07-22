@@ -114,7 +114,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["task"],
         help="Use the active semantic MPC task terrain.",
     )
-    parser.add_argument("--n-frames", type=int, default=25, help="Planner horizon in frames.")
+    parser.add_argument("--n-frames", type=int, default=30, help="Planner horizon in frames.")
     parser.add_argument("--plan-dt", type=float, default=0.02, help="Planner integration step.")
     parser.add_argument(
         "--planner-backend",

@@ -6,6 +6,14 @@ import pytest
 from .helpers import make_command, make_flat_field, make_state
 
 
+def test_crossing_placements_align_capsule_front_surface_with_other_shapes() -> None:
+    from .small_obstacle_crossing_probe import _placement_center_x
+
+    assert _placement_center_x("cuboid", 0) == pytest.approx(0.27)
+    assert _placement_center_x("capsule", 0) == pytest.approx(0.28)
+    assert _placement_center_x("capsule", 2) == pytest.approx(0.31)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="native stop matrix requires CUDA")
 def test_native_small_stop_matrix_recovers_grounded_support() -> None:
     from .small_obstacle_stop_probe import PARTS, run_stop_matrix
@@ -80,16 +88,19 @@ def test_flat_commands_track_direction_with_grounded_stance(
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
     from extension.joint_mpc_rti.planner import step
 
+    cfg = _realtime_cfg()
     trajectory = step(
         make_state(1),
         make_command(1, vx=vx, vy=vy, yaw=yaw_rate),
         make_flat_field(1),
         None,
-        _realtime_cfg(),
+        cfg,
     ).full_trajectory
 
     assert torch.isfinite(trajectory.state).all()
-    expected = torch.tensor([vx, vy, yaw_rate]) * (16 * 0.02)
+    expected = torch.tensor([vx, vy, yaw_rate]) * (
+        trajectory.control.shape[1] * cfg.runtime.dt
+    )
     actual = trajectory.state[0, -1, [0, 1, 5]]
     for index in range(3):
         if abs(float(expected[index])) > 1.0e-6:
@@ -174,6 +185,56 @@ def test_rolling_x1_keeps_stance_grounded_for_zero_direction_magnitude_yaw_and_m
     assert torch.isfinite(measured.as_vector()).all()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="high combined rolling stance requires CUDA")
+def test_high_combined_command_does_not_pull_stance_feet_airborne() -> None:
+    from extension.joint_mpc_rti.planner import step
+    from extension.joint_mpc_rti.terrain.query import query_world
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    command = torch.tensor([[-1.0, 0.5, -1.0]], device="cuda")
+    field = make_flat_field(1, device="cuda")
+    measured = make_state(1, device="cuda")
+    solver_state = None
+    max_gap = torch.zeros(1, device="cuda")
+    max_slip = torch.zeros(1, device="cuda")
+    previous_foot = None
+    previous_contact = None
+
+    for _ in range(16):
+        result = step(measured, command, field, solver_state, _realtime_cfg())
+        trajectory = result.full_trajectory
+        foot = trajectory.foot_pos_w[:, 1]
+        contact = trajectory.contact_state[:, 1]
+        gap = torch.abs(foot[..., 2] - query_world(field, foot).height_w - 0.022)
+        max_gap = torch.maximum(
+            max_gap,
+            torch.where(contact, gap, torch.zeros_like(gap)).amax(dim=1),
+        )
+        if previous_foot is not None and previous_contact is not None:
+            consecutive = torch.logical_and(contact, previous_contact)
+            slip = torch.linalg.vector_norm(foot[..., :2] - previous_foot[..., :2], dim=-1)
+            max_slip = torch.maximum(
+                max_slip,
+                torch.where(consecutive, slip, torch.zeros_like(slip)).amax(dim=1),
+            )
+        control = trajectory.control[:, 0]
+        state = trajectory.state[:, 1]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=control[:, :3],
+            root_ang_vel_b=control[:, 3:6],
+            joint_vel=control[:, 6:],
+        )
+        solver_state = result.solver_state
+        previous_foot = foot
+        previous_contact = contact
+
+    assert max_gap.max() <= 0.012
+    assert max_slip.max() <= 0.0005
+
+
 @pytest.mark.parametrize(
     ("y_range", "expected_lateral_sign"),
     (((0.02, 0.18), -1.0), ((-0.18, -0.02), 1.0)),
@@ -220,8 +281,9 @@ def test_small_object_is_crossed_by_swing_clearance_without_lifting_root(
     )
     trajectory = step(make_state(1), make_command(1, vx=0.2), field, None, _realtime_cfg()).full_trajectory
     foot_query = query_world(field, trajectory.foot_pos_w.reshape(1, -1, 3))
-    small_distance = foot_query.small_distance_m.reshape(1, 17, 4)
-    surface_height = foot_query.height_w.reshape(1, 17, 4)
+    nodes = int(trajectory.foot_pos_w.shape[1])
+    small_distance = foot_query.small_distance_m.reshape(1, nodes, 4)
+    surface_height = foot_query.height_w.reshape(1, nodes, 4)
     swing = torch.logical_not(trajectory.contact_state)
     near_small_swing = torch.logical_and(swing, small_distance < 0.02)
     near_small_swing[:, 0] = False  # measured x0 is injected, not an optimizable/published future node
@@ -253,7 +315,7 @@ def test_step_height_field_lifts_supporting_root_without_penetration() -> None:
     )
     trajectory = step(make_state(1), make_command(1, vx=0.2), field, None, _realtime_cfg()).full_trajectory
     query = query_world(field, trajectory.foot_pos_w.reshape(1, -1, 3))
-    foot_height = query.height_w.reshape(1, 17, 4)
+    foot_height = query.height_w.reshape(1, trajectory.foot_pos_w.shape[1], 4)
     foot_gap = trajectory.foot_pos_w[..., 2] - foot_height
 
     assert foot_gap.min() >= -1.0e-4
@@ -284,7 +346,9 @@ def test_down_step_lowers_root_continuously_without_penetration() -> None:
     state.root_pos_w[:, 2] = 0.38
     trajectory = step(state, make_command(1, vx=0.2), field, None, _realtime_cfg()).full_trajectory
     query = query_world(field, trajectory.foot_pos_w.reshape(1, -1, 3))
-    foot_gap = trajectory.foot_pos_w[..., 2] - query.height_w.reshape(1, 17, 4)
+    foot_gap = trajectory.foot_pos_w[..., 2] - query.height_w.reshape(
+        1, trajectory.foot_pos_w.shape[1], 4
+    )
 
     assert foot_gap.min() >= -1.0e-4
     assert trajectory.state[0, -1, 2] < 0.379

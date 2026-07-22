@@ -8,6 +8,7 @@ from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.losses.clearance import clearance_losses
 from extension.joint_mpc_rti.losses.command import command_losses
 from extension.joint_mpc_rti.losses.contact import (
+    reliable_support_height,
     stance_losses,
     swing_losses,
     touchdown_geometry_losses,
@@ -122,7 +123,20 @@ def rollout_loss_breakdown(
     body_height = body_query.height_w.reshape(batch, nodes, -1)
     contact = torch.as_tensor(contact_state, dtype=torch.bool, device=state.device)
     swing_weight = torch.as_tensor(swing_weight, dtype=state.dtype, device=state.device)
-    support_height = (foot_height * contact.to(state.dtype)).sum(dim=2) / contact.sum(dim=2).clamp_min(1).to(state.dtype)
+    support_safety = torch.sigmoid(
+        (
+            foot_query.small_distance_m.reshape(batch, nodes, 4)
+            - float(cfg.gait.small_support_safety_margin)
+        )
+        / float(cfg.gait.small_support_safety_temperature)
+    ).pow(float(cfg.gait.small_support_safety_exponent))
+    support_weight = contact.to(state.dtype) * support_safety
+    support_height = reliable_support_height(
+        foot_height,
+        support_weight,
+        temperature=float(cfg.gait.root_support_height_temperature),
+        root_pos_z=state[..., 2],
+    )
     nominal_joint = constant_like(state, "nominal_joint_pos", cfg.gait.nominal_joint_pos)
     joint_lower = constant_like(state, "joint_lower", (-1.0472, -0.6632, -2.721) * 4)
     joint_upper = constant_like(state, "joint_upper", (1.0472, 2.966, -0.837) * 4)
@@ -151,13 +165,7 @@ def rollout_loss_breakdown(
             foot_height,
             contact,
             stance_anchor_w=stance_anchor,
-            support_weight=torch.sigmoid(
-                (
-                    foot_query.small_distance_m.reshape(batch, nodes, 4)
-                    - float(cfg.gait.small_support_safety_margin)
-                )
-                / float(cfg.gait.small_support_safety_temperature)
-            ).pow(float(cfg.gait.small_support_safety_exponent)),
+            support_weight=support_safety,
             ground_far_weight=torch.sigmoid(
                 (
                     foot_query.small_distance_m.reshape(batch, nodes, 4).amin(dim=2)
@@ -177,6 +185,17 @@ def rollout_loss_breakdown(
             queried_height_w=foot_height,
             swing_mask=torch.logical_not(contact),
             swing_weight=swing_weight,
+            nominal_mask=(
+                torch.logical_not(contact).to(dtype=state.dtype)
+                + float(cfg.losses.swing_touchdown_target_multiplier)
+                * torch.cat(
+                    (
+                        torch.zeros_like(contact[:, :1]),
+                        torch.logical_and(contact[:, 1:], torch.logical_not(contact[:, :-1])),
+                    ),
+                    dim=1,
+                ).to(dtype=state.dtype)
+            ),
             dt=cfg.runtime.dt,
             terrain_margin=cfg.gait.nominal_swing_clearance,
             barrier_relaxation=cfg.solver.barrier_relaxation,
@@ -225,16 +244,23 @@ def rollout_loss_breakdown(
             foot_small_distance=foot_query.small_distance_m.reshape(batch, nodes, 4),
             small_top_height=foot_height,
             small_distance_touchdown=foot_query.small_distance_m.reshape(batch, nodes, 4)[:, -1],
+            knee_pos_w=rollout.knee_pos_w,
+            knee_small_distance=knee_query.small_distance_m.reshape(batch, nodes, 4),
+            knee_top_height=knee_height,
             calf_pos_w=rollout.shank_samples_w,
             calf_small_distance=shank_query.small_distance_m.reshape(batch, nodes, 4, 3),
             calf_top_height=shank_height,
             thigh_pos_w=rollout.thigh_samples_w,
             thigh_small_distance=thigh_query.small_distance_m.reshape(batch, nodes, 4, 3),
             thigh_top_height=thigh_height,
+            base_pos_w=rollout.body_samples_w,
+            base_small_distance=body_query.small_distance_m.reshape(batch, nodes, -1),
+            base_top_height=body_height,
             swing_mask=torch.logical_not(contact),
             stance_mask=contact,
             extra_margin=cfg.gait.small_semantic_clearance,
             foot_radius=cfg.gait.foot_collision_radius,
+            knee_radius=cfg.gait.knee_collision_radius,
             calf_radius=cfg.gait.calf_collision_radius,
             thigh_radius=cfg.gait.thigh_collision_radius,
             nominal_small_height=cfg.gait.small_semantic_height,

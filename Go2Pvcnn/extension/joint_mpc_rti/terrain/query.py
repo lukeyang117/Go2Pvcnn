@@ -18,6 +18,7 @@ class JointMpcTerrainQuery:
     small_gradient_w: Tensor
     large_gradient_w: Tensor
     valid: Tensor
+    height_gradient_w: Tensor | None = None
 
 
 def _gather_grid(grid: Tensor, flat_index: Tensor) -> Tensor:
@@ -130,13 +131,20 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
             dim=-1,
         )
 
+    height_w, height_gradient_local = _bilinear_scalar_with_gradient(
+        field.height_w,
+        index_x,
+        index_y,
+        resolution=field.resolution,
+    )
     return JointMpcTerrainQuery(
-        height_w=_bilinear(field.height_w, index_x, index_y),
+        height_w=height_w,
         small_distance_m=small_distance,
         large_distance_m=large_distance,
         small_gradient_w=rotate_gradient(small_gradient_local),
         large_gradient_w=rotate_gradient(large_gradient_local),
         valid=valid,
+        height_gradient_w=rotate_gradient(height_gradient_local),
     )
 
 

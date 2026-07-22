@@ -8,6 +8,8 @@ import torch
 from torch import Tensor
 from torch._higher_order_ops.scan import scan
 
+from extension.joint_mpc_rti.solver.fixed_spd import fixed_spd_solve
+
 
 @dataclass(frozen=True)
 class LqProblem:
@@ -22,6 +24,9 @@ class LqProblem:
     initial_state: Tensor
     affine_dynamics: Tensor
     matrix_s: Tensor | None = None
+    constraint_control: Tensor | None = None
+    constraint_state: Tensor | None = None
+    constraint_residual: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,41 @@ class LqSolution:
     feedback_gain: Tensor
     feedforward: Tensor
     dual: Tensor
+
+
+@dataclass(frozen=True)
+class JointKktCompileBudget:
+    constraint_rows: int
+    constraint_block: int
+    combined_rhs_columns: int
+    rhs_block: int
+
+
+def _next_power_of_two(value: int) -> int:
+    if value < 1:
+        raise ValueError("compile dimensions must be positive")
+    return 1 << (value - 1).bit_length()
+
+
+def joint_kkt_compile_budget(*, constraint_rows: int, state_dim: int) -> JointKktCompileBudget:
+    """Validate the fixed Triton KKT shape before any CUDA compilation starts."""
+    rows = int(constraint_rows)
+    state_columns = int(state_dim)
+    if rows < 1:
+        raise ValueError("constraint_rows must be positive")
+    if rows > 32:
+        raise ValueError("constraint_rows must be <= 32")
+    if state_columns < 1:
+        raise ValueError("state_dim must be positive")
+    combined_rhs_columns = state_columns + 1 + rows
+    if combined_rhs_columns > 51:
+        raise ValueError("combined control-solve RHS columns must be <= 51")
+    return JointKktCompileBudget(
+        constraint_rows=rows,
+        constraint_block=_next_power_of_two(rows),
+        combined_rhs_columns=combined_rhs_columns,
+        rhs_block=_next_power_of_two(combined_rhs_columns),
+    )
 
 
 def solve_lq_subproblem(problem: LqProblem, *, regularization: float) -> LqSolution:
@@ -56,15 +96,54 @@ def solve_lq_subproblem(problem: LqProblem, *, regularization: float) -> LqSolut
         if problem.matrix_s is None
         else torch.as_tensor(problem.matrix_s, dtype=matrix_a.dtype, device=matrix_a.device)
     )
+    has_constraints = problem.constraint_control is not None
+    if has_constraints:
+        if problem.constraint_state is None or problem.constraint_residual is None:
+            raise ValueError("control constraints require state Jacobians and residuals")
+        constraint_control = torch.as_tensor(
+            problem.constraint_control,
+            dtype=matrix_a.dtype,
+            device=matrix_a.device,
+        )
+        constraint_state = torch.as_tensor(
+            problem.constraint_state,
+            dtype=matrix_a.dtype,
+            device=matrix_a.device,
+        )
+        constraint_residual = torch.as_tensor(
+            problem.constraint_residual,
+            dtype=matrix_a.dtype,
+            device=matrix_a.device,
+        )
+        joint_kkt_compile_budget(
+            constraint_rows=int(constraint_control.shape[-2]),
+            state_dim=int(matrix_a.shape[-1]),
+        )
+    else:
+        constraint_control = matrix_b.new_zeros(*matrix_b.shape[:2], 1, matrix_b.shape[-1])
+        constraint_state = matrix_a.new_zeros(*matrix_a.shape[:2], 1, matrix_a.shape[-1])
+        constraint_residual = matrix_a.new_zeros(*matrix_a.shape[:2], 1)
     control_dim = int(matrix_b.shape[-1])
     regularizer = float(regularization) * torch.eye(control_dim, dtype=matrix_a.dtype, device=matrix_a.device)
 
     def backward(
         carry: tuple[Tensor, Tensor],
-        stage: tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor],
+        stage: tuple[Tensor, ...],
     ) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor, Tensor, Tensor]]:
         value_matrix_next, value_vector_next = carry
-        stage_a, stage_b, stage_q, stage_r, stage_s, stage_vector_q, stage_vector_r, stage_affine = stage
+        (
+            stage_a,
+            stage_b,
+            stage_q,
+            stage_r,
+            stage_s,
+            stage_vector_q,
+            stage_vector_r,
+            stage_affine,
+            stage_constraint_control,
+            stage_constraint_state,
+            stage_constraint_residual,
+        ) = stage
         b_transpose = stage_b.transpose(-1, -2)
         a_transpose = stage_a.transpose(-1, -2)
         value_affine = torch.matmul(value_matrix_next, stage_affine.unsqueeze(-1)).squeeze(-1) + value_vector_next
@@ -72,24 +151,121 @@ def solve_lq_subproblem(problem: LqProblem, *, regularization: float) -> LqSolut
         control_state = stage_s + torch.matmul(b_transpose, torch.matmul(value_matrix_next, stage_a))
         control_vector = stage_vector_r + torch.matmul(b_transpose, value_affine.unsqueeze(-1)).squeeze(-1)
         control_hessian = 0.5 * (control_hessian + control_hessian.transpose(-1, -2))
-        cholesky = torch.linalg.cholesky(control_hessian)
-        solve_state = torch.cholesky_solve(control_state, cholesky)
-        solve_vector = torch.cholesky_solve(control_vector.unsqueeze(-1), cholesky).squeeze(-1)
+        diagonal = control_hessian.diagonal(dim1=-2, dim2=-1)
+        off_diagonal_sum = control_hessian.abs().sum(dim=-1) - diagonal.abs()
+        gershgorin_lower_bound = (diagonal - off_diagonal_sum).amin(dim=-1)
+        minimum_eigenvalue = max(float(regularization), 1.0e-5)
+        adaptive_shift = torch.relu(
+            gershgorin_lower_bound.new_full((), minimum_eigenvalue) - gershgorin_lower_bound
+        )
+        control_hessian = control_hessian + adaptive_shift[..., None, None] * torch.eye(
+            control_dim, dtype=control_hessian.dtype, device=control_hessian.device
+        )
+        state_columns = int(control_state.shape[-1])
+        if has_constraints:
+            combined_rhs = torch.cat(
+                (
+                    control_state,
+                    control_vector.unsqueeze(-1),
+                    stage_constraint_control.transpose(-1, -2),
+                ),
+                dim=-1,
+            )
+        else:
+            combined_rhs = torch.cat((control_state, control_vector.unsqueeze(-1)), dim=-1)
+        combined_solution = fixed_spd_solve(control_hessian, combined_rhs)
+        solve_state = combined_solution[..., :state_columns]
+        solve_vector = combined_solution[..., state_columns]
         feedback = -solve_state
         feedforward = -solve_vector
-        value_matrix = stage_q + torch.matmul(a_transpose, torch.matmul(value_matrix_next, stage_a)) - torch.matmul(
-            control_state.transpose(-1, -2), solve_state
-        )
+        if has_constraints:
+            hessian_inverse_constraint_t = combined_solution[..., state_columns + 1 :]
+            schur = torch.matmul(stage_constraint_control, hessian_inverse_constraint_t)
+            active = stage_constraint_control.abs().sum(dim=-1) > 1.0e-9
+            active_pair = torch.logical_and(active.unsqueeze(-1), active.unsqueeze(-2))
+            schur = torch.where(active_pair, schur, torch.zeros_like(schur))
+            inactive_diagonal = torch.diag_embed(torch.logical_not(active).to(schur.dtype))
+            schur = schur + inactive_diagonal + 1.0e-9 * torch.diag_embed(active.to(schur.dtype))
+            feedback_error = (
+                torch.matmul(stage_constraint_control, feedback)
+                + stage_constraint_state
+            )
+            feedforward_error = (
+                torch.matmul(
+                    stage_constraint_control,
+                    feedforward.unsqueeze(-1),
+                ).squeeze(-1)
+                + stage_constraint_residual
+            )
+            schur_rhs = torch.cat((feedback_error, feedforward_error.unsqueeze(-1)), dim=-1)
+            schur_solution = fixed_spd_solve(schur, schur_rhs)
+            feedback = feedback - torch.matmul(
+                hessian_inverse_constraint_t,
+                schur_solution[..., :state_columns],
+            )
+            feedforward = feedforward - torch.matmul(
+                hessian_inverse_constraint_t,
+                schur_solution[..., state_columns:],
+            ).squeeze(-1)
+            state_hessian = stage_q + torch.matmul(
+                a_transpose,
+                torch.matmul(value_matrix_next, stage_a),
+            )
+            state_vector = stage_vector_q + torch.matmul(
+                a_transpose,
+                value_affine.unsqueeze(-1),
+            ).squeeze(-1)
+            feedback_t = feedback.transpose(-1, -2)
+            value_matrix = (
+                state_hessian
+                + torch.matmul(feedback_t, torch.matmul(control_hessian, feedback))
+                + torch.matmul(feedback_t, control_state)
+                + torch.matmul(control_state.transpose(-1, -2), feedback)
+            )
+            value_vector = (
+                state_vector
+                + torch.matmul(
+                    feedback_t,
+                    (
+                        torch.matmul(control_hessian, feedforward.unsqueeze(-1)).squeeze(-1)
+                        + control_vector
+                    ).unsqueeze(-1),
+                ).squeeze(-1)
+                + torch.matmul(
+                    control_state.transpose(-1, -2),
+                    feedforward.unsqueeze(-1),
+                ).squeeze(-1)
+            )
+        else:
+            value_matrix = stage_q + torch.matmul(a_transpose, torch.matmul(value_matrix_next, stage_a)) - torch.matmul(
+                control_state.transpose(-1, -2), solve_state
+            )
+            value_vector = stage_vector_q + torch.matmul(a_transpose, value_affine.unsqueeze(-1)).squeeze(-1) - torch.matmul(
+                control_state.transpose(-1, -2), solve_vector.unsqueeze(-1)
+            ).squeeze(-1)
         value_matrix = 0.5 * (value_matrix + value_matrix.transpose(-1, -2))
-        value_vector = stage_vector_q + torch.matmul(a_transpose, value_affine.unsqueeze(-1)).squeeze(-1) - torch.matmul(
-            control_state.transpose(-1, -2), solve_vector.unsqueeze(-1)
-        ).squeeze(-1)
-        return (value_matrix, value_vector), (feedback, feedforward, value_matrix, value_vector)
+        # torch.scan rejects output tensors that alias carry tensors.
+        return (
+            (value_matrix, value_vector),
+            (feedback.clone(), feedforward.clone(), value_matrix.clone(), value_vector.clone()),
+        )
 
     _, backward_output = scan(
         backward,
         (terminal_q, terminal_vector),
-        (matrix_a, matrix_b, matrix_q, matrix_r, matrix_s, vector_q, vector_r, affine),
+        (
+            matrix_a,
+            matrix_b,
+            matrix_q,
+            matrix_r,
+            matrix_s,
+            vector_q,
+            vector_r,
+            affine,
+            constraint_control,
+            constraint_state,
+            constraint_residual,
+        ),
         dim=1,
         reverse=True,
     )
@@ -108,7 +284,7 @@ def solve_lq_subproblem(problem: LqProblem, *, regularization: float) -> LqSolut
             + torch.matmul(stage_b, control.unsqueeze(-1)).squeeze(-1)
             + stage_affine
         )
-        return next_state, (next_state, control)
+        return next_state, (next_state.clone(), control.clone())
 
     _, forward_output = scan(
         forward,
@@ -192,7 +368,7 @@ def _solve_go2_block_tensors(
             value_affine.unsqueeze(-1),
         ).squeeze(-1)
         control_hessian = 0.5 * (control_hessian + control_hessian.transpose(-1, -2))
-        cholesky = torch.linalg.cholesky(control_hessian)
+        cholesky = torch.linalg.cholesky_ex(control_hessian, check_errors=False)[0]
         solve_state = torch.cholesky_solve(control_state, cholesky)
         solve_vector = torch.cholesky_solve(control_vector.unsqueeze(-1), cholesky).squeeze(-1)
         root_feedback_reverse.append(-solve_state)

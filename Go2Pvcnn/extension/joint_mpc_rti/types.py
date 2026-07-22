@@ -83,6 +83,15 @@ class JointMpcRtiSolverState:
     previous_control: Tensor
     gait_phase: Tensor | None = None
     stance_anchor_w: Tensor | None = None
+    stance_dual: Tensor | None = None
+    command_start_age: Tensor | None = None
+    command_start_origin_w: Tensor | None = None
+    previous_command_body: Tensor | None = None
+    contact_state: Tensor | None = None
+    phase_age: Tensor | None = None
+    swing_extension_age: Tensor | None = None
+    stance_age: Tensor | None = None
+    recovery_state: Tensor | None = None
 
 
 @dataclass(frozen=True)

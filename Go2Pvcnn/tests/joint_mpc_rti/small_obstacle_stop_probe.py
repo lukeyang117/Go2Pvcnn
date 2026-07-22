@@ -33,6 +33,7 @@ class StopCaseMetrics:
 @dataclass(frozen=True)
 class StopMatrixMetrics:
     cases: dict[tuple[str, float], StopCaseMetrics]
+    joint_metrics: dict[tuple[str, float], dict[str, float]]
     invalid_count: int
 
     @property
@@ -75,6 +76,8 @@ def run_stop_matrix(
     device: str = "cuda",
     hold_steps: int = 32,
     max_steps: int = 224,
+    shapes: tuple[str, ...] = SHAPES,
+    offsets: tuple[float, ...] = STOP_OFFSETS,
     cfg=None,
 ) -> StopMatrixMetrics:
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
@@ -85,9 +88,9 @@ def run_stop_matrix(
     from .helpers import make_state
 
     center_x = 0.34
-    case_rows = [(shape, 0.2, center_x) for shape in SHAPES for _ in STOP_OFFSETS]
+    case_rows = [(shape, 0.2, center_x) for shape in shapes for _ in offsets]
     stop_x = torch.tensor(
-        [center_x + offset for _ in SHAPES for offset in STOP_OFFSETS],
+        [center_x + offset for _ in shapes for offset in offsets],
         dtype=torch.float32,
         device=device,
     )
@@ -111,6 +114,15 @@ def run_stop_matrix(
     collision_frames = {part: torch.zeros(batch, dtype=torch.long, device=device) for part in PARTS}
     max_penetration = {part: torch.zeros(batch, device=device) for part in PARTS}
     invalid_count = torch.zeros((), dtype=torch.long, device=device)
+    trace_root: list[torch.Tensor] = []
+    trace_rpy: list[torch.Tensor] = []
+    trace_foot: list[torch.Tensor] = []
+    trace_contact: list[torch.Tensor] = []
+    trace_command: list[torch.Tensor] = []
+    trace_height: list[torch.Tensor] = []
+    trace_distance: list[torch.Tensor] = []
+    trace_collision = {part: [] for part in PARTS}
+    trace_valid: list[torch.Tensor] = []
 
     for _ in range(int(max_steps)):
         field, _ = _build_matrix_field(device, 1, case_rows=case_rows, origin_w=measured.root_pos_w)
@@ -127,6 +139,7 @@ def run_stop_matrix(
         points = torch.cat(
             (
                 geometry.foot_pos_w,
+                geometry.knee_pos_w,
                 geometry.shank_samples_w.reshape(batch, 12, 3),
                 geometry.thigh_samples_w.reshape(batch, 12, 3),
                 geometry.body_samples_w,
@@ -135,13 +148,15 @@ def run_stop_matrix(
         )
         queried = query_world(field, points)
         foot_distance = queried.small_distance_m[:, :4]
-        calf_distance = queried.small_distance_m[:, 4:16].reshape(batch, 4, 3)
-        thigh_distance = queried.small_distance_m[:, 16:28].reshape(batch, 4, 3)
-        base_distance = queried.small_distance_m[:, 28:]
+        knee_distance = queried.small_distance_m[:, 4:8]
+        calf_distance = queried.small_distance_m[:, 8:20].reshape(batch, 4, 3)
+        thigh_distance = queried.small_distance_m[:, 20:32].reshape(batch, 4, 3)
+        base_distance = queried.small_distance_m[:, 32:]
         foot_height = queried.height_w[:, :4]
-        calf_height = queried.height_w[:, 4:16].reshape(batch, 4, 3)
-        thigh_height = queried.height_w[:, 16:28].reshape(batch, 4, 3)
-        base_height = queried.height_w[:, 28:]
+        knee_height = queried.height_w[:, 4:8]
+        calf_height = queried.height_w[:, 8:20].reshape(batch, 4, 3)
+        thigh_height = queried.height_w[:, 20:32].reshape(batch, 4, 3)
+        base_height = queried.height_w[:, 32:]
         held = torch.logical_and(stopped, hold_frames < int(hold_steps))
 
         gap = geometry.foot_pos_w[..., 2] - foot_height - float(cfg.gait.foot_contact_offset)
@@ -189,6 +204,9 @@ def run_stop_matrix(
         foot_collision, foot_penetration = sphere_collision(
             geometry.foot_pos_w, foot_distance, foot_height, 0.022
         )
+        knee_collision, knee_penetration = sphere_collision(
+            geometry.knee_pos_w, knee_distance, knee_height, 0.040
+        )
         calf_collision, calf_penetration = sphere_collision(
             geometry.shank_samples_w, calf_distance, calf_height, 0.040
         )
@@ -202,16 +220,43 @@ def run_stop_matrix(
         base_collision = torch.logical_and(base_distance < 0.0, base_vertical)
         part_collision = {
             "foot": foot_collision.any(dim=1),
+            "knee": knee_collision.any(dim=1),
             "calf": calf_collision.any(dim=(1, 2)),
             "thigh": thigh_collision.any(dim=(1, 2)),
             "base": base_collision.any(dim=1),
         }
         part_penetration = {
             "foot": foot_penetration.amax(dim=1),
+            "knee": knee_penetration.amax(dim=1),
             "calf": calf_penetration.amax(dim=(1, 2)),
             "thigh": thigh_penetration.amax(dim=(1, 2)),
             "base": torch.where(base_collision, -base_distance, torch.zeros_like(base_distance)).amax(dim=1),
         }
+        if not trace_root:
+            initial_geometry = go2_fk(
+                trajectory.state[:, 0, :3], trajectory.state[:, 0, 3:6], trajectory.state[:, 0, 6:]
+            )
+            initial_query = query_world(field, initial_geometry.foot_pos_w)
+            trace_root.append(trajectory.state[:, 0, :3])
+            trace_rpy.append(trajectory.state[:, 0, 3:6])
+            trace_foot.append(initial_geometry.foot_pos_w)
+            trace_contact.append(trajectory.contact_state[:, 0])
+            trace_command.append(command)
+            trace_height.append(initial_query.height_w)
+            trace_distance.append(initial_query.small_distance_m)
+            for part in PARTS:
+                trace_collision[part].append(torch.zeros(batch, dtype=torch.bool, device=device))
+            trace_valid.append(trajectory.valid)
+        trace_root.append(executed_state[:, :3])
+        trace_rpy.append(executed_state[:, 3:6])
+        trace_foot.append(geometry.foot_pos_w)
+        trace_contact.append(contact)
+        trace_command.append(command)
+        trace_height.append(foot_height)
+        trace_distance.append(foot_distance)
+        for part in PARTS:
+            trace_collision[part].append(part_collision[part])
+        trace_valid.append(trajectory.valid)
         for part in PARTS:
             collision_frames[part] += torch.logical_and(held, part_collision[part]).to(torch.long)
             max_penetration[part] = torch.where(
@@ -237,9 +282,23 @@ def run_stop_matrix(
             break
 
     cases: dict[tuple[str, float], StopCaseMetrics] = {}
-    for index, shape in enumerate(SHAPES):
-        for offset_index, offset in enumerate(STOP_OFFSETS):
-            row = index * len(STOP_OFFSETS) + offset_index
+    joint_metrics: dict[tuple[str, float], dict[str, float]] = {}
+    from .joint_metrics import JointMetricTrace, accumulate_joint_metrics
+
+    stacked = {
+        "root": torch.stack(trace_root, dim=1),
+        "rpy": torch.stack(trace_rpy, dim=1),
+        "foot": torch.stack(trace_foot, dim=1),
+        "contact": torch.stack(trace_contact, dim=1),
+        "command": torch.stack(trace_command, dim=1),
+        "height": torch.stack(trace_height, dim=1),
+        "distance": torch.stack(trace_distance, dim=1),
+        "valid": torch.stack(trace_valid, dim=1),
+    }
+    stacked_collision = {part: torch.stack(trace_collision[part], dim=1) for part in PARTS}
+    for index, shape in enumerate(shapes):
+        for offset_index, offset in enumerate(offsets):
+            row = index * len(offsets) + offset_index
             cases[(shape, offset)] = StopCaseMetrics(
                 hold_frames=int(hold_frames[row]),
                 stance_frames=int(stance_frames[row]),
@@ -254,7 +313,28 @@ def run_stop_matrix(
                 collision_frames={part: int(collision_frames[part][row]) for part in PARTS},
                 max_penetration_m={part: float(max_penetration[part][row]) for part in PARTS},
             )
-    return StopMatrixMetrics(cases=cases, invalid_count=int(invalid_count))
+            row_ids = torch.tensor([row], dtype=torch.long, device=device)
+            joint_metrics[(shape, offset)] = accumulate_joint_metrics(
+                JointMetricTrace(
+                    root_pos_w=stacked["root"].index_select(0, row_ids),
+                    root_rpy_w=stacked["rpy"].index_select(0, row_ids),
+                    foot_pos_w=stacked["foot"].index_select(0, row_ids),
+                    contact_state=stacked["contact"].index_select(0, row_ids),
+                    command_body=stacked["command"].index_select(0, row_ids),
+                    foot_height_w=stacked["height"].index_select(0, row_ids),
+                    foot_small_distance_m=stacked["distance"].index_select(0, row_ids),
+                    part_collision={
+                        part: stacked_collision[part].index_select(0, row_ids) for part in PARTS
+                    },
+                    valid=stacked["valid"].index_select(0, row_ids),
+                    dt=float(cfg.runtime.dt),
+                )
+            )
+    return StopMatrixMetrics(
+        cases=cases,
+        joint_metrics=joint_metrics,
+        invalid_count=int(invalid_count),
+    )
 
 
 __all__ = [

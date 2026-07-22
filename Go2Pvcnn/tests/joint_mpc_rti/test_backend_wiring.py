@@ -9,6 +9,31 @@ import torch
 import pytest
 
 
+def test_root_direction_limit_replacement_does_not_need_a_cuda_index_tensor() -> None:
+    from extension.joint_mpc_rti.planner import _root_direction_limits
+
+    base_limits = torch.tensor([[[1.0, 2.0, 3.0, 4.0, 5.0]]])
+    terrain_step = torch.tensor([[True]])
+
+    limits = _root_direction_limits(
+        base_limits,
+        terrain_step,
+        vertical_limit=0.25,
+        linear_limit=0.75,
+    )
+
+    torch.testing.assert_close(limits, torch.tensor([[[1.0, 2.0, 0.25, 4.0, 5.0]]]))
+    torch.testing.assert_close(
+        _root_direction_limits(
+            base_limits,
+            ~terrain_step,
+            vertical_limit=0.25,
+            linear_limit=0.75,
+        ),
+        torch.tensor([[[1.0, 2.0, 0.75, 4.0, 5.0]]]),
+    )
+
+
 def test_state_from_env_reorders_robot_joint_position_and_velocity_into_planner_order() -> None:
     from extension.joint_mpc_rti.integration.isaaclab_adapter import state_from_env
 
@@ -73,7 +98,7 @@ def test_factory_creates_joint_mpc_rti_manager() -> None:
     manager = create_trajectory_manager(cfg, device="cpu")
 
     assert manager.planner_backend == "joint_mpc_rti"
-    assert manager.horizon_steps() == 16
+    assert manager.horizon_steps() == 30
 
 
 @pytest.mark.parametrize("num_envs", (1, 40, 512, 1024))
@@ -207,12 +232,12 @@ def test_manager_refresh_from_env_builds_ready_reference_cache() -> None:
     cache = manager.refresh_from_env(env)
 
     assert cache.is_ready()
-    assert cache.horizon_length() == 17
+    assert cache.horizon_length() == 31
     assert torch.equal(manager.current_frame_ids(), torch.ones(batch, dtype=torch.long))
     assert manager._field_sync is not None
     assert scanner._joint_mpc_field_observer is manager._field_sync
     assert torch.equal(manager._field_sync.latest_field().version, torch.ones(batch, dtype=torch.long))
-    assert manager.latest_trajectory().state.shape == (batch, 17, 18)
+    assert manager.latest_trajectory().state.shape == (batch, 31, 18)
 
 
 def test_viewer_cli_accepts_joint_mpc_rti() -> None:

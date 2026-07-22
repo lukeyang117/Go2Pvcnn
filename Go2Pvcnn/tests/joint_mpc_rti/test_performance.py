@@ -26,12 +26,14 @@ def test_perf_probe_declares_fixed_shape_cuda_event_contract() -> None:
     ).read_text()
 
     assert 'parser.add_argument("--num-envs", type=int, default=1024)' in source
-    assert 'parser.add_argument("--horizon", type=int, default=16)' in source
+    assert 'parser.add_argument("--horizon", type=int, default=30)' in source
     assert 'parser.add_argument("--steps", type=int, default=1000)' in source
     assert 'parser.add_argument("--warmup", type=int, default=100)' in source
+    assert 'parser.add_argument("--coupled-state-riccati"' in source
     assert '"nonfinite_count"' in source
     assert '"peak_allocated_mib"' in source
     assert '"total_ms"' in source
+    assert '"coupled_state_riccati"' in source
     assert "torch.cuda.Event" in source
 
 
@@ -41,7 +43,7 @@ def test_full_refresh_probe_times_exact_field_and_mpc_together() -> None:
     ).read_text()
 
     assert 'parser.add_argument("--num-envs", type=int, default=1024)' in source
-    assert 'parser.add_argument("--horizon", type=int, default=16)' in source
+    assert 'parser.add_argument("--horizon", type=int, default=30)' in source
     assert 'parser.add_argument("--steps", type=int, default=1000)' in source
     assert "cache.update_rows" in source
     assert "runner.run" in source

@@ -8,6 +8,46 @@ from torch import Tensor
 from extension.joint_mpc_rti.losses.barriers import localized_relaxed_barrier, masked_mean, relaxed_barrier
 
 
+def current_stance_segment_mask(contact_state: Tensor) -> Tensor:
+    """Return contacts continuously active from the measured horizon node."""
+    contact = torch.as_tensor(contact_state, dtype=torch.bool)
+    return torch.cumprod(contact.to(dtype=torch.int8), dim=1).to(dtype=torch.bool)
+
+
+def reliable_support_height(
+    foot_height_w: Tensor,
+    support_weight: Tensor,
+    *,
+    temperature: float,
+    root_pos_z: Tensor | None = None,
+    nominal_root_height: float = 0.32,
+) -> Tensor:
+    """Return a continuous conservative height from the reliable stance feet."""
+    height = torch.as_tensor(foot_height_w)
+    weight = torch.as_tensor(support_weight, dtype=height.dtype, device=height.device)
+    if height.shape != weight.shape or height.ndim != 3 or int(height.shape[-1]) != 4:
+        raise ValueError("foot_height_w and support_weight must have shape [B,T,4]")
+    if float(temperature) <= 0.0:
+        raise ValueError("temperature must be positive")
+    positive = weight > 0.0
+    weighted_sum = (height * weight).sum(dim=2)
+    weight_sum = weight.sum(dim=2)
+    average = weighted_sum / weight_sum.clamp_min(1.0e-6)
+    masked_high = torch.where(positive, height, torch.full_like(height, -1.0e9)).amax(dim=2)
+    masked_low = torch.where(positive, height, torch.full_like(height, 1.0e9)).amin(dim=2)
+    spread = masked_high - masked_low
+    if root_pos_z is None:
+        release = torch.ones_like(average)
+    else:
+        root_z = torch.as_tensor(root_pos_z, dtype=height.dtype, device=height.device)
+        baseline = average + float(nominal_root_height)
+        release = torch.sigmoid(
+            (baseline - root_z) / float(temperature)
+        )
+    support = average + release * spread
+    return torch.where(positive.any(dim=2), support, torch.zeros_like(support))
+
+
 def stance_losses(
     foot_pos_w: Tensor,
     queried_height_w: Tensor,
@@ -27,7 +67,11 @@ def stance_losses(
         raise ValueError("queried_height_w and contact_state must match foot [B,T,4]")
     ground_error = foot[..., 2] - height - float(foot_contact_offset)
     ground_error_sq = ground_error * ground_error
-    ground = masked_mean(ground_error_sq, contact, dims=(1, 2))
+    contact_float = contact.to(dtype=foot.dtype)
+    support_contact_weight = contact_float if support_weight is None else contact_float * torch.as_tensor(
+        support_weight, dtype=foot.dtype, device=foot.device
+    )
+    ground = masked_mean(ground_error_sq, support_contact_weight, dims=(1, 2))
     if ground_far_weight is not None:
         far = torch.as_tensor(ground_far_weight, dtype=foot.dtype, device=foot.device)
         if far.shape != contact.shape[:2]:
@@ -38,10 +82,6 @@ def stance_losses(
             dims=(1, 2),
         )
     support_epsilon = 1.0e-6
-    contact_float = contact.to(dtype=foot.dtype)
-    support_contact_weight = contact_float if support_weight is None else contact_float * torch.as_tensor(
-        support_weight, dtype=foot.dtype, device=foot.device
-    )
     support_count = support_contact_weight.sum(dim=2)
     inverse_error = (support_contact_weight / (ground_error_sq + support_epsilon)).sum(dim=2)
     support_viability_node = torch.where(
@@ -55,15 +95,24 @@ def stance_losses(
     xy_step_sq = (xy_step * xy_step).sum(dim=-1)
     if stance_anchor_w is None:
         xy_lock = masked_mean(xy_step_sq, consecutive_contact, dims=(1, 2))
+        equality_violation = xy_lock
     else:
         anchor = torch.as_tensor(stance_anchor_w, dtype=foot.dtype, device=foot.device)
         if anchor.shape != foot.shape:
             raise ValueError("stance_anchor_w must match foot_pos_w")
         xy_anchor_error = foot[..., :2] - anchor[..., :2]
-        xy_lock = masked_mean((xy_anchor_error * xy_anchor_error).sum(dim=-1), contact, dims=(1, 2))
+        xy_anchor_error_sq = (xy_anchor_error * xy_anchor_error).sum(dim=-1)
+        xy_lock = masked_mean(xy_anchor_error_sq, support_contact_weight, dims=(1, 2))
+        equality_weight = current_stance_segment_mask(contact).to(dtype=foot.dtype)
+        if support_weight is not None:
+            equality_weight = equality_weight * torch.as_tensor(
+                support_weight, dtype=foot.dtype, device=foot.device
+            )
+        equality_violation = masked_mean(xy_anchor_error_sq, equality_weight, dims=(1, 2))
     slip = masked_mean(xy_step_sq / (float(dt) ** 2), consecutive_contact, dims=(1, 2))
     return {
         "stance_xy_lock": xy_lock,
+        "stance_equality_violation": equality_violation,
         "stance_ground_contact": ground,
         "stance_support_viability": support_viability,
         "stance_slip_velocity": slip,
@@ -96,6 +145,7 @@ def swing_losses(
     queried_height_w: Tensor,
     swing_mask: Tensor,
     swing_weight: Tensor | None = None,
+    nominal_mask: Tensor | None = None,
     dt: float,
     terrain_margin: float = 0.02,
     barrier_relaxation: float = 0.01,
@@ -107,8 +157,11 @@ def swing_losses(
     weight = swing.to(foot.dtype) if swing_weight is None else torch.as_tensor(
         swing_weight, dtype=foot.dtype, device=foot.device
     )
+    shape_weight = weight if nominal_mask is None else torch.as_tensor(
+        nominal_mask, dtype=foot.dtype, device=foot.device
+    )
     shape_error = ((foot - nominal) ** 2).sum(dim=-1)
-    shape_loss = masked_mean(shape_error, weight, dims=(1, 2))
+    shape_loss = masked_mean(shape_error, shape_weight, dims=(1, 2))
     terrain_margin_value = foot[..., 2] - height - float(terrain_margin)
     clearance = masked_mean(
         localized_relaxed_barrier(
@@ -161,4 +214,10 @@ def touchdown_geometry_losses(
     }
 
 
-__all__ = ["stance_losses", "swing_losses", "touchdown_geometry_losses", "touchdown_losses"]
+__all__ = [
+    "reliable_support_height",
+    "stance_losses",
+    "swing_losses",
+    "touchdown_geometry_losses",
+    "touchdown_losses",
+]

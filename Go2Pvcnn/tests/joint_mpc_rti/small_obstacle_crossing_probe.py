@@ -7,7 +7,12 @@ import torch
 
 SHAPES = ("sphere", "cuboid", "cylinder", "capsule", "cone")
 SPEEDS = (0.1, 0.2, 0.4)
-PARTS = ("foot", "calf", "thigh", "base")
+PARTS = ("foot", "knee", "calf", "thigh", "base")
+
+
+def _placement_center_x(shape: str, placement: int) -> float:
+    front_surface_offset = 0.01 if shape == "capsule" else 0.0
+    return 0.27 + front_surface_offset + 0.015 * int(placement)
 
 
 @dataclass(frozen=True)
@@ -15,9 +20,16 @@ class CrossingCaseMetrics:
     cross_successes: int
     cross_opportunities: int
     collision_frames: dict[str, int]
+    collision_phase_frames: dict[str, dict[str, int]]
     valid_frames: dict[str, int]
     max_penetration_m: dict[str, float]
     stance_on_small_frames: int
+    root_forward_displacement_m: float
+    mean_root_forward_speed_mps: float
+    command_tracking_ratio: float
+    max_root_step_m: float
+    max_root_control_mps: float
+    max_joint_velocity_rps: float
 
     @property
     def cross_success_rate(self) -> float:
@@ -27,6 +39,7 @@ class CrossingCaseMetrics:
 @dataclass(frozen=True)
 class CrossingMatrixMetrics:
     cases: dict[tuple[str, float], CrossingCaseMetrics]
+    joint_metrics: dict[tuple[str, float], dict[str, float]]
     invalid_count: int
 
     @property
@@ -100,7 +113,7 @@ def _build_matrix_field(
         for shape in SHAPES:
             for speed in SPEEDS:
                 for placement in range(placements_per_case):
-                    center_x = 0.27 + 0.015 * placement
+                    center_x = _placement_center_x(shape, placement)
                     case_rows.append((shape, speed, center_x))
     batch = len(case_rows)
     origin = torch.zeros(batch, 3, device=device) if origin_w is None else origin_w.to(device=device).clone()
@@ -145,6 +158,9 @@ def run_crossing_matrix(
     device: str = "cuda",
     steps: int = 160,
     placements_per_case: int = 6,
+    shapes: tuple[str, ...] = SHAPES,
+    speeds: tuple[float, ...] = SPEEDS,
+    cases: tuple[tuple[str, float], ...] | None = None,
     cfg=None,
 ) -> CrossingMatrixMetrics:
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
@@ -154,7 +170,21 @@ def run_crossing_matrix(
     from extension.joint_mpc_rti.types import JointMpcRtiState
     from .helpers import make_state
 
-    field, case_rows = _build_matrix_field(device, placements_per_case)
+    selected_cases = (
+        tuple((shape, speed) for shape in shapes for speed in speeds)
+        if cases is None
+        else tuple(cases)
+    )
+    case_rows = [
+        (shape, speed, _placement_center_x(shape, placement))
+        for shape, speed in selected_cases
+        for placement in range(placements_per_case)
+    ]
+    field, case_rows = _build_matrix_field(
+        device,
+        placements_per_case,
+        case_rows=case_rows,
+    )
     batch = len(case_rows)
     command = torch.tensor(
         [[speed, 0.0, 0.0] for _, speed, _ in case_rows],
@@ -171,12 +201,29 @@ def run_crossing_matrix(
     successes = torch.zeros(batch, dtype=torch.long, device=device)
     opportunities = torch.zeros(batch, dtype=torch.long, device=device)
     collision_frames = {part: torch.zeros(batch, dtype=torch.long, device=device) for part in PARTS}
+    collision_phase_frames = {
+        part: {
+            phase: torch.zeros(batch, dtype=torch.long, device=device)
+            for phase in ("swing", "touchdown", "continuing_stance")
+        }
+        for part in ("foot", "knee", "calf", "thigh")
+    }
     max_penetration = {part: torch.zeros(batch, device=device) for part in PARTS}
     valid_frames = {part: torch.zeros(batch, dtype=torch.long, device=device) for part in PARTS}
     invalid_count = torch.zeros((), dtype=torch.long, device=device)
     stance_on_small_frames = torch.zeros(batch, dtype=torch.long, device=device)
     previous_contact = None
     previous_foot_distance = None
+    trace_root: list[torch.Tensor] = []
+    trace_rpy: list[torch.Tensor] = []
+    trace_foot: list[torch.Tensor] = []
+    trace_contact: list[torch.Tensor] = []
+    trace_command: list[torch.Tensor] = []
+    trace_height: list[torch.Tensor] = []
+    trace_distance: list[torch.Tensor] = []
+    trace_collision = {part: [] for part in PARTS}
+    trace_valid: list[torch.Tensor] = []
+    trace_control: list[torch.Tensor] = []
 
     for _ in range(int(steps)):
         field, _ = _build_matrix_field(
@@ -193,6 +240,7 @@ def run_crossing_matrix(
         points = torch.cat(
             (
                 geometry.foot_pos_w,
+                geometry.knee_pos_w,
                 geometry.shank_samples_w.reshape(batch, 12, 3),
                 geometry.thigh_samples_w.reshape(batch, 12, 3),
                 geometry.body_samples_w,
@@ -201,13 +249,15 @@ def run_crossing_matrix(
         )
         queried = query_world(field, points)
         foot_distance = queried.small_distance_m[:, :4]
-        calf_distance = queried.small_distance_m[:, 4:16].reshape(batch, 4, 3)
-        thigh_distance = queried.small_distance_m[:, 16:28].reshape(batch, 4, 3)
-        base_distance = queried.small_distance_m[:, 28:]
+        knee_distance = queried.small_distance_m[:, 4:8]
+        calf_distance = queried.small_distance_m[:, 8:20].reshape(batch, 4, 3)
+        thigh_distance = queried.small_distance_m[:, 20:32].reshape(batch, 4, 3)
+        base_distance = queried.small_distance_m[:, 32:]
         foot_height = queried.height_w[:, :4]
-        calf_height = queried.height_w[:, 4:16].reshape(batch, 4, 3)
-        thigh_height = queried.height_w[:, 16:28].reshape(batch, 4, 3)
-        base_height = queried.height_w[:, 28:]
+        knee_height = queried.height_w[:, 4:8]
+        calf_height = queried.height_w[:, 8:20].reshape(batch, 4, 3)
+        thigh_height = queried.height_w[:, 20:32].reshape(batch, 4, 3)
+        base_height = queried.height_w[:, 32:]
 
         def sphere_collision(
             position: torch.Tensor,
@@ -226,6 +276,9 @@ def run_crossing_matrix(
         foot_collision, foot_penetration = sphere_collision(
             geometry.foot_pos_w, foot_distance, foot_height, 0.022
         )
+        knee_collision, knee_penetration = sphere_collision(
+            geometry.knee_pos_w, knee_distance, knee_height, 0.040
+        )
         calf_collision, calf_penetration = sphere_collision(
             geometry.shank_samples_w, calf_distance, calf_height, 0.040
         )
@@ -240,25 +293,75 @@ def run_crossing_matrix(
         base_penetration = torch.where(base_collision, -base_distance, torch.zeros_like(base_distance))
         part_collision = {
             "foot": foot_collision.any(dim=1),
+            "knee": knee_collision.any(dim=1),
             "calf": calf_collision.any(dim=(1, 2)),
             "thigh": thigh_collision.any(dim=(1, 2)),
             "base": base_collision.any(dim=1),
         }
+        leg_part_collision = {
+            "foot": foot_collision,
+            "knee": knee_collision,
+            "calf": calf_collision.any(dim=2),
+            "thigh": thigh_collision.any(dim=2),
+        }
+        contact_x0 = trajectory.contact_state[:, 0]
+        collision_phase = {
+            "swing": torch.logical_not(contact),
+            "touchdown": torch.logical_and(torch.logical_not(contact_x0), contact),
+            "continuing_stance": torch.logical_and(contact_x0, contact),
+        }
         part_penetration = {
             "foot": foot_penetration.amax(dim=1),
+            "knee": knee_penetration.amax(dim=1),
             "calf": calf_penetration.amax(dim=(1, 2)),
             "thigh": thigh_penetration.amax(dim=(1, 2)),
             "base": base_penetration.amax(dim=1),
         }
+        if not trace_root:
+            initial_geometry = go2_fk(
+                trajectory.state[:, 0, :3], trajectory.state[:, 0, 3:6], trajectory.state[:, 0, 6:]
+            )
+            initial_query = query_world(field, initial_geometry.foot_pos_w)
+            trace_root.append(trajectory.state[:, 0, :3])
+            trace_rpy.append(trajectory.state[:, 0, 3:6])
+            trace_foot.append(initial_geometry.foot_pos_w)
+            trace_contact.append(trajectory.contact_state[:, 0])
+            trace_command.append(command)
+            trace_height.append(initial_query.height_w)
+            trace_distance.append(initial_query.small_distance_m)
+            for part in PARTS:
+                trace_collision[part].append(torch.zeros(batch, dtype=torch.bool, device=device))
+            trace_valid.append(trajectory.valid)
+            trace_control.append(torch.zeros(batch, 18, dtype=executed_state.dtype, device=device))
+        trace_root.append(executed_state[:, :3])
+        trace_rpy.append(executed_state[:, 3:6])
+        trace_foot.append(geometry.foot_pos_w)
+        trace_contact.append(contact)
+        trace_command.append(command)
+        trace_height.append(foot_height)
+        trace_distance.append(foot_distance)
+        for part in PARTS:
+            trace_collision[part].append(part_collision[part])
+        trace_valid.append(trajectory.valid)
+        trace_control.append(trajectory.control[:, 0])
         for part in PARTS:
             collision_frames[part] += part_collision[part].to(torch.long)
             max_penetration[part] = torch.maximum(max_penetration[part], part_penetration[part])
             valid_frames[part] += queried.valid.all(dim=1).to(torch.long)
+        for part in ("foot", "knee", "calf", "thigh"):
+            for phase, phase_mask in collision_phase.items():
+                collision_phase_frames[part][phase] += torch.logical_and(
+                    leg_part_collision[part],
+                    phase_mask,
+                ).any(dim=1).to(torch.long)
         stance_on_small_frames += torch.logical_and(contact, foot_distance <= 0.0).any(dim=1).to(torch.long)
 
         leg_collision = torch.logical_or(
             foot_collision,
-            torch.logical_or(calf_collision.any(dim=2), thigh_collision.any(dim=2)),
+            torch.logical_or(
+                knee_collision,
+                torch.logical_or(calf_collision.any(dim=2), thigh_collision.any(dim=2)),
+            ),
         )
         if previous_contact is None:
             previous_contact = trajectory.contact_state[:, 0]
@@ -300,19 +403,99 @@ def run_crossing_matrix(
         solver_state = result.solver_state
 
     cases: dict[tuple[str, float], CrossingCaseMetrics] = {}
-    for shape in SHAPES:
-        for speed in SPEEDS:
+    joint_metrics: dict[tuple[str, float], dict[str, float]] = {}
+    from .joint_metrics import JointMetricTrace, accumulate_joint_metrics
+
+    stacked = {
+        "root": torch.stack(trace_root, dim=1),
+        "rpy": torch.stack(trace_rpy, dim=1),
+        "foot": torch.stack(trace_foot, dim=1),
+        "contact": torch.stack(trace_contact, dim=1),
+        "command": torch.stack(trace_command, dim=1),
+        "height": torch.stack(trace_height, dim=1),
+        "distance": torch.stack(trace_distance, dim=1),
+        "valid": torch.stack(trace_valid, dim=1),
+        "control": torch.stack(trace_control, dim=1),
+    }
+    stacked_collision = {part: torch.stack(trace_collision[part], dim=1) for part in PARTS}
+    for shape, speed in dict.fromkeys(selected_cases):
             indices = [index for index, row in enumerate(case_rows) if row[0] == shape and row[1] == speed]
             ids = torch.tensor(indices, dtype=torch.long, device=device)
             cases[(shape, speed)] = CrossingCaseMetrics(
                 cross_successes=int(successes.index_select(0, ids).sum().item()),
                 cross_opportunities=int(opportunities.index_select(0, ids).sum().item()),
                 collision_frames={part: int(collision_frames[part].index_select(0, ids).sum().item()) for part in PARTS},
+                collision_phase_frames={
+                    part: {
+                        phase: int(values.index_select(0, ids).sum().item())
+                        for phase, values in phases.items()
+                    }
+                    for part, phases in collision_phase_frames.items()
+                },
                 valid_frames={part: int(valid_frames[part].index_select(0, ids).sum().item()) for part in PARTS},
                 max_penetration_m={part: float(max_penetration[part].index_select(0, ids).max().item()) for part in PARTS},
                 stance_on_small_frames=int(stance_on_small_frames.index_select(0, ids).sum().item()),
+                root_forward_displacement_m=float(
+                    (
+                        stacked["root"].index_select(0, ids)[:, -1, 0]
+                        - stacked["root"].index_select(0, ids)[:, 0, 0]
+                    ).mean().item()
+                ),
+                mean_root_forward_speed_mps=float(
+                    (
+                        (
+                            stacked["root"].index_select(0, ids)[:, -1, 0]
+                            - stacked["root"].index_select(0, ids)[:, 0, 0]
+                        )
+                        / (float(steps) * float(cfg.runtime.dt))
+                    ).mean().item()
+                ),
+                command_tracking_ratio=float(
+                    (
+                        (
+                            stacked["root"].index_select(0, ids)[:, -1, 0]
+                            - stacked["root"].index_select(0, ids)[:, 0, 0]
+                        )
+                        / (float(steps) * float(cfg.runtime.dt) * float(speed))
+                    ).mean().item()
+                ),
+                max_root_step_m=float(
+                    torch.linalg.vector_norm(
+                        torch.diff(stacked["root"].index_select(0, ids)[..., :2], dim=1),
+                        dim=-1,
+                    ).max().item()
+                ),
+                max_root_control_mps=float(
+                    torch.linalg.vector_norm(
+                        stacked["control"].index_select(0, ids)[..., :2],
+                        dim=-1,
+                    ).max().item()
+                ),
+                max_joint_velocity_rps=float(
+                    stacked["control"].index_select(0, ids)[..., 6:].abs().max().item()
+                ),
             )
-    return CrossingMatrixMetrics(cases=cases, invalid_count=int(invalid_count.item()))
+            joint_metrics[(shape, speed)] = accumulate_joint_metrics(
+                JointMetricTrace(
+                    root_pos_w=stacked["root"].index_select(0, ids),
+                    root_rpy_w=stacked["rpy"].index_select(0, ids),
+                    foot_pos_w=stacked["foot"].index_select(0, ids),
+                    contact_state=stacked["contact"].index_select(0, ids),
+                    command_body=stacked["command"].index_select(0, ids),
+                    foot_height_w=stacked["height"].index_select(0, ids),
+                    foot_small_distance_m=stacked["distance"].index_select(0, ids),
+                    part_collision={
+                        part: stacked_collision[part].index_select(0, ids) for part in PARTS
+                    },
+                    valid=stacked["valid"].index_select(0, ids),
+                    dt=float(cfg.runtime.dt),
+                )
+            )
+    return CrossingMatrixMetrics(
+        cases=cases,
+        joint_metrics=joint_metrics,
+        invalid_count=int(invalid_count.item()),
+    )
 
 
 __all__ = [

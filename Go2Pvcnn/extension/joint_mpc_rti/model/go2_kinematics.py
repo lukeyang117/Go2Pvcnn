@@ -93,6 +93,19 @@ def _rpy_rotation_derivatives(root_rpy_w: Tensor) -> Tensor:
     return torch.stack((droll, dpitch, dyaw), dim=1)
 
 
+def complete_root_point_jacobian(root_rpy_w: Tensor, point_body: Tensor) -> Tensor:
+    """Return point Jacobians with respect to root translation and XYZ RPY."""
+    rpy = torch.as_tensor(root_rpy_w)
+    point = torch.as_tensor(point_body, dtype=rpy.dtype, device=rpy.device)
+    if rpy.ndim != 2 or rpy.shape[-1] != 3 or point.ndim != 3 or point.shape[0] != rpy.shape[0]:
+        raise ValueError("root_rpy_w and point_body must have shapes [B,3] and [B,N,3]")
+    batch, points = int(point.shape[0]), int(point.shape[1])
+    output = torch.zeros(batch, points, 3, 6, dtype=point.dtype, device=point.device)
+    output[..., :3] = torch.eye(3, dtype=point.dtype, device=point.device).view(1, 1, 3, 3)
+    output[..., 3:6] = torch.einsum("bqij,bkj->bkiq", _rpy_rotation_derivatives(rpy), point)
+    return output
+
+
 def _validate_inputs(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     root_pos = torch.as_tensor(root_pos_w)
     root_rpy = torch.as_tensor(root_rpy_w, dtype=root_pos.dtype, device=root_pos.device)
@@ -277,6 +290,61 @@ def complete_foot_jacobian(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Te
     return output
 
 
+def complete_knee_jacobian(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
+    """Return world-knee Jacobians with respect to root position/RPY and all joints."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    del root_pos
+    batch = int(joint.shape[0])
+    knee_body = _leg_points_body(joint)[1]
+    output = torch.zeros(batch, 4, 3, 18, dtype=joint.dtype, device=joint.device)
+    output[..., :6] = complete_root_point_jacobian(root_rpy, knee_body)
+
+    angles = joint.reshape(batch, 4, 3)
+    abad = angles[..., 0]
+    thigh_angle = angles[..., 1]
+    side = constant_like(joint, "complete_knee_side_signs", LEG_SIDE_SIGNS).view(1, 4)
+    lateral = HIP_OFFSET_Y * side
+    cosine = torch.cos(abad)
+    sine = torch.sin(abad)
+    knee_z = -THIGH_LENGTH * torch.cos(thigh_angle)
+    zero = torch.zeros_like(abad)
+    knee_abad = torch.stack(
+        (
+            zero,
+            -sine * lateral - cosine * knee_z,
+            cosine * lateral - sine * knee_z,
+        ),
+        dim=-1,
+    )
+    dknee_x_thigh = -THIGH_LENGTH * torch.cos(thigh_angle)
+    dknee_z_thigh = THIGH_LENGTH * torch.sin(thigh_angle)
+    knee_thigh = torch.stack(
+        (dknee_x_thigh, -sine * dknee_z_thigh, cosine * dknee_z_thigh),
+        dim=-1,
+    )
+    local_body = torch.stack((knee_abad, knee_thigh, torch.zeros_like(knee_abad)), dim=-1)
+    local_world = torch.einsum("bij,bkjq->bkiq", rpy_to_rotation_matrix(root_rpy), local_body)
+    for leg in range(4):
+        output[:, leg, :, 6 + 3 * leg : 9 + 3 * leg] = local_world[:, leg]
+    return output
+
+
+def complete_body_sample_jacobian(root_rpy_w: Tensor, body_samples_w: Tensor, root_pos_w: Tensor) -> Tensor:
+    """Return body-sample Jacobians with zero joint columns."""
+    root_rpy = torch.as_tensor(root_rpy_w)
+    body_world = torch.as_tensor(body_samples_w, dtype=root_rpy.dtype, device=root_rpy.device)
+    root_pos = torch.as_tensor(root_pos_w, dtype=root_rpy.dtype, device=root_rpy.device)
+    rotation = rpy_to_rotation_matrix(root_rpy)
+    body_local = torch.einsum(
+        "bij,bkj->bki",
+        rotation.transpose(-1, -2),
+        body_world - root_pos.unsqueeze(1),
+    )
+    output = body_world.new_zeros((*body_world.shape[:-1], 3, 18))
+    output[..., :6] = complete_root_point_jacobian(root_rpy, body_local)
+    return output
+
+
 def link_sample_jacobians(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2LinkJacobians:
     """Return analytic local joint Jacobians for fixed calf and thigh samples."""
     root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
@@ -322,10 +390,52 @@ def link_sample_jacobians(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Ten
     return Go2LinkJacobians(calf_samples=calf_samples, thigh_samples=thigh_samples)
 
 
+def complete_link_sample_jacobians(
+    root_pos_w: Tensor,
+    root_rpy_w: Tensor,
+    joint_pos: Tensor,
+) -> Go2LinkJacobians:
+    """Return calf/thigh sample Jacobians with respect to all 18 planner states."""
+    root_pos, root_rpy, joint = _validate_inputs(root_pos_w, root_rpy_w, joint_pos)
+    del root_pos
+    batch = int(joint.shape[0])
+    upper_body, knee_body, foot_body = _leg_points_body(joint)
+    alpha = constant_like(joint, "complete_link_sample_alpha", (0.25, 0.5, 0.75)).view(
+        1, 1, 3, 1
+    )
+    calf_body = knee_body.unsqueeze(2) * (1.0 - alpha) + foot_body.unsqueeze(2) * alpha
+    thigh_body = upper_body.unsqueeze(2) * (1.0 - alpha) + knee_body.unsqueeze(2) * alpha
+    local = link_sample_jacobians(
+        torch.zeros(batch, 3, dtype=joint.dtype, device=joint.device),
+        root_rpy,
+        joint,
+    )
+
+    def assemble(points_body: Tensor, local_jacobian: Tensor) -> Tensor:
+        root_jacobian = complete_root_point_jacobian(
+            root_rpy,
+            points_body.reshape(batch, 12, 3),
+        ).reshape(batch, 4, 3, 3, 6)
+        output = torch.zeros(batch, 4, 3, 3, 18, dtype=joint.dtype, device=joint.device)
+        output[..., :6] = root_jacobian
+        for leg in range(4):
+            output[:, leg, :, :, 6 + 3 * leg : 9 + 3 * leg] = local_jacobian[:, leg]
+        return output
+
+    return Go2LinkJacobians(
+        calf_samples=assemble(calf_body, local.calf_samples),
+        thigh_samples=assemble(thigh_body, local.thigh_samples),
+    )
+
+
 __all__ = [
     "Go2Geometry",
     "Go2LinkJacobians",
     "complete_foot_jacobian",
+    "complete_knee_jacobian",
+    "complete_body_sample_jacobian",
+    "complete_link_sample_jacobians",
+    "complete_root_point_jacobian",
     "foot_jacobian_joint",
     "foot_jacobian_leg",
     "go2_fk",

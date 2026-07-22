@@ -100,6 +100,69 @@ def test_stance_xy_loss_tracks_world_anchor_not_only_previous_node() -> None:
     assert drifting["stance_xy_lock"] > 0.0
 
 
+def test_stance_xy_anchor_releases_continuously_when_support_is_unsafe() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses
+
+    foot = torch.zeros(1, 2, 4, 3)
+    height = torch.zeros(1, 2, 4)
+    contact = torch.ones(1, 2, 4, dtype=torch.bool)
+    anchor = foot.clone()
+    foot[:, :, 0, 0] = 0.05
+    unsafe_first_leg = torch.ones(1, 2, 4)
+    unsafe_first_leg[:, :, 0] = 0.0
+
+    released = stance_losses(
+        foot,
+        height,
+        contact,
+        stance_anchor_w=anchor,
+        support_weight=unsafe_first_leg,
+        dt=0.02,
+    )
+    locked = stance_losses(
+        foot,
+        height,
+        contact,
+        stance_anchor_w=anchor,
+        support_weight=torch.ones_like(unsafe_first_leg),
+        dt=0.02,
+    )
+
+    torch.testing.assert_close(released["stance_xy_lock"], torch.zeros_like(released["stance_xy_lock"]))
+    assert locked["stance_xy_lock"] > 0.0
+
+
+def test_stance_equality_only_covers_the_current_contiguous_stance_segment() -> None:
+    from extension.joint_mpc_rti.losses.contact import stance_losses
+
+    foot = torch.zeros(1, 4, 4, 3)
+    height = torch.zeros(1, 4, 4)
+    contact = torch.tensor(
+        [[[True, False, False, True], [True, False, False, True], [True, True, True, True], [True, True, True, True]]]
+    )
+    anchor = foot.clone()
+    foot[:, 2:, 1:3, 0] = 0.05
+
+    future_touchdown_only = stance_losses(
+        foot,
+        height,
+        contact,
+        stance_anchor_w=anchor,
+        dt=0.02,
+    )
+    assert future_touchdown_only["stance_equality_violation"].item() == 0.0
+
+    foot[:, :, 0, 0] = 0.01
+    current_stance_error = stance_losses(
+        foot,
+        height,
+        contact,
+        stance_anchor_w=anchor,
+        dt=0.02,
+    )
+    assert current_stance_error["stance_equality_violation"] > 0.0
+
+
 def test_small_object_loss_prefers_foot_over_or_bypass_without_root_gate() -> None:
     from extension.joint_mpc_rti.losses.semantic import small_object_losses
 
@@ -141,7 +204,7 @@ def test_small_object_loss_prefers_foot_over_or_bypass_without_root_gate() -> No
     assert "small_object_root_avoidance" not in over_loss
 
 
-def test_small_object_merit_exposes_separate_foot_calf_thigh_clearance() -> None:
+def test_small_object_merit_exposes_separate_full_body_clearance() -> None:
     from extension.joint_mpc_rti.losses.semantic import small_object_losses
 
     result = small_object_losses(
@@ -149,20 +212,28 @@ def test_small_object_merit_exposes_separate_foot_calf_thigh_clearance() -> None
         foot_small_distance=torch.tensor([[[-0.01]]]),
         small_top_height=torch.tensor([[[0.16]]]),
         small_distance_touchdown=torch.tensor([[-0.01]]),
+        knee_pos_w=torch.tensor([[[[0.0, 0.0, 0.06]]]]),
+        knee_small_distance=torch.tensor([[[-0.02]]]),
+        knee_top_height=torch.tensor([[[0.16]]]),
         calf_pos_w=torch.tensor([[[[0.0, 0.0, 0.08]]]]),
         calf_small_distance=torch.tensor([[[-0.02]]]),
         calf_top_height=torch.tensor([[[0.16]]]),
         thigh_pos_w=torch.tensor([[[[0.0, 0.0, 0.12]]]]),
         thigh_small_distance=torch.tensor([[[-0.02]]]),
         thigh_top_height=torch.tensor([[[0.16]]]),
+        base_pos_w=torch.tensor([[[[0.0, 0.0, 0.10]]]]),
+        base_small_distance=torch.tensor([[[-0.02]]]),
+        base_top_height=torch.tensor([[[0.16]]]),
         swing_mask=torch.tensor([[[True]]]),
         stance_mask=torch.tensor([[[False]]]),
         extra_margin=0.03,
     )
 
     assert result["small_object_foot_clearance"] > 0.0
+    assert result["small_object_knee_clearance"] > 0.0
     assert result["small_object_calf_clearance"] > 0.0
     assert result["small_object_thigh_clearance"] > 0.0
+    assert result["small_object_base_clearance"] > 0.0
 
 
 def test_small_clearance_reconstructs_near_boundary_top_from_signed_distance() -> None:
@@ -200,7 +271,12 @@ def test_small_swing_handoff_weights_release_foot_over_before_touchdown() -> Non
     from extension.joint_mpc_rti.planner import _small_swing_handoff_weights
 
     cfg = JointMpcRtiCfg()
-    contact = fixed_trot_schedule(1, 16, torch.device("cpu"), half_cycle_steps=8)
+    contact = fixed_trot_schedule(
+        1,
+        cfg.runtime.horizon_steps,
+        torch.device("cpu"),
+        half_cycle_steps=cfg.gait.half_cycle_steps,
+    )
     foot_over, safe_landing = _small_swing_handoff_weights(
         contact,
         torch.zeros(1, dtype=torch.long),
@@ -208,12 +284,13 @@ def test_small_swing_handoff_weights_release_foot_over_before_touchdown() -> Non
         dtype=torch.float32,
     )
 
-    # FL swings on nodes 8..15 and FR on 0..7 under the default diagonal trot.
-    for leg, nodes in ((0, slice(8, 16)), (1, slice(0, 8))):
+    # FL swings on nodes 15..29 and FR on 0..14 under the default diagonal trot.
+    half_cycle = cfg.gait.half_cycle_steps
+    for leg, nodes in ((0, slice(half_cycle, 2 * half_cycle)), (1, slice(0, half_cycle))):
         over = foot_over[0, nodes, leg]
         landing = safe_landing[0, nodes, leg]
         torch.testing.assert_close(over[[0, -1]], torch.zeros(2))
-        assert over[3:5].max() > 0.8
+        assert over.max() > 0.8
         torch.testing.assert_close(landing[[0, -1]], torch.tensor([0.0, 1.0]))
         assert torch.all(torch.diff(landing) >= 0.0)
 
@@ -298,6 +375,19 @@ def test_stance_support_viability_does_not_count_unsafe_grounded_foot() -> None:
     )
 
     assert unsafe_grounded["stance_support_viability"] > 100.0 * safe_grounded["stance_support_viability"]
+
+
+def test_root_support_height_soft_release_tracks_highest_reliable_foot() -> None:
+    from extension.joint_mpc_rti.losses.contact import reliable_support_height
+
+    height = torch.tensor([[[0.0, 0.06, 0.0, 0.0]]])
+    weight = torch.tensor([[[1.0, 1.0, 0.0, 0.0]]])
+
+    support = reliable_support_height(height, weight, temperature=0.01)
+    unsupported = reliable_support_height(height, torch.zeros_like(weight), temperature=0.01)
+
+    assert support.item() > 0.055
+    assert unsupported.item() == 0.0
 
 
 def test_stance_ground_far_weight_continuously_strengthens_flat_grounding() -> None:

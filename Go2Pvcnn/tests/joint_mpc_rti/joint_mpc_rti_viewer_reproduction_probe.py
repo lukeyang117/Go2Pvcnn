@@ -159,7 +159,7 @@ def main() -> int:
         runtime = RealViewerRuntimeFixture(
             num_envs=1,
             planner_backend="joint_mpc_rti",
-            requested_n_frames=16,
+            requested_n_frames=30,
             device=device,
             task_id="Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
         )

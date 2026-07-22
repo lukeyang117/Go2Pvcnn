@@ -55,7 +55,8 @@ def rollout_state_sequence(
 
     def combine(previous: Tensor, control_step: Tensor) -> tuple[Tensor, Tensor]:
         next_state = kinematic_step(previous, control_step, dt=dt)
-        return next_state, next_state
+        # torch.scan requires carry and emitted output to be non-aliasing.
+        return next_state, next_state.clone()
 
     _, scanned_state = scan(combine, state0, controls.transpose(0, 1), dim=0)
     return torch.cat((state0.unsqueeze(1), scanned_state.transpose(0, 1)), dim=1)

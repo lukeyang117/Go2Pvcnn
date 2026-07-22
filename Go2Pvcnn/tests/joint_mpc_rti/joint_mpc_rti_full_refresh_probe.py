@@ -18,7 +18,7 @@ for _path in (REPO_ROOT, GO2PVCNN_ROOT):
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Synchronous exact-field plus joint MPC RTI probe.")
     parser.add_argument("--num-envs", type=int, default=1024)
-    parser.add_argument("--horizon", type=int, default=16)
+    parser.add_argument("--horizon", type=int, default=30)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=100)
     return parser.parse_args()

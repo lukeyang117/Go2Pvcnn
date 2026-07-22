@@ -114,6 +114,34 @@ def test_world_query_uses_bound_field_pose_and_returns_invalid_outside() -> None
     assert not outside.valid.item()
 
 
+def test_world_query_returns_height_gradient_for_linear_terrain() -> None:
+    from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
+    from extension.joint_mpc_rti.terrain.query import query_world
+
+    grid_x = torch.arange(151, dtype=torch.float32).view(1, 151, 1)
+    height = 0.01 * grid_x.expand(1, 151, 151)
+    field = build_field_batch(
+        height_w=height,
+        semantic_id=torch.zeros(1, 151, 151, dtype=torch.long),
+        origin_w=torch.zeros(1, 3),
+        yaw_w=torch.zeros(1),
+        timestamp=torch.zeros(1),
+        version=torch.zeros(1, dtype=torch.long),
+        resolution=0.01,
+        small_ids=(1,),
+        large_ids=(2,),
+    )
+
+    queried = query_world(field, torch.tensor([[[0.0, 0.0, 0.0]]]))
+
+    torch.testing.assert_close(
+        queried.height_gradient_w,
+        torch.tensor([[[1.0, 0.0]]]),
+        atol=1.0e-6,
+        rtol=0.0,
+    )
+
+
 def test_field_cache_updates_only_selected_env_rows_atomically() -> None:
     from extension.joint_mpc_rti.terrain.field_cache import JointMpcTerrainFieldCache
 

@@ -23,6 +23,12 @@ def small_object_losses(
     swing_mask: Tensor,
     stance_mask: Tensor,
     extra_margin: float,
+    knee_pos_w: Tensor | None = None,
+    knee_small_distance: Tensor | None = None,
+    knee_top_height: Tensor | None = None,
+    base_pos_w: Tensor | None = None,
+    base_small_distance: Tensor | None = None,
+    base_top_height: Tensor | None = None,
     swing_weight: Tensor | None = None,
     foot_over_weight: Tensor | None = None,
     safe_landing_weight: Tensor | None = None,
@@ -33,8 +39,10 @@ def small_object_losses(
     touchdown_margin: float = 0.02,
     safe_landing_margin: float | None = None,
     foot_radius: float = 0.022,
+    knee_radius: float = 0.040,
     calf_radius: float = 0.040,
     thigh_radius: float = 0.040,
+    base_radius: float = 0.0,
     nominal_small_height: float = 0.16,
     link_margin_xy: float = 0.010,
     link_margin_z: float = 0.01,
@@ -92,18 +100,32 @@ def small_object_losses(
             signed_distance / float(temperature)
         )
         proximity = torch.sigmoid((float(influence_radius) - signed_distance) / float(temperature))
-        vertical = torch.sigmoid(
-            (effective_top + float(link_margin_z) - point[..., 2]) / float(temperature)
+        vertical_penalty = torch.nn.functional.softplus(
+            (
+                effective_top
+                + float(radius)
+                + float(link_margin_z)
+                - point[..., 2]
+            )
+            / float(temperature)
         )
         barrier = relaxed_barrier(
             signed_distance - float(radius) - float(link_margin_xy),
             relaxation=barrier_relaxation,
         )
-        numerator = (proximity * vertical * barrier).reshape(foot.shape[0], -1).sum(dim=1)
+        numerator = (proximity * vertical_penalty * barrier).reshape(foot.shape[0], -1).sum(dim=1)
         denominator = proximity.reshape(foot.shape[0], -1).sum(dim=1).clamp_min(1.0)
         return numerator / denominator
 
     foot_clearance = geometry_clearance(foot, foot_distance, top, foot_radius)
+    knee_clearance = foot_clearance.new_zeros(foot_clearance.shape)
+    if knee_pos_w is not None and knee_small_distance is not None and knee_top_height is not None:
+        knee_clearance = geometry_clearance(
+            knee_pos_w,
+            knee_small_distance,
+            knee_top_height,
+            knee_radius,
+        )
     calf_clearance = geometry_clearance(
         calf_pos_w,
         calf_small_distance,
@@ -116,6 +138,14 @@ def small_object_losses(
         thigh_top_height,
         thigh_radius,
     )
+    base_clearance = foot_clearance.new_zeros(foot_clearance.shape)
+    if base_pos_w is not None and base_small_distance is not None and base_top_height is not None:
+        base_clearance = geometry_clearance(
+            base_pos_w,
+            base_small_distance,
+            base_top_height,
+            base_radius,
+        )
     stance_touchdown = masked_mean(
         relaxed_barrier(foot_distance - float(touchdown_margin), relaxation=barrier_relaxation),
         stance,
@@ -126,8 +156,10 @@ def small_object_losses(
         "small_object_safe_landing": safe_landing,
         "small_object_touchdown_avoidance": touchdown_avoidance + stance_touchdown,
         "small_object_foot_clearance": foot_clearance,
+        "small_object_knee_clearance": knee_clearance,
         "small_object_calf_clearance": calf_clearance,
         "small_object_thigh_clearance": thigh_clearance,
+        "small_object_base_clearance": base_clearance,
     }
 
 
