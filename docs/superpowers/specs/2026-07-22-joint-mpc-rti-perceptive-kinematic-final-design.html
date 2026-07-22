@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joint MPC RTI 感知纯运动学最终设计</title>
+  <style>
+    :root {
+      --ink: #182027;
+      --muted: #5f6b73;
+      --line: #d8dee2;
+      --paper: #ffffff;
+      --page: #f3f5f6;
+      --blue: #1769aa;
+      --blue-soft: #edf6fc;
+      --green: #1f7a4d;
+      --green-soft: #edf8f2;
+      --amber: #925700;
+      --amber-soft: #fff7e8;
+      --red: #aa2e2e;
+      --red-soft: #fff1f1;
+      --violet: #6b4ca5;
+      --violet-soft: #f5f0fb;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--page); font: 15px/1.7 system-ui, sans-serif; }
+    main { max-width: 1180px; margin: 0 auto; padding: 42px 44px 76px; background: var(--paper); }
+    h1, h2, h3, h4 { line-height: 1.3; }
+    h1 { margin: 0 0 8px; font-size: 31px; }
+    h2 { margin-top: 42px; padding-bottom: 7px; border-bottom: 1px solid var(--line); font-size: 22px; }
+    h3 { margin-top: 25px; font-size: 18px; }
+    p, li { max-width: 100ch; }
+    a { color: var(--blue); }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    code { color: #243b4a; }
+    pre { overflow: auto; margin: 12px 0 18px; padding: 14px 16px; border: 1px solid var(--line); background: #f8fafb; line-height: 1.58; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0 22px; }
+    th, td { padding: 9px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f5f7f8; }
+    .meta { color: var(--muted); }
+    .note, .ok, .warn, .danger, .decision { margin: 16px 0; padding: 12px 15px; border-left: 4px solid; }
+    .note { border-left-color: var(--blue); background: var(--blue-soft); }
+    .ok { border-left-color: var(--green); background: var(--green-soft); }
+    .warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .danger { border-left-color: var(--red); background: var(--red-soft); }
+    .decision { border-left-color: var(--violet); background: var(--violet-soft); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card { padding: 13px 15px; border: 1px solid var(--line); border-radius: 7px; }
+    .card h3 { margin-top: 2px; }
+    .small { color: var(--muted); font-size: 13px; }
+    .toc { columns: 2; padding-left: 22px; }
+    @media (max-width: 780px) {
+      main { padding: 26px 18px 52px; }
+      .grid { grid-template-columns: 1fr; }
+      .toc { columns: 1; }
+      table { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Joint MPC RTI 感知纯运动学最终设计</h1>
+  <p class="meta">日期：2026-07-22 ｜ 分支：<code>work/joint-mpc-kinematic</code> ｜ 生产目录：<code>Go2Pvcnn/extension/joint_mpc_rti/</code></p>
+
+  <div class="danger">
+    <strong>替代关系：</strong>本文完整替代 2026-07-15 至 2026-07-20 的 <code>joint_mpc_rti</code> 架构定义。旧文档只保留为实验记录、失败证据和指标来源；实现不得同时保留旧的 terrain soft-loss、startup/recovery/progress 修补链与本文的 touchdown-region 架构。迁移完成后，生产调用图中不可达的旧代码必须删除。
+  </div>
+  <div class="danger">
+    <strong>历史结果状态：</strong>旧 synthetic fixture、ranked test 或 planner 自身 trace 中报告的 small-cross “通过”全部视为无效证据。现有 viewer 已经观察到 touchdown、swing 和腿部直接穿碰障碍，说明旧 detector 与真实行为不一致。本文实施后，只有 Isaac 实际 readback、真实障碍几何、完整 crossing event window 和生产 detector 同时通过，才允许使用“通过”。
+  </div>
+  <div class="ok">
+    <strong>最终合同：</strong>纯运动学 H30、每次 planner refresh 重新选择 touchdown、构造局部凸落脚区域和连续 swing nominal，再执行一次 SQP/RTI、一个 LQ/QP 和五候选并行硬安全 line search。小障碍跨越，大障碍绕行；foot、knee、calf、thigh、base 任一碰撞都禁止发布。
+  </div>
+
+  <h2>目录</h2>
+  <ol class="toc">
+    <li><a href="#scope">目标、验收顺序与设计边界</a></li>
+    <li><a href="#contract">固定状态、时间与运行合同</a></li>
+    <li><a href="#pipeline">单次 RTI 完整流程</a></li>
+    <li><a href="#field">Scanner 与统一 2.5D 安全场</a></li>
+    <li><a href="#touchdown">每轮 touchdown 选择</a></li>
+    <li><a href="#region">Touchdown 凸区域</a></li>
+    <li><a href="#nominal">Warm nominal 与连续 swing</a></li>
+    <li><a href="#lq-cost">LQ 代价</a></li>
+    <li><a href="#lq-constraints">LQ 约束</a></li>
+    <li><a href="#scan">Associative scan 与并行加速</a></li>
+    <li><a href="#line-search">五候选硬安全 line search</a></li>
+    <li><a href="#warm">Cold-once / warm-only 生命周期</a></li>
+    <li><a href="#rl">强化学习接口</a></li>
+    <li><a href="#tuning">可调参数与可视变化</a></li>
+    <li><a href="#metrics">指标公式与阈值</a></li>
+    <li><a href="#benchmark">1024 环境性能门</a></li>
+    <li><a href="#viewer">Viewer 合同</a></li>
+    <li><a href="#files">文件复用、替换与删除</a></li>
+    <li><a href="#completion">完成定义</a></li>
+  </ol>
+
+  <h2 id="scope">1. 目标、验收顺序与设计边界</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>必须实现</h3>
+      <ul>
+        <li>小障碍不得踩踏或碰撞，摆动足和整条腿从上方连续跨过。</li>
+        <li>大障碍不得跨越，落脚候选和身体轨迹从其膨胀占用区外绕行。</li>
+        <li>支撑足世界坐标贴地且不滑；root 运动由支撑腿关节补偿。</li>
+        <li>速度命令在当前可修改的 touchdown 事件上立即生效。</li>
+        <li>低速或平缓地形时保持 reset 时的 root 姿态和关节姿态。</li>
+        <li>root z、roll、pitch 可为净空与可达性小幅变化，但受绝对量和变化率限制。</li>
+        <li>同一实现支持 viewer 的单环境诊断和 1024 个 RL 环境的固定形状批处理。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>明确不做</h3>
+      <ul>
+        <li>不优化接触力、力矩、质心动力学、惯量或刚体动力学状态。</li>
+        <li>不在线改变 trot 的腿序、12/12 接触时长或 gait topology。</li>
+        <li>不把普通全身碰撞 soft loss 当作安全机制。</li>
+        <li>不使用多个离散四足组合；每条腿只在自己的预测 hip 坐标系独立选点。</li>
+        <li>不做迭代式 apex 加高，不在 line search 内重新选择 touchdown。</li>
+        <li>无安全候选时不发布“最不坏”的碰撞轨迹；输出明确 stop/invalid。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>1.1 严格验收顺序</h3>
+  <pre><code>Gate 0: 数学、shape、FK/IK/Jacobian、scanner parity、scan/dense parity
+  -&gt; Gate 1: flat 全部适用指标 + actual viewer
+  -&gt; Gate 2: small obstacle strict crossing 全部适用指标 + actual viewer
+  -&gt; Gate 3: large obstacle bypass 全部适用指标 + actual viewer
+  -&gt; Gate 4: 1024 x 1000 性能门和 RL batch regression</code></pre>
+  <p>Gate 1 没有全部通过时，不允许用 small 参数掩盖平地问题；Gate 2 没有全部通过时，不允许宣称感知跨越完成。测试可以按 gate 推进，但生产架构从第一次实现起就是本文定义的完整架构，不建立另一套临时 planner。</p>
+
+  <h3>1.2 冻结边界与修改空间</h3>
+  <table>
+    <thead><tr><th>冻结，不靠调参改变</th><th>允许调节和实现修正</th><th>需要设计修订才可改变</th></tr></thead>
+    <tbody>
+      <tr><td>纯运动学 18 维状态、H30、一次 SQP、一个 LQ/QP、五 alpha</td><td>代价权重、regularization、trust、slack penalty/cap</td><td>增加优化变量、动力学、改变 SQP 次数或 horizon</td></tr>
+      <tr><td>selector / region / nominal / LQ / hard line-search 的职责分离</td><td>候选网格物理尺度、评分权重、region 尺度、安全 margin、latch phase</td><td>删除任一层、在 line search 内重新选点、输出后 repair</td></tr>
+      <tr><td>small 可跨不可踩、large 绕行、actual collision 零容忍</td><td>几何半径、capsule/OBB 精度、sweep subdivision、地图膨胀和 clearance</td><td>用 soft loss 替代发布安全门、缩小真实几何通过测试</td></tr>
+      <tr><td>cold once、其余 warm-only</td><td>measurement decay、terminal fill、warm regularization</td><td>增加自动 cold fallback 或 recovery nominal</td></tr>
+    </tbody>
+  </table>
+  <p>公式族和安全语义固定，但数值不被过早锁死。若实际 detector 暴露坐标、几何、采样保守性或 Jacobian 原则错误，可在同一职责内修正并补 parity 测试；若失败只表现为行为强弱，则先在第 14 节参数空间内调节。</p>
+  <p>本文借鉴 Grandia 等人的感知 NMPC 中“滚动时域、warm start、地图碰撞约束与 SQP/RTI”思路，以及 TAMOLS 中“高程图上的落脚可行性和连续摆动轨迹”思路。为满足本项目纯运动学和大批量吞吐要求，本文不复制其动力学模型或通用三维 SDF：使用 GPU 固定形状的 2.5D 高程/语义安全场、离散 touchdown selector 和局部连续 LQ/QP。</p>
+
+  <h2 id="contract">2. 固定状态、时间与运行合同</h2>
+  <pre><code>dt = 0.02 s
+horizon_steps = 30
+state_nodes = 31
+prediction_time = 0.60 s
+gait_period = 24 frames = 0.48 s
+swing_steps = 12
+stance_steps = 12
+gait = diagonal trot
+sqp_iterations_per_refresh = 1
+lq_qp_subproblems_per_refresh = 1
+line_search_alphas = [1, 0.5, 0.25, 0.125, 0]</code></pre>
+  <p>节点状态固定为：</p>
+  <pre><code>z_k = [p_B,k, theta_B,k, q_k] in R^18
+p_B,k     = [x_B,k, y_B,k, z_B,k]
+theta_B,k = [roll_B,k, pitch_B,k, yaw_B,k]
+q_k       = 12 个 Go2 关节角
+Z         = [z_0, ..., z_30] in R^(31 x 18)</code></pre>
+  <ul>
+    <li><code>z_0</code> 是当前 measured state，严格注入，不是可自由改变的动作。</li>
+    <li><code>z_1</code> 是本周期准备发布的下一时刻状态；完整 <code>z_1...z_30</code> 是供下一轮 warm shift 和 RL teacher 使用的预测。</li>
+    <li>足端、膝、calf、thigh、hip 和 base 几何均由 <code>FK(z_k)</code> 得到，不增加独立足端优化变量。</li>
+    <li>所有 batch 张量以环境维 <code>B</code> 开头；正式运行固定支持 <code>B=1</code> 和 <code>B=1024</code> 的编译图。</li>
+    <li>gait phase、地图尺寸、候选数、碰撞布局、H30/32 scan 树和五个 alpha 在图捕获前固定。</li>
+  </ul>
+
+  <h2 id="pipeline">3. 单次 RTI 完整流程</h2>
+  <pre><code>输入 measured z0、command、gait phase、elevation、semantic、warm cache
+  1. scanner field build：统一 2.5D 安全场与 max_pool2d 膨胀层
+  2. warm shift/rebase：上一轮选中轨迹向前滚动并对齐 measured z0
+  3. perceptive preview：large 左/右 body corridor + 四腿下一次 touchdown event
+  4. touchdown selector：每腿 25 个 hip-frame 候选，GPU 并行筛选与评分
+  5. convex region builder：围绕每个选中点构造安全矩形与局部平面
+  6. nominal retarget：生成连续 swing、stance anchor 和 batched IK nominal
+  7. one SQP linearization：残差、FK Jacobian、碰撞与约束线性化
+  8. one LQ/QP：H30/32 associative scan 求 Delta Z
+  9. five-alpha line search：并行真实代价 + 全时域 swept hard safety
+ 10. publish/cache：只发布安全候选 z1；缓存完整选中轨迹与 touchdown event
+输出 trajectory、region、candidate masks、stop mask、metrics diagnostics</code></pre>
+  <div class="decision"><strong>职责分界：</strong>touchdown selector 决定“落在哪里”；convex region 决定“LQ 可以在多大范围内连续调整”；nominal 决定“从当前脚状态怎样连续走向该区域”；LQ 决定 root 与关节如何协同；line search 决定这次修正是否在真实非线性几何下可以发布。</div>
+
+  <h2 id="field">4. Scanner 与统一 2.5D 安全场</h2>
+  <h3>4.1 输入和坐标合同</h3>
+  <p>延续真实 scanner 的局部地图合同：每环境 <code>151 x 151</code>、分辨率 <code>r_map=0.01m</code>，地图原点和朝向随当前 measured root 更新。所有世界点先以同一个刚体变换进入 grid 坐标；地图外和 scanner unknown 均视为不安全。</p>
+  <pre><code>H[b,x,y]       : elevation height
+S[b,x,y]       : semantic id
+V[b,x,y]       : scanner valid mask
+M_s            = 1[S in small_ids]
+M_l            = 1[S in large_ids]
+M_u            = 1 - V
+M_forbidden    = M_l OR M_u</code></pre>
+  <p>统一地图不是把所有信息压成一个标量，也不是三维体素。它是固定通道的 2.5D tensor：</p>
+  <pre><code>F = [H, V, M_s, M_l, M_u,
+     H_r for each geometry radius,
+     landing-safe masks,
+     slope_x, slope_y, roughness,
+     semantic boundary masks]</code></pre>
+  <p>这使 touchdown、LQ 和 line search 使用同一份地图语义，同时保留“small 可跨但不可踩”和“large 必须绕行”的差异。</p>
+
+  <h3>4.2 max_pool2d 膨胀和半径高程</h3>
+  <p>对物理半径 <code>r</code> 与安全余量 <code>m</code>，固定 kernel 半径为：</p>
+  <pre><code>n_r = ceil((r + m) / r_map)
+k_r = 2 n_r + 1
+D_r(M) = max_pool2d(M, kernel=k_r, stride=1, padding=n_r)</code></pre>
+  <p>碰撞查询使用半径膨胀高程：</p>
+  <pre><code>H_eff,c(x,y) =
+  H(x,y)                         normal / small for swing
+  h_wall                         large or unknown
+
+H_r,c(x,y) = max_pool2d(H_eff,c, kernel=k_r, stride=1, padding=n_r)
+d_c(p) = p_z - H_r,c(p_x,p_y)</code></pre>
+  <p><code>H_r,c</code> 为 foot、calf、thigh 和 base 分别构建。<code>max_pool2d</code> 同时处理 <code>[B,C,151,151]</code>，禁止按环境、部位或像素循环。large/unknown 使用足够高的 <code>h_wall</code>，small 对 swing 保留真实物高，对 touchdown mask 则直接膨胀为 forbidden。</p>
+
+  <h3>4.3 Landing、边缘与局部平面字段</h3>
+  <pre><code>M_land_forbid = D_(r_sole + m_land)(M_s OR M_l OR M_u)
+g_x, g_y      = fixed Scharr(H)
+slope         = atan(sqrt(g_x^2 + g_y^2))
+roughness     = max_pool2d(H) - min_pool2d(H)
+M_edge        = 1[slope &gt; slope_max OR roughness &gt; roughness_max]
+M_land_safe   = NOT (M_land_forbid OR D_edge(M_edge))</code></pre>
+  <p><code>min_pool2d(H)=-max_pool2d(-H)</code>。Touchdown detector 和最终碰撞 detector 始终读取原始语义、原始高程和真实几何；模糊或膨胀场只能更保守，不能让验收标准变宽。</p>
+
+  <h3>4.4 Large-only body corridor preview</h3>
+  <p>只靠 foot touchdown 不能保证 base 绕开 large。若 command/warm root centerline 与 base-radius 膨胀的 large mask 相交，使用固定左右两个 corridor hypothesis；small 不触发该逻辑：</p>
+  <pre><code>e_cmd  = normalize(v_cmd,xy)
+e_perp = [-e_cmd,y,e_cmd,x]
+d_left  = e_perp^T(p_large,left-edge-p_B,command) + r_base + m_base + d_bypass,buffer
+d_right = e_perp^T(p_large,right-edge-p_B,command) - r_base - m_base - d_bypass,buffer
+d_side in {d_left,d_right}
+
+p_B,side,xy(k) = p_B,command,xy(k) + b(xi_k)d_side e_perp
+S(u) = 10u^3-15u^4+6u^5
+xi_enter(k) = clamp((s_k-(s_in-L_enter))/L_enter,0,1)
+xi_exit(k)  = clamp(((s_out+L_exit)-s_k)/L_exit,0,1)
+b(xi_k) = S(xi_enter(k))S(xi_exit(k))    smooth enter, hold and return
+
+valid_side = all base OBB samples/intervals outside D_(r_base)(M_l OR M_u)
+J_side = w_length path_length + w_offset sum_k |b(xi_k)d_side|^2
+       + w_switch 1[side differs from latched side]</code></pre>
+  <p>选择代价最低的 valid side，并在 base 完全通过 large 之前 latch；两侧都无效则 stop。它只有左右两个固定 body reference，不枚举四足组合，也不替代 LQ。选中的 <code>p_B,corridor</code> 用于 hip touchdown pose 预测、large 场景的 root nominal 和 root corridor cost；四条腿仍各自在自己的 25 点网格独立选择。该顺序保证 feet 与 body 使用同一个绕行侧，不会出现前腿向左、后腿向右的相互拉扯。</p>
+
+  <h2 id="touchdown">5. 每轮 touchdown 选择</h2>
+  <h3>5.1 事件时间与 hip 预测</h3>
+  <p>对腿 <code>i</code>，由固定 gait schedule 计算下一次 <code>swing -&gt; stance</code> 事件：</p>
+  <pre><code>stance_i(k) = 1[phase_i(k) in stance interval]
+n_td,i = min {n &gt;= 1 | NOT stance_i(n-1) AND stance_i(n)}
+t_td,i = n_td,i dt</code></pre>
+  <p><code>n_td,i</code> 在一个 gait period 内闭式求出，不截断到 30。若 <code>n_td,i &gt; 30</code>，事件仍保存时间、目标、区域和 preview tail。root/hip 预测优先使用第 4.4 节选中的 large corridor；没有 large encounter 时使用 shifted warm root 与 command 尾部外推：</p>
+  <pre><code>p_B^pred(k) = p_B^corridor(k) if large corridor is active
+p_B^pred(k) = p_B^warm(k),                                  k &lt;= 30 otherwise
+p_B^pred(k) = p_B^warm(30) + R_z(yaw_30)v_cmd,xy dt(k-30), k &gt; 30
+yaw^pred(k) = yaw^warm(k) or yaw_30 + omega_cmd dt(k-30)
+p_H,i^pred  = p_B^pred(n_td,i) + R_B^pred p_H,i(q_ref)</code></pre>
+  <p>每条腿在自己的预测 hip yaw frame 中搜索，四条腿没有组合候选集，也没有 <code>25^4</code> 枚举。</p>
+
+  <h3>5.2 固定候选网格</h3>
+  <pre><code>Delta_ab = [d_x[a], d_y[b]],  a,b in {0,...,4}
+p_ab,xy = p_H,i,xy^pred + R_z(yaw_H,i^pred) Delta_ab
+N_candidate = 5 x 5 = 25 per leg</code></pre>
+  <p>候选必须同时满足：</p>
+  <pre><code>valid_land     : complete sole lies in M_land_safe
+valid_reach    : q_IK(p_ab) lies inside joint safe bounds and workspace margin
+valid_plane    : slope, roughness and plane residual pass
+valid_semantic : no small, large, unknown or map-boundary overlap
+valid_swing    : deterministic foot/calf/thigh/knee sweep is collision-free
+valid_ab       = AND of all conditions</code></pre>
+
+  <h3>5.3 小障碍跨越条件</h3>
+  <p>命令平移非零时：</p>
+  <pre><code>e_cmd = v_cmd,xy / max(||v_cmd,xy||, epsilon)
+s(p)  = e_cmd^T (p_xy - p_lift,xy)</code></pre>
+  <p>若 lift-to-candidate 走廊与 small footprint 相交，该候选只能在障碍后方落地：</p>
+  <pre><code>s_obs,out = max {s(x) | x belongs to inflated small footprint in the corridor}
+s(p_td) &gt;= s_obs,out + d_landing
+M_s(p_td sole) = 0</code></pre>
+  <p>这里“后方”是沿当前 <code>e_cmd</code> 从 lift point 看越过障碍的一侧，不是固定世界 x 正方向。若候选虽然位于后方但整腿 sweep 不安全，它仍被排除；跨越条件不是对安全条件的替代。</p>
+
+  <h3>5.4 大障碍绕行条件</h3>
+  <p>large 的 <code>D_r(M_l)</code> 对 foot 和全部 link 均是 forbidden。候选评分允许向左右绕开，但任何候选和其 sweep 都不得穿过 large 膨胀区：</p>
+  <pre><code>valid_large = 1[Gamma_foot, Gamma_calf, Gamma_thigh do not intersect D_r(M_l)]
+J_bypass(p) = w_progress ||p - p_cmd||^2
+            + w_lateral ||e_perp^T(p - p_hip)||^2
+            + w_switch ||p - p_td,previous||^2</code></pre>
+  <p>左右两侧分数相同时，使用腿固定外侧方向和稳定 index 做确定性 tie-break，防止每轮左右抖动。</p>
+
+  <h3>5.5 连续 swing 和一次 apex 计算</h3>
+  <p>对每个 landing-safe 候选，先定义固定外侧向量 <code>n_i</code> 和水平路径：</p>
+  <pre><code>S(tau) = 10 tau^3 - 15 tau^4 + 6 tau^5
+B(tau) = 64 tau^3 (1-tau)^3
+p_xy(tau) = p_lift,xy + S(tau)(p_td,xy - p_lift,xy)
+          + B(tau) delta_out n_i
+p_apex,xy = (p_lift,xy + p_td,xy)/2 + delta_out n_i</code></pre>
+  <p>沿该走廊一次查询最大有效高度：</p>
+  <pre><code>z_apex = max_(x in Gamma) H_(r_foot)(x) + r_foot + m_z</code></pre>
+  <p>不重复加高 apex。z 使用两段零速度/零加速度 smoothstep：</p>
+  <pre><code>z(tau) = z_lift + S(2tau)(z_apex-z_lift),          0 &lt;= tau &lt;= 0.5
+z(tau) = z_apex + S(2tau-1)(z_td-z_apex),         0.5 &lt; tau &lt;= 1</code></pre>
+  <p>固定 preview 样本和相邻样本的保守 segment bound 检查 foot sphere、calf/thigh capsule 与 knee endpoint。只有完整 sweep 通过的候选才能参与评分。</p>
+
+  <h3>5.6 评分、选中与 latch</h3>
+  <pre><code>p_cmd = p_H,i^pred + R_z(yaw_H,i^pred)p_nominal_step(v_cmd,omega_cmd)
+J_td(ab) = w_cmd_td ||p_ab-p_cmd||^2
+         + w_warm_td ||p_ab-p_td,previous||^2
+         + w_slope slope_ab^2
+         + w_rough roughness_ab^2
+         + w_edge / max(distance_to_forbidden_ab,epsilon)
+         + w_out delta_out_ab^2
+
+score_ab = J_td(ab) if valid_ab else +infinity
+p_td,target = candidate[argmin(score)]</code></pre>
+  <ul>
+    <li>future stance 和 swing 前半段每轮允许重选，<code>w_warm_td</code> 保证变化连续。</li>
+    <li>swing 后半段锁定已选 region，不因小的评分变化换点。</li>
+    <li>锁定 region 一旦因新地图变得不安全，当前周期立即失效；重新搜索仍无安全点则输出 stop。</li>
+    <li>touchdown selector 每轮都运行；“运行”不等于每轮都切换目标。</li>
+  </ul>
+
+  <h2 id="region">6. Touchdown 凸区域</h2>
+  <h3>6.1 Hip-aligned 安全矩形</h3>
+  <p>selector 输出中心 <code>c_i=p_td,target</code>。region builder 在完整 sole-safe mask 内，沿预测 hip frame 的正负 x/y 方向计算离最近 forbidden cell 的保守距离：</p>
+  <pre><code>u = R_H,i,xy^T (p_xy-c_i)
+l_x^- = min(d_x^-,l_x,cap)-m_region
+l_x^+ = min(d_x^+,l_x,cap)-m_region
+l_y^- = min(d_y^-,l_y,cap)-m_region
+l_y^+ = min(d_y^+,l_y,cap)-m_region</code></pre>
+  <p>矩形内部所有栅格及完整 sole footprint 必须属于 <code>M_land_safe</code>。约束写成：</p>
+  <pre><code>-l_x^- &lt;= u_x &lt;= l_x^+
+-l_y^- &lt;= u_y &lt;= l_y^+
+
+A_td p_xy + b_td &gt;= 0
+A_td = [ r_x^T; -r_x^T; r_y^T; -r_y^T ]
+b_td = [ l_x^- - r_x^T c;
+         l_x^+ + r_x^T c;
+         l_y^- - r_y^T c;
+         l_y^+ + r_y^T c ]</code></pre>
+  <p>任一半边长度小于 <code>l_region,min</code> 时，该中心候选被拒绝并选择下一安全候选；region builder 不把矩形扩入障碍以换取面积。</p>
+
+  <h3>6.2 局部地形平面</h3>
+  <p>在矩形内对 valid、normal-ground cells 做固定形状加权最小二乘：</p>
+  <pre><code>h_plane(x,y) = h(c) + h_x(c)(x-c_x) + h_y(c)(y-c_y)
+rho_plane = max_(x in region) |H(x)-h_plane(x)|
+n_td proportional to [-h_x,-h_y,1]</code></pre>
+  <p>若 slope、roughness、semantic boundary、unknown cell 或 <code>rho_plane</code> 超阈值，region 无效。Touchdown foot center 满足：</p>
+  <pre><code>p_foot,z = h_plane(p_foot,x,p_foot,y) + foot_contact_offset</code></pre>
+  <div class="note"><strong>接口固定：</strong><code>selector -&gt; p_td,target</code>；<code>region_builder(p_td,target,field) -&gt; (A_td,b_td,n_td,plane)</code>。中心是代价 reference，矩形和平面是 LQ 约束；二者不能混成一个 soft loss。</div>
+
+  <h2 id="nominal">7. Warm nominal、事件 preview 与连续 swing</h2>
+  <h3>7.1 上一轮轨迹的关系</h3>
+  <p>除 reset 后唯一一次 cold build 外，nominal 必须从上一轮最近一次有限选中轨迹 <code>Z*_(t-1)</code> 得到：</p>
+  <pre><code>Z_shift[k] = Z*_(t-1)[k+1],  k=0,...,29
+Z_shift[30] = terminal_fill(Z*_(t-1),command)
+
+delta_p = p_measured-p_shift[0]
+delta_yaw_phys = wrap(yaw_measured-yaw_shift[0])
+delta_yaw_coord = yaw_measured-yaw_shift[0]
+
+p_rebase[k] = p_measured + R_z(delta_yaw_phys)(p_shift[k]-p_shift[0])
+yaw_rebase[k] = yaw_shift[k] + delta_yaw_coord
+q_rebase[k] = q_shift[k] + beta_k(q_measured-q_shift[0])
+beta_0=1, beta_k decreases to 0 within n_decay nodes
+z_bar[0] = z_measured exactly</code></pre>
+  <p>上一轮轨迹因此不会被丢弃：其 root、关节、速度趋势、swing 进度和末端事件都先被 shift/rebase；本轮地图只通过 large-only body corridor、重新选择的 touchdown、region、stance anchor 与 swing retarget 做结构化修正。small 场景不改写 root XY nominal；large corridor 激活时，root XY 使用同一 smooth window 从 rebase 轨迹连续混合到 <code>p_B,corridor</code>。</p>
+
+  <h3>7.2 Stance 与 swing reference</h3>
+  <pre><code>continuing_i(k) = stance_i(k-1) AND stance_i(k)
+onset_i(k)      = NOT stance_i(k-1) AND stance_i(k)
+
+a_i(k) = persistent_anchor_i, current continuing stance
+a_i(k) = selected touchdown on the local plane, future onset/stance</code></pre>
+  <p>stance reference 整段保持 <code>a_i</code>。Swing reference 使用当前 measured foot position/velocity 或预测 lift state作为边界，并按本轮选中 touchdown 重新参数化。若 touchdown 在 H30 外，H30 内仍按绝对 gait phase 走向该目标，不能把 node 30 当作假 touchdown 或冻结脚；node 30 到真实 event 的 preview tail 同时保存并检查。</p>
+
+  <h3>7.3 IK nominal 修正</h3>
+  <p>给定 rebase root 与 foot reference，固定 branch 的 batched analytic IK 生成每腿关节 reference：</p>
+  <pre><code>q_IK,i,k = IK_i(p_B,rebase,k,theta_B,rebase,k,p_foot,ref,i,k)
+q_bar,i,k = q_rebase,i,k + gamma_i,k wrap(q_IK,i,k-q_rebase,i,k)
+
+gamma_i,0 = 0
+gamma_i,k = 1                         stance nodes
+gamma_i,k = S(remaining_swing_phase)  affected swing nodes
+z_bar[0] = z_measured                 final overwrite</code></pre>
+  <p><code>gamma</code> 只在与当前/下一 touchdown event 相关的腿段起作用。这样 nominal 既继承上一轮优化结果，又明确响应新地图和新命令。候选 reachability 已保证 IK 有限且在关节安全区；IK 不承担碰撞修补。</p>
+
+  <h3>7.4 Nominal 自身安全</h3>
+  <p>nominal 进入 LQ 前必须通过 touchdown region、stance anchor、joint bounds 和完整 swept safety。它不通过时不得寄希望于一次局部 LQ 从碰撞深处拉出；应尝试 selector 排名中的下一个安全 touchdown。全部候选均失败则本环境本周期 stop。</p>
+
+  <h2 id="lq-cost">8. 一次 SQP/RTI 的 LQ 代价</h2>
+  <p>在 nominal <code>Z_bar</code> 处令 <code>Z=Z_bar+Delta Z</code>，所有非线性 residual 只线性化一次：</p>
+  <pre><code>r_j(Z_bar+Delta Z) ~= r_j(Z_bar) + J_j Delta Z
+
+min_(Delta Z,s) 1/2 sum_j ||r_j+J_j Delta Z||_(W_j)^2 + J_slack(s)</code></pre>
+  <p>固定行为代价为：</p>
+  <pre><code>J = J_velocity + J_posture + J_root + J_swing
+  + J_touchdown + J_smooth + J_warm + J_slack</code></pre>
+
+  <h3>8.1 Velocity tracking</h3>
+  <pre><code>v_B,k^body = R_z(yaw_k)^T(p_B,k+1,xy-p_B,k,xy)/dt
+omega_k   = wrap(yaw_k+1-yaw_k)/dt
+
+J_velocity = sum_k ||v_B,k^body-v_cmd,xy||_(W_v)^2
+           + sum_k w_omega(omega_k-omega_cmd)^2</code></pre>
+
+  <h3>8.2 Posture hold 与 root 小幅适应</h3>
+  <pre><code>g_hold = exp(-||v_cmd,xy||^2/s_v^2) exp(-rho_terrain^2/s_rho^2)
+J_posture = sum_k g_hold ||q_k-q_reset||_(W_q)^2
+
+J_root = sum_k [w_z(z_B,k-z_support-ref,k)^2
+              + w_rp||(roll_k,pitch_k)-(roll_0,pitch_0)||^2]
+       + sum_k w_corridor(k)||p_B,k,xy-p_B,corridor,k,xy||^2
+       + sum_k ||(Delta z_B,Delta roll,Delta pitch)/dt||_(W_root-rate)^2</code></pre>
+  <p><code>rho_terrain</code> 是当前 support/swing corridor 的固定 roughness 汇总。低速平地 <code>g_hold</code> 接近 1；速度或地形需要变姿态时平滑减弱，但 hard bounds 仍限制幅度。<code>w_corridor=0</code> 用于 flat/small，仅在 large encounter 激活。</p>
+
+  <h3>8.3 Swing 与 touchdown</h3>
+  <pre><code>J_swing = sum_(i,k in swing) ||FK_foot,i(z_k)-p_swing,ref,i,k||_(W_swing)^2
+        + sum_(i,k in swing edges) ||v_foot,i,k-v_swing,ref,i,k||_(W_swing-v)^2
+
+J_touchdown = sum_(i,e) ||p_foot,i(k_td)-p_td,target,i||_(W_td)^2</code></pre>
+  <p><code>J_touchdown</code> 把解拉向安全矩形中心；硬 region 允许 LQ 在矩形内为关节连续性和 root 配合做小幅调整。若事件在 H30 外，当前 LQ 不虚构 endpoint residual，只由 H30 内 swing tracking 和 terminal preview residual 保持朝向该事件。</p>
+
+  <h3>8.4 Smooth 与 warm consistency</h3>
+  <pre><code>J_smooth = sum_k ||z_k-z_k-1||_(W_1)^2
+         + sum_k ||z_k-2z_k-1+z_k-2||_(W_2)^2
+
+J_warm = sum_k ||z_k-z_bar,k||_(W_warm,k)^2
+
+J_slack = sum_c [w_s,c ||s_c||_2^2 + w_s1,c ||s_c||_1]</code></pre>
+  <p><code>J_warm</code> 是 RTI trust/regularization 的可见表达，不允许掩盖新的 touchdown target。<code>J_slack</code> 只用于让线性 QP 有数值方向；任何使用 slack 后仍违反真实约束的候选会被 line search 拒绝。</p>
+  <div class="danger"><strong>删除旧做法：</strong>不再保留“41 个稀疏 body 点、约 1395 行统一归一化”的 ordinary full-body terrain soft loss。单次局部线性化、已碰撞 nominal、无 swept 检查和行数归一化会让梯度太弱；碰撞安全改由 nominal 预检、LQ 局部硬约束和 line-search 精确拒绝三层共同承担。</div>
+
+  <h2 id="lq-constraints">9. LQ/QP 硬约束</h2>
+  <h3>9.1 Measured、joint、trust 与 root</h3>
+  <pre><code>Delta z_0 = z_measured-z_bar,0 = 0
+
+q_min+m_q &lt;= q_bar,k+Delta q_k &lt;= q_max-m_q
+|q_k-q_k-1| &lt;= qdot_max dt
+|Delta p_B,k| &lt;= trust_p
+|Delta theta_B,k| &lt;= trust_theta
+|Delta q_k| &lt;= trust_q
+
+z_B,min(k) &lt;= z_B,k &lt;= z_B,max(k)
+|roll_k-roll_ref| &lt;= roll_max
+|pitch_k-pitch_ref| &lt;= pitch_max
+|z_B,k-z_B,k-1|/dt &lt;= zdot_max
+|roll_k-roll_k-1|/dt &lt;= rp_rate_max
+|pitch_k-pitch_k-1|/dt &lt;= rp_rate_max</code></pre>
+
+  <h3>9.2 全 horizon stance support</h3>
+  <p>对每个 stance 节点，完整足端 XYZ 等于当前 persistent anchor 或该段 selected touchdown：</p>
+  <pre><code>p_foot,i(z_bar,k) + J_foot,i,k Delta z_k = a_i,k
+
+continuing current segment: a_i,k = persistent_anchor_i
+future stance segment:      a_i,k = selected touchdown on local plane</code></pre>
+  <p>这不是只约束 foot z，也不是只约束 <code>x1</code>。foot XYZ 被约束，root XY/姿态仍可改变；完整 Jacobian 中的 root 与 joint 列要求支撑腿关节同步补偿。线性化 equality 在 line search 中由真实 FK 再检查。</p>
+
+  <h3>9.3 Touchdown region 与平面</h3>
+  <pre><code>A_td[p_bar,foot,xy+J_foot,xy Delta z_k] + b_td &gt;= -s_td
+
+p_bar,foot,z + J_foot,z Delta z_k
+  = h_plane(p_bar,foot,xy)
+  + grad(h_plane)^T J_foot,xy Delta z_k
+  + foot_contact_offset</code></pre>
+  <p>region 约束只施加在相应 touchdown onset 及其 stance segment；swing 节点不被矩形锁住，而是由 swing reference 和碰撞约束连续引导。</p>
+
+  <h3>9.4 Foot、leg 与 base clearance</h3>
+  <p>LQ 默认梯度布局使用固定 53 点/节点：</p>
+  <pre><code>4 feet x 1 sphere       = 4
+4 calves x 5 samples   = 20
+4 thighs x 5 samples   = 20
+base bottom 3 x 3      = 9
+total                  = 53 points/node</code></pre>
+  <p>knee 是 thigh/calf capsule 的共享端点，因此在 53 点表示中已覆盖；最终 detector 仍单独报告 knee。对点/部位 <code>c</code>：</p>
+  <pre><code>d_c^nom = p_c,z^nom-H_(r_c)(p_c,xy^nom)
+g_c = partial d_c / partial p_c
+
+d_c^nom + g_c^T J_c Delta z_k &gt;= r_c+m_c-s_c
+s_c &gt;= 0</code></pre>
+  <p>large/unknown 的 <code>H_(r_c)</code> 是虚拟墙。base 约束同时检查底部 3x3 点，最终 safety 使用真实 oriented box；LQ 采样只负责提供局部方向，不构成安全证明。53 点是默认性能布局；若 finite-difference 或 exact-detector parity 证明某处没有提供正确的脱离方向，可在保持 foot/capsule/OBB 几何职责下调整样本布局，而不能缩小真实碰撞几何。</p>
+
+  <h3>9.5 Slack 边界</h3>
+  <pre><code>0 &lt;= s_collision &lt;= s_collision,max
+0 &lt;= s_region    &lt;= s_region,max
+s_stance = 0 in the physical publication test</code></pre>
+  <p>QP 可以用小 slack 产生恢复方向，但 line search 不读取“slack 已付费”作为可行证据。实际候选必须满足原始无 slack 约束，否则即使 nonlinear cost 更低也不可选。</p>
+
+  <h2 id="scan">10. Associative scan 与 MPX 式并行加速</h2>
+  <h3>10.1 H30/32 固定五层 scan</h3>
+  <p>局部 residual 和 active constraints 形成相邻时刻的条件二次 value factor。H30 edge 补齐为 32 个固定 factor，并用结合律组合：</p>
+  <pre><code>F_[a,c] = F_[a,b] combine F_[b,c]
+(F1 combine F2) combine F3 = F1 combine (F2 combine F3)
+
+level 0: 32 factors
+level 1: 16
+level 2: 8
+level 3: 4
+level 4: 2
+level 5: 1</code></pre>
+  <p>向下恢复所有 <code>Delta z_1...Delta z_30</code>。一个 QP 内允许固定次数 active-set mask refinement，但不重新构造 nonlinear nominal、不再次 SQP 线性化，也不增加第二个 LQ 子问题。必须保持 dense/scan parity：</p>
+  <pre><code>max_abs(Delta Z_scan-Delta Z_dense) &lt; 2e-5</code></pre>
+
+  <h3>10.2 从 raw/mpx 采用的执行原则</h3>
+  <table>
+    <thead><tr><th>MPX 参考思想</th><th>本设计中的固定实现</th></tr></thead>
+    <tbody>
+      <tr><td><code>jit(vmap)</code> 多环境</td><td>所有 tensor 以 <code>B</code> 为首维；不得有 Python per-environment loop。</td></tr>
+      <tr><td>shifted warm start</td><td>完整选中 H30 轨迹 shift/rebase，事件 metadata 同步滚动。</td></tr>
+      <tr><td>associative TVLQR/rollout</td><td>保留 <code>trajectory_scan.py</code> 与 <code>associative_scan.py</code> 的 H30/32 时间组合。</td></tr>
+      <tr><td>并行 alpha/filter evaluation</td><td>五个候选沿独立 alpha 维一次构造、一次 FK/map packed query、一次 reduce。</td></tr>
+      <tr><td>compiled fixed program</td><td>预分配 workspace、固定 shape、<code>torch.compile</code>/Triton、CUDA Graph replay。</td></tr>
+    </tbody>
+  </table>
+  <p>Field build、25 候选、IK/FK、53 点线性化、五 alpha 和 swept samples 都要 packed query；禁止 <code>.item()</code>、CPU mask 分支、动态 tensor 创建和 graph capture 内的 host synchronization。常量在 capture 前注册并复用。</p>
+
+  <h2 id="line-search">11. 五候选硬安全 line search</h2>
+  <pre><code>Z^(j) = Z_bar + alpha_j Delta Z
+alpha = [1,0.5,0.25,0.125,0]</code></pre>
+  <p>五个候选共享本轮选中的 touchdown target 与 region；line search 不重新做离散选点。对 <code>[B,5,31,18]</code> 并行计算真实非线性代价和下列无 slack filter：</p>
+  <ol>
+    <li>全部状态、FK、地图查询和代价 finite，且所有地图查询 valid。</li>
+    <li>joint position/velocity、root z/roll/pitch/rate 和 trust bounds 通过。</li>
+    <li>所有 stance 节点用真实 FK 满足 XYZ anchor/ground tolerance。</li>
+    <li>touchdown sole 完整位于本轮 convex region、安全语义和局部平面。</li>
+    <li>每个 swing node 与 node-to-node interval 的 foot sphere、knee、calf/thigh capsule 无碰撞。</li>
+    <li>每个 interval 的 base oriented box 无碰撞。</li>
+    <li>small crossing 事件满足越障后方条件；large 轨迹不进入膨胀 forbidden 区。</li>
+    <li>事件在 H30 外时，node 30 到 touchdown 的 preview tail 同样通过 sweep。</li>
+  </ol>
+  <pre><code>feasible_j = AND(all exact filters for candidate j)
+j* = argmin_j J_nonlinear(Z^(j)) among feasible_j
+
+tie within epsilon_line -&gt; choose larger alpha
+no feasible candidate -&gt; stop=true, publish=false</code></pre>
+  <p><code>alpha=0</code> 不是自动安全兜底，它也必须通过完整 filter。最终 swept detector 使用 foot sphere、calf/thigh capsules、knee endpoint、完整 sole 和 base oriented box；53 个 LQ 点不能替代它。碰撞检查是发布门，不是调权重后的偏好。</p>
+
+  <h2 id="warm">12. Cold-once / warm-only 生命周期</h2>
+  <pre><code>UNINITIALIZED --first optimize after explicit reset--&gt; WARM_ONLY
+WARM_ONLY     --every later optimize--------------&gt; WARM_ONLY
+WARM_ONLY     --explicit environment reset--------&gt; UNINITIALIZED</code></pre>
+  <ul>
+    <li>每个环境每个 reset lifecycle 恰好一次 cold nominal；第一次调用结束即设为 <code>WARM_ONLY</code>，与 line search 是否改善无关。</li>
+    <li>之后 command 改变、地图改变、<code>alpha=0</code>、无安全发布候选或 optimization invalid 都不得触发 cold。</li>
+    <li>每轮只把 finite 且通过硬安全的完整选中轨迹写入 accepted warm cache。</li>
+    <li>无安全候选时保留最近一次 finite cache 和 touchdown metadata，但本周期输出 stop；下一周期仍从该 cache warm shift/rebase。</li>
+    <li>已经 initialized 后 cache 缺失、shape 错误或 nonfinite 是 <code>warm_cache_invariant_fault</code>：停止该环境，不退回 cold，直到显式 reset。</li>
+    <li>persistent stance anchor 只在安全发布的 <code>swing -&gt; stance</code> onset 更新；continuing stance 原样保留。</li>
+  </ul>
+  <p>Cold build 只从 measured state、reset posture、command、gait 和本轮安全 touchdown 构造首条有限轨迹；它不是运行期恢复策略。</p>
+
+  <h2 id="rl">13. 强化学习接口与安全 mask</h2>
+  <p>Planner 的固定 batch 输入/输出为：</p>
+  <pre><code>input:
+  measured_state       [B,18]
+  command              [B,3]
+  gait_phase           [B]
+  elevation/semantic   [B,151,151]
+  reset_mask           [B]
+  optional_rl_logits   [B,4,25]
+  optional_posture_ref [B,12]
+
+output:
+  trajectory           [B,31,18]
+  published_z1         [B,18]
+  touchdown_target     [B,4,3]
+  touchdown_region     [B,4,4,3]
+  candidate_safe_mask  [B,4,25]
+  selected_alpha       [B]
+  publish_safe/stop    [B]
+  diagnostics          fixed-shape tensors</code></pre>
+  <p>RL 接入时，策略 logits 只在 <code>candidate_safe_mask</code> 内作为 touchdown score 的有界 bias：</p>
+  <pre><code>score_RL = score_model-w_RL clamp(logit_RL,-l_max,l_max)
+score_RL[NOT candidate_safe_mask] = +infinity</code></pre>
+  <p>策略不能关闭 scanner、扩大 region、降低 collision margin 或绕过 line-search filter。Planner 轨迹可作为 imitation/reference，safe mask、stop reason、region 和 clearance 可作为 observation/reward；默认 <code>w_RL=0</code> 时行为完全由模型优化定义。</p>
+
+  <h2 id="tuning">14. 可调参数与可视变化</h2>
+  <div class="warn"><strong>调参边界：</strong>以下参数可调，但章节 4 至 11 的公式、变量、候选职责、约束职责、五个 alpha 和一次 SQP 不可通过配置改变。每个参数必须在 viewer 中属于一个明确组，并立即反映到候选颜色、region、reference、约束余量或 alpha 结果。</div>
+
+  <h3>14.1 地图和安全膨胀</h3>
+  <table>
+    <thead><tr><th>参数</th><th>控制内容</th><th>肉眼可见变化</th></tr></thead>
+    <tbody>
+      <tr><td><code>foot/calf/thigh/base_radius</code></td><td><code>max_pool2d</code> 的物理 kernel 半径</td><td>障碍周围各部位 forbidden 轮廓扩大/缩小</td></tr>
+      <tr><td><code>margin_foot/link/base</code></td><td>真实碰撞净空</td><td>swing tube、leg capsule、base box 与地形间距</td></tr>
+      <tr><td><code>landing_margin</code></td><td>完整 sole 禁踩膨胀</td><td>绿色 touchdown cells 的边界</td></tr>
+      <tr><td><code>slope_max</code>、<code>roughness_max</code></td><td>可落脚地形质量</td><td>斜坡/边缘候选由绿变红</td></tr>
+      <tr><td><code>h_wall</code></td><td>large/unknown 虚拟墙高度</td><td>large 绕行 mask，不改变 small 真实高度</td></tr>
+      <tr><td><code>d_bypass</code>、<code>w_length/offset/switch</code></td><td>large 左右 corridor 宽度、路径长度与 side 稳定性</td><td>root corridor 的绕行距离和换侧行为</td></tr>
+      <tr><td><code>sweep_subdivisions</code></td><td>interval conservative check 精度</td><td>节点间最小 clearance 与 reject bit</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.2 Touchdown、region 与 swing</h3>
+  <table>
+    <thead><tr><th>参数</th><th>控制内容</th><th>肉眼可见变化</th></tr></thead>
+    <tbody>
+      <tr><td><code>candidate_dx/dy</code></td><td>5x5 hip-frame 网格间距</td><td>25 个候选覆盖范围</td></tr>
+      <tr><td><code>w_cmd_td</code></td><td>命令落脚偏好</td><td>选中点沿命令方向前移速度</td></tr>
+      <tr><td><code>w_warm_td</code></td><td>跨 RTI 目标连续性</td><td>早 swing 目标跳动幅度</td></tr>
+      <tr><td><code>w_slope/w_rough/w_edge</code></td><td>在安全点内的质量排序</td><td>相同可行 mask 中选中中心变化</td></tr>
+      <tr><td><code>d_landing</code></td><td>small 后方落脚余量</td><td>跨越 touchdown 离障碍远近</td></tr>
+      <tr><td><code>delta_out</code></td><td>固定腿外侧 swing 偏移</td><td>apex 水平点和 swing 曲线外移</td></tr>
+      <tr><td><code>l_region_cap/min</code></td><td>凸矩形最大/最小半边</td><td>落脚矩形面积</td></tr>
+      <tr><td><code>latch_phase</code></td><td>后半 swing 锁定开始点</td><td>锁定前候选可变，锁定后 region 固定</td></tr>
+      <tr><td><code>m_z</code></td><td>一次 apex 净空</td><td>swing 顶点高度</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.3 Nominal、LQ 与 line search</h3>
+  <table>
+    <thead><tr><th>参数组</th><th>允许调节</th><th>诊断依据</th></tr></thead>
+    <tbody>
+      <tr><td>Warm</td><td><code>measurement_decay_nodes</code>、terminal command fill scale、IK blend scale</td><td>shift/rebase 与 retarget 前后轨迹差</td></tr>
+      <tr><td>Cost</td><td><code>W_v</code>、<code>W_q</code>、<code>W_root</code>、<code>W_swing</code>、<code>W_td</code>、<code>W_1/W_2</code>、<code>W_warm</code></td><td>每 family 的未加权/加权能量</td></tr>
+      <tr><td>Hold gate</td><td><code>s_v</code>、<code>s_rho</code></td><td><code>g_hold</code> 与姿态 reference 偏差</td></tr>
+      <tr><td>QP</td><td>regularization、trust bounds、slack cap/penalty、固定 active refinement 次数</td><td>KKT residual、active rows、slack、<code>||Delta Z||</code></td></tr>
+      <tr><td>Line search</td><td>tie tolerance 与已定义物理 tolerance</td><td>五候选 loss、reject reason、最小 clearance</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="metrics">15. 完整指标公式、证据来源与阈值</h2>
+  <h3>15.1 证据分层和禁止误报</h3>
+  <p>每个行为指标同时标记数据来源：</p>
+  <pre><code>P: planner selected trajectory and planner map detector
+A: Isaac actual articulation readback and actual obstacle geometry
+C: Isaac contact report classified by body part and semantic object
+V: viewer overlay generated from the same A/C trace
+
+formal_behavior_pass = pass(P) AND pass(A) AND pass(C)
+canonical_visual_pass = pass(V) for every required canonical trace</code></pre>
+  <ul>
+    <li><code>P</code> 通过但 <code>A</code> 或 <code>C</code> 失败，整个 cell 失败；不能称为“规划通过、只是 viewer 不对”。</li>
+    <li>fixture 必须与 terrain task 的 native sphere/cuboid/cylinder/capsule/cone 几何和高度一致，不能用平顶近似 sphere/capsule。</li>
+    <li>地图随 measured root 更新，障碍保持固定 world pose；障碍不得跟随局部 field origin 移动。</li>
+    <li>每条 formal trace 必须从事件前开始，经过完整 swing、touchdown，并在 touchdown 后继续至少一个完整 24-frame gait period。</li>
+    <li>没有产生 crossing attempt、停在障碍前、从障碍旁绕过、越过后没有安全 touchdown，均记 strict-cross failure，不记 N/A 或 success。</li>
+    <li>canonical viewer 证据至少覆盖五类 small shape，各自低/中/高三个前向速度 <code>0.2/0.6/1.0m/s</code>；15 条实际 readback trace 必须逐条成功，不能用总体百分比隐藏肉眼失败。</li>
+  </ul>
+
+  <h3>15.2 通用记号与聚合</h3>
+  <pre><code>V_k       : valid trajectory/map frame mask
+E_k       = V_k AND V_(k-1)
+C_i,k     : leg i is stance
+CC_i,k    = C_i,k AND C_i,k-1 AND E_k
+SW_i,k    = NOT C_i,k AND V_k
+N(A)      : valid elements in set A
+ratio(A)  = sum 1[A] / max(N(A),1)</code></pre>
+  <p>每个正式测试 cell 保存 value、numerator、denominator、valid count、source、N/A 原因、worst-case key 和 pass/fail。误差类先对单个 rollout 的适用 valid 单元取均值，安全/连续性类取最大值或最小值；最终报告取所有 shape、speed、phase、offset、environment cell 的最坏值。零平移 command 下方向、crossing 和 lead 指标为 N/A，但 drift、stance、collision、joint、数值与 lifecycle 仍适用。</p>
+  <p>继承指标的实现 ID 冻结为：</p>
+  <pre><code>joint_position_violation, joint_velocity_violation,
+joint_safe_margin_min_rad, joint_step_max_rad, joint_acceleration_max_rps2,
+stance_ground_gap, stance_ground_penetration, stance_anchor_residual,
+stance_xy_slip_max_m, stance_xy_slip_mean_m, stance_stationary_ratio,
+stance_root_carry_ratio_abs, swing_surface_clearance_min_m,
+swing_active_motion_ratio, foot_root_lead_time_min_ms,
+foot_root_lead_time_max_ms, root_leak_before_foot_m,
+root_velocity_error, root_direction_error, root_yaw_rate_error,
+root_zero_drift_m, root_step_jump_m, root_roll_deviation_rad,
+root_pitch_deviation_rad, line_alpha_zero_ratio, line_alpha_zero_run,
+warm_start_jump_max, trajectory_valid_ratio, nonfinite_count,
+x0_injection_error, published_x1_error, map_valid_ratio,
+cold_start_count, warm_start_count, unexpected_cold_restart_count,
+warm_cache_invariant_fault_count, strict_cross_success,
+touchdown_on_small, stance_on_small, airborne_touchdown,
+root_lateral_offset_from_nominal_m, root_lateral_velocity_error_mps,
+root_yaw_error_from_nominal_rad, root_roll_pitch_rate_max_rps,
+maximum_penetration_m, foot_collision_frame_rate,
+knee_collision_frame_rate, calf_collision_frame_rate,
+thigh_collision_frame_rate, base_collision_frame_rate</code></pre>
+
+  <h3>15.3 Joint、执行一致性与足端连续性</h3>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>joint position violation</td><td><code>sum 1[q&lt;q_min or q&gt;q_max]</code></td><td><code>0</code></td><td>P+A</td></tr>
+      <tr><td>joint velocity violation</td><td><code>sum 1[|q_k-q_k-1|/dt&gt;qdot_max]</code></td><td><code>0</code></td><td>P+A</td></tr>
+      <tr><td>joint safe margin</td><td><code>min(min(q-q_min,q_max-q))</code></td><td><code>&gt;=0.1 rad</code></td><td>P+A</td></tr>
+      <tr><td>joint step max</td><td><code>max_E |q_k-q_k-1|</code></td><td><code>&lt;=0.35 rad</code></td><td>P+A</td></tr>
+      <tr><td>joint acceleration max</td><td><code>max |q_k-2q_k-1+q_k-2|/dt^2</code></td><td><code>&lt;=1500 rad/s^2</code></td><td>P+A</td></tr>
+      <tr><td>published joint tracking</td><td><code>max ||q_actual(t+1)-q_published,1(t)||_inf</code></td><td><code>&lt;=2e-4 rad</code> direct replay</td><td>A</td></tr>
+      <tr><td>swing foot step max</td><td><code>max_SW ||p_foot,k-p_foot,k-1||</code></td><td><code>&lt;=0.08 m/frame</code></td><td>P+A</td></tr>
+      <tr><td>swing foot acceleration max</td><td><code>max_SW ||p_k-2p_k-1+p_k-2||/dt^2</code></td><td><code>&lt;=100 m/s^2</code></td><td>P+A</td></tr>
+      <tr><td>target update max</td><td><code>max eligible ||p_td,t-p_td,t-1||</code></td><td><code>&lt;=0.10 m/RTI</code></td><td>P</td></tr>
+      <tr><td>latched target drift</td><td><code>max latched ||p_td,t-p_latched||</code></td><td><code>0</code>，除非本轮明确 invalid</td><td>P</td></tr>
+    </tbody>
+  </table>
+
+  <h3>15.4 Stance 与地面</h3>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>stance XY slip max/mean</td><td><code>max_CC / mean_CC ||p_i,k,xy-p_i,k-1,xy||</code></td><td><code>&lt;=0.5/0.2 mm</code></td><td>P+A</td></tr>
+      <tr><td>stance stationary ratio</td><td><code>sum_CC 1[slip&lt;=0.5mm]/N(CC)</code></td><td><code>1.0</code></td><td>P+A</td></tr>
+      <tr><td>stance ground gap</td><td><code>max_C max(p_foot,z-H-contact_offset,0)</code></td><td><code>&lt;=12 mm</code></td><td>P+A</td></tr>
+      <tr><td>stance penetration</td><td><code>max_C max(H+contact_offset-p_foot,z,0)</code></td><td><code>&lt;=1 mm</code></td><td>P+A</td></tr>
+      <tr><td>anchor residual</td><td><code>max_C ||p_foot-a_i||</code></td><td><code>&lt;=0.5 mm</code></td><td>P+A</td></tr>
+      <tr><td>stance/root carry ratio</td><td><code>|e_cmd^T Delta p_foot|/max(|e_cmd^T Delta p_root|,epsilon)</code></td><td><code>&lt;=0.10</code></td><td>P+A</td></tr>
+      <tr><td>airborne touchdown</td><td><code>sum_onset 1[|p_z-H-offset|&gt;stance_tol]</code></td><td><code>0</code></td><td>P+A+C</td></tr>
+    </tbody>
+  </table>
+
+  <h3>15.5 Swing、启动与响应</h3>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>swing surface clearance</td><td><code>min_SW(d_foot-r_foot)</code></td><td><code>&gt;=0</code></td><td>P+A</td></tr>
+      <tr><td>swing active motion ratio</td><td><code>sum_SW 1[e_cmd^T Delta p_foot&gt;0]/N(SW)</code></td><td><code>&gt;=0.50</code></td><td>P+A</td></tr>
+      <tr><td>foot/root lead time</td><td><code>t_root_first_progress-t_foot_first_progress</code></td><td><code>20..80 ms</code></td><td>P+A</td></tr>
+      <tr><td>root leak before foot</td><td><code>max ||p_root(t)-p_root(0)||</code> before first foot progress</td><td><code>&lt;=0.5 mm</code></td><td>P+A</td></tr>
+      <tr><td>touchdown response latency</td><td><code>t_selected_changed-t_command_or_map_changed</code>，仅未 latch 腿</td><td><code>&lt;=20 ms</code></td><td>P</td></tr>
+      <tr><td>unsafe target invalidation</td><td><code>t_stop_or_safe_reselect-t_became_unsafe</code></td><td><code>&lt;=20 ms</code></td><td>P</td></tr>
+      <tr><td>command 90% response</td><td><code>min t: projection(v_root,e_cmd)&gt;=0.9||v_cmd||</code></td><td><code>&lt;=0.20 s</code></td><td>P+A</td></tr>
+    </tbody>
+  </table>
+
+  <h3>15.6 Root tracking 与姿态</h3>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>root velocity error</td><td><code>mean_E ||v_root,xy^body-v_cmd,xy||</code></td><td><code>&lt;=0.20 m/s</code></td><td>P+A</td></tr>
+      <tr><td>root direction error</td><td><code>mean acos(clamp(v_root dot v_cmd/(||v_root||||v_cmd||),-1,1))</code></td><td><code>&lt;=10 deg</code></td><td>P+A</td></tr>
+      <tr><td>root yaw-rate error</td><td><code>mean_E |wrap(Delta yaw)/dt-omega_cmd|</code></td><td><code>&lt;=0.20 rad/s</code></td><td>P+A</td></tr>
+      <tr><td>zero-command drift</td><td><code>max ||p_root,xy(t)-p_root,xy(0)||</code></td><td><code>&lt;=1e-5 m</code></td><td>P</td></tr>
+      <tr><td>root step jump</td><td><code>max_E ||p_root,k,xy-p_root,k-1,xy||</code></td><td><code>&lt;=0.05 m</code></td><td>P+A</td></tr>
+      <tr><td>roll/pitch deviation</td><td><code>max |roll-roll_reset|,max |pitch-pitch_reset|</code></td><td><code>&lt;=6 deg</code></td><td>P+A</td></tr>
+      <tr><td>root lateral offset</td><td><code>max |e_perp^T(p_root-p_command_nominal)|</code></td><td><code>&lt;=0.06 m</code></td><td>P+A</td></tr>
+      <tr><td>lateral velocity error</td><td><code>mean |e_perp^T(v_root-v_cmd)|</code></td><td><code>&lt;=0.20 m/s</code></td><td>P+A</td></tr>
+      <tr><td>yaw offset</td><td><code>max |wrap(yaw-yaw_command_nominal)|</code></td><td><code>&lt;=10 deg</code></td><td>P+A</td></tr>
+      <tr><td>roll/pitch rate</td><td><code>max_E max(|Delta roll|,|Delta pitch|)/dt</code></td><td><code>&lt;=0.6 rad/s</code></td><td>P+A</td></tr>
+    </tbody>
+  </table>
+
+  <h3>15.7 碰撞指标：规划 detector 与 Isaac 双重判定</h3>
+  <p>对实际部位 <code>b</code> 和 frame <code>k</code>：</p>
+  <pre><code>geometry_hit_b,k = 1[min signed_clearance(actual geometry,actual terrain/object)&lt;0]
+contact_hit_b,k  = 1[forbidden contact impulse&gt;J_noise]
+
+collision_b,k = geometry_hit_b,k OR contact_hit_b,k</code></pre>
+  <p>允许的 contact 只有：stance phase、foot sole、normal-ground semantic 三者同时成立。swing foot 与任何地形接触、任意 foot 与 small/large 接触、knee/calf/thigh/base 与任何地形或物体接触均是 forbidden。Contact report 防止离散几何查询漏碰，解析 capsule/OBB/sole 查询防止低冲量或单帧 contact 漏报。</p>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>foot/knee/calf/thigh/base collision frame rate</td><td><code>sum_valid collision_b,k/N(valid frames)</code></td><td>每部位严格 <code>0</code></td><td>A+C</td></tr>
+      <tr><td>planner collision frame rate</td><td><code>sum_valid 1[swept_clearance_b,k&lt;0]/N</code></td><td>每部位严格 <code>0</code></td><td>P</td></tr>
+      <tr><td>maximum penetration</td><td><code>max_(b,k) max(-signed_clearance_b,k,0)</code></td><td><code>&lt;=1 mm</code> 数值诊断，不能覆盖 collision-rate 失败</td><td>P+A</td></tr>
+      <tr><td>planned safety margin</td><td><code>min_(b,k,interval)(signed_clearance-required_margin_b)</code></td><td><code>&gt;=0</code></td><td>P</td></tr>
+      <tr><td>contact classification unknown</td><td><code>sum 1[contact body/semantic cannot be classified]</code></td><td><code>0</code></td><td>C</td></tr>
+    </tbody>
+  </table>
+  <div class="danger"><strong>零碰撞的含义：</strong><code>maximum_penetration&lt;=1mm</code> 只用于报告数值误差大小，不表示允许触碰。只要 actual contact 或 signed-clearance crossing 被检测到，collision frame rate 就非零并直接失败。</div>
+
+  <h3>15.8 Strict small-cross 事件</h3>
+  <p>对命令轴 <code>e_cmd</code>、实际 obstacle footprint <code>O_s</code> 和一次相关 swing event：</p>
+  <pre><code>s(x) = e_cmd^T(x-p_lift,xy)
+s_in  = min_(x in O_s) s(x)
+s_out = max_(x in O_s) s(x)
+
+before = s(p_lift)&lt;=s_in-d_pre
+over_xy = exists t in swing: sole_xy(t) intersects O_s
+over_z  = min_(t where over_xy)[sole_bottom_z(t)-H_object_actual(sole_xy(t))]&gt;=m_cross
+after   = s(p_touchdown)&gt;=s_out+d_landing
+land_ok = complete sole on normal ground AND NOT on small/large/unknown
+body_ok = all foot/knee/calf/thigh/base collision flags are false in full event window
+
+strict_cross = opportunity AND before AND over_xy AND over_z AND after AND land_ok AND body_ok</code></pre>
+  <p><code>opportunity</code> 由固定 world obstacle、command corridor 和 gait event 共同定义，不能依赖 planner 是否选择跨越来消失。<code>over_xy</code> 明确排除从侧面绕过，<code>after</code> 排除碰到后退回，完整 event window 排除 crossing 当帧截断后隐藏 touchdown 碰撞。</p>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>strict small-cross success</td><td><code>sum strict_cross/N(all formal opportunities)</code></td><td>overall <code>&gt;=95%</code>；每 shape-speed <code>&gt;=90%</code></td><td>P+A+C</td></tr>
+      <tr><td>canonical actual cross</td><td><code>strict_cross</code> for each of 15 shape-speed viewer traces</td><td>每条均为 <code>1</code></td><td>A+C+V</td></tr>
+      <tr><td>touchdown on small</td><td><code>sum_onset 1[actual complete sole intersects raw O_s]</code></td><td><code>0</code></td><td>A+C</td></tr>
+      <tr><td>stance on small</td><td><code>sum_C 1[actual complete sole intersects raw O_s]</code></td><td><code>0</code></td><td>A+C</td></tr>
+      <tr><td>cross vertical margin</td><td><code>min over_xy(sole_bottom_z-H_object_actual)-m_cross</code></td><td><code>&gt;=0</code></td><td>P+A</td></tr>
+      <tr><td>cross denominator loss</td><td><code>N(expected formal opportunities)-N(classified opportunities)</code></td><td><code>0</code></td><td>A</td></tr>
+    </tbody>
+  </table>
+
+  <h3>15.9 Large bypass</h3>
+  <pre><code>large_bypass =
+  reaches command-side beyond large obstacle
+  AND no swept geometry intersects inflated/actual large
+  AND no touchdown/stance on large
+  AND forward_progress/nominal_progress &gt;= r_progress,min
+  AND no stop longer than t_stall,max</code></pre>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>large bypass success</td><td><code>sum large_bypass/N(large encounters)</code></td><td>overall <code>&gt;=95%</code>；每 shape-speed <code>&gt;=90%</code></td><td>P+A+C</td></tr>
+      <tr><td>touchdown/stance on large</td><td><code>sum 1[actual sole intersects raw large]</code></td><td>均为 <code>0</code></td><td>A+C</td></tr>
+      <tr><td>large forward progress ratio</td><td><code>actual command-axis progress/unobstructed nominal progress</code></td><td><code>&gt;=0.70</code></td><td>A</td></tr>
+    </tbody>
+  </table>
+
+  <h3>15.10 RTI、数值、地图与生命周期</h3>
+  <table>
+    <thead><tr><th>指标</th><th>公式</th><th>门</th></tr></thead>
+    <tbody>
+      <tr><td>alpha-zero ratio</td><td><code>sum 1[alpha=0]/N(refresh)</code></td><td><code>&lt;=5%</code></td></tr>
+      <tr><td>alpha-zero max run</td><td><code>max consecutive refreshes with alpha=0</code></td><td><code>&lt;=2</code></td></tr>
+      <tr><td>warm-start jump</td><td><code>max ||Z_bar,t[0]-rebase(Z*_t-1[1])||</code></td><td><code>&lt;=0.05</code> normalized state norm</td></tr>
+      <tr><td>trajectory valid ratio</td><td><code>sum valid trajectory nodes/N(all expected nodes)</code></td><td><code>1.0</code></td></tr>
+      <tr><td>map valid ratio</td><td><code>sum valid packed queries/N(all required queries)</code></td><td><code>1.0</code></td></tr>
+      <tr><td>nonfinite count</td><td><code>sum 1[any required tensor is NaN/Inf]</code></td><td><code>0</code></td></tr>
+      <tr><td>x0 injection error</td><td><code>max ||Z_selected[:,0]-z_measured||_inf</code></td><td><code>&lt;=1e-6</code></td></tr>
+      <tr><td>published x1 error</td><td><code>max ||published_z1-Z_selected[:,1]||_inf</code></td><td><code>&lt;=1e-6</code></td></tr>
+      <tr><td>cold start count</td><td><code>sum lifecycle 1[used_cold]</code></td><td>每无 reset rollout 恰好 <code>1</code></td></tr>
+      <tr><td>warm start count</td><td><code>sum lifecycle 1[used_warm]</code></td><td><code>N(refresh)-1</code></td></tr>
+      <tr><td>unexpected cold restart</td><td><code>sum 1[used_cold AND already_initialized]</code></td><td><code>0</code></td></tr>
+      <tr><td>warm cache invariant fault</td><td><code>sum 1[initialized AND cache invalid]</code></td><td><code>0</code></td></tr>
+      <tr><td>scan parity</td><td><code>max_abs(Delta Z_scan-Delta Z_dense)</code></td><td><code>&lt;2e-5</code></td></tr>
+    </tbody>
+  </table>
+  <div class="warn"><strong>指标源码状态：</strong><code>Go2Pvcnn/tests/joint_mpc_rti/joint_metrics.py</code> 和 <code>acceptance_thresholds.py</code> 当前含未解决 merge conflict markers。实现迁移必须先按本节统一 schema、公式、source 和阈值重建这两份文件；在冲突消除、actual readback/contact 单元测试通过前，其当前输出不能作为验收证据。</div>
+
+  <h3>15.11 正式命令与场景矩阵</h3>
+  <p>每个测试只从以下集合取一个单轴速度，不构造三类速度组合：</p>
+  <pre><code>vx in {0,+/-0.2,+/-0.4,+/-0.6,+/-0.8,+/-1.0} m/s
+vy in {0,+/-0.3,+/-0.5} m/s
+yaw_rate in {0,+/-0.5,+/-1.0} rad/s
+
+COMMANDS = {(0,0,0)}
+         union {(vx,0,0) | vx != 0}
+         union {(0,vy,0) | vy != 0}
+         union {(0,0,yaw_rate) | yaw_rate != 0}
+count = 19</code></pre>
+  <p>flat 覆盖 19 条命令和多个完整 gait 周期；small 覆盖 sphere、cuboid、cylinder、capsule、cone、进入 phase、横向 offset 与适用单轴命令；large 覆盖至少 cuboid、cylinder、wall-like block、左右可绕空间与适用单轴命令。所有场景继续检查 joint、stance、root、连续性、碰撞、RTI、地图和 lifecycle 指标。</p>
+
+  <h2 id="benchmark">16. 1024 环境性能门</h2>
+  <p>正式门的含义固定为：</p>
+  <pre><code>B = 1024
+H = 30
+refresh_count = 1000 warm-only calls
+T_total = CUDA-event elapsed time for 1000 complete planner refreshes
+
+T_total &lt; 5.0 s
+T_refresh = T_total/1000 &lt; 5.0 ms
+throughput = 1024*1000/T_total &gt; 204800 environment-refresh/s</code></pre>
+  <p>计时包含：field build、max-pool layers、touchdown event/candidates、convex region、nominal retarget/IK、一次 linearization、一次 scan LQ/QP、五 alpha 的 nonlinear cost和完整 swept filters、cache/diagnostics tensor 更新。计时不包含 Isaac sensor 渲染、首次 import、kernel compilation 和 CUDA Graph capture；输入已经位于 GPU，禁止在循环内 host-device copy。</p>
+  <p>基准先 warm up 100 次，随后独立运行 5 组 <code>1000</code> refresh；五组均须 <code>&lt;5.0s</code>，并报告 median、max、峰值显存和 graph replay 次数。realistic workload 必须同时含 flat、small、large 和不同 gait phase，不允许用全零地图替代。性能优化不得减少 25 候选、完整 line-search swept filter 或安全 margin；LQ 采样布局的修改必须保持 exact-detector 方向覆盖和 scan parity。</p>
+
+  <h2 id="viewer">17. Viewer 可视化与现场调参合同</h2>
+  <p>Viewer 使用同一 backend、同一 map、同一一次 SQP 和同一硬安全 detector；不得有 viewer-only 多轮优化或简化碰撞路径。默认显示：</p>
+  <ul>
+    <li>原始 elevation/semantic、small/large/unknown mask，以及各几何半径的 <code>max_pool2d</code> forbidden 轮廓。</li>
+    <li>每腿 25 个候选：安全绿色、按 reject reason 分类的红/橙色、选中点和上一轮点。</li>
+    <li>hip frame、command axis、small 的 <code>s_obs,out+d_landing</code> 线和 large 绕行方向。</li>
+    <li>touchdown convex rectangle、局部 plane normal、latch 状态和 H30 外 event 标记。</li>
+    <li>warm shift、retarget 后 nominal、五条 alpha candidate 与最终 selected trajectory。</li>
+    <li>foot swing 曲线、apex、foot sphere、calf/thigh capsule、knee endpoint、base box 和最小 clearance 点。</li>
+    <li>stance anchor、真实 sole touchdown、root path 和每节点 gait phase。</li>
+    <li>Isaac actual readback 轨迹与 planned 轨迹同时绘制；actual contact 点按 part/semantic 着色。</li>
+  </ul>
+  <p>侧栏按第 14 节分组，只暴露已批准参数。每次调节后在下一个 refresh 立即显示候选 mask、score 分项、region 面积、apex、<code>||Delta foot_k||</code>、约束 active/slack、五 alpha loss/reject bit、selected alpha、各部位 planned/actual 最小 clearance、touchdown response latency、RTI 总耗时和 stop reason。诊断来自同一次求解，不允许为显示再运行一次 SQP。</p>
+
+  <h2 id="files">18. 文件复用、替换与删除边界</h2>
+  <h3>18.1 保留并收紧合同</h3>
+  <table>
+    <thead><tr><th>文件</th><th>保留内容</th></tr></thead>
+    <tbody>
+      <tr><td><code>model/go2_kinematics.py</code></td><td>Go2 FK、完整 Jacobian、link/base 几何；补齐 capsule/OBB detector 接口。</td></tr>
+      <tr><td><code>model/analytic_ik.py</code></td><td>固定 branch batched IK 和 reachability。</td></tr>
+      <tr><td><code>model/gait_schedule.py</code></td><td>24 帧 trot、12/12 mask 和闭式 next-event。</td></tr>
+      <tr><td><code>terrain/query.py</code></td><td>packed world/grid 双线性查询；扩展固定通道 field。</td></tr>
+      <tr><td><code>solver/associative_scan.py</code>、<code>solver/trajectory_scan.py</code></td><td>H30/32 五层 scan 与 dense parity。</td></tr>
+      <tr><td><code>solver/fixed_general*.py</code>、<code>solver/fixed_spd*.py</code></td><td>固定小矩阵 GPU solve；只保留最终 scan 调用到的 kernel。</td></tr>
+      <tr><td><code>runtime/cuda_graph.py</code>、<code>runtime/manager.py</code></td><td>固定 buffer、graph replay 和 per-env reset mask；移除 graph capture 内动态 tensor 创建。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>18.2 替换或新增</h3>
+  <table>
+    <thead><tr><th>文件</th><th>最终职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>config.py</code>、<code>types.py</code></td><td>本文固定 shape、参数组、region/event/safety diagnostics。</td></tr>
+      <tr><td><code>terrain/perceptive_field.py</code></td><td>scanner 输入、统一多通道 2.5D field 和 <code>max_pool2d</code>。</td></tr>
+      <tr><td><code>model/perceptive_plan.py</code></td><td>large body corridor、event preview、25 候选、安全评分、latch 与凸 region。</td></tr>
+      <tr><td><code>model/nominal.py</code></td><td>cold once、warm shift/rebase、continuous swing、stance reference、IK retarget。</td></tr>
+      <tr><td><code>solver/lq_problem.py</code></td><td>八类代价 residual、局部约束、active mask 和 scan factor。</td></tr>
+      <tr><td><code>terrain/swept_safety.py</code></td><td>foot/capsule/knee/sole/OBB 的 fixed-shape exact publication filters。</td></tr>
+      <tr><td><code>solver/line_search.py</code>、<code>solver/sqp_rti.py</code></td><td>一次 LQ 方向、五 alpha、全时域硬安全选择。</td></tr>
+      <tr><td><code>planner.py</code></td><td>第 3 节十步数据流编排，不再包含场景 repair 分支。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>18.3 删除的旧生产路径</h3>
+  <p>新路径测试通过并切换后，下列旧职责不得与新架构并存：</p>
+  <ul>
+    <li>删除 <code>losses/semantic.py</code>、旧 <code>losses/terrain.py</code> 及其 ordinary full-body soft collision 实现。</li>
+    <li>删除旧 <code>losses/step.py</code>、<code>swing_speed.py</code>、<code>contact.py</code> 中 startup/recovery/progress、phase 特判和 x1-only repair；本文代价与约束统一进入 <code>lq_problem.py</code>。</li>
+    <li>删除旧 <code>terrain/cost_map.py</code> 的高斯 soft occupancy 路径、未被统一 field 使用的 EDT/cache 分支。</li>
+    <li>删除 <code>runtime/reference_buffer.py</code> 的 pending repair reference，以及 planner 中对应的延迟覆盖逻辑。</li>
+    <li>删除与 <code>trajectory_scan.py</code> 重复且最终调用图不可达的 dense/primal-dual/associative TVLQR solver 文件和 kernel。</li>
+    <li>删除所有 fallback-to-cold、无解后 hidden IK projection、输出后 foot/root 修补和只检查 published x1 的 collision filter。</li>
+  </ul>
+  <p><code>raw/</code> 和 <code>onlyReference/</code> 保持参考目录，不从其中 import 生产代码。迁移提交必须附 production import graph/coverage 证据，证明被删除职责没有从别名或 dead branch 留下。</p>
+
+  <h2 id="completion">19. 最终完成定义</h2>
+  <ol>
+    <li>生产代码的数据流逐项对应第 3 节，且一次 refresh 只有一次 SQP linearization、一个 LQ/QP 和五个固定 alpha。</li>
+    <li>Touchdown 每轮选择、H30 外 event preview、convex region、continuous swing、full-horizon stance 和 warm-only lifecycle 均有公式级单元测试。</li>
+    <li>max-pool field 与真实 scanner 在 world/grid、语义、native shape 高程、unknown/map boundary 上 parity。</li>
+    <li>FK/IK/Jacobian、collision gradient、region plane、LQ residual 用 finite difference 验证；scan/dense 误差小于 <code>2e-5</code>。</li>
+    <li>五 alpha 的每个 hard filter 有 RED/GREEN 测试；任何 foot、knee、calf、thigh、base 或 swept interval 碰撞都不可发布。</li>
+    <li>严格按 Gate 0 到 Gate 4 推进：先 flat 全绿，再 small strict-cross；不得用后一个场景的参数或总体均值掩盖前一个 gate 的失败。</li>
+    <li>第 15 节所有适用指标按同一 trace schema 计算，P/A/C source 同时通过；15 条 canonical small viewer trace 逐条 strict-cross 且零碰撞。</li>
+    <li>Viewer 使用生产 backend，一次 SQP，所有调参都可从画面和同次 diagnostics 看出实际变化。</li>
+    <li><code>1024 x 1000</code> realistic warm refresh 五组均小于 <code>5.0s</code>，无 host sync、per-env Python loop 或动态分配回归。</li>
+    <li>每个无 reset rollout 只有一次 cold；随后 cache/line-search 失败也只走 warm 或 stop，绝不隐式 cold restart。</li>
+    <li>旧 repair、soft collision 和重复 solver 不在生产调用图中，已按第 18 节删除；文档、配置、测试和 viewer 不暴露失效参数。</li>
+  </ol>
+
+  <h2>参考资料</h2>
+  <ul>
+    <li>Grandia et al., <a href="https://arxiv.org/abs/2208.08373">Perceptive Locomotion through Nonlinear Model Predictive Control</a>, IEEE Transactions on Robotics, 2023.</li>
+    <li>Jenelten et al., <a href="https://arxiv.org/abs/2204.09759">TAMOLS: Terrain-Aware Motion Optimization for Legged Systems</a>, IEEE Robotics and Automation Letters, 2022.</li>
+    <li><code>raw/mpx/mpx/examples/multi_env.py</code>：compiled environment batching。</li>
+    <li><code>raw/mpx/mpx/utils/mpc_wrapper.py</code>：shifted warm start。</li>
+    <li><code>raw/mpx/mpx/jax_ocp_solvers/jax_ocp_solvers/primal_tvlqr.py</code>：associative TVLQR/rollout。</li>
+    <li><code>raw/mpx/mpx/jax_ocp_solvers/jax_ocp_solvers/optimizers.py</code>：parallel optimization/evaluation structure。</li>
+  </ul>
+</main>
+</body>
+</html>
