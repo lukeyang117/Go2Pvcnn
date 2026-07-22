@@ -28,7 +28,7 @@ def test_loss_config_has_exactly_seven_top_level_weights() -> None:
     }
 
 
-def test_solver_state_has_no_recovery_or_independent_control() -> None:
+def test_solver_state_has_only_warm_lifecycle_state() -> None:
     fields = set(JointMpcRtiSolverState.__dataclass_fields__)
 
-    assert fields == {"trajectory", "gait_phase", "valid"}
+    assert fields == {"trajectory", "gait_phase", "initialized", "stance_anchor_w"}

@@ -16,7 +16,7 @@ def fixed_general_solve(matrix: Tensor, rhs: Tensor) -> Tensor:
     if system.is_cuda:
         from extension.joint_mpc_rti.solver.fixed_general_triton import fixed_general_solve_cuda
 
-        return fixed_general_solve_cuda(system, right)
+        return fixed_general_solve_cuda(system.contiguous(), right.contiguous())
     return torch.linalg.solve_ex(system, right, check_errors=False)[0]
 
 

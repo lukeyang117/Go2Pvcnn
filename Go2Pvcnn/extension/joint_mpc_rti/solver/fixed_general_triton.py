@@ -1,4 +1,4 @@
-"""Single-kernel fixed-size general solves for associative TVLQR factors."""
+"""Single-kernel fixed-size general solves for CUDA graph workloads."""
 
 from __future__ import annotations
 
@@ -38,6 +38,29 @@ def _fixed_general_solve_kernel(
     ).to(tl.float32)
 
     for pivot_index in tl.static_range(0, N):
+        matrix_column = tl.sum(tl.where(column == pivot_index, matrix, 0.0), axis=1)
+        pivot_row_index = tl.argmax(
+            tl.where(
+                (row_index >= pivot_index) & (row_index < N),
+                tl.abs(matrix_column),
+                -1.0,
+            ),
+            axis=0,
+        )
+        pivot_row = tl.sum(tl.where(row == pivot_index, matrix, 0.0), axis=0)
+        pivot_rhs = tl.sum(tl.where(row == pivot_index, right, 0.0), axis=0)
+        selected_row = tl.sum(tl.where(row == pivot_row_index, matrix, 0.0), axis=0)
+        selected_rhs = tl.sum(tl.where(row == pivot_row_index, right, 0.0), axis=0)
+        matrix = tl.where(
+            row == pivot_index,
+            selected_row[None, :],
+            tl.where(row == pivot_row_index, pivot_row[None, :], matrix),
+        )
+        right = tl.where(
+            row == pivot_index,
+            selected_rhs[None, :],
+            tl.where(row == pivot_row_index, pivot_rhs[None, :], right),
+        )
         pivot_row = tl.sum(tl.where(row == pivot_index, matrix, 0.0), axis=0)
         pivot_rhs = tl.sum(tl.where(row == pivot_index, right, 0.0), axis=0)
         pivot = tl.sum(

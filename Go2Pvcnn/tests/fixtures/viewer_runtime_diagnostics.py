@@ -673,6 +673,7 @@ class RealViewerRuntimeFixture:
                 )
             self._configure_compact_semantic_runtime_grid()
             self._configure_compact_cobblestone_runtime_grid()
+            self._configure_compact_runtime_physx_buffers()
             self._configure_large_runtime_physx_buffers()
             self.mpc_planner_cfg = self._viewer._build_mpc_planner_cfg(self.env_cfg)
             if hasattr(self.mpc_planner_cfg, "max_touchdown_xy_reach"):
@@ -855,6 +856,36 @@ class RealViewerRuntimeFixture:
             except Exception:  # noqa: BLE001 - Isaac config containers are duck-typed
                 continue
             setattr(physx_cfg, field_name, max(current_i, int(required_min)))
+
+    def _configure_compact_runtime_physx_buffers(self) -> None:
+        """Bound fixed GPU buffers for one-to-sixteen environment diagnostics."""
+        if int(self.num_envs) > 16:
+            return
+        sim_cfg = getattr(self.env_cfg, "sim", None)
+        physx_cfg = getattr(sim_cfg, "physx", None) if sim_cfg is not None else None
+        if physx_cfg is None:
+            return
+        capacity_limits = {
+            "gpu_max_rigid_contact_count": 2**20,
+            "gpu_max_rigid_patch_count": 2**17,
+            "gpu_found_lost_pairs_capacity": 2**18,
+            "gpu_found_lost_aggregate_pairs_capacity": 2**20,
+            "gpu_total_aggregate_pairs_capacity": 2**18,
+            "gpu_collision_stack_size": 2**24,
+            "gpu_heap_capacity": 2**24,
+            "gpu_temp_buffer_capacity": 2**22,
+            "gpu_max_soft_body_contacts": 2**16,
+            "gpu_max_particle_contacts": 2**16,
+        }
+        for field_name, allowed_max in capacity_limits.items():
+            if not hasattr(physx_cfg, field_name):
+                continue
+            current = getattr(physx_cfg, field_name)
+            try:
+                current_i = int(current)
+            except Exception:  # noqa: BLE001 - Isaac config containers are duck-typed
+                continue
+            setattr(physx_cfg, field_name, min(current_i, int(allowed_max)))
 
     def close(self) -> None:
         if self._closed:

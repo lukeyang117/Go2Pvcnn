@@ -5,6 +5,15 @@ import torch
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 
 
+def test_fixed_trot_schedule_uses_cached_constants_for_cuda_graph_capture() -> None:
+    source = __import__("pathlib").Path(
+        "Go2Pvcnn/extension/joint_mpc_rti/model/gait_schedule.py"
+    ).read_text()
+
+    assert "constant_like" in source
+    assert "torch.tensor((0, 12, 12, 0)" not in source
+
+
 def test_fixed_trot_schedule_returns_b31x4_without_extension_state() -> None:
     phase = torch.tensor([0, 7, 23], dtype=torch.long)
 

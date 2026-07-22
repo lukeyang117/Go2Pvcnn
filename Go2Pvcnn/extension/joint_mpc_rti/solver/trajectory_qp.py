@@ -7,6 +7,9 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
+from extension.joint_mpc_rti.tensor_constants import constant_like
+
 
 JOINT_LOWER = (-1.0472, -0.6632, -2.721) * 4
 JOINT_UPPER = (1.0472, 2.966, -0.837) * 4
@@ -22,6 +25,8 @@ class TrajectoryQp:
     upper: Tensor
     joint_difference_lower: Tensor
     joint_difference_upper: Tensor
+    support_jacobian: Tensor
+    support_target: Tensor
 
     @property
     def batch_size(self) -> int:
@@ -126,10 +131,12 @@ def _active_matrix_and_target(
 
     velocity_low_index = remove_box_redundant_edges(velocity_low_index)
     velocity_high_index = remove_box_redundant_edges(velocity_high_index)
-    row_count = sum(
+    active_row_count = sum(
         int(index.shape[0])
         for index in (box_low_index, box_high_index, velocity_low_index, velocity_high_index)
     )
+    support_rows = int(qp.support_jacobian.shape[1])
+    row_count = active_row_count + support_rows
     matrix = qp.gradient.new_zeros(row_count, nodes * state_dim)
     target = qp.gradient.new_zeros(row_count)
     cursor = 0
@@ -157,6 +164,9 @@ def _active_matrix_and_target(
             matrix[row, (edge + 1) * state_dim + 6 + joint] = 1.0
             target[cursor : cursor + count] = bound[edge, joint]
             cursor += count
+    support = qp.support_jacobian[batch_index]
+    matrix[cursor : cursor + support_rows, state_dim : 2 * state_dim] = support
+    target[cursor : cursor + support_rows] = qp.support_target[batch_index]
     return matrix, target
 
 
@@ -182,6 +192,23 @@ def solve_dense_active_kkt(qp: TrajectoryQp, active: ActiveConstraints) -> Tenso
             solution = torch.linalg.solve(kkt, rhs)[: gradient.shape[1]]
         solutions.append(solution.reshape(qp.nodes, -1))
     return torch.stack(solutions, dim=0)
+
+
+def _support_feasible_seed(qp: TrajectoryQp, active: ActiveConstraints) -> Tensor:
+    """Construct the affine seed in the free subspace of fixed box variables."""
+    fixed = active.box_mask
+    box_target = torch.where(active.box_low, qp.lower, qp.upper)
+    direction = torch.where(fixed, box_target, torch.zeros_like(qp.gradient))
+    free_x1 = (~fixed[:, 1]).to(qp.gradient.dtype)
+    reduced_support = qp.support_jacobian * free_x1[:, None]
+    support_rhs = qp.support_target - torch.einsum(
+        "bri,bi->br", qp.support_jacobian, direction[:, 1]
+    )
+    gram = torch.bmm(reduced_support, reduced_support.transpose(1, 2))
+    multiplier = fixed_general_solve(gram, support_rhs.unsqueeze(-1))
+    correction = torch.bmm(reduced_support.transpose(1, 2), multiplier).squeeze(-1)
+    direction[:, 1] += free_x1 * correction
+    return direction
 
 
 def refine_active_set(
@@ -235,7 +262,7 @@ def refine_active_set(
         )
 
     active = ActiveConstraints.empty(qp)
-    direction = torch.zeros_like(qp.gradient)
+    direction = _support_feasible_seed(qp, active)
     free = solve_fn(qp, active)
     direction = feasible_step(direction, free, active)
     active = merge(active, select_active_constraints(qp, direction, tolerance=1.0e-5))
@@ -252,15 +279,21 @@ def refine_active_set(
 
 def trajectory_bounds(nominal: Tensor, cfg) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     state = torch.as_tensor(nominal)
-    trust = state.new_tensor(
+    trust_values = (
         (cfg.solver.root_position_trust,) * 3
-        + (cfg.solver.root_orientation_trust,) * 3
+        + (cfg.solver.root_roll_pitch_trust,) * 2
+        + (cfg.solver.root_yaw_trust,)
         + (cfg.solver.joint_trust,) * 12
-    ).view(1, 1, 18)
-    lower = -trust.expand_as(state).clone()
+    )
+    trust = constant_like(state, f"trajectory_trust_{trust_values}", trust_values).view(1, 1, 18)
     upper = trust.expand_as(state).clone()
-    joint_lower = state.new_tensor(JOINT_LOWER).view(1, 1, 12) - state[..., 6:]
-    joint_upper = state.new_tensor(JOINT_UPPER).view(1, 1, 12) - state[..., 6:]
+    node = torch.arange(state.shape[1], dtype=state.dtype, device=state.device).view(1, -1, 1)
+    upper[..., :3] = node * float(cfg.solver.root_position_trust)
+    lower = -upper.clone()
+    lower[:, 1, :2] = 0.0
+    upper[:, 1, :2] = 0.0
+    joint_lower = constant_like(state, "trajectory_joint_lower", JOINT_LOWER).view(1, 1, 12) - state[..., 6:]
+    joint_upper = constant_like(state, "trajectory_joint_upper", JOINT_UPPER).view(1, 1, 12) - state[..., 6:]
     lower[..., 6:] = torch.maximum(lower[..., 6:], joint_lower)
     upper[..., 6:] = torch.minimum(upper[..., 6:], joint_upper)
     lower[:, 0] = 0.0

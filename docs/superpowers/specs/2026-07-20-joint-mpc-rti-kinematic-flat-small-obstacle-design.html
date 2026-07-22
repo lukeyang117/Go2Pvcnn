@@ -175,6 +175,7 @@ M_stance = 1 - M_swing</code></pre>
   <p>一次得到 <code>[B,31,4]</code> gait mask。</p>
 
   <h3>4.2 Cold start</h3>
+  <p><strong>触发条件：</strong>每个环境生命周期只允许一次。仅当该环境从未初始化，或该环境收到显式 reset 后，执行一次 cold start；完成该次调用后立即进入 <code>WARM_ONLY</code>，直到下一次显式 reset。上一轮候选不改善、line search 选择 <code>alpha=0</code>、新解无效、command/地图变化、shape 检查失败或 NaN/Inf 均不得触发 cold start。</p>
   <ol>
     <li>固定 <code>z_bar[:,0] = z_measured</code>。</li>
     <li>由 command 一次产生全部 yaw，并用世界系位移的 <code>cumsum</code> 产生 31 个 root XY 节点。</li>
@@ -188,21 +189,30 @@ z_foot(tau) = (1-tau) z_lift + tau z_td + h_swing 4 tau (1-tau)</code></pre>
   <p><code>h_swing</code> 是可调参数，建议初值 0.08 m；它不等于每个查询点的 terrain clearance，后者仍由地形高度和部位安全余量决定。最后用 batched analytic IK 一次得到 <code>[B,31,4,3]</code> 关节角。</p>
 
   <h3>4.3 Rolling warm start</h3>
+  <p><strong>触发条件：</strong>该环境已经完成本生命周期唯一一次 cold start 后，每个 RTI 周期无条件进入 warm start。它只负责继承最近一次有限的已选择轨迹并与当前测量连续连接，不负责根据地形或语义重新规划动作。</p>
+  <pre><code>UNINITIALIZED --cold once--&gt; WARM_ONLY --explicit env reset--&gt; UNINITIALIZED</code></pre>
+  <p>Runtime 必须保存每个环境的 <code>last_finite_selected_trajectory</code>。五个 line-search candidate 包含 <code>alpha=0</code> 的 shifted warm nominal，因此一次 LQ/line-search 没有改善时仍有有限的下一轮轨迹，不能把“没有新优化步”解释成“没有上一轮解”。无效或 nonfinite candidate 禁止写入 warm cache；继续保留本轮 <code>alpha=0</code> 或最近一次有限轨迹，并通过 loss、尺度、regularization、trust region 和 Jacobian 一致性修正后续优化。</p>
+  <p>Warm state 还保存 <code>stance_anchor_w[B,4,3]</code>。它不是优化变量，也不增加 loss、KKT 约束、line-search filter 或 recovery 分支；它只记录每条腿最近一次有效 touchdown 的世界坐标。cold row 从当前 measured FK foot 初始化，连续 stance 跨 RTI 原样保留，只有有限且将要发布的 <code>x1</code> 出现 <code>swing -&gt; stance</code> 时才更新对应腿。显式 reset 只清除 <code>initialized</code>，下一次唯一 cold build 会用测量足端覆盖该 row 的旧 anchor。</p>
   <pre><code>Z_shift[:,0:30] = Z_prev_star[:,1:31]
-q_shift[:,30] = q_shift[:,6]  # 相差一个 24-frame gait 周期</code></pre>
+q_shift[:,30] = q_prev_star[:,30]  # hold the last accepted terminal joint state</code></pre>
   <p>用 measured state 与上一轮预测 <code>x1</code> 的误差一次性重定位全部 root 节点：</p>
   <pre><code>delta_p = p_measured - p_prev_star[1]
-delta_yaw = wrap(yaw_measured - yaw_prev_star[1])
-p_bar_B,k = p_measured + Rz(delta_yaw) (p_shift_B,k - p_shift_B,0)
-yaw_bar_k = yaw_shift_k + delta_yaw</code></pre>
+delta_yaw_physical = wrap(yaw_measured - yaw_shift_0)
+delta_yaw_coordinate = yaw_measured - yaw_shift_0
+p_bar_B,k = p_measured + Rz(delta_yaw_physical) (p_shift_B,k - p_shift_B,0)
+yaw_bar_k = yaw_shift_k + delta_yaw_coordinate</code></pre>
+  <p><strong>2026-07-21 yaw 连续性 amendment：</strong><code>wrap</code> 只用于 SE(2) 位置旋转所需的最短物理角差，禁止对 31 个 <code>yaw_bar_k</code> 节点逐点 wrap。yaw 坐标差把整条 shifted horizon 一次性搬到 measured yaw 所在的 <code>2*pi</code> 分支，因此 <code>x0</code> 仍与 measured 数值相等，horizon 内相邻 yaw 连续。逐节点 wrap 会在预测尾部先越过 <code>+/-pi</code> 时制造约 <code>2*pi</code> 的假跳变，使 Command 和 Smooth 反向拉回 yaw，并经 FK/Contact 耦合产生虚假的 root RPY 与 stance slip。</p>
   <p>关节 measurement mismatch 使用固定衰减向量修正前几帧：</p>
   <pre><code>q_bar_k = q_shift_k + beta_k (q_measured - q_shift_0)
 beta_0 = 1, beta_k -> 0 in the first configured nodes</code></pre>
   <p>最后严格覆盖 <code>z_bar[:,0]=z_measured</code>，重新生成 gait/reference 和 packed map query。新地图进入后续 loss/Jacobian，不通过 hidden repair 改写 nominal XY。</p>
-  <p><strong>2026-07-21 stance-anchor 一致性 amendment：</strong>当前 horizon 起点已经处于 stance 的足，anchor 取 measured/warm <code>z0</code> 的 FK；horizon 内未来发生的 stance onset，anchor 必须取同一事件的 <code>touchdown_reference</code> 并保持到 liftoff。禁止把未来 onset 的 shifted warm FK 当作 anchor，因为 warm <code>q</code> 按合同不经 IK 重建，它可能与新生成 touchdown reference 不一致，从而使 Step 与 Contact 在同一事件互相冲突。</p>
-  <pre><code>a_i(k_onset) = FK_i(z0),                         current stance at k=0
-a_i(k_onset) = p_i_touchdown_reference(k_onset), future stance onset k&gt;0
-a_i(k)       = a_i(k_onset),                     until liftoff</code></pre>
+  <p><strong>2026-07-21 stance-anchor 一致性 amendment：</strong>当前 horizon 起点已经处于 stance 的足，anchor 取 persistent measured/warm anchor。不得把 shifted warm FK 当作新的 persistent anchor。</p>
+  <p><strong>2026-07-21 future-contact amendment：</strong>当前已激活 stance 强绝对锁 persistent world anchor。future onset 只用弱 touchdown reference 引导第一帧落脚，future continuing stance 再使用强相邻足端差分抑制滑动。把 onset 也改成强相邻锁定的实验会继承错误的高位 swing endpoint，产生 <code>87mm</code> stance gap、<code>3.57mm</code> slip 和 <code>0.4605rad</code> joint step，已拒绝。该修正仍属于同一个 Contact loss，不增加优化变量、候选点、地图搜索、硬约束或第八类 loss。</p>
+  <pre><code>e_current_i(k) = p_i(z_k) - a_i_persistent,  stance active at k=0
+e_onset_i(k)   = p_i(z_k) - p_i,target(k),   future onset, weak
+e_future_i(k)  = p_i(z_k) - p_i(z_(k-1)),   future continuing stance
+weight(e_onset) &lt;&lt; weight(e_future)</code></pre>
+  <div class="danger"><strong>Warm-start 白名单（Task 14E 修订）：</strong>生产路径只允许 shift、root rebase、joint mismatch decay、tail fill、x0 overwrite，以及下面显式定义的 published-x1 continuing-stance manifold initialization。除这六步外的 terrain projection、semantic search、全 horizon IK、swing/onset IK、startup/recovery shaping 或其他 contact-dependent trajectory rewrite 均不属于 warm start。<code>WARM_ONLY</code> 中若缓存缺失、shape 错误或 nonfinite，视为 solver invariant fault：禁止退回 cold；runtime 必须显式报告并停止该环境发布，直到环境 reset。</div>
 
   <h2>5. 七项固定 Loss</h2>
   <pre><code>J = w_cmd J_cmd
@@ -217,7 +227,7 @@ a_i(k)       = a_i(k_onset),                     until liftoff</code></pre>
     <tbody>
       <tr><td>Command</td><td>由相邻 root pose 差分跟踪 XY 速度和 yaw rate command。</td><td><code>k,k+1</code></td></tr>
       <tr><td>Step</td><td>在 swing 的 <code>tau=1</code> 节点（phase 11）跟踪 command-conditioned touchdown reference；不做 terrain XY 搜索。</td><td>由 gait event reference 连接时刻</td></tr>
-      <tr><td>Contact</td><td>stance 足世界位置不滑并贴真实地面；当前 stance 锁 measured FK，未来 stance 锁同事件 touchdown reference。</td><td>相邻 stance 节点</td></tr>
+      <tr><td>Contact</td><td>stance 足世界位置不滑并贴真实地面；当前 stance 强锁 persistent world anchor，future onset 弱跟踪 touchdown reference，后续 stance 强相邻锁定。</td><td>当前 segment 绝对 anchor；future onset 节点；continuing stance <code>k-1,k</code></td></tr>
       <tr><td>Swing speed</td><td>swing 中要求足端 XY 速度大于 root XY 速度，并保持相对主动推进。</td><td><code>k,k+1</code></td></tr>
       <tr><td>Terrain</td><td>统一处理 foot/link/root clearance、small 禁踩与全身碰撞。</td><td>节点代价，地图空间梯度耦合轨迹</td></tr>
       <tr><td>Posture</td><td>root height、roll/pitch 与默认关节姿态。</td><td>节点代价</td></tr>
@@ -226,21 +236,26 @@ a_i(k)       = a_i(k_onset),                     until liftoff</code></pre>
   </table>
   <pre><code>J_smooth = sum ||z_(k+1)-z_k||^2_W1
          + sum ||z_(k+1)-2z_k+z_(k-1)||^2_W2</code></pre>
+  <p><strong>2026-07-21 command-conditioned swing-margin amendment：</strong>Swing speed 的相对推进 margin 随平移命令模长连续增加，并在配置速度处饱和：</p>
+  <pre><code>m_swing(v) = m_swing,max clamp(||v_xy|| / v_swing,scale, 0, 1)</code></pre>
+  <p><code>m_swing,max</code> 与 <code>v_swing,scale</code> 都是同一 Swing loss 的可调子权重。该缩放让低速 gait 保留 clearance/joint 平滑裕量，同时让高速 gait 的摆动足相对 root 有足够主动推进；它进入同一 nonlinear residual 与 GGN，不增加命令分支、loss、constraint 或 filter。</p>
   <div class="danger"><strong>禁止扩展：</strong>不得增加 recovery、startup、detour、foot-lead、progress、特殊楼梯等第八类 loss；不得针对场景切换另一套目标函数；不得在 nonlinear score 中加入 LQ/GGN 看不到的隐藏目标。</div>
 
   <h3>5.1 Early command 的滚动一致性 amendment</h3>
   <p>早期摆动 command 子权重只用于当前待发布的第一条 edge，不用于 horizon 内未来的每个 swing 边界：</p>
-  <pre><code>c = 1 - exp(-||v_cmd||^2 / s_cmd^2)
+  <pre><code>c = 1 - exp(-||v_xy||^2 / s_cmd^2)
 e_0 = max_i [ (1-tau_{0,i}) 1[swing_{0,i} and swing_{1,i}] ]
 w_cmd,0 = 1 - (1-w_early) c e_0
 w_cmd,k = 1, k=1,...,29</code></pre>
-  <p>其中 <code>s_cmd</code> 是固定的小 activity scale。它是连续的：零命令时 <code>c=0</code>，因此 zero-command hold 不会被放松；非零命令的当前第一条 swing edge 才允许让 foot 先启动。未来 edge 保持完整 command 压力，避免一个尚未发布的 gait 边界被优化成 kink，再由 rolling warm shift 推入 <code>x1</code>。这仍属于 command loss 的已批准 subweight，不增加 loss、状态变量、KKT 行、candidate 或 filter，也不增加跨时间 Jacobian 带宽。</p>
+  <p>其中 <code>s_cmd</code> 是固定的小 activity scale。该 early 权重只乘 linear command residual：零平移或纯 yaw 时 <code>c=0</code>，因此 XY hold 与 yaw residual 都不会被放松；非零平移命令的当前第一条 swing edge 才允许让 foot 先启动。未来 edge 保持完整 command 压力，避免一个尚未发布的 gait 边界被优化成 kink，再由 rolling warm shift 推入 <code>x1</code>。这仍属于 command loss 的已批准 subweight，不增加 loss、状态变量、KKT 行、candidate 或 filter，也不增加跨时间 Jacobian 带宽。</p>
+  <p>Cold nominal 必须与该首边目标一致：启动时 <code>root_nom,1=root_measured</code>，从 edge <code>1-&gt;2</code> 起才按 <code>command_scale</code> 积分 root pose。否则 LM regularization 会把一次 RTI 方向拉回一个首边已前进的 nominal，即使 <code>w_cmd,0=0</code> 也无法形成规定的 foot-before-root 启动顺序。该规则只修正已有 cold nominal 的第一条 increment；warm shift、七项 loss、KKT 和 line search 结构不变。</p>
 
   <h3>5.2 Zero-command hold 的连续权重 amendment</h3>
-  <p>纯软目标下，零命令的 Command residual 虽以零速度为目标，但 Contact、Posture、Terrain 和 Smooth 仍可通过微小 root 位移降低总损失。为在不增加 hard branch 或 projection 的前提下满足静止合同，Command loss 使用一个仅依赖 command 范数的连续 hold multiplier：</p>
-  <pre><code>m_hold(v_cmd) = 1 + (m_0 - 1) exp(-||v_cmd||^2 / s_cmd^2)
-J_command     = m_hold(v_cmd) J_command_base</code></pre>
-  <p><code>m_0 &gt;= 1</code> 是允许调节的 Command 子权重，<code>s_cmd</code> 与 5.1 使用同一 activity scale。零命令时 multiplier 为 <code>m_0</code>；正式最小非零 command 远大于 <code>s_cmd</code>，multiplier 连续趋近 1，不改变移动命令压力。实现必须通过 residual 的平方根缩放进入 nonlinear loss 与同一 GGN Jacobian，禁止只改 line-search score。</p>
+  <p>纯软目标下，零值 Command residual 分量虽以零速度为目标，但 Contact、Posture、Terrain 和 Smooth 仍可通过微小 root 位移降低总损失。为在不增加 hard branch 或 projection 的前提下满足静止合同，linear 与 yaw 分量使用独立、连续的 hold multiplier：</p>
+  <pre><code>m_xy(v_xy) = 1 + (m_0 - 1) exp(-||v_xy||^2 / s_cmd^2)
+m_yaw(w)   = 1 + (m_0 - 1) exp(-w^2 / s_cmd^2)
+J_command  = m_xy J_command,xy + m_yaw J_command,yaw</code></pre>
+  <p><code>m_0 &gt;= 1</code> 是允许调节的 Command 子权重，<code>s_cmd</code> 与 5.1 使用同一 activity scale。纯 yaw 时仍压住 XY drift，纯平移时仍压住 yaw drift；对应正式非零分量远大于 <code>s_cmd</code> 时各自趋近 1。实现必须通过各 residual 分量的平方根缩放进入 nonlinear loss 与同一 GGN Jacobian，禁止只改 line-search score。</p>
 
   <h2>6. 一次 SQP/RTI、LQ 与 KKT</h2>
   <p>每个控制周期只执行一次 SQP iteration：</p>
@@ -258,7 +273,8 @@ J_command     = m_hold(v_cmd) J_command_base</code></pre>
     <li><code>-qdot_max dt &lt;= q_(k+1)-q_k &lt;= qdot_max dt</code>。</li>
     <li>SQP trust region。</li>
   </ul>
-  <p>stance、terrain、collision、small touchdown 不进入新的 general KKT 行，由固定七项 loss 统一处理。旧设计的 32 行是资源上限而不是新设计目标，禁止重新用 startup/recovery/collision 分支填满。</p>
+  <p>Root position trust 按预测节点累计：对 <code>k=0..30</code>，<code>|delta p_(B,k)| &lt;= k Delta_p</code>。因此 <code>delta p_(B,0)=0</code>，每跨过一条预测 edge 最多新增一份位置修正预算，而持续的速度修正可以在 horizon 内累计。Root orientation 与 joint trust 仍是逐节点常数 box。该定义只改变现有 merged trust box 的数值，不增加 KKT 行、约束类别、loss、candidate 或 filter。</p>
+  <p>terrain、collision、small touchdown 不进入新的 general KKT 行，由固定七项 loss 统一处理。旧设计的 32 行是资源上限而不是新设计目标，禁止重新用 startup/recovery/collision 分支填满。唯一例外是 2026-07-22 批准的 published-x1 当前 stance 保持约束；它使用固定 6 行低秩 Schur KKT 修正，不占用每 interval 的 30 行 box/velocity active-set 预算。</p>
 
   <h2>7. Associative Scan</h2>
   <p>二阶 smooth 使原始 QP 呈 block-pentadiagonal。求解器内部使用 separator：</p>
@@ -305,14 +321,19 @@ Z_alpha = Z_bar + alpha * delta_Z</code></pre>
     <li>zero translation command 的方向误差、foot/root lead 以及以近零 root 位移为分母的 stance-root-carry ratio 数学上 N/A；drift、yaw tracking、绝对 stance slip/stationary/ground、joint 和数值指标仍适用。</li>
     <li>正式 small crossing 场景必须构造真实 crossing opportunity；不能用 opportunity 缺失记成功。</li>
     <li>不同测试可突出不同指标，但所有适用指标必须同时检查。</li>
+    <li>每个环境记录 <code>cold_start_count</code>、<code>warm_start_count</code>、<code>unexpected_cold_restart_count</code> 和 <code>warm_cache_invariant_fault_count</code>。一个无 reset 的 rolling 段必须满足 <code>cold_start_count=1</code>、后续全部为 warm、unexpected restart=0、invariant fault=0。</li>
   </ul>
 
   <h2>11. Stage 1：Flat 全指标门</h2>
-  <p>正式 command 笛卡尔积沿用 275 个带符号组合：</p>
+  <p>正式 command 使用 19 个带符号的单轴速度。每个非零测试命令只激活 longitudinal、lateral 或 yaw 中的一类，不再构造三类速度的笛卡尔积或混合速度：</p>
   <pre><code>vx in {0, +/-0.2, +/-0.4, +/-0.6, +/-0.8, +/-1.0} m/s
 vy in {0, +/-0.3, +/-0.5} m/s
 yaw_rate in {0, +/-0.5, +/-1.0} rad/s
-command_count = 11 * 5 * 5 = 275</code></pre>
+COMMANDS = {(0,0,0)}
+         union {(vx,0,0) | vx != 0}
+         union {(0,vy,0) | vy != 0}
+         union {(0,0,yaw_rate) | yaw_rate != 0}
+command_count = 1 + 10 + 4 + 4 = 19</code></pre>
   <p>每个 command 运行多个完整 gait 周期。重点与门如下：</p>
   <table>
     <thead><tr><th>组</th><th>核心指标</th><th>门</th></tr></thead>
@@ -323,10 +344,12 @@ command_count = 11 * 5 * 5 = 275</code></pre>
       <tr><td>Stance</td><td>XY slip、stationary ratio、ground gap/penetration、anchor residual</td><td>max/mean &lt;=0.5/0.2 mm/frame；stationary 100%；gap &lt;=12 mm；penetration &lt;=1 mm；residual &lt;=0.5 mm</td></tr>
     </tbody>
   </table>
-  <p>同时必须检查 swing clearance、touchdown surface error、root RPY、joint continuity、line-search alpha 分布、warm-start continuity、x0 injection、published x1、map validity 和 nonfinite。flat 的全部适用指标通过后才允许进入 small。</p>
+  <p>同时必须检查 swing clearance、touchdown surface error、root RPY、joint continuity、line-search alpha 分布、cold-once/warm-only lifecycle、warm-start continuity、x0 injection、published x1、map validity 和 nonfinite。flat 的全部适用指标通过后才允许进入 small。</p>
 
   <h2>12. Stage 2：Small Obstacle 全指标门</h2>
   <p>覆盖 sphere、cuboid、cylinder、capsule、cone，不同进入 phase、横向偏置和正式 command。指标集合为：</p>
+  <p>Acceptance fixture 必须复现真实 scanner 的局部地图语义：固定使用真实 scanner 的 <code>151x151</code>、<code>0.01m</code> resolution；small obstacle 的 world center 在进入 obstacle window 时固定一次；之后每个控制步以当前 measured root 重建同尺寸局部 field，并把固定 world obstacle 变换到新的 field 局部坐标。禁止把 field origin 永久固定到进入时刻，也禁止让障碍随 field 原点一起移动。这样晚 phase、高速、长 rolling cell 的 <code>map_valid_ratio</code> 检查的是 planner 查询，而不是测试轨迹走出一张过期局部地图。</p>
+  <p>Formal fixture 的每种高程轮廓还必须与 <code>semantic_course.shape_params_for_profile()</code> 生成的 grounded native shape 一致，不能只共享名义 diameter/height。特别地，diameter <code>0.12m</code> 的 sphere 实际总高为 <code>0.12m</code>，不是 semantic profile 的名义 <code>0.16m</code>；capsule 的圆顶表面也不能近似成整片 <code>0.16m</code> 平顶。geometry parity 测试通过前，formal fixture 结果不能作为真实 small 行为证据。</p>
   <pre><code>M_small = M_flat + M_small_obstacle</code></pre>
   <table>
     <thead><tr><th>组</th><th>定义</th><th>门</th></tr></thead>
@@ -338,6 +361,72 @@ command_count = 11 * 5 * 5 = 275</code></pre>
     </tbody>
   </table>
   <p>flat 中的 joint、foot-before-root、root tracking、stance、touchdown、RTI、line search 和 numerical 门在 small 中仍全部适用。不能以 crossing 成功掩盖碰撞、悬空、关节触限或 root 跟踪失败。</p>
+  <p><strong>2026-07-21 fixture/viewer amendment：</strong>先前 <code>0.05m</code> fixture 上的 ranked small <code>7/7</code> 已作废。fixture 现已固定为真实 <code>0.01m</code>，并按 grounded native sphere/capsule/cuboid/cylinder/cone 的解析表面生成高程；geometry parity tests 通过。针对 parity 后暴露的 pure-yaw 长时漂移和 gait-boundary joint step，只调整已有参数 <code>command_hold_multiplier=4000</code>、<code>smooth=14.25</code>，当前 ranked small <code>7/7</code>、ranked flat <code>7/7</code>、package <code>213 passed</code>。viewer 证据必须使用 Isaac 场景中真实生成的 S4 small obstacle、真实 scanner field，以及每周期直接回放 published x1 后读回的 actual root/joint/foot。碰撞、penetration、touchdown 和 strict crossing 必须复用正式 acceptance runner 的 detector 与阈值。由于 S4 tile 同时包含多个障碍，单目标 viewer trace 在首次 strict crossing 后继续完整一个 24-cycle gait period即结束；禁止把后续无关课程障碍混入目标 crossing，也禁止在 crossing 当帧立即截断以隐藏落脚或 warm-start 回归。</p>
+  <p>当前 real-viewer 证据仍为 RED。诊断发现旧 grounding 把脚几何中心直接放在 terrain height，漏掉了 <code>0.022m</code> foot contact offset；修复后假的 <code>1.865mm</code> stance penetration 消失。当前 49-cycle representative sphere 的红项为 stance slip/anchor <code>3.173/3.366mm</code>、stationary ratio <code>0.9778</code>、root velocity error <code>0.2215m/s</code> 和 swing clearance <code>-1.958mm</code>。最坏 continuing-stance XY 事件位于 FL、phase <code>20->21</code>：root 前进 <code>21.60mm</code> 时脚向后滑 <code>3.08mm</code>，脚离 small footprint <code>59->62mm</code> 且正在远离，说明它不是 Terrain 直接避障推脚。<code>contact_anchor_xy=800</code> 虽可降低 slip，却恶化 root tracking/stationary，故生产候选保留 ranked 绿的 <code>400</code>，停止盲目权重叠加。该差异不是 Isaac readback 延迟（actual/planned foot 最大误差 <code>1.92e-6m</code>），必须在现有七项 loss/nominal/field 合同内继续诊断，不能缩短事件窗口或放宽阈值。</p>
+  <p><strong>2026-07-21 current-contact 与 landing-phase amendment：</strong>solver-layer 诊断证明 measured、persistent anchor 和 warm nominal 在最坏 stance edge 进入 QP 前均为微米级误差，而统一 Contact XY 分母会让未来 stance 行稀释当前 persistent-anchor 行。当前 segment 因此使用自己的 active-row 分母；future onset/continuing 保留原 horizon 分母，避免无意增强 future Contact。该修正使 representative viewer stance slip 从 <code>3.173mm</code> 降至 <code>0.457mm</code>，并保持 ranked small <code>7/7</code>。</p>
+  <p>同一 viewer 随后暴露 phase <code>11-&gt;12</code> joint kink：touchdown target 两节点完全相同，但 warm nominal 的 swing endpoint 足仍比地面高约 <code>89.3mm</code>，下一节点下降 <code>88.5mm</code>，造成 RR thigh nominal jump <code>0.4319rad</code>。<code>contact_future_onset_xy=4</code> 虽压低 joint jump，却产生 <code>23.6mm</code> stance penetration；把现有 joint velocity bound 收紧到 <code>17.5rad/s</code> 虽将 jump 限到 <code>0.348rad</code>，却产生 <code>45.3mm</code> stance penetration 和 <code>16.0mm</code> swing penetration，二者均拒绝。根因是 Terrain foot clearance 在 <code>tau=1</code> 和 stance 仍向上推脚，而 Step/Contact 同时要求落到 contact surface。</p>
+  <p>两种 Terrain phase 候选均已拒绝。把整个 endpoint foot residual 归零会使另一对腿在 local phase 11 穿入平地 <code>22.67mm</code>；只衰减 extra margin 仍产生 <code>14.26mm</code> 穿透，<code>step_z=16</code> 又引入 airborne touchdown、姿态率和 joint 回归。生产 Terrain 公式恢复，不继续用 scalar 掩盖 touchdown 时序。</p>
+  <p><strong>Touchdown 时序实验结论：</strong>phase 11 Contact-ground 特判已拒绝；把 swing 改为 <code>tau=phase/12</code> 并把 Step 移到 phase 12 也已拒绝。后者在 ranked small 中使纯负 yaw joint step 达到 <code>0.35379rad</code>，在 representative viewer 中使 phase <code>11-&gt;12</code> joint step 从 <code>0.41972rad</code> 恶化到 <code>0.44678rad</code>，同时产生 <code>-3.83mm</code> swing clearance。原因是 phase 11 失去 Step 拉力后，Terrain 将最后 swing 节点维持得更高，最终下降更陡。</p>
+  <p><strong>2026-07-22 Step approach amendment：</strong>Task 14 只允许在现有 Step family 内对最后 <code>E=3</code> 条 swing edge 增加连续 touchdown approach。令 <code>r_phi=12-phi</code>，参考点为 <code>p_approach=p_foot,k-1+(p_touchdown-p_foot,k-1)/r_phi</code>；令 <code>u_phi=(phi-9)/(E-1)</code>，Step residual 乘 <code>sqrt(w_phi)</code>，其中 <code>w_phi=0.5+0.5u_phi</code>。因此 phase <code>9/10/11</code> 的能量权重精确为 <code>[0.5,0.75,1.0]</code>，更早 swing 节点为零，phase 11 仍命中原 touchdown target。该公式不改变 nominal，不增加 loss、变量、KKT 行、line-search candidate 或 SQP 次数。</p>
+  <p>同一次 residual evaluation 额外导出 31 节点的 Step、Terrain、Smooth 未加权能量及对应 family-weighted 能量供 viewer 诊断，不执行第二次 solve。边界实验已经完成：<code>[1,1,1]</code> 将 joint step 降到 <code>0.32289rad</code>，但 stance slip/anchor 退化到 <code>1.2939mm</code>、root velocity error 为 <code>0.22184m/s</code>、clearance 为 <code>-2.024mm</code>；<code>[1/3,2/3,1]</code> 恢复 stance 和 root（<code>0.346/0.351mm</code>、<code>0.19991m/s</code>），但 joint step <code>0.42666rad</code>、clearance <code>-0.597mm</code> 仍红。故只允许验证一次中间剖面 <code>[0.5,0.75,1.0]</code>；若不能让 joint、clearance、stance、root、语义、碰撞、validity 和 lifecycle 同时通过，停止继续扫描权重并回到架构复查。</p>
+  <p><strong>Midpoint rejection：</strong>真实 representative viewer 的 midpoint 结果为 joint step <code>0.32291rad</code>，但 stance slip/anchor <code>1.2969mm</code>、stationary <code>0.9889</code>、root velocity error <code>0.22145m/s</code>、clearance <code>-2.080mm</code>，因此拒绝从优化变量 <code>p_foot,k-1</code> 动态构造 approach target 的方案，并停止继续调整权重剖面。</p>
+  <p><strong>Fixed-reference architecture rejection：</strong><code>NominalTrajectory.foot_reference_w</code> 确实包含解析 swing curve、摆高和同一 phase-11 touchdown，但在真实 representative viewer 中，固定世界坐标 reference 仍产生与 trajectory-relative approach 基本相同的 root/stance 回归：joint step <code>0.32251rad</code>，stance slip/anchor <code>1.2939mm</code>，stationary <code>0.9889</code>，root velocity error <code>0.22194m/s</code>，clearance <code>-2.076mm</code>。因此整个“phase 9/10 直接用世界坐标 Step 拉 foot”架构被拒绝，不再增加第三种世界坐标 target 或 profile。</p>
+  <p><strong>Body-relative swing-shaping amendment：</strong>下一候选仍属于现有 Step family，不增加 loss、变量、KKT 行、candidate、recovery、projection 或 SQP。phase <code>9/10</code> 不再用世界坐标 foot residual 直接拉 root，而是比较当前关节产生的 body-frame foot 与 nominal swing reference 转到 nominal body frame 后的结果：</p>
+  <pre><code>p_body(z_k) = R_B(z_k)^T (p_foot(z_k) - p_B(z_k))
+r_body,k   = p_body(z_k) - R_B(bar z_k)^T (p_ref,k - p_B(bar z_k))
+e_step,k   = sqrt(w_k) S r_body,k,       phase 9/10
+e_step,11  = S (p_foot(z_11) - p_touchdown,11), phase 11</code></pre>
+  <p>其中 <code>bar z_k</code> 是本次已经构造出的 nominal，<code>p_ref,k=foot_reference_w[k]</code>，<code>w=[0.5,0.75,1.0]</code> 只保留已批准的末三条 swing edge profile；phase 11 明确保持原 world touchdown endpoint。由于 phase 9/10 的 nominal target 固定且当前 foot 先变换到当前 body frame，根平移/姿态不会成为这两帧 Step residual 的直接优化方向，Step 的关节 shaping 也不会靠移动 root 来完成。Terrain 仍在 world frame 负责 clearance/collision，Contact 仍负责 stance anchor/ground；这不是增加语义硬分支，而是修正同一 residual 的坐标表达。实现必须新增 RED 测试：对 phase 9/10 的 root translation/rotation 做有限差分，Step residual 不应变化；对 phase 11 的 root/foot world movement，residual 仍应变化；body reference 的 phase-11 endpoint 必须与 touchdown reference 保持一致。</p>
+  <p><strong>Body-relative rejection and production restoration：</strong>上述坐标分解通过 focused 求解链 <code>70 passed</code>，但真实 representative viewer 仍为 RED：joint step <code>0.32122rad</code> 通过，stance slip/anchor <code>1.2951mm</code>、stationary <code>0.9889</code>、root velocity error <code>0.22139m/s</code>、clearance <code>-2.053mm</code> 失败。最坏 phase <code>0-&gt;1</code> 事件中，nominal x1 anchor error 仅 <code>0.070mm</code>，QP full step 却增至 <code>1.296mm</code>，root x correction 再次命中 <code>+10mm</code> trust limit。phase 9/10 的直接 root Jacobian 虽已消除，未来 joint shaping 仍通过全 horizon Smooth、Contact 和 root/joint FK 耦合传播到 x1。因此 body-relative 候选也被拒绝，生产恢复唯一已接受的 phase-11-only Step，并删除实验性的 <code>step_approach_edges</code> 调参入口。三个末段 shaping 候选均失败后，禁止继续增加 Step target/profile/coordinate variant；下一次行为架构变更必须重新审查“直接优化 root + 软 Contact + 无动力学 + 单次 RTI”是否能同时满足 touchdown joint continuity 与 <code>0.5mm</code> stance 门。</p>
+  <p><strong>Published-x1 stance KKT amendment：</strong>保留完整 <code>Z[B,31,18]=[p_B,theta_B,q]</code> 优化变量。对 <code>x1</code> 时刻 gait schedule 中恰好两条当前 stance 腿，取完整足端 Jacobian <code>J_i=[I,-R[f_i]_x,RJ_i]</code>，组成固定 <code>A_s[B,6,18]</code>。continuing stance 的 <code>a_s.xy</code> 取 warm state 中的 persistent anchor，<code>a_s.z</code> 每轮在该 XY 查询统一地形场并设为 <code>height_w+foot_contact_offset</code>，不得把 measured 的初始穿透或悬空 z 永久冻结；若该腿在 <code>x0-&gt;x1</code> 刚从 swing 进入 stance，则完整 <code>a_s</code> 取本轮已经生成的 <code>touchdown_reference_w[:,1]</code>，不得读取该腿上一个 stance segment 遗留的旧 anchor。由此与 nominal x1 足端 <code>p_s(bar z_1)</code> 构造固定右端 <code>b_s=a_s-p_s(bar z_1)</code>，并加入仿射纠偏约束：</p>
+  <pre><code>A_s delta z_1 = b_s</code></pre>
+  <p>该约束不把 root 冻住；root 平移或旋转时，stance joint 必须在同一方向中补偿，同时把 nominal 已有的 x1 锚点误差在线性化层纠正，而不是把该误差冻结。只约束真正将发布的 <code>x1</code>；<code>x2..x30</code> 继续使用原 Contact loss 规划未来，下一 RTI 周期再对新的 <code>x1</code> 应用同一规则。真实 viewer 已证明旧齐次式只能把约 <code>1.094mm</code> nominal 错误保持为约 <code>1.091mm</code>，不足以满足 <code>0.5mm</code> 支撑门，因此旧齐次定义被拒绝。首次仿射 viewer 又证明 touchdown onset 若误用旧 persistent anchor，会造成 <code>trajectory_valid_ratio=0.92</code> 和 <code>4.62mm</code> stance penetration；onset 必须使用当前 touchdown reference，选中并发布后再由现有 lifecycle 写成新 persistent anchor。</p>
+  <p>仿射约束只在 <code>alpha=1</code> 时自动满足；缩放方向会得到 <code>A_s(alpha delta z_1)=alpha b_s</code>。五候选 line search 因此增加唯一一个固定物理可行性 filter：对每条完整 candidate 的 x1 做真实 FK，只对 <code>stance(x0) AND stance(x1)</code> 的 continuing-stance 腿要求其 XY 足端到 persistent anchor 的最大范数不超过 <code>0.5mm</code>。touchdown onset 的 x1 正在建立新 persistent anchor，不适用旧 anchor 的 stationary filter；它仍由六行 KKT 的 touchdown target、七项 loss 与原 joint filters 共同约束。这不是 projection、repair、semantic branch 或第二次求解；候选仍为原五个 alpha，目标仍为七项 loss。</p>
+  <p>H30 scan 先在原 box/joint-velocity active 子空间求方向 <code>d_0</code>，再对同一 active system 批量求六个响应列 <code>Y=H_F^{-1}A_s^T</code>，最后执行固定 6x6 Schur 修正：</p>
+  <pre><code>lambda = (A_s Y)^-1 (A_s d_0 - b_s)
+d = d_0 - Y lambda</code></pre>
+  <p>active-set refinement 不再从不满足仿射式的零方向开始，而是先在 x1 构造最小范数可行种子 <code>d_seed=A_s^T(A_s A_s^T)^-1b_s</code>；此后的 feasible-step 只在两个均满足 <code>A_s d=b_s</code> 的方向之间插值，因此不会因 box/velocity 截断重新缩放右端。<code>TrajectoryQp</code> 同时保存 <code>support_jacobian[B,6,18]</code> 与 <code>support_target[B,6]</code>。dense reference 必须把相同 6 行及非零 target 直接放入 KKT，并要求 dense/scan、仿射支撑残差和所有原 box/velocity bound 同时通过。未来 stance、swing、terrain、semantic 和 touchdown 不新增硬行。</p>
+  <p><strong>Support viewer conclusion：</strong>上述仿射层和 grounded-z/onset 生命周期已实现，focused 回归 <code>63 passed</code>。真实 representative viewer 中，最终版本将 stance penetration 降到数值零、stance slip/anchor 降到 <code>0.136/0.181mm</code>，joint step 为 <code>0.34094rad</code>；但 <code>trajectory_valid_ratio=0.98</code>、root velocity error <code>0.21931m/s</code>、swing clearance <code>-3.296mm</code> 仍失败。因此本设计下的 support target/filter/anchor 变体到此停止，禁止启动 ranked/formal；下一次行为修改必须重新批准更高层 optimizer architecture，而不是继续改 x1 anchor 细节。</p>
+  <p><strong>Candidate-level diagnosis：</strong>固定 shape 诊断证明唯一 invalid phase-12 节点的五个 alpha 全部通过 finite/joint-position/joint-velocity/published-stance filters；其七项 loss 按 alpha <code>[1,.5,.25,.125,0]</code> 为 <code>[1000.94,251.37,64.78,18.52,3.62]</code>。根因是 touchdown onset 的仿射右端一次要求两脚修正约 <code>26-32mm</code>，merit 正确选择 alpha 0，而该 nominal analytic-valid 为 false。正式最坏 swing 节点同样不是 filter 问题：nominal/full/selected 足中心 z 为 <code>17.446/22.602/18.704mm</code>，candidate loss 为 <code>[31.24,4.28,2.68,3.10,3.79]</code>，故 alpha <code>0.25</code> 留下 <code>-3.296mm</code> clearance。</p>
+  <p><strong>2026-07-22 approved XY-only support amendment：</strong>用户已批准把 hard support 定义缩为固定四行 world-XY 约束。continuing stance 使用 persistent-anchor XY 的仿射纠偏；<code>x0-&gt;x1</code> touchdown onset 的右端为 0，只保持 nominal x1 XY，不在 support KKT 内强迫 landing correction；Z 完全回到已有 Contact-ground 与 Terrain residual。保留完整 18D 变量、一次 QP/RTI、五 alpha、七 loss 和 continuing-stance exact-FK XY filter。实施顺序固定为 4 行 shape、continuing affine XY、onset zero、dense/scan parity 与原 bounds 的 RED/GREEN 测试，然后只运行 focused regression 和 representative viewer；viewer 全绿前仍禁止 ranked/formal。</p>
+  <p><strong>XY-only implementation result：</strong>上述四行合同已按 RED/GREEN 实现，拆分 focused union 为 <code>66 passed</code>。真实 49-cycle representative viewer 将 validity 从 <code>0.98</code> 修复到 <code>1.0</code>，joint step 为 <code>0.31995rad</code>，stance slip/anchor 为 <code>0.164/0.164mm</code>，并保持 collision、semantic、crossing、penetration 与 cold-once/warm-only 全绿；但 root velocity error 退化到 <code>0.22483m/s</code>，swing clearance 虽改善到 <code>-2.593mm</code> 仍失败。最坏 swing 节点五候选 filter 全绿，七项 loss 选择 alpha <code>1.0</code>，说明剩余问题不是 support filter 或 onset target。禁止继续 support-anchor/scalar 变体及 ranked/formal；下一次行为修改必须重新批准显式 swing 可行性或 one-RTI merit 架构。</p>
+  <p><strong>2026-07-22 approved mixed published-kinematics KKT：</strong>用户已批准把固定秩约束改为六行新语义，而不是恢复旧 stance-XYZ 六行。前四行保持两条 x1 stance 腿的 world-XY；后两行取两条 x1 swing 腿的完整 FK Jacobian z 行。对 swing 腿在 nominal x1 XY 查询与 Terrain 完全相同的 effective surface，并定义：</p>
+  <pre><code>safe_z_i = h_effective(p_nominal_foot_xy) + foot_contact_offset + published_swing_clearance_buffer
+b_z_i    = max(safe_z_i - p_nominal_foot_z, 0)
+J_foot_z,i delta z_1 = b_z_i</code></pre>
+  <p><code>published_swing_clearance_buffer</code> 初值固定为 <code>0</code>，是唯一新增的可视化调参量。nominal 已安全时右端为零，QP 保持其 z；nominal 不安全时 full direction 必须抬到 metric floor。line search 仍保留四类 filter，但第四类从 <code>published_stance</code> 扩为 <code>published_kinematics</code>：对每个 candidate 做真实 FK，continuing stance 检查 persistent-anchor XY，对 swing foot 的 candidate XY 重新查询 effective surface 并检查 z floor。这样 alpha 缩放不能破坏 hard floor，也不会用 nominal XY 的旧地形高度误判移动后的脚。保持完整 18D 变量、一次 QP/RTI、五 alpha、七 loss、两次 active-set refinement、cold-once/warm-only；不增加第二次求解、projection、repair、semantic hard branch 或新 loss。</p>
+  <p>实施必须先 RED 覆盖：共享 effective surface 与 Terrain 一致；六行 shape/FK parity；continuing/onset stance XY target；nominal-below-floor 的正 swing target；nominal-above-floor 的零 target；dense/scan 仿射可行性与原 bounds；candidate XY 重新查图的 swing floor filter；固定四类 filter ABI；viewer 的 nominal/full/selected/safe-z deficit。GREEN 后只跑 focused union 和同一个 49-cycle representative viewer。只有 joint、stance、validity、root tracking、clearance、collision、semantic、crossing、penetration 与 lifecycle 同时全绿，才允许 ranked/formal。</p>
+  <p><strong>Mixed published-kinematics result：</strong>Task 14C 已按 RED/GREEN 完成，focused union 为 <code>93 passed</code>。真实 S4 sphere <code>small_forward</code> viewer 的最坏 swing 节点中，nominal 相对安全面低 <code>2.473mm</code>，full QP 与 selected 分别高于安全面 <code>5.271um</code> 和 <code>5.294um</code>；第四类 filter 仅允许 alpha <code>1.0</code>，最终 clearance 为 <code>+6.219um</code>。validity <code>1.0</code>、joint step <code>0.32031rad</code>、stance slip/anchor <code>0.136/0.118mm</code>、strict crossing、collision、penetration 和 <code>1 cold + 48 warm</code> 均通过。代表性 gate 仍只因 root velocity error <code>0.22393m/s &gt; 0.2m/s</code> 失败。因此六行混合 KKT 的 swing-floor 目标已经闭合，但整体 Task 14 尚未闭合；ranked/formal 继续禁止，下一步只能先分层诊断 nominal x1、full QP、selected alpha、root trust 和指标瞬态，不能直接扫 scalar。</p>
+  <p><strong>Root-layer diagnosis：</strong>不改变任何 solver 行为的真实 viewer 复跑证明，root 误差不是 warm nominal 太慢：overall nominal/full-QP/selected 分别为 <code>0.09045/0.23343/0.22393m/s</code>，warm-only 分别为 <code>0.07150/0.20604/0.19634m/s</code>。full QP 在 <code>41/49</code> 周期比 nominal 更差，line search 只在 <code>3/49</code> 周期改善 full；root XY trust 只饱和四次。cold 首周期 selected 误差为 <code>1.54806m/s</code>，并且大修正在每 12 帧 gait 边界重复。因此根因位于 hard published-foot KKT、joint/root FK 耦合与七项 soft objective 共同产生的 QP 方向，而不是 command scale、line-search filter 或 trust 不够大。正式指标不得删除 cold edge；下一次行为修改必须先批准 root/foot priority 合同，不能直接增大 trust 或降低阈值。</p>
+  <p><strong>2026-07-22 approved published-root XY priority：</strong>用户已批准只保护每轮真正发布的 <code>x1</code> root XY，不冻结整个 horizon，也不把 measured <code>x0</code> 当作目标。令本轮 nominal 为 <code>bar z</code>、QP 方向为 <code>delta z</code>，在现有 box bounds 中固定：</p>
+  <pre><code>delta p_B,1,x = 0
+delta p_B,1,y = 0
+p_B,1,xy(selected) = p_B,1,xy(nominal)</code></pre>
+  <p>这不是新增 KKT 行：<code>x1</code> root XY 作为现有 active box 的 fixed variables 进入同一次 QP；六行 mixed published-kinematics Schur 仍精确为 <code>4 x stance XY + 2 x swing Z</code>。<code>x1</code> root z、RPY、12 个关节及 <code>x2..x30</code> 的 root/joint trust 全部保持原定义，因此未来轨迹仍可优化。cold nominal 的第一条 root edge 本来就保持 measured pose，该约束使 QP 不能为满足足端 KKT 反向/横向移动 root；warm nominal 已具有低于阈值的 command error，该约束同样禁止 QP 将它改坏。足端六行必须由 x1 joint、root z/RPY 和完整 horizon coupling 在原 joint position/velocity bounds 内共同满足。若 dense/scan 不能同时满足 fixed root XY、六行足端仿射式与原 bounds，则方案判定不可行并停止；禁止 recovery、projection、第二次 solve、放宽指标或偷偷解除 fixed bound。</p>
+  <p>实施按 Task 14D TDD：先证明 <code>x0</code> 仍全固定、<code>x1</code> 仅 XY direction 为零、<code>x1 z</code> 与 <code>x2..x30</code> trust 不变；再证明 dense/scan 六行可行性、原 joint bounds、五 alpha candidate 的 published root XY 恒等于 nominal，以及一次 RTI ABI。focused 全绿后只运行同一个 S4 sphere <code>small_forward</code> viewer；代表性指标未全部通过前继续禁止 ranked/formal。</p>
+  <p><strong>Published-root XY priority result：</strong>Task 14D 先发现并修复了 active-set 仿射种子的真实实现错误：旧种子在完整 18D 中求 <code>J^T(JJ^T)^-1b</code>，会让 fixed <code>x1 root XY</code> 从非法点开始；其他 bound 连续阻挡时，两次 refinement 后仍可残留越界。新种子先写入 fixed box，再只在自由列上解六行修正。三阻挡回归从旧实现的 <code>21mm</code> 越界转绿，真实 FK 的 <code>6mm</code> 支撑目标也能在原 bounds 内由 root z/RPY 与 joints 精确满足。focused union 为 <code>93 passed</code>，合同/地形补充为 <code>37 passed</code>，CUDA compile、py_compile 与 diff check 通过。</p>
+  <p>同一个真实 S4 sphere viewer 中，full/selected 的 published root-XY deviation 与 violation count 都严格为零；root velocity <code>0.12535m/s</code>、root direction <code>0.09765rad</code>、stance slip/anchor <code>0.01893mm</code>、clearance <code>+3.748um</code>、crossing、collision、penetration、cold-once/warm-only 和 <code>20ms</code> foot lead 均通过。但整体方案仍拒绝：phase <code>13..23</code> 共十一轮的五个 alpha 全部失败于 exact-FK <code>published_kinematics</code>，validity 仅 <code>0.77551</code>，joint step <code>0.37823rad</code>，stance gap <code>0.08101m</code>，并出现 airborne touchdown。随着 continuing-stance target 增长到约 <code>6.09mm</code>，冻结 root XY 后剩余变量的一次线性 KKT 修正无法在一次 RTI 内进入 <code>0.5mm</code> 非线性 FK filter。保留 solver seed 修复，但 Task 14D 不构成行为闭环；继续禁止 ranked/formal 和 Stage B。下一次行为修改必须重新批准架构，不能隐式增加 projection、repair、第二次 QP/SQP、放宽 filter/指标或解除 fixed bound。</p>
+  <p><strong>2026-07-22 approved Task 14E published support manifold initialization：</strong>用户批准方案 A，显式扩展 warm 白名单，而不是增加第二次 QP/SQP 或放宽 exact-FK filter。根因是 shifted old <code>x2</code> 成为 new <code>x1</code> 时，旧 <code>x2</code> 从未受 published support KKT 约束；warm path 又只 shift/rebase joints，不重建支撑流形，因此 continuing-stance nominal 误差可逐轮增长。固定 root 的 <code>6mm</code> 复现中，现有解析 IK 可把两条 stance 腿的 XY anchor error 降到 <code>1.5e-8m</code>，最大 joint correction 约 <code>0.018rad</code>，证明 current-x1 manifold initialization 是局部可达的。</p>
+  <p>Task 14E 只在 initialized warm row 上、完成 shift/rebase/measurement decay/tail fill/x0 overwrite 后，对 <code>continuing_i = stance_i(x0) AND stance_i(x1)</code> 执行一次张量化闭式映射。先以 shifted state 做 FK，保留 nominal foot z，仅把 continuing leg 的目标 XY 换成 persistent anchor：</p>
+  <pre><code>p_target_i = [a_persistent_i,x, a_persistent_i,y, p_FK_i,z]
+q_IK_i, reachable_i = analytic_IK(p_B,1, R_B,1, p_target_i)
+q_bar_1,i = q_IK_i                  if continuing_i
+q_bar_1,i = q_shift_1,i             otherwise</code></pre>
+  <p>该操作不改 <code>x0</code>、<code>x1</code> root position/RPY、任何 swing/onset leg joint、或 <code>x2..x30</code>；不查询 semantic XY、不改变 touchdown、不覆盖整条 warm joint trajectory。它是 nominal 构造的公开第六步，不是 line-search 后 projection、candidate repair、recovery 或额外优化。之后仍只线性化一次、解一个六行 mixed KKT QP、运行一次 RTI 和固定五 alpha/four filters/seven losses。六行 stance target 应缩到数值残差，swing-Z 行保持原语义。</p>
+  <p>continuing leg 的 IK reachability、finite、原 joint position bounds 和原 <code>30rad/s</code> published <code>x0-&gt;x1</code> velocity bound 必须进入 nominal validity；失败时该 warm row 明确 invalid，但 <code>initialized</code> 不清零、不得回 cold、不得使用旧 joint 或其他候选修补。Task 14E 首先只闭合 phase <code>13..23</code> 的 exact-FK validity/stance gap/airborne touchdown。phase <code>23-&gt;0</code> 的 <code>0.378rad</code> joint-step metric 是独立问题，禁止在同一修改中顺带降低全 horizon <code>joint_velocity_limit=30</code> 或扫描 loss scalar。</p>
+  <p>实施必须先 RED/GREEN 覆盖：<code>6mm</code> shifted-x2 复现；continuing stance XY exactness；nominal foot-z preservation；x0/x1-root/x2..x30/swing/onset invariance；unreachable/position/velocity invalid propagation且不回 cold；support target 归零；alpha-zero exact-FK feasibility；B=<code>1/40/512/1024</code> tensor shape/finite。focused 全绿后只重跑同一个 S4 sphere <code>small_forward</code> viewer。若 validity、stance gap、airborne touchdown 未闭合，停止并回到该 manifold 定义；若它们闭合但 joint step 仍红，再单独设计 Task 14F。代表性 viewer 全绿前继续禁止 ranked/formal 和 Stage B。</p>
+  <p><strong>Task 14E implementation result：</strong>方案 A 已按上述边界实现为 warm nominal 的显式 tensor-only 第六步。<code>6mm</code> 回归、XY/z 与冻结区域、三类 invalid、support target、alpha-zero、lifecycle 和 <code>B=1/40/512/1024</code> 全部通过；focused solver union <code>124 passed</code>，contract/IK/gait/terrain supplement <code>47 passed</code>，nominal final <code>28 passed</code>，<code>py_compile</code> 与 diff check 通过。同一个真实 S4 sphere viewer 中 invalid cycles 从 11 个降为 0，trajectory validity <code>1.0</code>、root velocity <code>0.10739m/s</code>、joint step <code>0.34683rad</code>、stance XY slip <code>0.338mm</code>、swing clearance <code>+9.276um</code>、collision/penetration/crossing/lifecycle 均通过。</p>
+  <p>Task 14E 尚未闭合整体行为：<code>stance_ground_gap=84.63mm</code>、<code>airborne_touchdown=0.020408</code>，并出现 <code>stance_root_carry_ratio_abs=29.72</code>。最坏 continuing-stance XY nominal error 已为 0，证明 XY manifold 生效；失败边界恰在 approved target 保留 shifted foot z，因此旧 horizon 的悬空 z 会被原样带入新 published stance。按既定 gate 停止，不进入 Task 14F，也不把 Task 14E 偷改为 XYZ/onset projection。下一次行为修改必须重新审查 continuing z 与 touchdown-onset manifold 的所有权，仍禁止第二次求解、repair、阈值放宽或 scalar sweep。</p>
+  <p><strong>2026-07-22 approved Task 14E-Z amendment (方案 A)：</strong>用户批准把 warm published-x1 manifold 从 continuing-stance XY 扩展为 all-x1-stance ground initialization，但不把整条 horizon 投影到地形。定义 <code>continuing_i=stance_i(x0) AND stance_i(x1)</code>、<code>onset_i=NOT stance_i(x0) AND stance_i(x1)</code>。continuing 腿使用 persistent anchor XY；onset 腿保留 shifted-x1 FK XY，避免重新引入已证明会产生 <code>26-32mm</code> 单拍修正的 touchdown-reference XY。两类腿的目标 Z 均查询目标 XY 下方的 raw terrain height，并加 <code>foot_contact_offset</code>：</p>
+  <pre><code>target_xy_i = where(continuing_i, persistent_anchor_xy_i, shifted_foot_x1_xy_i)
+target_z_i  = h_raw(target_xy_i) + foot_contact_offset
+target_i    = [target_xy_i, target_z_i]
+q_x1_i      = IK(root_x1, rpy_x1, target_i),  for stance_i(x1)</code></pre>
+  <p>该初始化只替换 x1 stance 腿关节，保持 x0、x1 root position/RPY、x1 swing 腿和 x2..x30 不变。IK reachability、finite、joint-position 与 <code>30rad/s * 0.02s</code> x0-to-x1 velocity 继续进入 nominal validity；失败环境保持 warm-only，不返回 cold。它仍是 pre-LQ nominal 构造，不是 post-solve repair、第二次优化或 semantic XY 搜索。</p>
+  <p>同一个第四类 <code>published_kinematics</code> filter 增加 all-x1-stance raw-ground 检查，不增加第五类 filter 或新调参量。continuing stance 继续执行 <code>0.5mm</code> persistent-anchor XY 检查；所有 x1 stance candidate 在各自 candidate XY 重新查询 raw height，并要求 <code>abs(foot_z-h_raw(foot_xy)-foot_contact_offset) &lt;= published_stance_tolerance</code>。swing-Z safe-floor、六行 mixed KKT、一次 QP/RTI、五 alpha、七 loss、fixed root x1 XY 与 H30 均保持不变。</p>
+  <p>Task 14E-Z 必须先 RED/GREEN 覆盖 continuing XYZ、onset only-Z、冻结区域、candidate-XY raw-height query、stance gap/penetration 双侧过滤、alpha-zero feasibility、invalid warm lifecycle 和 <code>B=1/40/512/1024</code>。focused union 通过后只重跑同一个真实 S4 sphere <code>small_forward</code> viewer。只有 <code>stance_ground_gap&lt;=12mm</code>、<code>airborne_touchdown=0</code> 且原 validity/root/joint/XY-slip/clearance/collision/crossing/lifecycle 门保持绿色，才允许讨论后续 Task 14F；ranked/formal 与 Stage B 继续阻塞。</p>
+  <p><strong>Task 14E-Z execution result：</strong>方案 A 已实现，focused nominal/loss/QP/scan/line-search/RTI/backend 为 <code>127 passed</code>，补充 contract/IK/gait/terrain 为 <code>47 passed</code>，静态检查通过；但同一个 48-cycle representative viewer 仍为 RED。最坏 touchdown onset 的 shifted XY 在规划 raw field 中查询到约 <code>100.26mm</code> 的小障碍顶面，因此 manifold 只把足中心从 <code>127.95mm</code> 调到 <code>122.26mm</code>，而不是普通地面的 <code>22mm</code>。下一拍 continuing stance 回到普通地面目标后产生 <code>100.75mm</code> 足端下降和 <code>0.59164rad</code> 关节跳变。最终 <code>stance_ground_gap=100.75mm</code>、<code>airborne_touchdown=0.020408</code>、validity <code>0.97959</code>；phase 23 还出现 all-five-alpha <code>published_kinematics=false</code>，因为新 stance ground 与新 swing floor 在同一离散切换边界没有共同候选。root tracking、stance XY、clearance、collision、semantic landing 与 strict crossing 保持绿色。</p>
+  <p>该结果证明 all-x1-stance raw-height grounding 本身不足以表达“小障碍不可踩、必须跨过”：当 onset shifted XY 仍落在 small footprint 上时，raw height 的正确物理表面就是障碍顶，单独修改 Z 无法同时得到安全 touchdown XY、ground contact 和 <code>0.35rad</code> joint continuity。不得通过放宽 joint/gap/filter 阈值或删掉 stance-Z filter 宣称闭合。Task 14E-Z 保留为已批准但行为未闭合的实现证据；下一次修改必须重新批准 touchdown XY 所有权或提前下降时序，ranked/formal、Task 14F 与 Stage B 继续阻塞。</p>
 
   <h2>13. Stage 3：Flat + Small 联合复验</h2>
   <p>Stage 1 和 Stage 2 分别通过后，冻结所有参数，在同一 HEAD 重新运行：</p>
@@ -358,7 +447,7 @@ command_count = 11 * 5 * 5 = 275</code></pre>
   -> short rolling
   -> ranked 1-3 cells
   -> small matrix
-  -> formal 275-command behavior</code></pre>
+  -> formal 19-command axis-isolated behavior</code></pre>
   <p>删除或改写所有会长时间运行、无进度输出、无 hard timeout 的旧测试入口。普通 pytest 只负责短单测/合同；重测试由统一 runner 在独立进程组执行。父进程至少每 5 秒输出 stage、cell、wall time、CPU/RSS、GPU memory/utilization 和 child <code>ptxas</code> RSS。</p>
   <table>
     <thead><tr><th>触发条件</th><th>动作</th></tr></thead>

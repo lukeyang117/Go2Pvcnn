@@ -67,6 +67,22 @@ class JointMpcRtiTrajectory:
     status: Tensor
     line_search_alpha: Tensor
     loss_breakdown: dict[str, Tensor] = field(default_factory=dict)
+    cold_start: Tensor | None = None
+    warm_start: Tensor | None = None
+    warm_cache_invariant_fault: Tensor | None = None
+
+
+@dataclass(frozen=True)
+class JointMpcRtiStepDiagnostics:
+    nominal_state: Tensor
+    qp_direction: Tensor
+    stance_anchor_w: Tensor
+    touchdown_reference_w: Tensor
+    candidate_loss: Tensor
+    candidate_filter_valid: Tensor
+    candidate_swing_safe_z: Tensor
+    support_target: Tensor
+    node_loss_breakdown: dict[str, Tensor]
 
 
 @dataclass(frozen=True)
@@ -74,13 +90,15 @@ class JointMpcRtiStepResult:
     full_trajectory: JointMpcRtiTrajectory
     pending_reference: object | None
     solver_state: object | None
+    diagnostics: JointMpcRtiStepDiagnostics | None = None
 
 
 @dataclass(frozen=True)
 class JointMpcRtiSolverState:
     trajectory: Tensor
     gait_phase: Tensor
-    valid: Tensor
+    initialized: Tensor
+    stance_anchor_w: Tensor
 
 
 @dataclass(frozen=True)

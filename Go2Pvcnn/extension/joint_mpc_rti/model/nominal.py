@@ -12,6 +12,8 @@ from extension.joint_mpc_rti.model.analytic_ik import go2_analytic_ik
 from extension.joint_mpc_rti.model.gait_schedule import FixedTrotSchedule, fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.runtime.warm_start import shift_rebase_trajectory
+from extension.joint_mpc_rti.solver.trajectory_qp import JOINT_LOWER, JOINT_UPPER
+from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.terrain.query import query_world
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState, JointMpcRtiState, JointMpcTerrainField
 
@@ -22,8 +24,14 @@ class NominalTrajectory:
     foot_reference_w: Tensor
     touchdown_reference_w: Tensor
     contact_state: Tensor
+    used_cold_start: Tensor
     used_warm_start: Tensor
     valid: Tensor
+    current_stance_anchor_w: Tensor
+
+
+class WarmStartInvariantError(RuntimeError):
+    """Raised when an initialized environment loses its finite warm trajectory."""
 
 
 @dataclass(frozen=True)
@@ -31,18 +39,27 @@ class _FootReferences:
     foot: Tensor
     touchdown: Tensor
     valid: Tensor
+    measured_foot_w: Tensor
+
+
+@dataclass(frozen=True)
+class _WarmManifoldInitialization:
+    state: Tensor
+    valid: Tensor
 
 
 def _integrate_root(measured: JointMpcRtiState, command: Tensor, cfg: JointMpcRtiCfg) -> tuple[Tensor, Tensor]:
     batch = measured.batch_size
     nodes = cfg.runtime.horizon_steps + 1
     node = torch.arange(nodes, dtype=measured.root_pos_w.dtype, device=measured.device)
+    progress_node = (node - 1.0).clamp_min(0.0)
     scaled = command * float(cfg.nominal.command_scale)
-    yaw = measured.root_rpy_w[:, 2:3] + scaled[:, 2:3] * float(cfg.runtime.dt) * node[None]
+    yaw = measured.root_rpy_w[:, 2:3] + scaled[:, 2:3] * float(cfg.runtime.dt) * progress_node[None]
     interval_yaw = yaw[:, :-1]
     vx = torch.cos(interval_yaw) * scaled[:, None, 0] - torch.sin(interval_yaw) * scaled[:, None, 1]
     vy = torch.sin(interval_yaw) * scaled[:, None, 0] + torch.cos(interval_yaw) * scaled[:, None, 1]
     increments = torch.stack((vx, vy), dim=-1) * float(cfg.runtime.dt)
+    increments[:, 0] = 0.0
     displacement = torch.cat(
         (
             torch.zeros(batch, 1, 2, dtype=increments.dtype, device=increments.device),
@@ -108,10 +125,10 @@ def _build_foot_references(
 ) -> _FootReferences:
     batch, nodes = root_pos.shape[:2]
     measured_foot = go2_fk(measured.root_pos_w, measured.root_rpy_w, measured.joint_pos).foot_pos_w
-    nominal_joint = torch.as_tensor(
+    nominal_joint = constant_like(
+        root_pos,
+        "nominal_joint_pos",
         cfg.gait.nominal_joint_pos,
-        dtype=root_pos.dtype,
-        device=root_pos.device,
     ).expand(batch, -1)
     footprint_xy = go2_fk(
         torch.zeros_like(measured.root_pos_w),
@@ -150,8 +167,13 @@ def _build_foot_references(
     )
 
     tau0 = schedule.swing_tau[:, :1]
-    denominator = (1.0 - tau0).clamp_min(1.0e-4)
+    remaining_swing = 1.0 - tau0
+    endpoint = remaining_swing <= 1.0e-4
+    denominator = remaining_swing.clamp_min(1.0e-4)
     inferred_lift_xy = (measured_foot[:, None, :, :2] - tau0[..., None] * touchdown_xy[:, :1]) / denominator[..., None]
+    inferred_lift_xy = torch.where(
+        endpoint[..., None], measured_foot[:, None, :, :2], inferred_lift_xy
+    )
     inferred_lift_xy = torch.where(
         schedule.swing[:, :1, :, None],
         inferred_lift_xy,
@@ -188,6 +210,7 @@ def _build_foot_references(
         - tau0 * touchdown_z[:, :1]
         - float(cfg.gait.h_swing) * 4.0 * tau0 * (1.0 - tau0)
     ) / denominator
+    inferred_lift_z = torch.where(endpoint, measured_foot[:, None, :, 2], inferred_lift_z)
     inferred_lift_z = torch.where(schedule.swing[:, :1], inferred_lift_z, measured_foot[:, None, :, 2])
     lift_z_event = torch.where(
         previous_touchdown_raw <= 0,
@@ -214,7 +237,12 @@ def _build_foot_references(
     foot = torch.where(schedule.swing[..., None], swing_foot, stance_foot)
     touchdown = torch.cat((touchdown_xy, touchdown_z[..., None]), dim=-1)
     valid = query_valid.all(dim=(1, 2, 3))
-    return _FootReferences(foot=foot, touchdown=touchdown, valid=valid)
+    return _FootReferences(
+        foot=foot,
+        touchdown=touchdown,
+        valid=valid,
+        measured_foot_w=measured_foot,
+    )
 
 
 def _build_cold_nominal(
@@ -250,7 +278,16 @@ def _build_cold_nominal(
     state = torch.cat((root_pos, root_rpy, joint), dim=-1)
     state = torch.cat((measured.as_vector()[:, None], state[:, 1:]), dim=1)
     valid = reachable.all(dim=(1, 2)) & torch.where(use_reduced, reduced.valid, full.valid)
-    return NominalTrajectory(state, foot, touchdown, schedule.stance, torch.zeros_like(valid), valid)
+    return NominalTrajectory(
+        state=state,
+        foot_reference_w=foot,
+        touchdown_reference_w=touchdown,
+        contact_state=schedule.stance,
+        used_cold_start=torch.ones_like(valid),
+        used_warm_start=torch.zeros_like(valid),
+        valid=valid,
+        current_stance_anchor_w=full.measured_foot_w,
+    )
 
 
 def _build_warm_nominal(
@@ -266,6 +303,15 @@ def _build_warm_nominal(
         measured.as_vector(),
         decay_nodes=int(cfg.nominal.measurement_decay_nodes),
     )
+    manifold = _initialize_published_stance_manifold(
+        state,
+        schedule,
+        previous.stance_anchor_w,
+        previous.initialized,
+        terrain,
+        cfg,
+    )
+    state = manifold.state
     references = _build_foot_references(
         measured,
         command,
@@ -277,8 +323,69 @@ def _build_warm_nominal(
         step_scale=1.0,
     )
     foot = references.foot
-    valid = previous.valid & references.valid & torch.isfinite(state).all(dim=(1, 2))
-    return NominalTrajectory(state, foot, references.touchdown, schedule.stance, previous.valid, valid)
+    valid = references.valid & manifold.valid & torch.isfinite(state).all(dim=(1, 2))
+    return NominalTrajectory(
+        state=state,
+        foot_reference_w=foot,
+        touchdown_reference_w=references.touchdown,
+        contact_state=schedule.stance,
+        used_cold_start=torch.zeros_like(valid),
+        used_warm_start=torch.ones_like(valid),
+        valid=valid,
+        current_stance_anchor_w=previous.stance_anchor_w,
+    )
+
+
+def _initialize_published_stance_manifold(
+    state: Tensor,
+    schedule: FixedTrotSchedule,
+    stance_anchor_w: Tensor,
+    initialized: Tensor,
+    terrain: JointMpcTerrainField,
+    cfg: JointMpcRtiCfg,
+) -> _WarmManifoldInitialization:
+    warm_rows = torch.as_tensor(initialized, dtype=torch.bool, device=state.device)
+    continuing = schedule.stance[:, 0] & schedule.stance[:, 1] & warm_rows[:, None]
+    published_stance = schedule.stance[:, 1] & warm_rows[:, None]
+    joint_1 = state[:, 1, 6:].reshape(state.shape[0], 4, 3)
+    foot_1 = go2_fk(state[:, 1, :3], state[:, 1, 3:6], state[:, 1, 6:]).foot_pos_w
+    anchor = torch.as_tensor(stance_anchor_w, dtype=state.dtype, device=state.device)
+    target_xy = torch.where(continuing[..., None], anchor[..., :2], foot_1[..., :2])
+    ground = query_world(terrain, target_xy)
+    target_z = ground.height_w + float(cfg.gait.foot_contact_offset)
+    target_foot_1 = torch.cat((target_xy, target_z[..., None]), dim=-1)
+    ik_joint_1, reachable = go2_analytic_ik(
+        state[:, 1, :3], state[:, 1, 3:6], target_foot_1
+    )
+    corrected_joint_1 = torch.where(published_stance[..., None], ik_joint_1, joint_1)
+    corrected_node_1 = torch.cat((state[:, 1, :6], corrected_joint_1.flatten(1)), dim=-1)
+    corrected_state = torch.cat(
+        (state[:, :1], corrected_node_1[:, None], state[:, 2:]), dim=1
+    )
+
+    finite_ik = torch.isfinite(ik_joint_1).all(dim=-1)
+    stance_valid = torch.where(
+        published_stance,
+        reachable & finite_ik & ground.valid,
+        torch.ones_like(published_stance),
+    ).all(dim=-1)
+    joint_lower = constant_like(state, "nominal_joint_lower", JOINT_LOWER)
+    joint_upper = constant_like(state, "nominal_joint_upper", JOINT_UPPER)
+    position_valid = (
+        (corrected_state[:, 1, 6:] >= joint_lower)
+        & (corrected_state[:, 1, 6:] <= joint_upper)
+    ).all(dim=-1)
+    maximum_step = float(cfg.solver.joint_velocity_limit) * float(cfg.runtime.dt)
+    velocity_valid = (
+        (corrected_state[:, 1, 6:] - corrected_state[:, 0, 6:]).abs() <= maximum_step
+    ).all(dim=-1)
+    valid = (
+        stance_valid
+        & position_valid
+        & velocity_valid
+        & torch.isfinite(corrected_state).all(dim=(1, 2))
+    )
+    return _WarmManifoldInitialization(state=corrected_state, valid=valid)
 
 
 def build_nominal(
@@ -297,24 +404,45 @@ def build_nominal(
         raise ValueError("command_body must have shape [B,3]")
     if phase.shape != (measured.batch_size,):
         raise ValueError("gait_phase must have shape [B]")
+    if previous.trajectory.shape != (measured.batch_size, 31, 18):
+        raise WarmStartInvariantError("initialized warm cache must have shape [B,31,18]")
+    initialized = torch.as_tensor(previous.initialized, dtype=torch.bool, device=measured.device)
+    if initialized.shape != (measured.batch_size,):
+        raise WarmStartInvariantError("initialized warm cache mask must have shape [B]")
+    if previous.stance_anchor_w.shape != (measured.batch_size, 4, 3):
+        raise WarmStartInvariantError("initialized stance anchor must have shape [B,4,3]")
+    cache_finite = torch.isfinite(previous.trajectory).all(dim=(1, 2))
+    anchor_finite = torch.isfinite(previous.stance_anchor_w).all(dim=(1, 2))
+    if previous.trajectory.device.type == "cpu":
+        if bool((initialized & ~cache_finite).any().item()):
+            raise WarmStartInvariantError("initialized warm cache must be finite")
+        if bool((initialized & ~anchor_finite).any().item()):
+            raise WarmStartInvariantError("initialized stance anchor must be finite")
     schedule = fixed_trot_schedule(phase, horizon_steps=cfg.runtime.horizon_steps)
     cold = _build_cold_nominal(measured, command, terrain_field, schedule, cfg)
     warm = _build_warm_nominal(measured, command, terrain_field, schedule, previous, cfg)
-    use_warm = previous.valid[:, None, None]
+    use_warm = initialized[:, None, None]
     state = torch.where(use_warm, warm.state, cold.state)
     foot = torch.where(use_warm[:, :, None], warm.foot_reference_w, cold.foot_reference_w)
     touchdown = torch.where(
         use_warm[:, :, None], warm.touchdown_reference_w, cold.touchdown_reference_w
     )
-    valid = torch.where(previous.valid, warm.valid, cold.valid)
+    valid = torch.where(initialized, warm.valid, cold.valid)
+    current_stance_anchor = torch.where(
+        initialized[:, None, None],
+        warm.current_stance_anchor_w,
+        cold.current_stance_anchor_w,
+    )
     return NominalTrajectory(
         state=state,
         foot_reference_w=foot,
         touchdown_reference_w=touchdown,
         contact_state=schedule.stance,
-        used_warm_start=previous.valid,
+        used_cold_start=~initialized,
+        used_warm_start=initialized,
         valid=valid,
+        current_stance_anchor_w=current_stance_anchor,
     )
 
 
-__all__ = ["NominalTrajectory", "build_nominal"]
+__all__ = ["NominalTrajectory", "WarmStartInvariantError", "build_nominal"]

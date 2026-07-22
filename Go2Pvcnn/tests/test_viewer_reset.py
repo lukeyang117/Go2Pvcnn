@@ -20,6 +20,7 @@ from extension.batch_mpc_planner.types import MpcPlannerTerrain
 from extension.batch_mpc_planner.config import MpcPlannerCfg
 from extension.viz import go2_foostep_planner as viewer
 from scripts import play
+from Go2Pvcnn.tests.fixtures.viewer_runtime_diagnostics import RealViewerRuntimeFixture
 
 
 class _FakeRobot:
@@ -185,6 +186,36 @@ def test_viewer_build_env_cfg_uses_viewer_cfg_name() -> None:
 
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER" in build_env_cfg_source
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" not in build_env_cfg_source
+
+
+def test_real_viewer_fixture_compacts_physx_buffers_only_for_small_runtime() -> None:
+    defaults = {
+        "gpu_max_rigid_contact_count": 2**23,
+        "gpu_max_rigid_patch_count": 10 * 2**15,
+        "gpu_found_lost_pairs_capacity": 2**21,
+        "gpu_found_lost_aggregate_pairs_capacity": 2**25,
+        "gpu_total_aggregate_pairs_capacity": 2**21,
+        "gpu_collision_stack_size": 2**26,
+        "gpu_heap_capacity": 2**26,
+        "gpu_temp_buffer_capacity": 2**24,
+    }
+
+    def configured(num_envs: int) -> SimpleNamespace:
+        fixture = object.__new__(RealViewerRuntimeFixture)
+        fixture.num_envs = num_envs
+        physx = SimpleNamespace(**defaults)
+        fixture.env_cfg = SimpleNamespace(sim=SimpleNamespace(physx=physx))
+        fixture._configure_compact_runtime_physx_buffers()
+        return physx
+
+    compact = configured(1)
+    assert compact.gpu_max_rigid_contact_count == 2**20
+    assert compact.gpu_max_rigid_patch_count == 2**17
+    assert compact.gpu_found_lost_aggregate_pairs_capacity == 2**20
+    assert compact.gpu_heap_capacity == 2**24
+
+    large = configured(4096)
+    assert vars(large) == defaults
 
 
 def test_play_configure_reference_trajectory_disables_mpc() -> None:
@@ -534,6 +565,30 @@ def test_viewer_ground_robot_from_scanner_shifts_root_z_to_match_ground(monkeypa
     assert z_shift == pytest.approx(-0.2)
     torch.testing.assert_close(robot.data.root_pos_w[:, 2], torch.tensor([0.3], dtype=torch.float32))
     torch.testing.assert_close(robot.data.root_lin_vel_w, torch.zeros_like(robot.data.root_lin_vel_w))
+    assert scene.write_count == 1
+    assert scene.update_count == 1
+    assert sim.render_count == 1
+
+
+def test_viewer_ground_robot_from_scanner_can_preserve_foot_contact_offset(monkeypatch) -> None:
+    base_env, robot, scene, sim = _fake_base_env()
+    terrain = MpcPlannerTerrain(
+        height_map=torch.zeros((1, 5, 5), dtype=torch.float32),
+        semantic_map=torch.zeros((1, 5, 5), dtype=torch.long),
+        world_x_range=(-1.0, 1.0),
+        world_y_range=(-1.0, 1.0),
+    )
+    monkeypatch.setattr(viewer, "_compute_mpc_local_terrain", lambda scanner, env_id=0: (terrain, None))
+
+    z_shift = viewer._viewer_ground_robot_from_scanner(
+        base_env,
+        object(),
+        [0, 1, 2, 3],
+        foot_contact_offset=0.022,
+    )
+
+    assert z_shift == pytest.approx(-0.178)
+    torch.testing.assert_close(robot.data.root_pos_w[:, 2], torch.tensor([0.322], dtype=torch.float32))
     assert scene.write_count == 1
     assert scene.update_count == 1
     assert sim.render_count == 1

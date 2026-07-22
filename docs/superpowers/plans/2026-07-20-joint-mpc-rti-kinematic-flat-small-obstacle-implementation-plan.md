@@ -32,14 +32,26 @@ dense/scan parity = max abs error < 2e-5
 Stage B = realistic synchronous 1024 x H30 x 1000 <= 5.0s
 ```
 
-Allowed tuning is limited to the seven loss weights and their approved subweights, `h_swing`, clearance margins that do not weaken physical geometry, smoothing temperatures, command/step reference scales, posture references, measurement-mismatch decay, trust-region sizes, regularization, `small_sigma_m`, `large_sigma_m`, `small_gain`, `large_gain`, and `h_wall`. The two active-set refinement passes and convolution/Scharr/query structure are frozen. Do not add loss categories, candidate filters, recovery logic, output projection, scenario-specific objective branches, or discrete semantic hard branches in the optimizer.
+Allowed tuning is limited to the seven loss weights and their approved subweights, `h_swing`, clearance margins that do not weaken physical geometry, smoothing temperatures, command/step reference scales, posture references, measurement-mismatch decay, trust-region sizes, regularization, `small_sigma_m`, `large_sigma_m`, `small_gain`, `large_gain`, and `h_wall`. The two active-set refinement passes and convolution/Scharr/query structure are frozen. Do not add loss categories, recovery logic, output projection, scenario-specific objective branches, or discrete semantic hard branches in the optimizer. The only fourth candidate filter authorized below is the fixed published-x1 stance-anchor feasibility gate at the existing `0.5mm` acceptance threshold.
+
+2026-07-22 support-KKT amendment: the sole new hard optimizer row family is the fixed six-row affine current-stance correction constraint at published `x1`, `A_stance delta z1 = b_stance`, where `b_stance = anchor_stance - foot_nominal_stance_x1`. It gathers the two stance legs from the fixed gait schedule and uses their complete root/RPY/joint foot Jacobians. For a continuing stance leg, `anchor_stance.xy` is the persistent warm anchor while `anchor_stance.z` is refreshed from the unified terrain field at that XY plus `foot_contact_offset`; for an `x0->x1` swing-to-stance onset, the complete anchor is the current `touchdown_reference_w[:,1]`, never the stale anchor from that leg's previous stance segment. It is solved as a fixed-rank Schur correction around the existing active H30 scan, so the per-interval box/velocity compile budget remains 30 rows. Because alpha scaling does not preserve a nonzero right-hand side, line search adds one exact-FK continuing-stance XY filter at `0.5mm`; onset feet establish their new anchor and are excluded from that filter. No future-stance row, terrain/semantic row, projection, recovery, second QP, or second SQP is authorized.
+
+The cold nominal follows the approved first-edge command amendment: root pose node one equals the measured root pose, and command-scaled root integration begins on edge `1->2`. This keeps the nominal and GGN objective consistent during startup without changing the rolling warm shift or adding startup state/logic.
+
+Warm-start lifecycle is a one-way per-environment state machine:
+
+```text
+UNINITIALIZED --one cold build--> WARM_ONLY --explicit env reset--> UNINITIALIZED
+```
+
+Cold start is forbidden after initialization. Candidate rejection, `alpha=0`, command/map changes, a missing new optimizer step, shape mismatch, and nonfinite candidate output must not route back to cold construction. Runtime preserves the last finite selected trajectory; `alpha=0` is the ordinary no-improvement result. A missing or corrupt cache in `WARM_ONLY` is an explicit solver invariant fault and blocks publication for that environment until reset.
 
 ## Target File Map
 
 ```text
 Go2Pvcnn/extension/joint_mpc_rti/
 |- config.py                         # only approved fixed contracts and tuning parameters
-|- types.py                          # measured input, nominal, optimized trajectory, compact solver state
+|- types.py                          # measured input, nominal, optimized trajectory, warm-only lifecycle state
 |- planner.py                        # short one-RTI orchestration only
 |- model/gait_schedule.py            # fixed 24/12+12 tensor schedule
 |- model/analytic_ik.py              # batched Go2 analytic IK
@@ -57,10 +69,10 @@ Go2Pvcnn/extension/joint_mpc_rti/
 |- losses/objective.py               # exact seven-key nonlinear objective and GGN blocks
 |- solver/trajectory_qp.py           # block bands, active constraints, dense reference
 |- solver/trajectory_scan.py         # fixed H30/32 associative solve
-|- solver/line_search.py              # five candidates, three filters, seven-loss argmin
+|- solver/line_search.py              # five candidates, four filters, seven-loss argmin
 |- solver/sqp_rti.py                  # one linearize/solve/search update
-|- runtime/warm_start.py              # compact shifted trajectory state helpers
-|- runtime/manager.py                 # batch lifecycle, x1 buffer, graph dispatch
+|- runtime/warm_start.py              # five-operation shifted trajectory helper
+|- runtime/manager.py                 # per-env cold-once/warm-only lifecycle, x1 buffer, graph dispatch
 `- runtime/cuda_graph.py              # fixed-address new solver state replay
 
 Go2Pvcnn/tests/joint_mpc_rti/
@@ -116,9 +128,9 @@ def test_loss_config_has_exactly_seven_top_level_weights():
     }
 
 
-def test_solver_state_has_no_recovery_or_independent_control():
+def test_solver_state_has_only_warm_lifecycle_state():
     fields = set(JointMpcRtiSolverState.__dataclass_fields__)
-    assert fields == {"trajectory", "gait_phase", "valid"}
+    assert fields == {"trajectory", "gait_phase", "initialized", "stance_anchor_w"}
 ```
 
 - [ ] **Step 2: Run the contract tests and verify RED**
@@ -139,9 +151,10 @@ Use these public structures:
 ```python
 @dataclass(frozen=True)
 class JointMpcRtiSolverState:
-    trajectory: Tensor       # [B,31,18], previous accepted Z*
+    trajectory: Tensor       # [B,31,18], last finite selected Z; meaningful when initialized
     gait_phase: Tensor       # [B], int64 in [0,23]
-    valid: Tensor            # [B], bool
+    initialized: Tensor      # [B], false only before first call or after explicit env reset
+    stance_anchor_w: Tensor  # [B,4,3], persistent touchdown anchors; warm memory, not optimized Z
 
 
 @dataclass(frozen=True)
@@ -341,16 +354,34 @@ git commit -m "feat: add batched analytic ik for nominal trajectories"
 
 ---
 
-### Task 4: Build Cold And Rolling Nominal In One Call
+### Task 4: Implement The Cold-Once/Warm-Only Nominal Lifecycle
 
 **Files:**
 - Create: `Go2Pvcnn/extension/joint_mpc_rti/model/nominal.py`
 - Rewrite: `Go2Pvcnn/extension/joint_mpc_rti/runtime/warm_start.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/types.py`
 - Create: `Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py`
 
-- [ ] **Step 1: Write RED shape, formula, shift, and source tests**
+- [ ] **Step 1: Write RED lifecycle, shape, shift, and invariant tests**
 
 ```python
+def test_each_environment_uses_cold_only_before_initialization_or_after_reset():
+    state = uninitialized_solver_state(measured, phase)
+    first = prepare_nominal(measured, command, field, state, cfg)
+    assert first.used_cold_start.all()
+    initialized = solver_state_from_selected(first.state, phase, initialized=True)
+
+    second = prepare_nominal(measured_next, command, field, initialized, cfg)
+    assert second.used_warm_start.all()
+    assert not second.used_cold_start.any()
+
+    selected = solver_state_from_selected(second.state, phase + 1, initialized=True)
+    reset_state = reset_solver_rows(selected, torch.tensor([False, True]))
+    third = prepare_nominal(measured_reset, command, field, reset_state, cfg)
+    assert torch.equal(third.used_cold_start, torch.tensor([False, True]))
+    assert torch.equal(third.used_warm_start, torch.tensor([True, False]))
+
+
 def test_nominal_builder_returns_complete_b31_state_in_one_call():
     previous = invalid_solver_state_from_measurement(measured, phase)
     result = build_nominal(measured, command, field, phase, previous=previous, cfg=cfg)
@@ -361,16 +392,32 @@ def test_nominal_builder_returns_complete_b31_state_in_one_call():
 
 
 def test_warm_nominal_is_shift_rebase_and_measurement_decay():
-    previous = accepted_solver_state(accepted, phase)
-    result = build_nominal(measured_next, command, field, phase + 1, previous=previous, cfg=cfg)
+    previous = initialized_solver_state(accepted, phase)
+    result = prepare_nominal(measured_next, command, field, previous, cfg)
     assert result.used_warm_start.all()
     torch.testing.assert_close(result.state[:, 0], measured_next.as_vector())
     torch.testing.assert_close(result.state[:, 30, 6:], result.state[:, 6, 6:], atol=1e-6, rtol=0)
 
 
-def test_nominal_source_has_no_for_or_while():
-    tree = ast.parse(textwrap.dedent(inspect.getsource(build_nominal)))
-    assert not any(isinstance(node, (ast.For, ast.While)) for node in ast.walk(tree))
+def test_initialized_corrupt_cache_is_fault_not_cold_fallback(monkeypatch):
+    previous = initialized_solver_state(accepted, phase)
+    previous.trajectory[:, 4, 7] = torch.nan
+    cold = monkeypatch.spy(nominal_module, "build_cold_nominal")
+    with pytest.raises(WarmStartInvariantError, match="initialized warm cache"):
+        prepare_nominal(measured_next, command, field, previous, cfg)
+    cold.assert_not_called()
+
+
+def test_warm_nominal_xy_is_not_rewritten_by_semantics_or_terrain_projection():
+    flat = prepare_nominal(measured_next, command, flat_field, previous, cfg)
+    obstacle = prepare_nominal(measured_next, command, obstacle_field, previous, cfg)
+    torch.testing.assert_close(flat.state, obstacle.state)
+
+
+def test_nominal_sources_have_no_environment_time_or_leg_loop():
+    for function in (build_cold_nominal, shift_rebase_trajectory, prepare_nominal):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+        assert not any(isinstance(node, (ast.For, ast.While)) for node in ast.walk(tree))
 ```
 
 - [ ] **Step 2: Run and verify RED**
@@ -380,51 +427,45 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m py
   Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py -q
 ```
 
-Expected: FAIL because the one-call builder does not exist.
+Expected: FAIL because the current implementation overloads trajectory validity as lifecycle state and silently reinitializes corrupt rows.
 
-- [ ] **Step 3: Implement cold nominal**
+- [ ] **Step 3: Implement the lifecycle state and cold initialization**
 
 ```python
+class WarmStartInvariantError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class NominalTrajectory:
     state: Tensor
     foot_reference_w: Tensor
     touchdown_reference_w: Tensor
     contact_state: Tensor
+    used_cold_start: Tensor
     used_warm_start: Tensor
     valid: Tensor
 
 
-def build_nominal(measured, command_body, terrain_field, gait_phase, previous, cfg):
-    schedule = fixed_trot_schedule(gait_phase, horizon_steps=30)
-    cold = build_cold_nominal(measured, command_body, terrain_field, schedule, cfg)
-    warm = build_shifted_nominal(measured, command_body, terrain_field, schedule, previous, cfg)
-    use_warm = previous.valid[:, None, None]
-    state = torch.where(use_warm, warm.state, cold.state)
-    foot = torch.where(use_warm.unsqueeze(-1), warm.foot_reference_w, cold.foot_reference_w)
-    touchdown = torch.where(
-        use_warm.unsqueeze(-1), warm.touchdown_reference_w, cold.touchdown_reference_w
-    )
-    valid = torch.where(previous.valid, warm.valid, cold.valid)
-    return NominalTrajectory(
-        state=state,
-        foot_reference_w=foot,
-        touchdown_reference_w=touchdown,
-        contact_state=schedule.stance,
-        used_warm_start=previous.valid,
-        valid=valid,
-    )
+def reset_solver_rows(state, reset_mask):
+    return replace(state, initialized=state.initialized & ~reset_mask)
 ```
 
-Cold nominal must reduce the configured command step scale with one batch mask if analytic IK reports unreachable points; it may not search semantic XY or create candidate trajectories.
+`initialized=False` may be produced only by solver-state creation or `reset_solver_rows`. Cold nominal runs for those rows once, sets exact measured `x0`, and produces the finite cache used by the first RTI. It must retain the approved first-edge root hold and may reduce command step scale with one batch mask if analytic IK reports unreachable points; it may not search semantic XY or create candidate trajectories.
 
-- [ ] **Step 4: Implement shifted warm nominal**
+- [ ] **Step 4: Implement the five-operation warm whitelist and no-backward transition**
 
-Use tensor slicing for `previous[:,1:31]`, gait-period terminal joint copy `q30=q6`, SE(2) root rebase from old predicted `x1` to measured root, and one fixed `beta[31]` measurement mismatch vector. Query new terrain references after rebase; do not rebuild warm `q` through IK.
+Use tensor slicing for `previous[:,1:31]`, terminal joint hold from the last accepted `q30`, SE(2) root rebase from old predicted `x1` to measured root, and one fixed `beta[31]` measurement mismatch vector. Query new terrain references after rebase; do not rebuild warm `q` through IK and do not copy an unconstrained gait-phase interior joint node into the terminal state.
 
-2026-07-21 amendment: when building Contact context, use FK at node zero for a stance segment already active at the horizon start, but use the matching `touchdown_reference_w` at every future stance onset and tensorially hold it until liftoff. Add a RED test where shifted warm FK deliberately differs from the regenerated touchdown target. This is a Step/Contact reference-consistency correction, not warm IK repair or a new constraint/loss.
+2026-07-21 yaw-continuity amendment: compute `delta_yaw_physical = wrap(yaw_measured - yaw_shift_0)` only for the SE(2) XY rotation, but add the unwrapped coordinate delta `yaw_measured - yaw_shift_0` uniformly to every shifted yaw node. Never wrap the 31 output yaw nodes independently. Add RED/GREEN tests for both cases: the prediction tail crosses `pi` before measured yaw does, and measured yaw has already changed its `2*pi` coordinate branch. Both must retain exact measured `x0` and continuous adjacent yaw.
 
-The Step event must be the `tau=1` swing endpoint, phase `swing_steps-1` (`11`), not the first stance node phase `12`. Contact starts at phase `12` with the same touchdown anchor, giving a continuous target across the phase boundary.
+Before any warm operation, assert that every initialized row has shape `[31,18]` and is finite. Missing, wrong-shape, or nonfinite initialized cache raises `WarmStartInvariantError`; it must not alter `initialized` and must not call cold construction. The warm path is limited to shift, root rebase, joint mismatch decay, tail fill, and exact `x0` overwrite.
+
+`prepare_nominal` selects cold only with `cold_mask = ~previous.initialized` and warm only with `warm_mask = previous.initialized`. The planner writes `initialized=True` after selecting the first finite trajectory. Nominal/query validity remains a separate output and never drives the lifecycle mask.
+
+2026-07-21 amendment: for a stance segment already active at the horizon start, use the persistent measured/warm world anchor. At a future stance onset, weakly track the touchdown reference with `contact_future_onset_xy`; for continuing future stance, strongly penalize consecutive world-foot differences with `contact_anchor_xy`. Strong relative locking at onset was tested and rejected because it inherited a high swing endpoint and regressed stance gap, slip, and joint continuity. It remains one Contact loss and adds no variable, semantic search, hard constraint, projection, or recovery path.
+
+The production Step event remains the `tau=1` swing endpoint, phase `swing_steps-1` (`11`), and Contact starts at phase `12`. Moving Step to phase 12 was tested later in Task 14 and rejected because it increased the boundary joint jump and caused negative swing clearance.
 
 - [ ] **Step 5: Run GREEN at B=1,40,512,1024**
 
@@ -433,15 +474,16 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m py
   Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py -q
 ```
 
-Expected: PASS for all batch sizes, no source loops, finite state, exact measured `z0`, and no semantic XY modification.
+Expected: PASS for all batch sizes, per-row reset isolation, exactly one cold transition per lifecycle, warm-only continuation, no source loops, finite state, exact measured `z0`, no semantic/terrain state rewrite, and explicit invariant failure instead of cold fallback.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/joint_mpc_rti/model/nominal.py \
   Go2Pvcnn/extension/joint_mpc_rti/runtime/warm_start.py \
+  Go2Pvcnn/extension/joint_mpc_rti/types.py \
   Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py
-git commit -m "feat: build vectorized cold and rolling nominal"
+git commit -m "feat: enforce cold-once warm-only nominal lifecycle"
 ```
 
 ---
@@ -619,6 +661,8 @@ Each function must return `[B]` nonlinear cost and expose residual/Jacobian help
 
 2026-07-21 zero-command amendment: multiply the existing Command residual by the square root of `1 + (command_hold_multiplier - 1) * exp(-||v_cmd||^2 / command_activity_scale^2)`. This must affect nonlinear scoring and GGN through the same residual, remain continuous, equal the configured multiplier at exactly zero, and converge to one for the formal nonzero command range. Add RED tests for those three properties. Do not add command-zero branching, output projection, a new loss key, or a line-search-only score.
 
+2026-07-21 swing-margin amendment: interpret `swing_speed_margin` as the saturated maximum and add the existing-loss subweight `swing_speed_command_scale`. Use `margin = swing_speed_margin * clamp(||v_xy|| / swing_speed_command_scale, 0, 1)` inside the shared Swing residual. Add a RED test showing that, for the same state and direction, `0.4 m/s` receives four times the margin energy of `0.2 m/s` when the scale is `0.4` and the maximum margin is `0.02`. The formula must remain continuous, affect nonlinear scoring and GGN identically, and add no command branch, loss, KKT row, candidate, or filter.
+
 - [ ] **Step 4: Run loss tests and finite-difference Jacobian tests**
 
 ```bash
@@ -691,6 +735,14 @@ class TrajectoryQp:
 ```
 
 Assemble GGN blocks from the seven residual Jacobians. Merge position and trust bounds into one box per state component so a node contributes at most 18 active box rows; velocity contributes at most 12 edge rows. Do not add stance, collision, startup, or recovery constraint rows.
+
+Root position trust uses an accumulated per-edge budget:
+
+```python
+abs(delta_p_B[:, k]) <= k * cfg.solver.root_position_trust
+```
+
+Node zero remains fixed, node one receives one trust increment, and node 30 receives 30 increments. Root orientation and joint trust remain constant per-node boxes. This preserves the same merged-box KKT structure and row budget while allowing a sustained horizon velocity correction.
 
 - [ ] **Step 4: Implement dense reference helpers**
 
@@ -940,6 +992,8 @@ selected_index = tie.to(torch.int64).argmax(dim=1)  # descending alpha order
 
 `alpha=0` nominal must be feasible by construction and is the only fallback. Do not return constraint violation fields.
 
+Add a regression where every nonzero-alpha candidate is nonfinite or fails joint filters. The selected result must be the finite `alpha=0` shifted warm nominal, and it must remain the next cycle's initialized warm cache. Candidate rejection must never request cold initialization.
+
 - [ ] **Step 4: Delete conflicting old tests and run GREEN**
 
 Delete tests that require safer-base selection, required-control injection, constraint-component restoration, collision hard gates, recovery fallback, or post-candidate FK/KKT projection. Retain generic finite, shape, tie, position, and velocity tests under `test_line_search_v2.py`.
@@ -987,6 +1041,24 @@ def test_planner_runs_one_nominal_linearize_scan_search_and_publishes_x1(monkeyp
     torch.testing.assert_close(result.pending_reference.root_pos_w, result.full_trajectory.state[:, 1, :3])
 
 
+def test_failed_update_keeps_alpha_zero_warm_cache_without_cold_restart(monkeypatch):
+    state = initialized_solver_state(previous_finite_trajectory, phase)
+    force_all_nonzero_alpha_candidates_invalid(monkeypatch)
+    first = planner_step(measured, command, field, solver_state=state, cfg=cfg)
+    assert torch.equal(first.full_trajectory.line_search_alpha, torch.zeros(B))
+    assert first.solver_state.initialized.all()
+    second = planner_step(measured_next, command, field, solver_state=first.solver_state, cfg=cfg)
+    assert second.nominal.used_warm_start.all()
+    assert not second.nominal.used_cold_start.any()
+
+
+def test_reset_reinitializes_only_selected_environment_once():
+    reset = manager.reset_rows(initialized_state, torch.tensor([False, True]))
+    result = planner_step(measured_reset, command, field, solver_state=reset, cfg=cfg)
+    assert torch.equal(result.nominal.used_cold_start, torch.tensor([False, True]))
+    assert result.solver_state.initialized.all()
+
+
 def test_planner_source_has_no_old_repair_calls():
     source = inspect.getsource(planner_step)
     forbidden = ("recovery", "startup", "restore_candidate", "minimum_norm", "enforce_first_stance")
@@ -1011,11 +1083,12 @@ def step(measured_state, command_body, terrain_field, solver_state, cfg):
         previous = JointMpcRtiSolverState(
             trajectory=measured_state.as_vector()[:, None].expand(-1, 31, -1).clone(),
             gait_phase=torch.zeros(batch, dtype=torch.long, device=measured_state.device),
-            valid=torch.zeros(batch, dtype=torch.bool, device=measured_state.device),
+            initialized=torch.zeros(batch, dtype=torch.bool, device=measured_state.device),
+            stance_anchor_w=measured_fk_foot_w,
         )
     else:
         previous = solver_state
-    nominal = build_nominal(
+    nominal = prepare_nominal(
         measured_state,
         command_body,
         terrain_field,
@@ -1051,7 +1124,8 @@ def step(measured_state, command_body, terrain_field, solver_state, cfg):
     next_solver_state = JointMpcRtiSolverState(
         trajectory=state,
         gait_phase=(previous.gait_phase + 1) % 24,
-        valid=nominal.valid,
+        initialized=torch.ones(batch, dtype=torch.bool, device=measured_state.device),
+        stance_anchor_w=update_touchdown_anchors_only(previous, geometry, nominal.contact_state),
     )
     return JointMpcRtiStepResult(
         full_trajectory=trajectory,
@@ -1060,11 +1134,11 @@ def step(measured_state, command_body, terrain_field, solver_state, cfg):
     )
 ```
 
-`sqp_rti_update` performs exactly one linearization, one active-set scan QP solve, and one line search.
+`sqp_rti_update` performs exactly one linearization, one active-set scan QP solve, and one line search. Its returned `state` must be finite because `alpha=0` is the shifted/cold nominal candidate. Nonfinite selected output is an invariant failure, not a reason to clear `initialized` or rebuild cold. `stance_anchor_w` is persistent warm memory rather than an optimization variable: cold rows initialize it from measured FK feet, continuing-stance legs preserve it exactly, and only a finite published `x1` swing-to-stance transition replaces the corresponding leg anchor. Explicit reset clears only `initialized`; the next cold build overwrites stale anchors from measurement.
 
 - [ ] **Step 4: Update runtime and external ABI**
 
-CUDA Graph fixed state becomes only previous trajectory, phase, and valid. Reference adapter consumes `state`, `foot_pos_w`, and `contact_state`; diagnostics consume `derived_velocity` instead of optimized `control`. Batch changes still require manager/cache/graph rebuild.
+CUDA Graph fixed state becomes previous trajectory, phase, initialized, and persistent stance anchors. Manager creation and per-environment reset are the only writers of `initialized=False`; normal planner completion always writes `True`. Reference adapter consumes `state`, `foot_pos_w`, and `contact_state`; diagnostics consume `derived_velocity` instead of optimized `control`. Batch changes still require manager/cache/graph rebuild.
 
 - [ ] **Step 5: Delete old production helpers and modules**
 
@@ -1088,7 +1162,7 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m py
   Go2Pvcnn/tests/joint_mpc_rti/test_rolling_runtime.py -q
 ```
 
-Expected: PASS for B=1/40, x0 injection, x1 publication, warm shift, reset, and fixed-shape runtime.
+Expected: PASS for B=1/40, x0 injection, x1 publication, warm shift, one cold call per lifecycle, per-row reset isolation, alpha-zero warm retention, invariant-fault reporting, and fixed-shape runtime.
 
 - [ ] **Step 7: Commit**
 
@@ -1128,6 +1202,13 @@ def test_small_includes_every_flat_metric_plus_small_metrics():
     assert applicable_metrics("flat") < applicable_metrics("small")
 
 
+def test_rolling_trace_has_one_cold_then_only_warm_until_reset():
+    report = evaluate_trace(rolling_trace_without_reset, scenario="flat")
+    assert report.metric("cold_start_count").value == 1
+    assert report.metric("unexpected_cold_restart_count").value == 0
+    assert report.metric("warm_cache_invariant_fault_count").value == 0
+
+
 def test_watchdog_terminates_only_child_process_group_on_timeout(tmp_path):
     result = run_monitored([sys.executable, "-c", "import time; time.sleep(60)"], timeout_s=0.2)
     assert result.terminated
@@ -1147,21 +1228,27 @@ Expected: FAIL because old metrics contain recovery fields and heavy probes lack
 
 - [ ] **Step 3: Define one trace and per-metric applicability**
 
-The trace must include actual root/joint/foot, command, gait phase, terrain surface, small signed distance, per-part collision, line alpha, nominal root, validity, and timestamps. Remove recovery/extension/liftoff-guard fields. Every metric result stores value, numerator, denominator, valid count, applicability, N/A reason, threshold, pass, and worst-case key.
+The trace must include actual root/joint/foot, command, gait phase, terrain surface, small signed distance, per-part collision, line alpha, nominal root, nominal source (`cold` or `warm`), reset mask, initialized mask, warm-cache invariant faults, validity, and timestamps. Remove recovery/extension/liftoff-guard fields. Every metric result stores value, numerator, denominator, valid count, applicability, N/A reason, threshold, pass, and worst-case key. Every no-reset rolling segment requires exactly one cold start at its first frame, warm on every later frame, zero unexpected cold restarts, and zero warm-cache invariant faults.
 
 For exactly zero translation command, `stance_root_carry_ratio_abs` is mathematically N/A because its denominator is near-zero root displacement. Keep absolute stance slip max/mean, stationary ratio, anchor residual, ground gap/penetration, drift, joints, and numerical metrics applicable.
 
-- [ ] **Step 4: Preserve the formal 275 command matrix**
+- [ ] **Step 4: Define the formal 19-command axis-isolated matrix**
 
 ```python
 VX = (0.0, -0.2, 0.2, -0.4, 0.4, -0.6, 0.6, -0.8, 0.8, -1.0, 1.0)
 VY = (0.0, -0.3, 0.3, -0.5, 0.5)
 YAW = (0.0, -0.5, 0.5, -1.0, 1.0)
-COMMANDS = tuple(itertools.product(VX, VY, YAW))
-assert len(COMMANDS) == 275
+COMMANDS = (
+    ((0.0, 0.0, 0.0),)
+    + tuple((vx, 0.0, 0.0) for vx in VX if vx != 0.0)
+    + tuple((0.0, vy, 0.0) for vy in VY if vy != 0.0)
+    + tuple((0.0, 0.0, yaw) for yaw in YAW if yaw != 0.0)
+)
+assert len(COMMANDS) == 19
+assert all(sum(value != 0.0 for value in command) <= 1 for command in COMMANDS)
 ```
 
-Small scenes add shape, phase, and offset dimensions. Pure yaw/zero translation keeps drift, yaw, stance, joint, collision, and numerical metrics while translation-direction/crossing metrics receive explicit mathematical N/A.
+The ranked smoke uses seven commands: zero plus positive and negative maxima for each axis. Small scenes add shape, phase, and offset dimensions to the same axis-isolated command set. Pure yaw/zero translation keeps drift, yaw, stance, joint, collision, and numerical metrics while translation-direction/crossing metrics receive explicit mathematical N/A.
 
 - [ ] **Step 5: Implement the process-group watchdog**
 
@@ -1213,7 +1300,7 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
   Go2Pvcnn/tests/joint_mpc_rti/run_monitored_joint_mpc.py -- \
   /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
   Go2Pvcnn/tests/joint_mpc_rti/run_joint_acceptance.py \
-  --stage flat --ranked-cells 3 --steps 96 --heartbeat-seconds 5
+  --stage flat --ranked-cells 7 --steps 96 --heartbeat-seconds 5
 ```
 
 Expected before tuning: finite report with explicit per-metric failures, not a silent process.
@@ -1228,7 +1315,7 @@ Expected before tuning: finite report with explicit per-metric failures, not a s
 
 After each edit rerun the same ranked cells and record the changed parameter plus all metric deltas.
 
-- [ ] **Step 4: Run the complete 275-command flat matrix**
+- [x] **Step 4: Run the complete 19-command axis-isolated flat matrix**
 
 ```bash
 PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
@@ -1241,9 +1328,11 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
 
 Expected: every applicable metric passes in every command cell; small-only metrics are explicit N/A; no average masks a failed cell.
 
-- [ ] **Step 5: Run real viewer actual-state flat smoke**
+- [x] **Step 5: Run real viewer actual-state flat smoke**
 
-Use the monitored runner around `joint_mpc_rti_viewer_reproduction_probe.py --scenario flat`; require actual root/joint/foot finite, x1 publication equality, and the same flat metrics. Planner-internal state is not sufficient evidence.
+Use the monitored runner around `joint_mpc_rti_viewer_reproduction_probe.py` with `JOINT_MPC_VIEWER_REPRO_CASES=standstill,forward_slow,forward_fast,backward,lateral_left,lateral_right,yaw_left,yaw_right`. Every case must contain at most one nonzero command component. Require actual root/joint/foot finite, x1 publication equality, and the same flat metrics. Planner-internal state is not sufficient evidence.
+
+2026-07-21 viewer amendment: the probe must preserve fixed H30, use no `env.step` warmup, and ground the phase-zero FR/RL stance pair from the scanner before the first solve. It runs one complete SQP/RTI per playback cycle with CUDA Graph disabled; graph capture/replay is a separate Stage B performance contract and must not block actual-state viewer behavior acceptance. The completed smoke covered all eight axis-isolated viewer cases for eight cycles and passed.
 
 - [ ] **Step 6: Record evidence and commit**
 
@@ -1267,10 +1356,17 @@ Checkpoint: do not run or tune the formal small matrix until flat is fully green
 - Create: `Go2Pvcnn/tests/joint_mpc_rti/test_small_acceptance.py`
 - Modify: `Go2Pvcnn/tests/joint_mpc_rti/scenario_matrix.py`
 - Modify: `Go2Pvcnn/tests/joint_mpc_rti/run_joint_acceptance.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/runtime/warm_start.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/losses/objective.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/solver/linearization.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/solver/sqp_rti.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/planner.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_trajectory_losses.py`
 - Tune only: `Go2Pvcnn/extension/joint_mpc_rti/config.py`
 - Create evidence: `notes/log/2026-07-20-joint-mpc-rti-kinematic-small-gate.md`
 
-- [ ] **Step 1: Write RED strict-crossing and universal-metric tests**
+- [x] **Step 1: Write RED strict-crossing and universal-metric tests**
 
 ```python
 def test_small_gate_requires_all_flat_metrics_and_small_metrics():
@@ -1284,19 +1380,23 @@ def test_bypass_or_stop_is_not_strict_crossing_success():
     assert not strict_crossing_event(stopped_trace).success
 ```
 
-- [ ] **Step 2: Run ranked shape/phase/offset cells**
+- [x] **Step 2: Run ranked shape/phase/offset cells at real scanner parity**
 
 ```bash
 PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
   Go2Pvcnn/tests/joint_mpc_rti/run_monitored_joint_mpc.py -- \
   /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
   Go2Pvcnn/tests/joint_mpc_rti/run_joint_acceptance.py \
-  --stage small --ranked-cells 3 --steps 160 --heartbeat-seconds 5
+  --stage small --ranked-cells 7 --steps 160 --heartbeat-seconds 5
 ```
 
 Expected before tuning: finite per-part/per-phase collision and strict-cross opportunity report.
 
-- [ ] **Step 3: Tune only approved terrain and existing loss parameters**
+The fixture is fixed at the real scanner contract `151x151 @ 0.01m`. The prior `0.05m` ranked `7/7` is superseded and must not be cited as Task 14 evidence. The first corrected-resolution run is `5/7`: all translation and zero-command cells pass, while pure yaw remains red (`+yaw` zero drift `1.1782e-5m`; `-yaw` zero drift `1.6495e-5m` and joint step `0.37055rad`).
+
+Geometry-parity tests now verify center, half-radius, and footprint-edge scanner heights plus footprint semantics for sphere, cuboid, cylinder, capsule, and cone. The fixture uses grounded sphere and capsule caps, and focused parity/backend tests pass (`37 passed`). The first parity run remained `5/7`, proving the old pure-yaw failures were not only fixture geometry.
+
+- [x] **Step 3: Tune only approved terrain and existing loss parameters after fixture parity**
 
 1. Swing foot/link collision: increase terrain weight or clearance subweight, then `h_swing`, then `small_sigma_m`.
 2. Touchdown/stance on small: increase terrain touchdown penalty, `small_gain`, or a non-weakened small margin.
@@ -1306,7 +1406,17 @@ Expected before tuning: finite per-part/per-phase collision and strict-cross opp
 
 After every edit rerun ranked small cells and the ranked flat regression cells.
 
+2026-07-21 historical tuning result: the continuous-yaw warm fix removed the false `2*pi` horizon discontinuity, and `contact_anchor_xy=400` with `contact_future_onset_xy=1` passed the old ranked fixture. Its old `7/7` small result is superseded because that fixture used `0.05m`; retain the implementation and diagnosis, but require a fresh green run after scanner-resolution and native-geometry parity. No new loss, constraint, recovery, projection, candidate filter, or semantic branch may be added.
+
+2026-07-21 parity tuning result: flat H160 A/B proved the remaining pure-yaw issue was obstacle-field pressure, not duration-only drift. Raising the existing zero-linear-command hold multiplier from `2000` to `4000` closes the `10um` root-drift gate. Raising the existing smooth loss minimally from `14` to `14.25` closes the negative-yaw `0.35rad` joint-step gate while preserving negative-forward swing clearance; `smooth=16` was rejected because it produced `-0.709mm` clearance. The accepted candidate passes real-resolution/native-geometry ranked small `7/7` and ranked flat `7/7`; full package is `213 passed`, compileall and diff check pass.
+
 - [ ] **Step 4: Run formal small matrix**
+
+Preflight expands this selector to `19 x 5 x 24 x 13 = 29,640` cells. Before launching it, add deterministic resumable test sharding plus a merge gate that proves every expected cell key appears exactly once. This is acceptance-runner infrastructure only and must not change planner behavior, thresholds, applicability, or Cartesian coverage.
+
+2026-07-21 infrastructure status: deterministic contiguous sharding, shard metadata, exact-key merge, duplicate/missing/inconsistent rejection, and CLI selectors are implemented. A real two-shard CLI preflight wrote two one-cell reports and merged them in formal key order with `formal_complete=true`; the intentionally two-step moving cell remained behavior-red, as expected. This closes only the sharding preflight, not the `29,640`-cell formal matrix.
+
+The small fixture must keep the obstacle world center fixed while rebuilding the same-size `151x151 @ 0.01m` local terrain field around the current measured root every control step, matching a root-centered scanner. A field origin frozen at obstacle entry is invalid for late-phase `vx=1.0` cells because the 160-step trace reaches the stale map edge and creates coupled `map_valid/ground/airborne-touchdown` false failures. The field-recentering test must keep the fixed obstacle inside the real 1.5m scanner window. Native-shape geometry parity, ranked `7/7`, and the representative viewer gate must all be green before launching formal shards.
 
 ```bash
 PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
@@ -1324,7 +1434,184 @@ Expected: all applicable flat metrics pass; foot/knee/calf/thigh/base collision 
 
 Run actual-state crossing under the watchdog for the representative signed commands. Require the same detector and thresholds as the planner matrix, not a private viewer success flag.
 
-- [ ] **Step 6: Record evidence and commit**
+2026-07-21 implementation status: `joint_mpc_rti_viewer_reproduction_probe.py` now has a real `small` mode. It uses an actual S4 sphere, planner-updated 0.01m scanner field, published-x1 direct playback, actual root/joint/foot readback, and the shared `_small_detector_row`, `strict_crossing_event`, and `evaluate_trace(..., scenario="small")`. The trace ends one complete 24-cycle gait period after first strict crossing so later S4 course obstacles cannot contaminate the target event.
+
+The monitored parity/tuned `small_forward`, `vx=1.0`, sphere event still runs 49 cycles and remains RED. A worst-event diagnostic proved the old viewer grounding omitted the `0.022m` foot contact offset; a backward-compatible helper option and probe-only cfg wiring remove the false `1.865mm` penetration. Current failures are root velocity error `0.22152m/s`, stance stationary ratio `0.9778`, stance slip max `3.173mm`, stance anchor residual `3.366mm`, and swing clearance `-1.958mm`. The worst continuing-stance event is FL phase `20->21`: root moves `+21.60mm` while the foot slips `-3.08mm`; small signed distance grows `59->62mm`, so this is not direct obstacle repulsion. Contact `400->800` reduced slip but worsened root tracking/stationary and is rejected; retain `400`. Strict crossing, all collision/penetration/semantic/map/lifecycle/x0/x1/joint gates otherwise pass, and actual/planned foot error remains micrometric. Do not mark Step 5 complete, run other signed cases, or launch the full formal matrix until this representative blocker is diagnosed within the approved architecture.
+
+2026-07-21 solver-layer amendment: add a RED test proving future Contact rows cannot dilute current persistent-anchor energy. Normalize the current absolute-anchor rows independently, while leaving future onset/continuing on the prior full-horizon denominator. The first version also normalized future rows independently and regressed ranked negative yaw to `0.35972rad`; reject that version. The narrowed version restores ranked small `7/7` and moves viewer stance slip/anchor/stationary and swing clearance green (`0.457/0.460mm`, `1.0`, `+0.621mm`).
+
+The remaining viewer joint failure is a warm future phase kink, not the same-cycle x1 QP direction. At phase `11->12`, RR thigh changes `-0.41972rad`; nominal already contains `-0.43188rad` and the current QP corrects it by only `+0.01217rad`. The two touchdown targets are identical, but nominal foot moves `(108.4,55.3,-88.5)mm`; phase-11 actual foot is still `89.3mm` above its contact surface. Reject `contact_future_onset_xy=4` because it creates `23.6mm` stance penetration, and reject `joint_velocity_limit=17.5rad/s` because it creates `45.3mm` stance penetration and `16.0mm` swing penetration.
+
+Two Terrain phase candidates are rejected. Multiplying the whole foot residual by `sqrt(M_swing*(1-tau))` produced `22.67mm` flat endpoint penetration. Decaying only the extra margin improved joint continuity but still produced `14.26mm` penetration; `step_z=16` added airborne-touchdown, root-RPY-rate, joint, and stance regressions. Restore the production Terrain formula and `step_z=4`.
+
+Two Contact variants are also rejected. Making phase 11 ground-active improved endpoint height but still left `0.3674rad` joint step, `0.655mm` stance slip, and `0.2163m/s` root velocity error. Strong adjacent XY continuity at future onset inherited the bad high endpoint and produced `87mm` stance gap, `3.57mm` slip, and `0.4605rad` joint step. Production Contact therefore remains stance-only in z, with weak touchdown-reference onset and strong relative continuing stance.
+
+The phase-12 touchdown amendment was implemented by TDD and rejected. Its three contract tests passed and the focused gait/nominal/loss/QP/RTI union was `67 passed`, but ranked small regressed to `6/7`: pure negative yaw joint step was `0.35379rad`. The representative viewer was also worse: phase `11->12` joint step rose from `0.41972rad` to `0.44678rad`, root velocity error remained red at `0.20402m/s`, and swing clearance became `-3.83mm`. Restore `tau=phase/11` and phase-11 Step.
+
+The reviewed Step-family touchdown approach is now the only authorized Task 14 behavior experiment. It remains inside the existing Step residual and introduces no new loss family, optimization variable, KKT row, candidate, repair, or SQP iteration. For the final `E=3` swing edges, with local phase `phi in {9,10,11}`, define
+
+```text
+r_phi = swing_steps - phi
+p_approach_phi = p_foot_(k-1) + (p_touchdown_phi - p_foot_(k-1)) / r_phi
+u_phi = (phi - (swing_steps - E)) / (E - 1)
+w_phi = 0.5 + 0.5 u_phi
+```
+
+and multiply the existing Step residual by `sqrt(w_phi)`. Outside the final three swing edges its weight is zero. Thus the exact energy profile at phases `9,10,11` is `[0.5,0.75,1.0]`, and phase 11 still converges to the existing touchdown target.
+
+Per-node unweighted Step, Terrain, and Smooth diagnostic energy is carried from the same residual evaluation used by the solve; the representative viewer records all 31 node energies and corresponding family-weighted energies without a second solve. RED/GREEN tests require exact family/node energy summation, progressive approach preference, no activation before the final-swing band, and the exact midpoint profile.
+
+The profile is bounded by two completed representative experiments. Equal energy `[1,1,1]` closes joint continuity (`0.32289rad`) but regresses stance slip/anchor (`1.2939mm`), stationary ratio (`0.9889`), root velocity (`0.22184m/s`), and clearance (`-2.024mm`). Linear energy `[1/3,2/3,1]` restores stance (`0.346/0.351mm`, stationary `1.0`) and root velocity (`0.19991m/s`) but leaves joint (`0.42666rad`) and clearance (`-0.597mm`) red. `[0.5,0.75,1.0]` is the single midpoint interpolation authorized by this bracket. If it does not make joint, clearance, stance, root, semantic, collision, validity, and lifecycle metrics green simultaneously, stop profile tuning and return to architecture review.
+
+2026-07-22 midpoint result: the real representative viewer ran after compacting only the one-environment fixture's oversized PhysX training buffers. Joint continuity became green (`0.32291rad`), but stance slip/anchor (`1.2969mm`), stationary ratio (`0.9889`), root velocity (`0.22145m/s`), and clearance (`-2.080mm`) remained red. Reject the trajectory-relative target and stop all approach-weight profile tuning.
+
+The architecture review found that `NominalTrajectory.foot_reference_w` already contains the complete fixed analytic swing curve and converges to the same touchdown at phase 11. Both the trajectory-relative approach and the fixed world-reference candidate are rejected by the real viewer: each can reduce the joint kink only by moving the directly optimized root, which regresses stance anchoring, stationary ratio, root velocity and clearance. Do not add a third world-coordinate target or continue profile tuning.
+
+The next authorized candidate replaces only the coordinate expression of the existing Step family. It keeps the fixed `[0.5,0.75,1.0]` energy profile and uses
+
+```text
+p_body(z_k) = R(z_k)^T (p_foot(z_k) - p_B(z_k))
+p_body_ref,k = R(nominal_k)^T (nominal.foot_reference_w[k] - p_B(nominal_k))
+e_step,k = p_body(z_k) - p_body_ref,k, phi in {9,10}
+e_step,11 = p_foot(z_11) - nominal.touchdown_reference_w[11]
+```
+
+with phase 11 explicitly equal to `touchdown_reference_w`. `p_body(z_k)` is computed from the current FK and current root, while `p_body_ref,k` is frozen from the already-produced nominal. Thus phase 9/10 Step rows have no direct root translation/rotation gradient and shape joints without moving the body; phase 11 remains the world touchdown row. Add RED tests proving phase 9/10 root finite differences leave Step unchanged and phase 11 world touchdown still responds. Thread the nominal root pose through `LossContext` and single-sample linearization only; this changes no optimizer contract. Run focused tests and only the representative viewer. If body-relative shaping also leaves the viewer cross-family regressions, document the structural impossibility under direct root optimization + soft Contact + one RTI instead of adding another architecture branch.
+
+2026-07-22 body-relative result: the candidate passed the focused gait/nominal/loss/QP/RTI chain (`70 passed`) but the real representative viewer remained red. Joint continuity was `0.32122rad`, while stance slip/anchor was `1.2951mm`, stationary ratio `0.9889`, root velocity error `0.22139m/s`, and swing clearance `-2.053mm`. At the worst phase `0->1` event, nominal x1 anchor error was only `0.070mm`; the same-cycle QP increased it to `1.296mm` while applying the full `+10mm` root trust correction. Removing the early Step rows' direct root Jacobian did not remove their indirect full-horizon coupling through Smooth, Contact, and FK.
+
+Reject body-relative shaping and restore production to phase-11-only Step. Remove `step_approach_edges`, fixed/body reference plumbing, and the viewer experiment knob; keep the compact PhysX fixture fix and diagnostics. Do not add another Step target, profile, coordinate frame, hard constraint, recovery path, nominal IK repair, or second SQP. Task 14 is now architecture-blocked: under direct root optimization, soft Contact, no dynamics, and one RTI, the tested objective cannot simultaneously close the phase-11/12 joint kink and the `0.5mm` stance/root/clearance gates. A new behavior experiment requires an explicit design decision outside the exhausted Step-approach family.
+
+2026-07-22 approved architecture decision: retain the full 18D root-joint variable and add only a published-x1 current-stance affine KKT constraint. For the two stance legs at node 1, gather `complete_foot_jacobian(...)` into `support_jacobian[B,6,18]`, gather their persistent anchors and nominal x1 foot positions into `support_target[B,6]`, and require
+
+```text
+support_target = stance_anchor - nominal_stance_foot_x1
+support_jacobian @ direction[:,1] = support_target
+```
+
+Add RED tests for exact two-leg row construction, root/joint coupling, nonzero support-target construction, dense affine KKT feasibility, dense/scan parity, exact-FK line-search support filtering, and the original box/joint-velocity bounds. Extend `TrajectoryQp` with the fixed support Jacobian and target. Dense reference appends six target rows. Production scan computes the same constrained direction through a batched six-column Schur response around each active solve using `lambda=(A_s Y)^-1(A_s d_0-b_s)`; this remains one QP solve architecture and one SQP/RTI iteration. Initialize active-set refinement with the x1 minimum-norm affine-feasible seed `A_s^T(A_s A_s^T)^-1b_s`, not zero, so every subsequent feasible-step interpolates between directions satisfying the same right-hand side and cannot destroy the support equality while clipping to box/velocity bounds. The line search still constructs exactly five alphas and minimizes the same seven-loss objective, but rejects a candidate when either published stance foot has XY anchor residual above `0.5mm`. Run focused tests and only the representative viewer. Do not restore any rejected Step approach until this support layer independently proves that nominal x1 stance quality is corrected rather than merely preserved.
+
+First affine viewer evidence made joint (`0.20128rad`), stance XY slip/anchor (`0.1748/0.2114mm`), stationary (`1.0`), root velocity (`0.19428m/s`), and swing clearance (`+3.680mm`) green, but remained RED on `trajectory_valid_ratio=0.92` and stance penetration `4.621mm`. The four invalid cycles occur at touchdown transitions because the first implementation constrained newly-stance x1 feet to stale persistent anchors. Add a RED onset contract, select `touchdown_reference_w[:,1]` for those legs in both KKT target and exact-FK filter, retain persistent anchors for continuing stance, and rerun focused tests plus the same representative viewer only.
+
+Follow-up read-only viewer diagnostics refined that conclusion. The invalid nodes are exactly phases `12,0,12,0`, all `alpha=0`, fallback, status `1`; onset feet must therefore be excluded from the continuing-anchor line-search filter even though their six KKT rows still target the current touchdown. The worst stance penetration originates from the initial continuing support at flat terrain: foot-center z is `17.373mm` versus the `22mm` contact offset, so a full-XYZ persistent anchor preserves a measured `4.627mm` penetration. Preserve persistent XY but refresh support-anchor z from terrain height plus contact offset. Add RED tests for both contracts, rerun focused tests, then rerun only the representative viewer.
+
+2026-07-22 final support result: the grounded-z and continuing-filter contracts pass the focused QP/scan/line-search/RTI/backend union at `63 passed`. The same real viewer reduces stance penetration to numerical zero, stance slip/anchor to `0.136/0.181mm`, and keeps joint step green at `0.34094rad`, but remains RED on `trajectory_valid_ratio=0.98`, root velocity error `0.21931m/s`, and swing clearance `-3.296mm`. Stop support-target/filter/anchor variants. Do not run ranked/formal or other signed viewer cases. The next change requires a new user-approved architecture decision addressing direct root optimization, missing dynamics, and one-RTI cross-family coupling.
+
+Candidate-level diagnostics add no behavior and pass the focused union at `63 passed`. At the sole invalid phase-12 node all five candidates pass every filter, but the onset affine target is `26-32mm` and candidate losses are `[1000.94,251.37,64.78,18.52,3.62]`, so alpha zero is the correct seven-loss argmin and the analytically invalid nominal cannot publish. At the formal worst-clearance node, nominal/full/selected foot-center z is `17.446/22.602/18.704mm`; all filters pass and losses `[31.24,4.28,2.68,3.10,3.79]` select alpha `0.25`, leaving `-3.296mm` clearance. This rules out filter bugs and scalar tuning as the next step.
+
+2026-07-22 user-approved architecture amendment: change the support layer from six XYZ rows to four world-XY rows. Gather the XY rows of the two x1 stance-foot Jacobians into `support_jacobian[B,4,18]`. Continuing stance uses `persistent_anchor_xy - nominal_foot_xy`; touchdown onset uses zero target, preserving nominal x1 XY rather than forcing landing through support KKT. Remove grounded z from the hard target; existing Contact-ground and Terrain residuals remain solely responsible for z. Keep one QP, one RTI, five alphas, four existing filters, seven losses, full 18D variables, and cold-once/warm-only. Add RED tests for 4-row shape, continuing affine XY, zero onset target, dense/scan parity and unchanged bounds; then run focused tests and only the representative viewer.
+
+2026-07-22 XY-only result: RED/GREEN implementation is complete and the split focused union is `66 passed`. The real 49-cycle representative viewer fixes validity to `1.0`, keeps joint/stance/collision/crossing/lifecycle green, and improves clearance from `-3.296mm` to `-2.593mm`; however root velocity regresses to `0.22483m/s` and clearance remains below zero. Stop here: do not run ranked/formal or add another support-target/scalar variant. The next implementation requires a separately approved architecture decision about explicit swing feasibility or merit handling under one RTI.
+
+2026-07-22 user-approved mixed published-kinematics amendment: replace the four-row support block with six fixed-rank rows having new semantics: four world-XY rows for the two x1 stance feet and two world-Z rows for the two x1 swing feet. This does not restore the rejected stance-XYZ contract. Query the same effective foot surface used by Terrain at each nominal swing-foot XY and impose `J_z delta z1 = clamp_min(h_effective + foot_contact_offset + published_swing_clearance_buffer - nominal_foot_z, 0)`, with the new buffer defaulting to zero. Extend the fourth existing line-search filter from stance-only to published kinematics: continuing stance checks exact-FK XY anchor error and swing checks exact-FK z against effective surface queried at each candidate XY. Keep exactly four filter families, five alphas, seven losses, one QP, one RTI, full 18D variables, and cold-once/warm-only.
+
+### Task 14C: Mixed Published-Kinematics KKT
+
+**Files:**
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/config.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/losses/terrain.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/solver/linearization.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/solver/line_search.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/solver/sqp_rti.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/planner.py`
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/types.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_trajectory_losses.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_trajectory_qp.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_trajectory_scan.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_line_search_v2.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_rti_pipeline.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_viewer_reproduction_probe.py`
+
+- [x] **Step 1: RED shared effective foot surface**
+
+Add a test proving the public helper returns raw terrain on flat, propagated small height for swing, `h_wall` for stance-on-small and large occupancy, and that `terrain_residual` consumes the same tensor.
+
+- [x] **Step 2: GREEN shared effective foot surface**
+
+Expose one helper in `losses/terrain.py` and route the existing Terrain foot rows through it without changing the seven-loss formula.
+
+- [x] **Step 3: RED six mixed KKT rows**
+
+Require `support_jacobian[B,6,18]`: first four rows match finite-difference stance-foot XY, final two match finite-difference swing-foot Z. Require continuing stance XY correction, zero onset XY, positive below-floor swing target, and zero already-safe swing target.
+
+- [x] **Step 4: GREEN six mixed KKT rows**
+
+Build the fixed rows from complete FK Jacobians and nominal x1 effective-surface queries. Add `published_swing_clearance_buffer: float = 0.0` to solver config. Keep dense and scan solvers row-count generic.
+
+- [x] **Step 5: RED/GREEN dense-scan and original bounds**
+
+Require dense KKT and fixed-rank scan to satisfy all six affine rows while retaining root/joint trust, physical joint-position, and `30rad/s` joint-velocity bounds.
+
+- [x] **Step 6: RED published-kinematics candidate filter**
+
+Require exactly four filter names with the fourth named `published_kinematics`. A candidate must fail when continuing stance XY exceeds `0.5mm` or when a swing foot is below `h_effective(candidate_xy)+foot_contact_offset+buffer`; moving candidate XY onto a higher cell must use the higher candidate surface.
+
+- [x] **Step 7: GREEN published-kinematics candidate filter**
+
+Reuse one exact-FK evaluation for stance and swing checks, query the immutable field with the `B*5` candidate rows, and combine both checks into the fourth filter tensor column. Do not add an alpha, filter column, loss, projection, repair or second solve.
+
+- [x] **Step 8: RED/GREEN viewer diagnostics**
+
+Record `safe_floor_z_m` and nominal/full/selected deficits in the existing worst-swing solver layer. Keep report shape deterministic and execute no additional solve.
+
+- [x] **Step 9: Focused verification**
+
+Run the QP, scan, line-search, RTI, backend and viewer-diagnostic focused tests. Require all affine rows, all original bounds, exactly one RTI and the fixed five-alpha/four-filter ABI.
+
+- [x] **Step 10: Representative viewer gate**
+
+Run only the actual-state S4 sphere `small_forward` case on `cuda:1`. Do not run ranked/formal unless every applicable representative metric is green. If it remains red, record the exact nominal/full/selected/safe layers and stop without scalar tuning.
+
+Keep Contact ground stance-only, future onset weak, Terrain unchanged, `step_z=4`, `contact_future_onset_xy=1`, `joint_velocity_limit=30rad/s`, one SQP/RTI, five alphas, seven loss families, and cold-once/warm-only. Run focused tests and the representative viewer first. Ranked small/flat may run only after the representative viewer is green; the formal `29,640` matrix remains blocked. The formal 19-command matrix remains axis-isolated: every cell selects exactly one command from the fixed set; it never combines longitudinal, lateral, and yaw speeds.
+
+2026-07-22 Task 14C result: RED initially failed `5` architecture tests; the implementation and safe-Z diagnostics pass the combined focused union at `93 passed`. The actual-state S4 sphere `small_forward` viewer ran 49 RTI cycles after the initial published node. At the worst swing node, nominal/full/selected floor deficits are `+2.473mm/-5.271um/-5.294um`; only alpha `1.0` passes `published_kinematics`, and it is selected. Clearance is therefore green at `+6.219um`, with validity `1.0`, joint step `0.32031rad`, stance slip/anchor `0.136/0.118mm`, strict crossing `1.0`, zero collision/penetration, and lifecycle `1 cold + 48 warm`. The representative gate is still globally RED only because root velocity error is `0.22393m/s > 0.2m/s`. Do not run ranked/formal. Diagnose root tracking by separating nominal x1 progress, full-QP correction, selected-alpha effect, trust saturation, and metric transient averaging before any behavior change or scalar sweep.
+
+2026-07-22 root-layer diagnosis: a diagnostics-only TDD helper passes and an unchanged rerun reproduces the exact `0.2239295m/s` metric. Overall nominal/full-QP/selected errors are `0.09045/0.23343/0.22393m/s`; warm-only values are `0.07150/0.20604/0.19634m/s`. Full QP is worse than nominal in `41/49` cycles, while line search improves full QP in only `3/49`. Root XY trust saturates in only four cycles, so the defect is not insufficient trust authority or warm nominal command scaling: the constrained QP direction itself commonly trades root tracking for the hard published-foot rows and other losses, especially at the cold first edge and 12-frame gait boundaries. The cold cycle alone has `1.54806m/s` selected error and raises the warm-only passing mean above threshold. Keep the formal metric unchanged. Before any fix, add a separately approved root/foot priority contract; increasing root trust is contraindicated because the current direction often points farther from the command.
+
+2026-07-22 user-approved root/foot priority amendment: preserve the six mixed published-kinematics rows and fix only the QP correction of published x1 root XY to zero through the existing box bounds. This means `lower[:,1,:2] = upper[:,1,:2] = 0`, while x1 root z/RPY/joints and every x2..x30 bound remain unchanged. The selected x1 root XY must therefore equal nominal for all five alphas. This adds no KKT row, loss, filter, alpha, projection, repair, recovery or solve. If the six foot rows and original joint bounds are infeasible with fixed x1 root XY, record the failure and stop rather than weakening the contract.
+
+### Task 14D: Published Root XY Priority
+
+**Files:**
+- Modify: `Go2Pvcnn/extension/joint_mpc_rti/solver/trajectory_qp.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_trajectory_qp.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_trajectory_scan.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/test_rti_pipeline.py`
+- Modify: `Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_viewer_reproduction_probe.py`
+
+- [x] **Step 1: RED published-x1 bounds**
+
+Extend the bounds test to require all x0 variables fixed, x1 root XY lower/upper exactly zero, x1 root z still `+/-root_position_trust`, x2 root XYZ still `+/-2*root_position_trust`, and the original root RPY/joint bounds unchanged.
+
+- [x] **Step 2: GREEN published-x1 bounds**
+
+After constructing the existing node-scaled bounds in `trajectory_bounds`, assign only `lower[:,1,:2]` and `upper[:,1,:2]` to zero. Do not add a config parameter or alter future-node trust.
+
+- [x] **Step 3: RED/GREEN dense-scan feasibility**
+
+Use the existing six-row mixed KKT fixture with nonzero stance/swing targets. Require dense and production scan directions to satisfy `support_jacobian @ direction[:,1] == support_target`, require `direction[:,1,:2] == 0`, retain dense/scan parity, and retain physical joint-position plus `30rad/s` joint-velocity bounds.
+
+- [x] **Step 4: RED/GREEN one-RTI publication invariant**
+
+Require `update.state[:,1,:2] == nominal[:,1,:2]` for every selected alpha while `update.direction[:,2:,:2]` remains eligible for nonzero optimization. Preserve exactly five alphas, four filters, seven losses, one QP and one RTI.
+
+- [x] **Step 5: Viewer root-layer diagnostics**
+
+Keep the existing actual/nominal/full/selected report. Require every cycle's full and selected x1 root XY to equal nominal within numerical tolerance, and record any fixed-bound violation without changing publication behavior.
+
+- [x] **Step 6: Focused verification**
+
+Run QP, scan, line-search, RTI, backend and viewer-diagnostic tests. Also run fixed-contract and terrain-field supplements plus `py_compile` and `git diff --check`.
+
+- [x] **Step 7: Representative viewer gate**
+
+Run only actual-state S4 sphere `small_forward` on `cuda:1`. Require root velocity `<=0.2m/s` without regressing validity, joint continuity, stance XY, swing floor, collision, penetration, crossing, lifecycle, five-alpha/four-filter ABI or cold foot lead. Do not run ranked/formal unless every applicable representative metric is green.
+
+- [x] **Step 8: Record evidence**
+
+2026-07-22 Task 14D result: the first implementation exposed a real active-set defect. The affine seed used the unconstrained minimum-norm six-row solution, so it could begin outside fixed `x1` root-XY boxes; when unrelated bounds blocked the path to the active KKT solution, the fixed-coordinate error survived both refinements. A synthetic three-blocker RED reproduced `0.021m` residual. The seed now writes fixed boxes first and solves the six-row correction in their free subspace. Real-FK `6mm` targets are linearly feasible with maximum joint correction about `0.013rad`. Focused QP/scan/loss/line-search/RTI/backend is `93 passed`, contract/gait/terrain is `37 passed`, CUDA compile, `py_compile`, and `git diff --check` pass.
+
+The representative S4 sphere viewer confirms full/selected published root-XY deviations and violation counts are exactly zero; root velocity `0.12535m/s`, direction `0.09765rad`, stance XY/anchor `0.01893mm`, swing clearance `+3.748um`, crossing, collision, penetration, lifecycle, and foot lead are green. Task 14D is nevertheless rejected as a complete behavior solution: phases `13..23` have eleven invalid cycles because all five candidates fail the exact-FK `published_kinematics` filter as the continuing-stance target grows to about `6.09mm`; validity is `0.77551`, joint step is `0.37823rad`, stance gap is `0.08101m`, and airborne touchdown is nonzero. Keep the solver fix, do not run ranked/formal or Stage B, and return to user-approved architecture design before changing one-RTI linearization, projection/repair, filter tolerance, or solve count.
 
 ```bash
 git add Go2Pvcnn/extension/joint_mpc_rti/config.py \
@@ -1488,13 +1775,16 @@ git commit -m "perf: close pure kinematic joint mpc final gates"
 ## Final Acceptance Checklist
 
 - [ ] Production optimization variable is only `Z[B,31,18]`; any velocity tensor is derived diagnostics.
-- [ ] Nominal cold/warm construction has no Python environment/time/leg loop and passes B=1/40/512/1024.
+- [ ] Each environment executes cold exactly once after creation/reset, then uses warm start on every cycle until its next explicit reset.
+- [ ] Candidate rejection and `alpha=0` preserve an initialized finite warm cache; no validity/nonfinite path transitions back to cold.
+- [ ] Corrupt/missing initialized cache raises an explicit invariant fault and blocks publication rather than invoking cold.
+- [ ] Nominal cold/warm construction uses only the five approved warm operations, has no Python environment/time/leg loop, and passes B=1/40/512/1024.
 - [ ] Gait is fixed H30, period 24, swing/stance 12/12.
 - [ ] Objective exposes exactly seven loss keys and no scenario-specific branch.
 - [ ] Semantic observation uses fixed grouped convolution, propagated class height, Scharr XY gradients, and bilinear trajectory queries; optimizer terrain loss contains no raw-class hard branch.
-- [ ] KKT contains only fixed `z0`, merged joint-position/trust bounds, joint-velocity bounds, and trust region.
+- [ ] KKT contains only fixed `z0`, merged joint-position/trust bounds, joint-velocity bounds, trust region, and the fixed six-row affine published-x1 stance constraint.
 - [ ] H30/32 associative scan matches dense active KKT within `2e-5`.
-- [ ] Line search uses exactly five alphas, three filters, seven-loss argmin, and larger-alpha tie break.
+- [ ] Line search uses exactly five alphas, four filters (finite, joint position, joint velocity, published-x1 stance anchor), seven-loss argmin, and larger-alpha tie break.
 - [ ] Old recovery/startup/projection/restoration/adaptive-contact production code is deleted.
 - [ ] Shared applicability-aware JointMetrics checks every applicable metric in flat and small.
 - [ ] Flat formal matrix passes before small formal matrix.

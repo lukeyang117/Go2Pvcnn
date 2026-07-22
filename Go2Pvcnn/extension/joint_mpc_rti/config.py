@@ -18,11 +18,14 @@ class JointMpcRtiRuntimeCfg:
 
 @dataclass
 class JointMpcRtiSolverCfg:
-    regularization: float = 0.1
+    regularization: float = 3.0
     line_search_alphas: tuple[float, ...] = (1.0, 0.5, 0.25, 0.125, 0.0)
     line_search_tie_tolerance: float = 1.0e-7
+    published_stance_tolerance: float = 0.0005
+    published_swing_clearance_buffer: float = 0.0
     root_position_trust: float = 0.01
-    root_orientation_trust: float = 0.10
+    root_roll_pitch_trust: float = 0.10
+    root_yaw_trust: float = 0.02
     joint_trust: float = 0.25
     active_set_refinements: int = 2
     joint_velocity_limit: float = 30.0
@@ -66,38 +69,41 @@ class JointMpcRtiTerrainCfg:
 
 @dataclass
 class JointMpcRtiLossTermsCfg:
-    command_linear: float = 1.0
+    command_linear: float = 2.0
     command_yaw: float = 0.5
     command_early_swing: float = 0.0
     command_activity_scale: float = 0.01
+    command_hold_multiplier: float = 4000.0
     step_xy: float = 1.0
-    step_z: float = 0.5
-    contact_anchor_xy: float = 200.0
+    step_z: float = 4.0
+    contact_anchor_xy: float = 400.0
+    contact_future_onset_xy: float = 1.0
     contact_ground: float = 32.0
-    swing_speed_margin: float = 0.002
+    swing_speed_margin: float = 0.02
+    swing_speed_command_scale: float = 0.4
     swing_speed_early: float = 1.0
     terrain_temperature: float = 0.015
-    terrain_foot_margin: float = 0.01
+    terrain_foot_margin: float = 0.027
     terrain_link_margin: float = 0.015
     terrain_base_margin: float = 0.025
     terrain_touchdown_avoidance: float = 1.0
     posture_root_clearance: float = 0.34
     posture_root_height: float = 1.0
-    posture_roll_pitch: float = 1.0
-    posture_joint: float = 0.1
-    smooth_first: float = 0.02
+    posture_roll_pitch: float = 16000.0
+    posture_joint: float = 1.2
+    smooth_first: float = 3.0
     smooth_second: float = 1.0
 
 
 @dataclass
 class JointMpcRtiLossCfg:
-    command: float = 5.0
+    command: float = 90.0
     step: float = 1.0
-    contact: float = 100.0
-    swing_speed: float = 1.0
-    terrain: float = 1.0
+    contact: float = 3000.0
+    swing_speed: float = 400.0
+    terrain: float = 8000.0
     posture: float = 1.0
-    smooth: float = 1.0
+    smooth: float = 14.25
 
     def weights(self) -> dict[str, float]:
         names = (

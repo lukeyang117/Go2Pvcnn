@@ -13,17 +13,17 @@ from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.terrain.query import query_world
 
 
-def _surface_height(
+def effective_foot_surface_height(
     raw_height: Tensor,
     small_occupancy: Tensor,
     large_occupancy: Tensor,
     small_height: Tensor,
     *,
-    small_wall: Tensor,
-    cfg: JointMpcRtiCfg,
+    stance: Tensor,
+    h_wall: float,
 ) -> Tensor:
-    wall = torch.full_like(raw_height, float(cfg.terrain.h_wall))
-    small_target = torch.where(small_wall, wall, small_height)
+    wall = torch.full_like(raw_height, float(h_wall))
+    small_target = torch.where(stance, wall, small_height)
     small_surface = torch.lerp(raw_height, small_target, small_occupancy)
     return torch.lerp(small_surface, wall, large_occupancy)
 
@@ -57,21 +57,21 @@ def terrain_residual(state: Tensor, context, cfg: JointMpcRtiCfg) -> Tensor:
     small_height = query.small_propagated_height.reshape(query_shape)
     foot_stance = context.schedule.stance
     never_wall = torch.zeros(batch, nodes, 1, dtype=torch.bool, device=trajectory.device)
-    foot_surface = _surface_height(
+    foot_surface = effective_foot_surface_height(
         height[..., :4],
         small_occupancy[..., :4],
         large_occupancy[..., :4],
         small_height[..., :4],
-        small_wall=foot_stance,
-        cfg=cfg,
+        stance=foot_stance,
+        h_wall=float(cfg.terrain.h_wall),
     )
-    all_surface = _surface_height(
+    all_surface = effective_foot_surface_height(
         height,
         small_occupancy,
         large_occupancy,
         small_height,
-        small_wall=never_wall,
-        cfg=cfg,
+        stance=never_wall,
+        h_wall=float(cfg.terrain.h_wall),
     )
     temperature = float(cfg.loss_terms.terrain_temperature)
     foot = _clearance_residual(
@@ -126,4 +126,4 @@ def terrain_loss(state: Tensor, context, cfg: JointMpcRtiCfg) -> Tensor:
     return 0.5 * residual.square().sum(dim=1)
 
 
-__all__ = ["terrain_loss", "terrain_residual"]
+__all__ = ["effective_foot_surface_height", "terrain_loss", "terrain_residual"]

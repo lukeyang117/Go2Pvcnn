@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
+
 
 ConditionalValueFactor = tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
 
@@ -23,10 +25,10 @@ def combine_conditional_value_factors(
         device=matrix_a_left.device,
     )
     coupling = identity + matrix_c_left @ matrix_p_right
-    right_elimination = torch.linalg.solve(
+    right_elimination = fixed_general_solve(
         coupling.transpose(-1, -2), matrix_a_right.transpose(-1, -2)
     ).transpose(-1, -2)
-    left_elimination = torch.linalg.solve(coupling, matrix_a_left).transpose(-1, -2)
+    left_elimination = fixed_general_solve(coupling, matrix_a_left).transpose(-1, -2)
     matrix_a = right_elimination @ matrix_a_left
     vector_c = (
         right_elimination

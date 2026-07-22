@@ -47,6 +47,10 @@ FLAT_METRICS = frozenset(
         "x0_injection_error",
         "published_x1_error",
         "map_valid_ratio",
+        "cold_start_count",
+        "warm_start_count",
+        "unexpected_cold_restart_count",
+        "warm_cache_invariant_fault_count",
     }
 )
 SMALL_METRICS = frozenset(
@@ -93,6 +97,9 @@ class JointMetricTrace:
     x0_injection_error: Tensor | None = None
     published_x1_error: Tensor | None = None
     warm_start_jump: Tensor | None = None
+    cold_start: Tensor | None = None
+    warm_start: Tensor | None = None
+    warm_cache_invariant_fault: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -189,6 +196,20 @@ def _command_axis(command_xy: Tensor) -> Tensor:
     return torch.where(norm > 1.0e-6, command_xy / norm.clamp_min(1.0e-6), fallback)
 
 
+def _world_command_axis(command_xy: Tensor, yaw_w: Tensor) -> Tensor:
+    axis_body = _command_axis(command_xy)
+    yaw = torch.as_tensor(yaw_w, dtype=axis_body.dtype, device=axis_body.device)
+    cosine = torch.cos(yaw)
+    sine = torch.sin(yaw)
+    return torch.stack(
+        (
+            cosine * axis_body[..., 0] - sine * axis_body[..., 1],
+            sine * axis_body[..., 0] + cosine * axis_body[..., 1],
+        ),
+        dim=-1,
+    )
+
+
 def _masked_max(value: Tensor, mask: Tensor, default: float = 0.0) -> float:
     selected = value[mask]
     return default if selected.numel() == 0 else float(selected.max().item())
@@ -220,11 +241,13 @@ def applicable_metrics(scenario: str, command: tuple[float, float, float] | None
         raise ValueError("scenario must be flat or small")
     metrics = set(FLAT_METRICS if scenario == "flat" else FLAT_METRICS | SMALL_METRICS)
     if command is not None and math.hypot(command[0], command[1]) <= 1.0e-8:
+        metrics.discard("strict_cross_success")
         metrics.discard("root_direction_error")
         metrics.discard("swing_active_motion_ratio")
         metrics.discard("foot_root_lead_time_min_ms")
         metrics.discard("foot_root_lead_time_max_ms")
         metrics.discard("root_leak_before_foot_m")
+        metrics.discard("stance_root_carry_ratio_abs")
     else:
         metrics.discard("root_zero_drift_m")
     return frozenset(metrics)
@@ -246,7 +269,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     joint_step = joint[:, 1:] - joint[:, :-1]
     foot_step = foot[:, 1:, :, :2] - foot[:, :-1, :, :2]
     command_edge = command[:, 1:]
-    axis = _command_axis(command_edge[..., :2])
+    axis = _world_command_axis(command_edge[..., :2], rpy[:, :-1, 2])
     root_progress = (root_step * axis).sum(dim=-1)
     foot_progress = (foot_step * axis.unsqueeze(2)).sum(dim=-1)
 <<<<<<< HEAD
@@ -303,7 +326,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
 
     relative_xy = foot[..., :2] - root[..., None, :2]
     relative_from_start = relative_xy - relative_xy[:, :1]
-    node_axis = _command_axis(command[..., :2])
+    node_axis = _world_command_axis(command[..., :2], rpy[..., 2])
     foot_onset_distance = (relative_from_start * node_axis.unsqueeze(2)).sum(dim=-1)
     root_from_start = root[..., :2] - root[:, :1, :2]
     root_onset_distance = (root_from_start * node_axis).sum(dim=-1)
@@ -500,7 +523,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     swing_clearance = foot[..., 2] - torch.as_tensor(trace.foot_height_w, dtype=root.dtype, device=root.device) - 0.022
     nominal_pos = torch.as_tensor(trace.nominal_root_pos_w, dtype=root.dtype, device=root.device)
     nominal_rpy = torch.as_tensor(trace.nominal_root_rpy_w, dtype=root.dtype, device=root.device)
-    nominal_axis = _command_axis(command[..., :2])
+    nominal_axis = _world_command_axis(command[..., :2], nominal_rpy[..., 2])
     lateral_axis = torch.stack((-nominal_axis[..., 1], nominal_axis[..., 0]), dim=-1)
     lateral = ((root[..., :2] - nominal_pos[..., :2]) * lateral_axis).sum(dim=-1)
 
@@ -515,7 +538,9 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "joint_acceleration_max_rps2": _masked_max(acceleration.abs().amax(dim=-1), valid_edge[:, 1:] & valid_edge[:, :-1]),
         "stance_xy_slip_max_m": _masked_max(stance_slip, consecutive_stance),
         "stance_xy_slip_mean_m": _masked_mean(stance_slip, consecutive_stance),
-        "stance_stationary_ratio": _masked_mean((stance_slip <= 0.0005).to(root.dtype), consecutive_stance, 1.0),
+        "stance_stationary_ratio": _masked_bool_ratio(
+            stance_slip <= 0.0005, consecutive_stance, 1.0
+        ),
         "stance_root_carry_ratio_abs": _masked_mean(carry, consecutive_stance),
         "swing_active_motion_ratio": _masked_mean(relative_progress / root_denominator, swing),
         "foot_root_lead_time_min_ms": min(lead_values) if lead_values else 0.0,
@@ -541,7 +566,21 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "map_valid_ratio": _masked_bool_ratio(
             torch.as_tensor(trace.map_valid, dtype=torch.bool, device=root.device), valid
         ),
+        "cold_start_count": 1 if trace.cold_start is None else int(
+            torch.as_tensor(trace.cold_start, dtype=torch.bool, device=root.device).sum().item()
+        ),
+        "warm_start_count": 0 if trace.warm_start is None else int(
+            torch.as_tensor(trace.warm_start, dtype=torch.bool, device=root.device).sum().item()
+        ),
+        "unexpected_cold_restart_count": 0,
+        "warm_cache_invariant_fault_count": 0 if trace.warm_cache_invariant_fault is None else int(
+            torch.as_tensor(trace.warm_cache_invariant_fault, dtype=torch.bool, device=root.device).sum().item()
+        ),
     }
+    if trace.cold_start is not None:
+        cold = torch.as_tensor(trace.cold_start, dtype=torch.bool, device=root.device)
+        cold_count = cold.to(torch.int64).sum(dim=1)
+        output["unexpected_cold_restart_count"] = int((cold_count - 1).clamp_min(0).sum().item())
     anchor = trace.stance_anchor_w
     output["stance_anchor_residual"] = 0.0 if anchor is None else _masked_max(
         torch.linalg.vector_norm(

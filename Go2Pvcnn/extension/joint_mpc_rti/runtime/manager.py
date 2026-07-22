@@ -115,23 +115,7 @@ class JointMpcRtiManager:
         if self._solver_state is not None:
             mask = torch.as_tensor(env_mask, dtype=torch.bool, device=self._solver_state.gait_phase.device)
             self._solver_state.gait_phase.masked_fill_(mask, 0)
-<<<<<<< HEAD
-            if self._solver_state.stance_anchor_w is not None:
-                self._solver_state.stance_anchor_w[mask] = torch.nan
-            if self._solver_state.contact_state is not None:
-                self._solver_state.contact_state[mask] = False
-            for value in (
-                self._solver_state.phase_age,
-                self._solver_state.swing_extension_age,
-                self._solver_state.stance_age,
-            ):
-                if value is not None:
-                    value[mask] = 0
-            if self._solver_state.recovery_state is not None:
-                self._solver_state.recovery_state[mask] = False
-=======
-            self._solver_state.valid.masked_fill_(mask, False)
->>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
+            self._solver_state.initialized.masked_fill_(mask, False)
 
     def current_reference(self):
         if self._buffer is None or self._buffer.reference is None:

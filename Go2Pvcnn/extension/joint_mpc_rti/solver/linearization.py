@@ -7,9 +7,95 @@ from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.losses.objective import LossContext, weighted_trajectory_residual
+from extension.joint_mpc_rti.losses.terrain import effective_foot_surface_height
 from extension.joint_mpc_rti.model.gait_schedule import FixedTrotSchedule
+from extension.joint_mpc_rti.model.go2_kinematics import complete_foot_jacobian, go2_fk
 from extension.joint_mpc_rti.solver.trajectory_qp import TrajectoryQp, trajectory_bounds
+from extension.joint_mpc_rti.terrain.query import query_world
 from extension.joint_mpc_rti.types import JointMpcTerrainField
+
+
+def published_kinematic_jacobian(state: Tensor, schedule: FixedTrotSchedule) -> Tensor:
+    """Return two stance-XY and two swing-Z Jacobian rows at published x1."""
+    nominal = torch.as_tensor(state)
+    if nominal.ndim != 3 or nominal.shape[1:] != (31, 18):
+        raise ValueError("state must have shape [B,31,18]")
+    stance = torch.as_tensor(schedule.stance, dtype=torch.bool, device=nominal.device)
+    if stance.shape != (nominal.shape[0], 31, 4):
+        raise ValueError("schedule stance must have shape [B,31,4]")
+    stance_index = torch.topk(stance[:, 1].to(torch.int64), k=2, dim=1).indices
+    swing_index = torch.topk((~stance[:, 1]).to(torch.int64), k=2, dim=1).indices
+    jacobian = complete_foot_jacobian(
+        nominal[:, 1, :3], nominal[:, 1, 3:6], nominal[:, 1, 6:]
+    )
+    selected_stance = torch.gather(
+        jacobian,
+        1,
+        stance_index[..., None, None].expand(-1, -1, 3, 18),
+    )
+    selected_swing = torch.gather(
+        jacobian,
+        1,
+        swing_index[..., None, None].expand(-1, -1, 3, 18),
+    )
+    return torch.cat(
+        (
+            selected_stance[..., :2, :].reshape(nominal.shape[0], 4, 18),
+            selected_swing[..., 2, :],
+        ),
+        dim=1,
+    )
+
+
+def published_kinematic_target(
+    state: Tensor,
+    context: LossContext,
+    cfg: JointMpcRtiCfg,
+) -> Tensor:
+    """Return stance-XY corrections and nonnegative swing-Z floor corrections."""
+    nominal = torch.as_tensor(state)
+    anchor = torch.as_tensor(
+        context.stance_anchor_w, dtype=nominal.dtype, device=nominal.device
+    )
+    if anchor.shape != (nominal.shape[0], 31, 4, 3):
+        raise ValueError("stance_anchor_w must have shape [B,31,4,3]")
+    stance = torch.as_tensor(
+        context.schedule.stance, dtype=torch.bool, device=nominal.device
+    )
+    stance_index = torch.topk(stance[:, 1].to(torch.int64), k=2, dim=1).indices
+    swing_index = torch.topk((~stance[:, 1]).to(torch.int64), k=2, dim=1).indices
+    foot = go2_fk(
+        nominal[:, 1, :3], nominal[:, 1, 3:6], nominal[:, 1, 6:]
+    ).foot_pos_w
+    gather_index = stance_index[..., None].expand(-1, -1, 3)
+    onset = ~stance[:, 0] & stance[:, 1]
+    selected_anchor = torch.gather(anchor[:, 1], 1, gather_index)
+    selected_foot = torch.gather(foot, 1, gather_index)
+    selected_onset = torch.gather(onset, 1, stance_index)
+    correction_xy = selected_anchor[..., :2] - selected_foot[..., :2]
+    correction_xy = torch.where(
+        selected_onset[..., None], torch.zeros_like(correction_xy), correction_xy
+    )
+    correction_xy = correction_xy.reshape(nominal.shape[0], 4)
+
+    query = query_world(context.terrain, foot)
+    surface = effective_foot_surface_height(
+        query.height_w,
+        query.small_occupancy,
+        query.large_occupancy,
+        query.small_propagated_height,
+        stance=stance[:, 1],
+        h_wall=float(cfg.terrain.h_wall),
+    ).to(nominal.dtype)
+    selected_surface = torch.gather(surface, 1, swing_index)
+    selected_swing_z = torch.gather(foot[..., 2], 1, swing_index)
+    safe_z = (
+        selected_surface
+        + float(cfg.gait.foot_contact_offset)
+        + float(cfg.solver.published_swing_clearance_buffer)
+    )
+    swing_correction_z = (safe_z - selected_swing_z).clamp_min(0.0)
+    return torch.cat((correction_xy, swing_correction_z), dim=1)
 
 
 def _single_residual(
@@ -161,7 +247,13 @@ def linearize_trajectory(state: Tensor, context: LossContext, cfg: JointMpcRtiCf
         upper=upper,
         joint_difference_lower=difference_lower,
         joint_difference_upper=difference_upper,
+        support_jacobian=published_kinematic_jacobian(nominal, context.schedule),
+        support_target=published_kinematic_target(nominal, context, cfg),
     )
 
 
-__all__ = ["linearize_trajectory"]
+__all__ = [
+    "linearize_trajectory",
+    "published_kinematic_jacobian",
+    "published_kinematic_target",
+]

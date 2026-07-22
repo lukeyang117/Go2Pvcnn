@@ -644,6 +644,7 @@ def _viewer_ground_robot_from_scanner(
     *,
     root_pos_xy: torch.Tensor | None = None,
     root_quat_w: torch.Tensor | None = None,
+    foot_contact_offset: float = 0.0,
 ) -> float:
     from extension.batch_mpc_planner.terrain import height_at
 
@@ -674,7 +675,7 @@ def _viewer_ground_robot_from_scanner(
     foot_z = foot_pos_w[..., 2]
     terrain, _ = _compute_mpc_local_terrain(scanner, env_id=0)
     terrain_z = height_at(terrain, foot_xy).to(dtype=foot_z.dtype, device=foot_z.device)
-    z_shift = (terrain_z - foot_z).mean(dim=1, keepdim=True)
+    z_shift = (terrain_z + float(foot_contact_offset) - foot_z).mean(dim=1, keepdim=True)
     if torch.allclose(z_shift, torch.zeros_like(z_shift), atol=1.0e-5, rtol=0.0):
         return 0.0
     root_pos = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float32).clone()

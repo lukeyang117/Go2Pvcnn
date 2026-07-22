@@ -25,15 +25,6 @@ def _clone_state(state: JointMpcRtiState) -> JointMpcRtiState:
     )
 
 
-def _clone_optional(tensor: torch.Tensor | None) -> torch.Tensor | None:
-    return None if tensor is None else tensor.clone()
-
-
-def _copy_optional(target: torch.Tensor | None, source: torch.Tensor | None) -> None:
-    if target is not None and source is not None:
-        target.copy_(source)
-
-
 class JointMpcCudaGraphRunner:
     def __init__(
         self,
@@ -51,27 +42,10 @@ class JointMpcCudaGraphRunner:
         self._field = terrain_field
         self._field_height_ptr = int(terrain_field.height_w.data_ptr())
         self._solver_state = JointMpcRtiSolverState(
-<<<<<<< HEAD
-            state=solver_state.state.clone(),
-            control=solver_state.control.clone(),
-            dual=_clone_optional(solver_state.dual),
-            previous_control=solver_state.previous_control.clone(),
-            gait_phase=_clone_optional(solver_state.gait_phase),
-            stance_anchor_w=_clone_optional(solver_state.stance_anchor_w),
-            stance_dual=_clone_optional(solver_state.stance_dual),
-            command_start_age=_clone_optional(solver_state.command_start_age),
-            command_start_origin_w=_clone_optional(solver_state.command_start_origin_w),
-            previous_command_body=_clone_optional(solver_state.previous_command_body),
-            contact_state=_clone_optional(solver_state.contact_state),
-            phase_age=_clone_optional(solver_state.phase_age),
-            swing_extension_age=_clone_optional(solver_state.swing_extension_age),
-            stance_age=_clone_optional(solver_state.stance_age),
-            recovery_state=_clone_optional(solver_state.recovery_state),
-=======
             trajectory=solver_state.trajectory.clone(),
             gait_phase=solver_state.gait_phase.clone(),
-            valid=solver_state.valid.clone(),
->>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
+            initialized=solver_state.initialized.clone(),
+            stance_anchor_w=solver_state.stance_anchor_w.clone(),
         )
         warm = planner_step(self._state, self._command, self._field, self._solver_state, self._cfg)
         torch.cuda.synchronize(device=measured_state.device)
@@ -85,36 +59,10 @@ class JointMpcCudaGraphRunner:
                 self._solver_state,
                 self._cfg,
             )
-<<<<<<< HEAD
-            self._solver_state.state.copy_(self._result.solver_state.state)
-            self._solver_state.control.copy_(self._result.solver_state.control)
-            _copy_optional(self._solver_state.dual, self._result.solver_state.dual)
-            self._solver_state.previous_control.copy_(self._result.solver_state.previous_control)
-            _copy_optional(self._solver_state.gait_phase, self._result.solver_state.gait_phase)
-            _copy_optional(self._solver_state.stance_anchor_w, self._result.solver_state.stance_anchor_w)
-            _copy_optional(self._solver_state.stance_dual, self._result.solver_state.stance_dual)
-            _copy_optional(self._solver_state.command_start_age, self._result.solver_state.command_start_age)
-            _copy_optional(
-                self._solver_state.command_start_origin_w,
-                self._result.solver_state.command_start_origin_w,
-            )
-            _copy_optional(
-                self._solver_state.previous_command_body,
-                self._result.solver_state.previous_command_body,
-            )
-            _copy_optional(self._solver_state.contact_state, self._result.solver_state.contact_state)
-            _copy_optional(self._solver_state.phase_age, self._result.solver_state.phase_age)
-            _copy_optional(
-                self._solver_state.swing_extension_age,
-                self._result.solver_state.swing_extension_age,
-            )
-            _copy_optional(self._solver_state.stance_age, self._result.solver_state.stance_age)
-            _copy_optional(self._solver_state.recovery_state, self._result.solver_state.recovery_state)
-=======
             self._solver_state.trajectory.copy_(self._result.solver_state.trajectory)
             self._solver_state.gait_phase.copy_(self._result.solver_state.gait_phase)
-            self._solver_state.valid.copy_(self._result.solver_state.valid)
->>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
+            self._solver_state.initialized.copy_(self._result.solver_state.initialized)
+            self._solver_state.stance_anchor_w.copy_(self._result.solver_state.stance_anchor_w)
         self._graph.replay()
 
     @property

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a truly coupled H30 root-joint rolling RTI gait with adaptive per-leg touchdown and bounded root assistance, pass every inherited/new Stage A behavior metric, then make the realistic 1024-env synchronous field+H30 MPC complete 1000 updates in at most 5.0s and freshly rerun both gates on one final candidate.
+**Goal:** Build the approved pure-kinematic H30 root-joint rolling RTI gait, close the representative flat/small-obstacle behavior gate, then make the realistic 1024-env synchronous field+H30 MPC complete 1000 updates in at most 5.0s and freshly rerun both gates on one final candidate.
 
-**Architecture:** Keep `dt=0.02`, measured x0 and published x1, but fix production shape to `H=30`, nominal stance/swing to 15 frames each, and line-search alphas to `(1.0,0.5,0.25,0.1)`. Add per-leg contact/extension/recovery state, grounded-and-full-body-safe touchdown confirmation, complete root-joint/full-body GGN directions, continuously released root lateral/RPY assistance with per-frame and cumulative clamps, and one shared JointMetrics accumulator over the 275-command Cartesian matrix. Stage A must pass first; Stage B then freezes this exact H30 behavior and optimizes the realistic synchronous pipeline without relaxing the five-second gate; Stage C freshly reruns Stage A and Stage B on one final candidate.
+**Architecture:** Keep `dt=0.02`, measured x0, published x1, `H=30`, the fixed 24-frame diagonal trot with 12 swing and 12 stance frames, one QP and exactly one SQP/RTI update per cycle, five line-search alphas `(1.0,0.5,0.25,0.125,0.0)`, four filters and seven loss families. Cold construction is allowed exactly once per initialized lifecycle; later cycles are warm-only. Task 14E adds one explicit pre-LQ warm operation that maps only continuing-stance x1 leg joints back to the persistent-anchor manifold while preserving foot z and every other state component. Stage B and formal/ranked acceptance remain blocked until the representative viewer is green.
 
 **Tech Stack:** Python 3.10, PyTorch, torch.compile, CUDA/C++, SQP-RTI/GGN/Riccati, pytest, Isaac Lab in `/mnt/mydisk/lhy/anaconda3/envs/env_isaacsim`.
 
@@ -162,6 +162,97 @@ This task is blocked until Task 10A passes.
 - [ ] Freshly rerun complete Stage A.
 - [ ] Freshly rerun complete Stage B on the same HEAD.
 - [ ] Mark completion only if both latest reports pass; otherwise return to the failing stage and later rerun both.
+
+### Task 14E: Warm Published-x1 Continuing-Stance Manifold Initialization
+
+Task 14E follows the behavior-rejected but solver-correct Task 14D published-root XY priority. The shifted old x2 becomes the next warm x1 even though old x2 was never constrained by the published support KKT. This task changes only warm nominal construction; it does not add a second QP/SQP, candidate repair, recovery, semantic branch, terrain XY projection, or another loss/filter.
+
+**Files:** modify `Go2Pvcnn/extension/joint_mpc_rti/model/nominal.py`, `Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py`, and only direct contract tests that expose the same nominal state through the existing QP/line-search/RTI APIs. Update `notes/todo.md`, `notes/todo/T302v-joint-mpc-rti-gpu.md`, `notes/log/index.md`, and one Task 14E evidence log.
+
+- [x] Write a RED helper fixture that creates an initialized phase-12 warm row, shifts old x2 into new x1, and leaves both continuing-stance feet 6mm away from their persistent XY anchors. Assert the precondition with real FK rather than a mocked foot position.
+
+```python
+continuing = schedule.stance[:, 0] & schedule.stance[:, 1]
+before_foot = go2_fk(shifted[:, 1, :3], shifted[:, 1, 3:6], shifted[:, 1, 6:]).foot_pos_w
+assert torch.allclose(
+    torch.linalg.vector_norm(before_foot[..., :2] - persistent_anchor[..., :2], dim=-1)[continuing],
+    torch.full((2,), 0.006),
+    atol=2.0e-5,
+    rtol=0.0,
+)
+```
+
+- [x] Add RED assertions for the exact approved map. For `continuing_i = stance_i(x0) AND stance_i(x1)`, preserve the shifted FK z and replace only target XY with the persistent anchor before calling the existing batched analytic IK:
+
+```python
+shifted_foot_1 = go2_fk(state[:, 1, :3], state[:, 1, 3:6], state[:, 1, 6:]).foot_pos_w
+target_foot_1 = torch.cat((persistent_anchor[..., :2], shifted_foot_1[..., 2:3]), dim=-1)
+ik_joint_1, reachable = go2_analytic_ik(state[:, 1, :3], state[:, 1, 3:6], target_foot_1)
+```
+
+Require continuing-stance FK XY error `<=2e-5m`, preserved FK z `<=2e-5m`, and exact invariance of x0, x1 root position/RPY, x2..x30, swing legs and x0->x1 touchdown-onset legs.
+
+- [x] Run the focused RED test and require failure because current `_build_warm_nominal` returns the shifted state unchanged:
+
+```bash
+PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest \
+  Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py \
+  -k 'published_x1 or manifold' -q
+```
+
+- [x] Implement one tensor-only helper in `model/nominal.py`. It must return corrected `[B,31,18]` state and a `[B]` validity mask. Apply IK joints with `torch.where(continuing[...,None], ik_joint_1, shifted_joint_1)`, rebuild only node x1, and leave every other node byte-for-byte unchanged. No Python loop or per-environment branch is allowed.
+
+- [x] Define helper validity as terrain/reference validity AND finite corrected state AND continuing-leg geometric reachability AND x1 joint position bounds AND the existing `30rad/s * 0.02s` x0->x1 joint-step bound. A failed initialized row remains `used_warm_start=True`; it becomes nominal-invalid and never clears `previous.initialized` or selects cold construction.
+
+```python
+position_ok = ((joint_1 >= joint_lower) & (joint_1 <= joint_upper)).all(dim=-1)
+velocity_ok = ((joint_1 - state[:, 0, 6:]).abs() <= cfg.solver.joint_velocity_limit * cfg.runtime.dt).all(dim=-1)
+manifold_valid = (
+    torch.where(continuing, reachable & torch.isfinite(ik_joint_1).all(dim=-1), True).all(dim=-1)
+    & position_ok
+    & velocity_ok
+)
+```
+
+- [x] Run the focused GREEN test, then add invalid-path RED/GREEN cases for unreachable target, IK joint-position violation and x0->x1 velocity violation. Each case must assert `valid=False`, `used_warm_start=True`, `used_cold_start=False`, and unchanged lifecycle initialization in one planner step when a nonzero accepted candidate does not recover it.
+
+- [x] Add direct downstream contract tests: the mixed support target for initialized continuing stance is numerically zero after nominal construction; alpha zero passes the exact-FK continuing-stance portion of `published_kinematics`; batches `B=1/40/512/1024` preserve fixed shapes and finite valid rows.
+
+- [x] Run the focused nominal/QP/line-search/RTI/backend union. Keep `step_z=4`, `contact_future_onset_xy=1`, `joint_velocity_limit=30`, fixed x1 root XY, six mixed KKT rows, five alphas, four filters and seven losses unchanged.
+
+- [x] Run only the same real S4 sphere `small_forward` representative viewer on `cuda:1`. Record validity, phases 13..23 candidate filters, continuing-stance gap, airborne touchdown, root tracking, clearance, stance slip/anchor, collision, penetration, lifecycle, and joint step. If validity/support/touchdown close but the phase `23->0` joint step remains above `0.35rad`, close Task 14E and create a separate Task 14F design decision; do not change velocity limits or loss weights in Task 14E.
+
+**2026-07-22 execution result:** Task 14E code and focused tests are complete, but the representative behavior gate is RED. Verification is `124 passed` for nominal/loss/QP/scan/line-search/RTI/backend, `47 passed` for contract/IK/gait/terrain, and `28 passed` for final nominal, with static checks passing. The real viewer has validity `1.0`, no invalid cycles, root velocity `0.10739m/s`, joint step `0.34683rad`, stance slip `0.338mm`, and clearance `+9.276um`; however stance ground gap is `84.63mm`, airborne touchdown is `0.020408`, and stance-root carry ratio is `29.72`. Stop at the plan's failed manifold gate: do not start Task 14F, ranked/formal or Stage B. The next approved plan amendment must decide whether continuing-stance z and touchdown-onset z belong in nominal manifold initialization without turning it into post-solve repair or another optimization.
+
+### Task 14E-Z: Warm Published-x1 All-Stance Ground Manifold
+
+User approved方案 A on 2026-07-22. This task remains inside pre-LQ warm nominal construction and the existing fourth line-search filter. It does not change the six-row mixed KKT, fixed x1 root XY, one-QP/one-RTI contract, five alphas, seven losses, H30, `step_z=4`, `contact_future_onset_xy=1`, or `joint_velocity_limit=30`.
+
+**Files:** modify `Go2Pvcnn/extension/joint_mpc_rti/model/nominal.py`, `Go2Pvcnn/extension/joint_mpc_rti/solver/line_search.py`, `Go2Pvcnn/extension/joint_mpc_rti/solver/sqp_rti.py`, and focused tests in `test_nominal.py`, `test_line_search_v2.py`, `test_trajectory_qp.py`, and `test_rti_pipeline.py`. Update the T302v dashboard/log evidence after verification.
+
+- [x] Write nominal RED tests for phase 12 continuing stance and phase 11 touchdown onset. For every x1 stance leg, query raw terrain at the approved target XY and require exact-FK Z equal to `height_w + foot_contact_offset` within `2e-5m`. Continuing XY must equal the persistent anchor; onset XY must equal shifted-x1 FK XY. Assert x0, x1 root/RPY, x1 swing joints, and x2..x30 remain byte-for-byte unchanged.
+
+- [x] Run the focused nominal RED test and require the current implementation to fail because it preserves shifted z for continuing legs and leaves onset legs unchanged:
+
+```bash
+PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest \
+  Go2Pvcnn/tests/joint_mpc_rti/test_nominal.py \
+  -k 'all_stance_ground or touchdown_onset_ground' -q
+```
+
+- [x] Extend `_initialize_published_stance_manifold` with the terrain field. Build `continuing`, `onset`, and `published_stance=stance[:,1]`; choose target XY with `torch.where(continuing[...,None], anchor_xy, shifted_foot_xy)`; query raw `height_w`; form target Z as raw height plus `foot_contact_offset`; run the existing batched analytic IK; and replace only published-stance x1 joints. No Python environment/leg loop is allowed.
+
+- [x] Preserve warm-only invalid semantics. Require terrain query validity, all published-stance IK reachability/finite, x1 joint position bounds, x0-to-x1 velocity bounds, and finite corrected state. Invalid rows stay `used_warm_start=True`, `used_cold_start=False`, and keep lifecycle initialization.
+
+- [x] Write line-search RED tests that keep continuing XY masking unchanged while adding an all-x1-stance ground mask. Query raw height independently at each candidate XY and reject both gap and penetration when `abs(foot_z-height-foot_contact_offset) > published_stance_tolerance`. Keep `FILTER_NAMES` exactly four entries and preserve the existing swing safe-floor behavior.
+
+- [x] Extend `parallel_line_search` and `sqp_rti_update` minimally: pass `published_stance_ground_mask=context.schedule.stance[:,1]`, reuse `published_terrain_field`, combine ground validity with continuing XY and swing Z into the existing `published_kinematics` boolean, and reuse `published_stance_tolerance=0.0005m` rather than adding a scalar.
+
+- [x] Add direct QP/RTI contracts: the initialized nominal keeps continuing stance support XY target at numerical zero; alpha zero passes continuing XY plus all-stance Z; onset XY remains unconstrained by the continuing filter; batch sizes `1/40/512/1024` preserve fixed shapes and finite valid rows.
+
+- [x] Run focused nominal/QP/scan/line-search/RTI/backend tests, `py_compile`, and `git diff --check`. Then run only the same real S4 sphere `small_forward` viewer on `cuda:1`. Record ground gap, airborne touchdown, penetration, validity, joint step, root tracking, stance XY, swing clearance, collision, crossing, cold/warm lifecycle, and candidate filters. Do not run ranked/formal or Stage B unless every representative gate is green.
+
+**2026-07-22 execution result:** implementation and focused contracts pass (`127 passed` plus `47 passed`, `py_compile` and diff check green), but representative behavior is RED. At the worst onset, the approved shifted XY queries a `100.26mm` raw small-obstacle surface, so grounding places the foot center at `122.26mm`; the next continuing step drops it to ordinary ground and causes `joint_step=0.59164rad`. Final viewer metrics include `stance_ground_gap=100.75mm`, `airborne_touchdown=0.020408`, validity `0.97959`, and one phase-23 all-alpha published-kinematics rejection. Keep ranked/formal, Task 14F and Stage B blocked. A new approved architecture decision must address touchdown XY ownership or pre-touchdown descent timing; do not tune scalars or relax gates inside Task 14E-Z.
 
 ## Stage A — Behavior And Joint Metrics
 

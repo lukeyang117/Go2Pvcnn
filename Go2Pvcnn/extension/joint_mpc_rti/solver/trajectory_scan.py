@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
 from .associative_scan import ConditionalValueFactor, combine_conditional_value_factors
 from .trajectory_qp import ActiveConstraints, ActiveSetSolution, TrajectoryQp, refine_active_set
 
@@ -157,8 +158,8 @@ def _trajectory_factors(qp: TrajectoryQp, active: ActiveConstraints) -> Conditio
     ).squeeze(-1)
     transformed_cross = (affine_control.transpose(-1, -2) @ control_hessian + cross) @ free_matrix
 
-    solve_b = torch.linalg.solve(transformed_r, transformed_b.transpose(-1, -2)).transpose(-1, -2)
-    solve_m = torch.linalg.solve(transformed_r, transformed_cross.transpose(-1, -2)).transpose(-1, -2)
+    solve_b = fixed_general_solve(transformed_r, transformed_b.transpose(-1, -2)).transpose(-1, -2)
+    solve_m = fixed_general_solve(transformed_r, transformed_cross.transpose(-1, -2)).transpose(-1, -2)
     matrix_a = transformed_a - solve_b @ transformed_cross.transpose(-1, -2)
     vector_c = transformed_c - (solve_b @ transformed_control_linear.unsqueeze(-1)).squeeze(-1)
     matrix_c = solve_b @ transformed_b.transpose(-1, -2)
@@ -184,7 +185,9 @@ def _split_boundaries(
             @ (p_right + (a_right.transpose(-1, -2) @ costate_right.unsqueeze(-1)).squeeze(-1)).unsqueeze(-1)
         ).squeeze(-1)
     )
-    state_middle = torch.linalg.solve(identity + c_matrix_left @ p_matrix_right, rhs.unsqueeze(-1)).squeeze(-1)
+    state_middle = fixed_general_solve(
+        identity + c_matrix_left @ p_matrix_right, rhs.unsqueeze(-1)
+    ).squeeze(-1)
     costate_middle = (
         a_right.transpose(-1, -2) @ costate_right.unsqueeze(-1)
     ).squeeze(-1) + p_right + (p_matrix_right @ state_middle.unsqueeze(-1)).squeeze(-1)
@@ -219,10 +222,56 @@ def _recover_direction(levels: tuple[ConditionalValueFactor, ...], batch: int) -
     return boundaries[:31, :, STATE_DIM:].movedim(0, 1)
 
 
-def solve_active_trajectory_qp_scan(qp: TrajectoryQp, active: ActiveConstraints) -> Tensor:
+def _solve_active_trajectory_qp_scan_base(qp: TrajectoryQp, active: ActiveConstraints) -> Tensor:
     factors, _ = pad_h30_factors(_trajectory_factors(qp, active))
     levels = _fixed_five_level_tree(factors)
     return _recover_direction(levels, qp.batch_size)
+
+
+def _repeat_active(active: ActiveConstraints, repeats: int) -> ActiveConstraints:
+    return ActiveConstraints(
+        box_low=active.box_low.repeat_interleave(repeats, dim=0),
+        box_high=active.box_high.repeat_interleave(repeats, dim=0),
+        velocity_low=active.velocity_low.repeat_interleave(repeats, dim=0),
+        velocity_high=active.velocity_high.repeat_interleave(repeats, dim=0),
+    )
+
+
+def solve_active_trajectory_qp_scan(qp: TrajectoryQp, active: ActiveConstraints) -> Tensor:
+    base = _solve_active_trajectory_qp_scan_base(qp, active)
+    support = qp.support_jacobian
+    rows = int(support.shape[1])
+    perturbation = qp.gradient.new_zeros(qp.batch_size, rows, qp.nodes, STATE_DIM)
+    perturbation[:, :, 1] = support
+
+    def repeat(value: Tensor) -> Tensor:
+        return value.repeat_interleave(rows, dim=0)
+
+    perturbed_qp = TrajectoryQp(
+        diagonal=repeat(qp.diagonal),
+        first_offdiag=repeat(qp.first_offdiag),
+        second_offdiag=repeat(qp.second_offdiag),
+        gradient=(qp.gradient[:, None] + perturbation).reshape(
+            qp.batch_size * rows, qp.nodes, STATE_DIM
+        ),
+        lower=repeat(qp.lower),
+        upper=repeat(qp.upper),
+        joint_difference_lower=repeat(qp.joint_difference_lower),
+        joint_difference_upper=repeat(qp.joint_difference_upper),
+        support_jacobian=repeat(qp.support_jacobian),
+        support_target=repeat(qp.support_target),
+    )
+    perturbed = _solve_active_trajectory_qp_scan_base(
+        perturbed_qp, _repeat_active(active, rows)
+    ).reshape(qp.batch_size, rows, qp.nodes, STATE_DIM)
+    response = base[:, None] - perturbed
+    schur = torch.einsum("bri,bqi->brq", support, response[:, :, 1])
+    schur = 0.5 * (schur + schur.transpose(-1, -2))
+    support_motion = (
+        torch.einsum("bri,bi->br", support, base[:, 1]) - qp.support_target
+    )
+    multiplier = fixed_general_solve(schur, support_motion.unsqueeze(-1)).squeeze(-1)
+    return base - torch.einsum("bqki,bq->bki", response, multiplier)
 
 
 def solve_trajectory_qp_scan(qp: TrajectoryQp) -> ActiveSetSolution:

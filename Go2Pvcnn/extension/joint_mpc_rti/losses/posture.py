@@ -8,12 +8,17 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
+from extension.joint_mpc_rti.tensor_constants import constant_like
 
 
 def posture_residual(state: Tensor, support_height: Tensor, cfg: JointMpcRtiCfg) -> Tensor:
     trajectory = torch.as_tensor(state)
     support = torch.as_tensor(support_height, dtype=trajectory.dtype, device=trajectory.device)
-    nominal_joint = trajectory.new_tensor(cfg.gait.nominal_joint_pos).view(1, 1, 12)
+    nominal_joint = constant_like(
+        trajectory,
+        f"posture_nominal_joint_{tuple(cfg.gait.nominal_joint_pos)}",
+        cfg.gait.nominal_joint_pos,
+    ).view(1, 1, 12)
     height = math.sqrt(float(cfg.loss_terms.posture_root_height)) * (
         trajectory[..., 2] - support - float(cfg.loss_terms.posture_root_clearance)
     )

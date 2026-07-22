@@ -9,6 +9,7 @@ from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+from extension.joint_mpc_rti.tensor_constants import constant_like
 
 
 def step_residual(state: Tensor, touchdown_reference_w: Tensor, schedule, cfg: JointMpcRtiCfg) -> Tensor:
@@ -16,12 +17,14 @@ def step_residual(state: Tensor, touchdown_reference_w: Tensor, schedule, cfg: J
     target = torch.as_tensor(touchdown_reference_w, dtype=trajectory.dtype, device=trajectory.device)
     foot = go2_fk(trajectory[..., :3], trajectory[..., 3:6], trajectory[..., 6:]).foot_pos_w
     event = schedule.phase.eq(int(cfg.gait.swing_steps) - 1).to(trajectory.dtype)
-    scale = torch.stack(
+    scale = constant_like(
+        trajectory,
+        f"step_residual_scale_{cfg.loss_terms.step_xy}_{cfg.loss_terms.step_z}",
         (
-            trajectory.new_tensor(math.sqrt(float(cfg.loss_terms.step_xy))),
-            trajectory.new_tensor(math.sqrt(float(cfg.loss_terms.step_xy))),
-            trajectory.new_tensor(math.sqrt(float(cfg.loss_terms.step_z))),
-        )
+            math.sqrt(float(cfg.loss_terms.step_xy)),
+            math.sqrt(float(cfg.loss_terms.step_xy)),
+            math.sqrt(float(cfg.loss_terms.step_z)),
+        ),
     )
     residual = (foot - target) * event[..., None] * scale
     denominator = (event.sum(dim=(1, 2)) * 3.0).clamp_min(1.0).sqrt()

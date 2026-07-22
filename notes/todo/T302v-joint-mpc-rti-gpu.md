@@ -2,6 +2,36 @@
 
 ## Current State
 
+- Task 14E-Z方案 A is implemented: all published x1 stance legs use raw-ground analytic IK in warm nominal, and the existing fourth filter checks continuing XY, all-stance ground and swing floor. Focused regression is `127 passed` plus `47 passed`, but the real viewer rejects behavior closure. A post-obstacle onset shifted XY queries the `100.26mm` small-obstacle top, then the next continuing cycle drops `100.75mm` to ordinary ground; joint step is `0.59164rad`, validity `0.97959`, airborne touchdown `0.020408`, and phase 23 has no published-kinematics-feasible alpha. Root/XY/clearance/collision/crossing/lifecycle stay green. Stop before Task 14F/ranked/formal/Stage B; redesign touchdown XY ownership or pre-touchdown descent timing. See [Task 14E-Z implementation](../log/2026-07-22-joint-mpc-rti-all-stance-ground-implementation.md).
+
+- Task 14E方案 A is implemented as the approved tensor-only pre-LQ warm operation. The 6mm exact-FK, invariance, invalid/lifecycle, support, alpha-zero and B=`1/40/512/1024` contracts pass; focused solver union is `124 passed`, contract/IK/gait/terrain is `47 passed`. The real viewer closes invalid cycles and makes validity/root/joint/XY-slip/clearance green, but preserving shifted z leaves stance ground gap `84.63mm`, airborne touchdown `0.020408`, and carry ratio `29.72`. Stop before Task 14F/ranked/formal/Stage B and review continuing/onset z ownership. See [Task 14E implementation](../log/2026-07-22-joint-mpc-rti-warm-x1-manifold-implementation.md).
+
+- Task 14D published-root XY priority is implemented. A synthetic RED proved the old affine seed could begin outside fixed x1 root-XY boxes and retain `21mm` error after two unrelated blockers; the seed now solves the six rows only in the free subspace. Focused `93 passed`, contract/terrain `37 passed`, and the real viewer reports full/selected root-XY deviations and violations exactly `0`. Root velocity is green at `0.12535m/s`, but Task 14D is behavior-rejected: phases `13..23` have all five candidates fail exact FK, validity is `0.77551`, joint step is `0.37823rad`, and stance/touchdown metrics regress. Ranked/formal/Stage B remain blocked pending a new architecture decision. See [published root XY priority](../log/2026-07-22-joint-mpc-rti-published-root-xy-priority.md).
+
+- Root-layer diagnostics now reproduce the sole remaining viewer failure and localize it after nominal construction: overall nominal/full-QP/selected root velocity errors are `0.09045/0.23343/0.22393m/s`, and warm-only values are `0.07150/0.20604/0.19634m/s`. Full QP worsens nominal in `41/49` cycles; line search improves full in only three; root trust saturates only four times. The cold first edge contributes `1.54806m/s`, while large corrections repeat at 12-frame gait boundaries. The next behavior change requires a user-approved root/foot priority contract, not larger trust, a relaxed metric, or another scalar sweep. See [root-layer diagnosis](../log/2026-07-22-joint-mpc-rti-root-tracking-layer-diagnosis.md).
+
+- The user-approved mixed published-kinematics KKT is implemented as six fixed-rank rows: four stance XY plus two swing Z floors, with the fourth existing filter checking both exact-FK contracts. Focused union is `93 passed`. In the real S4 sphere viewer the worst swing nominal is `2.473mm` below its safe floor, while full/selected are `5.271/5.294um` above it; only alpha `1.0` passes `published_kinematics`. Clearance is green at `+6.219um`, and validity, joint, stance, collision, crossing, penetration, and lifecycle are green. The sole remaining gate failure is root velocity `0.22393m/s > 0.2m/s`; ranked/formal remain blocked for read-only root-layer diagnosis. See [mixed swing-floor viewer](../log/2026-07-22-joint-mpc-rti-mixed-swing-floor-viewer.md).
+
+- The user-approved four-row XY-only support contract is implemented: continuing stance receives persistent-anchor XY correction, touchdown onset target is zero, and Z remains in Contact/Terrain. Split focused regression is `66 passed`. The real 49-cycle viewer fixes validity to `1.0`, keeps joint/stance/collision/crossing/lifecycle green, and improves clearance to `-2.593mm`, but root velocity is `0.22483m/s` and clearance remains red. Stop support/scalar variants and keep ranked/formal blocked. See [XY-only support viewer](../log/2026-07-22-joint-mpc-rti-xy-only-support-viewer.md).
+
+- The approved affine published-x1 support KKT is implemented with six complete FK rows, nonzero targets, dense/scan parity, fixed-rank Schur correction, an affine-feasible active-set seed, and an exact-FK continuing-stance line filter. Focused regression is `63 passed`. Real viewer comparison rejects homogeneous support and both affine variants as complete acceptance candidates: the final grounded-z variant makes joint/stance/penetration green but leaves validity `0.98`, root velocity `0.21931m/s`, and clearance `-3.296mm` red. Stop support-anchor variants; ranked/formal remain blocked. See [affine support KKT](../log/2026-07-22-joint-mpc-rti-affine-support-kkt.md).
+
+- Task 14 solver-layer diagnosis accepts only independent normalization of current persistent-anchor Contact rows; future onset/continuing retain the prior horizon denominator. This restores ranked small `7/7` and makes representative viewer stance/clearance green, but root velocity `0.20182m/s` and phase `11->12` joint step `0.41972rad` remain red. The joint event is already present in warm nominal (`0.43188rad`) and same-cycle QP corrects only `0.01217rad`.
+
+- Compact one-env PhysX buffers unblocked real viewer execution. Three final-swing Step architectures are now rejected: trajectory-relative midpoint, fixed world reference, and body-relative phase 9/10 shaping. All make joint continuity green (`0.321-0.323rad`) but leave stance slip/anchor near `1.295mm`, root velocity error near `0.221m/s`, and clearance near `-2.05mm`. The worst phase `0->1` QP moves nominal x1 anchor error from `0.070mm` to `1.296mm` while root correction hits the `+10mm` trust bound. Production is restored to phase-11-only Step, experiment knobs are removed, and focused regression is `82 passed`. See [Step architecture closure](../log/2026-07-22-joint-mpc-rti-step-architecture-closure.md).
+
+- The phase-12 touchdown amendment is rejected. Although its TDD/focused union reached `67 passed`, ranked small regressed to `6/7` and the real viewer joint step worsened to `0.44678rad`, root velocity stayed red at `0.20402m/s`, and swing clearance became `-3.83mm`. Production is restored to `tau=phase/11`, phase-11 Step, phase-12 stance-only Contact ground, weak future onset, and original Terrain; restored focused regression is `66 passed`. See [phase-12 rejection](../log/2026-07-21-joint-mpc-rti-touchdown-phase12-rejected.md).
+
+- Task 14 sharding preflight is complete at the CLI boundary, and the missing real-viewer small path is implemented with actual S4 obstacle/scanner/root/joint/foot plus shared JointMetrics. The representative sphere event executes 49 RTI cycles and passes strict crossing, all collision/penetration/semantic/map/validity/lifecycle gates, but remains behavior-red on post-crossing stance: slip `5.120mm`, anchor residual `5.225mm`, stationary ratio `0.9667`; root velocity `0.21598m/s`, joint step `0.35389rad`, and stance penetration `1.872mm` also miss. Actual/planned foot error is only `1.924e-6m`, ruling out viewer lag. Full formal `29,640` remains unrun and Stage B remains blocked. See [CLI sharding and viewer blocker](../log/2026-07-21-joint-mpc-rti-cli-sharding-real-viewer-small-blocker.md).
+
+- Task 14 fixture parity and ranked gates are green. The formal field matches `151x151 @ 0.01m` and all five grounded native profiles; `command_hold_multiplier=4000`, `smooth=14.25` gives ranked small/flat `7/7`. Viewer diagnostics found and fixed a missing `0.022m` grounding offset, removing false penetration. The real viewer remains red on FL phase-20/21 continuing stance: slip/anchor `3.173/3.366mm`, stationary `0.9778`, root velocity `0.2215m/s`, swing clearance `-1.958mm`; small distance grows `59->62mm`, excluding direct Terrain repulsion. Contact `800` is rejected because it trades slip for worse tracking/stationary. Joint package plus viewer reset regression is `248 passed`. See [native-shape parity and ranked retune](../log/2026-07-21-joint-mpc-rti-native-shape-parity-ranked-retune.md).
+
+- Task 13 is closed for behavior: the formal flat matrix is now 19 axis-isolated commands and passes `19/19`; the real H30 viewer probe passes eight axis-isolated cases for eight RTI cycles. Task 14 small-obstacle acceptance is the next behavior front. CUDA Graph capture remains open only for Stage B after diagnostics reached loss scalar creation. See [flat axis-19 and viewer gate](../log/2026-07-21-joint-mpc-rti-flat-axis19-viewer-gate.md).
+
+- The user-approved warm-start boundary supersedes the current `previous.valid -> cold` behavior: each environment cold-starts exactly once after creation/reset and then remains warm-only. `alpha=0` is a normal retained trajectory, candidate validity cannot reset lifecycle state, and corrupt initialized cache must fault rather than cold-start. The implementation plan is amended; lifecycle TDD is now required before resuming Task 13 tuning. See [cold-once/warm-only amendment](../log/2026-07-21-joint-mpc-rti-cold-once-warm-only-plan-amendment.md).
+
+- Task 13 root-trust/cold-first-edge candidate now closes ranked moving tracking, stance, foot lead, root jump, joint validity and zero-command behavior on the 3-cell CUDA probe. The only remaining ranked failures are phase-11 swing/touchdown surface clearance `-21/-29mm`; flat is still red and small/Stage B remain blocked. See [root trust and cold first edge](../log/2026-07-21-joint-mpc-rti-root-trust-cold-first-edge-and-flat-tuning.md).
+
 - Task 13 has reached a design-contract blocker after the rolling-time command amendment: focused regression is `55 passed`, and all ranked CUDA runs complete safely, but approved scalar tuning cannot simultaneously close frozen zero drift (`10 um`), moving root tracking, stance, and swing endpoint clearance. Touchdown scale `0.5` and command weight `5` improve different metrics; root trust `0.02`, decoupled root/foot scales, and command weight `100` are rejected. Stop scalar sweeping and decide the zero-command soft-objective contract before more production edits; small and Stage B remain blocked. See [soft-objective blocker](../log/2026-07-21-joint-mpc-rti-flat-soft-objective-contract-blocker.md).
 
 - The former active-KKT blocker is closed: fixed-two-refinement feasible blocking returns a feasible descending direction, dense/scan differ by `9.64e-8`, active masks match, and focused QP/nominal/loss/RTI regression is `32 passed`. The approved grouped-convolution -> propagated-height -> Scharr -> bilinear-query perception chain is already differentiable in trajectory XY. Full-horizon tracing proves the remaining jump is a repeated early-command objective kink moving through edges `11..0`; `command_early=0.1` fixes jump but breaks foot lead/leak, and `smooth_first=0.2` is ineffective. Scalar tuning is paused pending a minimal loss-semantics amendment; zero drift and `tau=1` swing clearance remain separate. See [feasible-KKT/phase diagnostic](../log/2026-07-21-joint-mpc-rti-feasible-kkt-and-phase12-warm-kink.md).
@@ -74,11 +104,10 @@
 
 ## Open Children
 
-- Task 13 early-command time-consistency amendment: define startup foot lead without creating a low-command-pressure edge at every future swing transition; keep exactly seven losses and the frozen line search/KKT structure.
-- Task 13 zero-command drift and `tau=1` swing-clearance endpoint remain separate after the phase-boundary diagnosis.
-
-- Task 13 mixed-command accepted trajectory and first-node swing jump: rerun the ranked CUDA trace after validity propagation and fixture correction, then identify the remaining joint-filter, alpha-zero, clearance, and foot/root onset failures without changing the fixed nominal/loss/KKT/line-search contracts.
-- Task 13 rolling batch-size sensitivity: compare frame-10 backward candidate losses, filter masks, and scan directions across B=1/B=3; ranked B3 must be representative before tuning toward the formal B275 gate.
+- Task 14E vertical manifold follow-up: decide whether pre-LQ nominal should ground continuing-stance z, touchdown-onset z, or both, while preserving the one-RTI/no-repair architecture. Current XY-only implementation remains behavior-red.
+- Task 14F joint continuity decision: still blocked despite current `0.34683rad` green result because the Task 14E vertical support gate is red.
+- Task 14 complete formal small matrix: run all deterministic contiguous shards for `19 x 5 x 24 x 13 = 29,640` cells and require exact-key merge coverage.
+- Task 14 remaining signed real viewer crossings: run only after the representative forward stance blocker is closed.
 
 - T302v.7 support-driven gait quality: define and implement a contract for near-zero world-frame stance slip, command-conditioned swing touchdown lead, and root progress coupled to established support. Current grounding-Z/collision metrics do not detect root-carried feet.
 - Realistic multi-cell signed-field performance: the final contract is `1024 x H_selected x 1000 <=5s` with Stage A's selected horizon and unchanged `11x11` small plus `41x41` large footprints. The current H16 baseline misses this gate; single-cell results must not be used as acceptance. Stage B starts only after Stage A and may use MPX-style temporal associative scans, multiple shooting, parallel line search and state-space Schur structure in addition to exact-EDT work.
@@ -100,6 +129,17 @@
 - T302v.6 performance investigation: compiled fixed-shape LQ/query/rollout is retained; single-cell EDT fusion, complementary transforms, stream chunking, brute-force reduction, and compact warp bbox experiments were evaluated. The single-cell pass was rejected and the failed CUDA experiments were removed.
 
 ## Related Logs
+
+- [CUDA Graph capture fix](../log/2026-07-22-joint-mpc-rti-cuda-graph-capture-fix.md)
+- [Task 14E warm x1 manifold implementation](../log/2026-07-22-joint-mpc-rti-warm-x1-manifold-implementation.md)
+- [Task 14E warm x1 support manifold plan](../log/2026-07-22-joint-mpc-rti-warm-x1-manifold-plan.md)
+- [Published root XY priority](../log/2026-07-22-joint-mpc-rti-published-root-xy-priority.md)
+- [Root tracking layer diagnosis](../log/2026-07-22-joint-mpc-rti-root-tracking-layer-diagnosis.md)
+- [Mixed swing-floor viewer](../log/2026-07-22-joint-mpc-rti-mixed-swing-floor-viewer.md)
+- [Swing-floor architecture audit](../log/2026-07-22-joint-mpc-rti-swing-floor-architecture-audit.md)
+- [XY-only support viewer](../log/2026-07-22-joint-mpc-rti-xy-only-support-viewer.md)
+- [Step architecture closure](../log/2026-07-22-joint-mpc-rti-step-architecture-closure.md)
+- [Phase-12 touchdown amendment rejected](../log/2026-07-21-joint-mpc-rti-touchdown-phase12-rejected.md)
 
 - [Performance acceptance](../log/2026-07-15-joint-mpc-rti-performance.md)
 - [Regression verification](../log/2026-07-15-joint-mpc-rti-regression.md)
@@ -124,14 +164,14 @@
 
 ## Git Refs
 
-- Last Feature Commit: `724a1c3`.
-- Last Verified Commit: `724a1c3` plus the current working tree (`32 passed`; monitored ranked diagnostic completed).
-- Current Work Ref: `work/joint-mpc-kinematic` at `724a1c3` plus uncommitted Task 13 work.
-- Key Files: `planner.py`, `runtime/cuda_graph.py`, `runtime/manager.py`, `solver/primal_dual_ilqr.py`, `joint_mpc_rti_perf_probe.py`.
+- Last Feature Commit: `41f1b18`.
+- Last Verified Commit: `41f1b18` plus the current working tree (Task 14E focused `124 passed`; contract/IK/gait/terrain `47 passed`; nominal `28 passed`; pycompile/diff check pass; representative validity/root/joint/XY/clearance green but vertical support behavior red).
+- Current Work Ref: `work/joint-mpc-kinematic` at `41f1b18` plus uncommitted Task 14 work.
+- Key Files: `model/nominal.py`, `planner.py`, `solver/trajectory_qp.py`, `solver/line_search.py`, `test_nominal.py`, `joint_mpc_rti_viewer_reproduction_probe.py`.
 
 ## Next Step
 
-Keep the future-touchdown anchor and phase-11 Step fixes. Coordinate only approved parameters around `step_reference_scale=0.5`: reduce signed joint step, close swing clearance, and meet root velocity/direction tracking without losing positive joint margin, stance, lead, or validity. Then run the monitored 96-step ranked flat gate before any small-obstacle test.
+Return to design review for the Task 14E vertical manifold boundary: preserving shifted foot z leaves an `84.63mm` stance gap and one airborne touchdown despite exact continuing XY. Keep the implemented XY initialization, free-subspace seed fix and fixed x1 root XY; do not launch Task 14F/ranked/formal/Stage B, tune scalar variants, add projection/repair/another solve, change metrics, or weaken thresholds.
 
 ## Node Details
 

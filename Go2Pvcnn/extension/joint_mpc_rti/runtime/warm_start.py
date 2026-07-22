@@ -38,7 +38,8 @@ def shift_rebase_trajectory(previous: Tensor, measured: Tensor, *, decay_nodes: 
     terminal = torch.cat((terminal_root, trajectory[:, -1, 6:]), dim=-1)
     shifted = torch.cat((trajectory[:, 1:], terminal[:, None]), dim=1)
 
-    delta_yaw = wrap_angle(measured_state[:, 5] - shifted[:, 0, 5])
+    yaw_coordinate_delta = measured_state[:, 5] - shifted[:, 0, 5]
+    delta_yaw = wrap_angle(yaw_coordinate_delta)
     relative_pos = shifted[..., :3] - shifted[:, :1, :3]
     cosine = torch.cos(delta_yaw)[:, None]
     sine = torch.sin(delta_yaw)[:, None]
@@ -52,7 +53,7 @@ def shift_rebase_trajectory(previous: Tensor, measured: Tensor, *, decay_nodes: 
     rebased_z = measured_state[:, None, 2] + relative_pos[..., 2]
     rebased_pos = torch.cat((rebased_xy, rebased_z[..., None]), dim=-1)
     rebased_rpy = torch.cat(
-        (shifted[..., 3:5], wrap_angle(shifted[..., 5] + delta_yaw[:, None])[..., None]),
+        (shifted[..., 3:5], (shifted[..., 5] + yaw_coordinate_delta[:, None])[..., None]),
         dim=-1,
     )
 

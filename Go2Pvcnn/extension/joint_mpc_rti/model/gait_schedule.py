@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from extension.joint_mpc_rti.tensor_constants import constant_like
+
 
 @dataclass(frozen=True)
 class FixedTrotSchedule:
@@ -27,7 +29,7 @@ def fixed_trot_schedule(phase0: Tensor, *, horizon_steps: int = 30) -> FixedTrot
         raise ValueError("horizon_steps must be positive")
 
     node = torch.arange(horizon_steps + 1, device=phase0.device)
-    leg_offset = torch.tensor((0, 12, 12, 0), device=phase0.device)
+    leg_offset = constant_like(phase0, "gait_leg_offsets", (0, 12, 12, 0))
     phase = (phase0[:, None, None] + node[None, :, None] + leg_offset[None, None, :]) % 24
     swing = phase < 12
     swing_tau = phase.to(torch.float32).div(11.0).clamp(0.0, 1.0)

@@ -90,6 +90,103 @@ def test_task_joint_backend_uses_verified_realtime_solver_profile() -> None:
     assert "diagonal_state_riccati" not in source
 
 
+def test_viewer_reproduction_uses_only_axis_isolated_commands() -> None:
+    source = Path(
+        "Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_viewer_reproduction_probe.py"
+    ).read_text()
+
+    assert '("mixed",' not in source
+    assert '("mixed_reverse",' not in source
+    assert '("yaw_left", (0.0, 0.0, 0.5))' in source
+    assert '("yaw_right", (0.0, 0.0, -0.5))' in source
+    assert '("small_forward", (1.0, 0.0, 0.0))' in source
+    assert '("small_backward", (-1.0, 0.0, 0.0))' in source
+    assert '("small_lateral_left", (0.0, 0.5, 0.0))' in source
+    assert '("small_lateral_right", (0.0, -0.5, 0.0))' in source
+
+
+def test_viewer_reproduction_preserves_fixed_h30_solver_contract() -> None:
+    source = Path(
+        "Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_viewer_reproduction_probe.py"
+    ).read_text()
+
+    assert "requested_n_frames=30" in source
+    assert 'os.environ.get("JOINT_MPC_VIEWER_REPRO_WARMUP_STEPS", "0")' in source
+    assert "_viewer_ground_robot_from_scanner" in source
+    assert "runtime.foot_ids.index_select(0, stance_leg_indices)" in source
+    assert "manager._cfg.solver.use_cuda_graph = False" in source
+
+
+def test_viewer_small_reproduction_uses_real_anchor_and_shared_acceptance_metrics() -> None:
+    source = Path(
+        "Go2Pvcnn/tests/joint_mpc_rti/joint_mpc_rti_viewer_reproduction_probe.py"
+    ).read_text()
+
+    assert 'os.environ.get("JOINT_MPC_VIEWER_REPRO_SCENARIO", "flat")' in source
+    assert 's4_semantic_course_anchor("small")' in source
+    assert "manager.latest_trajectory()" in source
+    assert "measured_before_vector = measured_before.as_vector().clone()" in source
+    assert "_small_detector_row" in source
+    assert "strict_crossing_event" in source
+    assert "evaluate_trace" in source
+    assert 'scenario="small"' in source
+    assert "post_cross_cycles = 24" in source
+    assert '"worst_stance_event"' in source
+    assert '"loss_breakdown"' in source
+    assert '"solver_layers"' in source
+
+
+def test_root_tracking_solver_layers_separate_nominal_full_selected_and_actual() -> None:
+    from .joint_mpc_rti_viewer_reproduction_probe import _root_tracking_solver_layers
+
+    state = torch.zeros(1, 3, 18)
+    state[0, 1, 0] = 0.016
+    state[0, 2, 0] = 0.036
+    nominal = torch.zeros(1, 2, 18)
+    nominal[0, 1, 0] = 0.009
+    direction = torch.zeros_like(nominal)
+    direction[0, 1, 0] = 0.010
+    diagnostics = [
+        SimpleNamespace(nominal_state=nominal.clone(), qp_direction=direction.clone()),
+        SimpleNamespace(nominal_state=nominal.clone(), qp_direction=direction.clone()),
+    ]
+
+    layers = _root_tracking_solver_layers(
+        state=state,
+        step_diagnostics_rows=diagnostics,
+        command_body=torch.tensor([[1.0, 0.0, 0.0]]),
+        line_alpha=torch.tensor([[0.5, 1.0]]),
+        warm_start=torch.tensor([[False, True]]),
+        dt=0.02,
+        root_position_trust=0.01,
+    )
+
+    assert layers["mean_error_mps"] == pytest.approx(
+        {"actual": 0.1, "nominal": 0.55, "full_qp": 0.05, "selected": 0.175}
+    )
+    assert layers["warm_mean_error_mps"]["selected"] == pytest.approx(0.05)
+    assert layers["root_xy_trust_utilization"]["max"] == pytest.approx(1.0)
+    assert layers["root_xy_trust_utilization"]["saturated_cycle_count"] == 2
+    assert layers["published_root_xy_deviation_m"] == pytest.approx(
+        {"full_qp_max": 0.01, "selected_max": 0.01}
+    )
+    assert layers["published_root_xy_violation_count"] == {"full_qp": 2, "selected": 2}
+    assert layers["cycles"][0]["velocity_body_mps"]["selected"] == pytest.approx([0.7, 0.0])
+
+
+def test_viewer_small_reproduction_prefers_representative_sphere_then_cuboid() -> None:
+    from .joint_mpc_rti_viewer_reproduction_probe import _select_small_anchor
+
+    anchors = (
+        SimpleNamespace(stage="S4", semantic_class="small", shape_kind="capsule", world_xy=(-3.0, 0.0)),
+        SimpleNamespace(stage="S4", semantic_class="small", shape_kind="cuboid", world_xy=(1.0, 0.0)),
+        SimpleNamespace(stage="S4", semantic_class="small", shape_kind="sphere", world_xy=(2.0, 0.0)),
+    )
+
+    assert _select_small_anchor(anchors).shape_kind == "sphere"
+    assert _select_small_anchor(anchors[0:2]).shape_kind == "cuboid"
+
+
 def test_factory_creates_joint_mpc_rti_manager() -> None:
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
     from extension.trajectory_manager_factory import create_trajectory_manager

@@ -57,6 +57,12 @@ def _random_h30_qp(
     upper[:, 0] = 0.0
     difference_lower = torch.full((batch, nodes - 1, 12), -10.0, dtype=dtype, device=device)
     difference_upper = torch.full_like(difference_lower, 10.0)
+    support_jacobian = 0.05 * torch.randn(
+        batch, 6, state_dim, generator=generator, dtype=dtype, device=device
+    )
+    support_target = 1.0e-3 * torch.randn(
+        batch, 6, generator=generator, dtype=dtype, device=device
+    )
     return TrajectoryQp(
         diagonal=diagonal,
         first_offdiag=first,
@@ -66,6 +72,8 @@ def _random_h30_qp(
         upper=upper,
         joint_difference_lower=difference_lower,
         joint_difference_upper=difference_upper,
+        support_jacobian=support_jacobian,
+        support_target=support_target,
     )
 
 
@@ -201,6 +209,8 @@ def test_scan_matches_dense_for_random_feasible_active_components() -> None:
         upper=torch.where(box_high, witness, qp.upper),
         joint_difference_lower=torch.where(velocity_low, difference, qp.joint_difference_lower),
         joint_difference_upper=torch.where(velocity_high, difference, qp.joint_difference_upper),
+        support_jacobian=qp.support_jacobian,
+        support_target=qp.support_target,
     )
     active = ActiveConstraints(box_low, box_high, velocity_low, velocity_high)
 
