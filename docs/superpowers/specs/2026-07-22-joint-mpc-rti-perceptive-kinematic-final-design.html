@@ -125,11 +125,19 @@
 
   <h3>1.1 严格验收顺序</h3>
   <pre><code>Gate 0: 数学、shape、FK/IK/Jacobian、scanner parity、scan/dense parity
-  -&gt; Gate 1: flat 全部适用指标 + actual viewer
-  -&gt; Gate 2: small obstacle strict crossing 全部适用指标 + actual viewer
+  -&gt; Gate 1: flat 的 M_common 全部指标 + actual viewer
+  -&gt; Gate 2: small 的 M_common 全部指标 + M_small + actual viewer
   -&gt; Gate 3: large obstacle bypass 全部适用指标 + actual viewer
   -&gt; Gate 4: 1024 x 1000 性能门和 RL batch regression</code></pre>
-  <p>Gate 1 没有全部通过时，不允许用 small 参数掩盖平地问题；Gate 2 没有全部通过时，不允许宣称感知跨越完成。测试可以按 gate 推进，但生产架构从第一次实现起就是本文定义的完整架构，不建立另一套临时 planner。</p>
+  <pre><code>M_common = {joint, execution tracking, foot continuity, stance, swing,
+            command response, root tracking/posture, all-part collision,
+            RTI/line-search, numerical, map, warm lifecycle}
+M_small  = {strict crossing, cross clearance/denominator,
+            touchdown/stance on small, small-event collision}
+
+Pass_flat  = AND_(m in M_common) Pass(flat,m)
+Pass_small = AND_(m in M_common union M_small) Pass(small,m)</code></pre>
+  <p>Gate 1 没有全部通过时，不允许用 small 参数掩盖平地问题；Gate 2 必须在 small obstacle 场景重新运行并通过 <code>M_common</code> 的每一个指标，不能只看 crossing success。任一 common 指标在 small 中回归，small 整体即失败。Cross 在没有障碍的 flat 上不存在物理分母，因此不伪造“零事件通过”，而是在 <code>M_small</code> 中追加。测试可以按 gate 推进，但生产架构从第一次实现起就是本文定义的完整架构，不建立另一套临时 planner。</p>
 
   <h3>1.2 冻结边界与修改空间</h3>
   <table>
@@ -648,6 +656,9 @@ SW_i,k    = NOT C_i,k AND V_k
 N(A)      : valid elements in set A
 ratio(A)  = sum 1[A] / max(N(A),1)</code></pre>
   <p>每个正式测试 cell 保存 value、numerator、denominator、valid count、source、N/A 原因、worst-case key 和 pass/fail。误差类先对单个 rollout 的适用 valid 单元取均值，安全/连续性类取最大值或最小值；最终报告取所有 shape、speed、phase、offset、environment cell 的最坏值。零平移 command 下方向、crossing 和 lead 指标为 N/A，但 drift、stance、collision、joint、数值与 lifecycle 仍适用。</p>
+  <div class="decision">
+    <strong>Flat/small 双门：</strong>第 15.3 至 15.7、15.10 节全部属于 <code>M_common</code>，必须分别在 flat report 和 small report 中达到相同阈值。第 15.8 节组成 <code>M_small</code>，只在真实 small crossing opportunity 上计算，并与 small 的全部 common 指标做逻辑 AND。任何指标不得因为另一个指标更好而相互抵消。
+  </div>
   <p>继承指标的实现 ID 冻结为：</p>
   <pre><code>joint_position_violation, joint_velocity_violation,
 joint_safe_margin_min_rad, joint_step_max_rad, joint_acceleration_max_rps2,
@@ -826,20 +837,21 @@ COMMANDS = {(0,0,0)}
          union {(0,vy,0) | vy != 0}
          union {(0,0,yaw_rate) | yaw_rate != 0}
 count = 19</code></pre>
-  <p>flat 覆盖 19 条命令和多个完整 gait 周期；small 覆盖 sphere、cuboid、cylinder、capsule、cone、进入 phase、横向 offset 与适用单轴命令；large 覆盖至少 cuboid、cylinder、wall-like block、左右可绕空间与适用单轴命令。所有场景继续检查 joint、stance、root、连续性、碰撞、RTI、地图和 lifecycle 指标。</p>
+  <p>flat 必须对 19 条命令运行 <code>M_common</code> 和多个完整 gait 周期。small 同样对全部 19 条命令重新运行 <code>M_common</code>，并覆盖 sphere、cuboid、cylinder、capsule、cone、进入 phase 和横向 offset；其中 14 条非零平移命令构造真实 crossing opportunity 并追加 <code>M_small</code>，零命令与四条纯 yaw 命令只对无数学分母的 crossing/方向项记 N/A，其余 common 指标仍全部检查。large 覆盖至少 cuboid、cylinder、wall-like block、左右可绕空间与适用单轴命令，并继续检查全部 common 指标。</p>
 
   <h2 id="benchmark">16. 1024 环境性能门</h2>
   <p>正式门的含义固定为：</p>
   <pre><code>B = 1024
 H = 30
 refresh_count = 1000 warm-only calls
-T_total = CUDA-event elapsed time for 1000 complete planner refreshes
+T_total(W) = CUDA-event elapsed time for 1000 complete planner refreshes
+W in {flat-only,small-only,realistic-mixed}
 
-T_total &lt; 5.0 s
-T_refresh = T_total/1000 &lt; 5.0 ms
-throughput = 1024*1000/T_total &gt; 204800 environment-refresh/s</code></pre>
+max_W T_total(W) &lt; 5.0 s
+T_refresh(W) = T_total(W)/1000 &lt; 5.0 ms
+throughput(W) = 1024*1000/T_total(W) &gt; 204800 environment-refresh/s</code></pre>
   <p>计时包含：field build、max-pool layers、touchdown event/candidates、convex region、nominal retarget/IK、一次 linearization、一次 scan LQ/QP、五 alpha 的 nonlinear cost和完整 swept filters、cache/diagnostics tensor 更新。计时不包含 Isaac sensor 渲染、首次 import、kernel compilation 和 CUDA Graph capture；输入已经位于 GPU，禁止在循环内 host-device copy。</p>
-  <p>基准先 warm up 100 次，随后独立运行 5 组 <code>1000</code> refresh；五组均须 <code>&lt;5.0s</code>，并报告 median、max、峰值显存和 graph replay 次数。realistic workload 必须同时含 flat、small、large 和不同 gait phase，不允许用全零地图替代。性能优化不得减少 25 候选、完整 line-search swept filter 或安全 margin；LQ 采样布局的修改必须保持 exact-detector 方向覆盖和 scan parity。</p>
+  <p>flat-only、small-only 和 realistic-mixed 三个 workload 各自先 warm up 100 次，再独立运行 5 组 <code>1000</code> refresh；每个 workload 的五组均须 <code>&lt;5.0s</code>，并分别报告 median、max、峰值显存和 graph replay 次数。small-only 必须包含五种真实 shape、不同 gait phase/offset 和全部安全检查；realistic-mixed 同时含 flat、small、large，不允许用全零地图或 flat 平均耗时掩盖 small 变慢。性能优化不得减少 25 候选、完整 line-search swept filter 或安全 margin；LQ 采样布局的修改必须保持 exact-detector 方向覆盖和 scan parity。</p>
 
   <h2 id="viewer">17. Viewer 可视化与现场调参合同</h2>
   <p>Viewer 使用同一 backend、同一 map、同一一次 SQP 和同一硬安全 detector；不得有 viewer-only 多轮优化或简化碰撞路径。默认显示：</p>
@@ -904,10 +916,10 @@ throughput = 1024*1000/T_total &gt; 204800 environment-refresh/s</code></pre>
     <li>max-pool field 与真实 scanner 在 world/grid、语义、native shape 高程、unknown/map boundary 上 parity。</li>
     <li>FK/IK/Jacobian、collision gradient、region plane、LQ residual 用 finite difference 验证；scan/dense 误差小于 <code>2e-5</code>。</li>
     <li>五 alpha 的每个 hard filter 有 RED/GREEN 测试；任何 foot、knee、calf、thigh、base 或 swept interval 碰撞都不可发布。</li>
-    <li>严格按 Gate 0 到 Gate 4 推进：先 flat 全绿，再 small strict-cross；不得用后一个场景的参数或总体均值掩盖前一个 gate 的失败。</li>
-    <li>第 15 节所有适用指标按同一 trace schema 计算，P/A/C source 同时通过；15 条 canonical small viewer trace 逐条 strict-cross 且零碰撞。</li>
+    <li>严格按 Gate 0 到 Gate 4 推进：先让 flat 的 <code>M_common</code> 全绿，再让 small 的全部 <code>M_common union M_small</code> 全绿；不得用 crossing 成功率或总体均值掩盖 small 中的 common 回归。</li>
+    <li>第 15 节所有适用指标按同一 trace schema 计算，flat 与 small 各自形成完整 report，P/A/C source 同时通过；15 条 canonical small viewer trace 逐条 strict-cross 且零碰撞。</li>
     <li>Viewer 使用生产 backend，一次 SQP，所有调参都可从画面和同次 diagnostics 看出实际变化。</li>
-    <li><code>1024 x 1000</code> realistic warm refresh 五组均小于 <code>5.0s</code>，无 host sync、per-env Python loop 或动态分配回归。</li>
+    <li><code>1024 x 1000</code> 的 flat-only、small-only、realistic-mixed warm refresh 各五组均小于 <code>5.0s</code>，无 host sync、per-env Python loop 或动态分配回归。</li>
     <li>每个无 reset rollout 只有一次 cold；随后 cache/line-search 失败也只走 warm 或 stop，绝不隐式 cold restart。</li>
     <li>旧 repair、soft collision 和重复 solver 不在生产调用图中，已按第 18 节删除；文档、配置、测试和 viewer 不暴露失效参数。</li>
   </ol>
