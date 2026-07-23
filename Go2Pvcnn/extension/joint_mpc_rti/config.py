@@ -54,6 +54,24 @@ class JointMpcRtiNominalCfg:
 
 
 @dataclass
+class JointMpcRtiTouchdownCfg:
+    candidate_x_m: tuple[float, ...] = (-0.12, -0.06, 0.0, 0.06, 0.12)
+    candidate_y_m: tuple[float, ...] = (-0.12, -0.06, 0.0, 0.06, 0.12)
+    command_prediction_scale: float = 0.5
+    landing_after_margin_m: float = 0.025
+    joint_margin_rad: float = 0.10
+    corridor_samples: int = 33
+    swing_samples: int = 9
+    selector_capsule_samples: int = 5
+    latch_phase: int = 6
+    w_command: float = 8.0
+    w_warm: float = 12.0
+    w_slope: float = 1.0
+    w_roughness: float = 2.0
+    w_edge: float = 0.02
+
+
+@dataclass
 class JointMpcRtiTerrainCfg:
     small_sigma_m: float = 0.04
     large_sigma_m: float = 0.10
@@ -66,7 +84,7 @@ class JointMpcRtiTerrainCfg:
     resolution: float = 0.01
     foot_radius_m: float = 0.022
     knee_radius_m: float = 0.030
-    calf_radius_m: float = 0.025
+    calf_radius_m: float = 0.015
     thigh_radius_m: float = 0.035
     base_radius_m: float = 0.120
     foot_margin_m: float = 0.010
@@ -143,6 +161,7 @@ class JointMpcRtiCfg:
     solver: JointMpcRtiSolverCfg = field(default_factory=JointMpcRtiSolverCfg)
     gait: JointMpcRtiGaitCfg = field(default_factory=JointMpcRtiGaitCfg)
     nominal: JointMpcRtiNominalCfg = field(default_factory=JointMpcRtiNominalCfg)
+    touchdown: JointMpcRtiTouchdownCfg = field(default_factory=JointMpcRtiTouchdownCfg)
     terrain: JointMpcRtiTerrainCfg = field(default_factory=JointMpcRtiTerrainCfg)
     loss_terms: JointMpcRtiLossTermsCfg = field(default_factory=JointMpcRtiLossTermsCfg)
     losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
@@ -157,4 +176,5 @@ __all__ = [
     "JointMpcRtiRuntimeCfg",
     "JointMpcRtiSolverCfg",
     "JointMpcRtiTerrainCfg",
+    "JointMpcRtiTouchdownCfg",
 ]
