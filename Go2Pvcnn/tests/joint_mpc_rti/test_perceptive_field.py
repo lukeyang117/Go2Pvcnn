@@ -112,6 +112,30 @@ def test_packed_world_query_returns_all_channels_and_rejects_out_of_map() -> Non
     assert query.boundary_distance_m[0, 2] < 0.0
 
 
+def test_compact_region_query_matches_the_corresponding_packed_channels() -> None:
+    from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+    from extension.joint_mpc_rti.terrain.query import (
+        query_landing_region_world,
+        query_perceptive_world,
+    )
+
+    height, semantic, valid, frame = _inputs(batch=2)
+    field = build_perceptive_field(height, semantic, valid, frame, JointMpcRtiCfg())
+    points = torch.tensor(
+        [[[0.0, 0.0], [0.04, -0.03], [0.2, 0.1]], [[0.01, 0.02], [-0.1, 0.0], [1.0, 1.0]]]
+    )
+
+    compact = query_landing_region_world(field, points)
+    packed = query_perceptive_world(field, points)
+
+    assert torch.equal(compact.valid, packed.valid)
+    assert torch.equal(compact.landing_safe, packed.landing_safe)
+    assert torch.equal(compact.semantic_edge_mask, packed.semantic_edge_mask)
+    torch.testing.assert_close(compact.height_w, packed.height_w)
+    torch.testing.assert_close(compact.slope_rad, packed.slope_rad)
+    torch.testing.assert_close(compact.roughness, packed.roughness)
+
+
 def test_perceptive_cache_overwrites_selected_rows_and_preserves_refresh_id_on_read() -> None:
     from extension.joint_mpc_rti.terrain.field_cache import JointMpcPerceptiveFieldCache
     from extension.joint_mpc_rti.types import JointMpcFieldFrame

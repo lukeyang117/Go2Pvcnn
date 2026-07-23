@@ -72,6 +72,14 @@ class JointMpcRtiTouchdownCfg:
 
 
 @dataclass
+class JointMpcRtiRegionCfg:
+    cap_m: float = 0.06
+    margin_m: float = 0.005
+    min_half_extent_m: float = 0.015
+    max_plane_residual_m: float = 0.012
+
+
+@dataclass
 class JointMpcRtiTerrainCfg:
     small_sigma_m: float = 0.04
     large_sigma_m: float = 0.10
@@ -162,6 +170,7 @@ class JointMpcRtiCfg:
     gait: JointMpcRtiGaitCfg = field(default_factory=JointMpcRtiGaitCfg)
     nominal: JointMpcRtiNominalCfg = field(default_factory=JointMpcRtiNominalCfg)
     touchdown: JointMpcRtiTouchdownCfg = field(default_factory=JointMpcRtiTouchdownCfg)
+    region: JointMpcRtiRegionCfg = field(default_factory=JointMpcRtiRegionCfg)
     terrain: JointMpcRtiTerrainCfg = field(default_factory=JointMpcRtiTerrainCfg)
     loss_terms: JointMpcRtiLossTermsCfg = field(default_factory=JointMpcRtiLossTermsCfg)
     losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
@@ -173,6 +182,7 @@ __all__ = [
     "JointMpcRtiLossCfg",
     "JointMpcRtiLossTermsCfg",
     "JointMpcRtiNominalCfg",
+    "JointMpcRtiRegionCfg",
     "JointMpcRtiRuntimeCfg",
     "JointMpcRtiSolverCfg",
     "JointMpcRtiTerrainCfg",

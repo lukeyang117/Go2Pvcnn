@@ -160,6 +160,20 @@ class JointMpcPerceptiveField:
 
 
 @dataclass(frozen=True)
+class JointMpcTouchdownRegion:
+    A: Tensor
+    b: Tensor
+    half_extent: Tensor
+    corners_w: Tensor
+    plane: Tensor
+    normal_w: Tensor
+    plane_residual: Tensor
+    area: Tensor
+    distance_to_forbidden: Tensor
+    valid: Tensor
+
+
+@dataclass(frozen=True)
 class JointMpcPendingReference:
     root_pos_w: Tensor
     root_rpy_w: Tensor
@@ -199,6 +213,7 @@ __all__ = [
     "JointMpcRtiSolverState",
     "JointMpcRtiStepResult",
     "JointMpcRtiTrajectory",
+    "JointMpcTouchdownRegion",
     "JointMpcPendingReference",
     "JointMpcTerrainField",
 ]

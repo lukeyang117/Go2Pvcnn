@@ -45,6 +45,16 @@ class JointMpcPerceptiveQuery:
     boundary_distance_m: Tensor
 
 
+@dataclass(frozen=True)
+class JointMpcLandingRegionQuery:
+    height_w: Tensor
+    valid: Tensor
+    landing_safe: Tensor
+    slope_rad: Tensor
+    roughness: Tensor
+    semantic_edge_mask: Tensor
+
+
 def _gather_grid(grid: Tensor, flat_index: Tensor) -> Tensor:
     field_batch = int(grid.shape[0])
     query_batch = int(flat_index.shape[0])
@@ -246,6 +256,51 @@ def query_perceptive_world(
     )
 
 
+def query_landing_region_world(
+    field: JointMpcPerceptiveField,
+    points_w: Tensor,
+) -> JointMpcLandingRegionQuery:
+    """Query only the channels used by touchdown region construction."""
+    points = torch.as_tensor(points_w, dtype=field.height_w.dtype, device=field.height_w.device)
+    if points.ndim != 3 or int(points.shape[-1]) not in (2, 3):
+        raise ValueError("points_w must have shape [B,N,2 or 3]")
+    field_batch, nx, ny = map(int, field.height_w.shape)
+    query_batch = int(points.shape[0])
+    if query_batch % field_batch != 0:
+        raise ValueError("points_w batch must be an integer repeat of field batch")
+    repeats = query_batch // field_batch
+    origin_w = field.origin_w.repeat_interleave(repeats, dim=0)
+    yaw_w = field.yaw_w.repeat_interleave(repeats, dim=0)
+    delta = points[..., :2] - origin_w[:, None, :2]
+    cosine = torch.cos(yaw_w)[:, None]
+    sine = torch.sin(yaw_w)[:, None]
+    local_x = cosine * delta[..., 0] + sine * delta[..., 1]
+    local_y = -sine * delta[..., 0] + cosine * delta[..., 1]
+    index_x = local_x / float(field.resolution) + 0.5 * float(nx - 1)
+    index_y = local_y / float(field.resolution) + 0.5 * float(ny - 1)
+    inside = (
+        (index_x >= 0.0)
+        & (index_x <= float(nx - 1))
+        & (index_y >= 0.0)
+        & (index_y <= float(ny - 1))
+    )
+    valid = inside & (
+        _bilinear(field.valid_mask.to(field.height_w.dtype), index_x, index_y) > 0.999
+    )
+    nearest_x = torch.round(index_x).to(dtype=torch.long).clamp(0, nx - 1)
+    nearest_y = torch.round(index_y).to(dtype=torch.long).clamp(0, ny - 1)
+    nearest_index = nearest_x * ny + nearest_y
+    return JointMpcLandingRegionQuery(
+        height_w=_bilinear(field.height_w, index_x, index_y),
+        valid=valid,
+        landing_safe=inside
+        & (_bilinear(field.landing_safe.to(field.height_w.dtype), index_x, index_y) > 0.999),
+        slope_rad=_bilinear(field.slope_rad, index_x, index_y),
+        roughness=_bilinear(field.roughness, index_x, index_y),
+        semantic_edge_mask=_gather_grid(field.semantic_edge_mask, nearest_index).to(torch.bool),
+    )
+
+
 _COMPILED_QUERY_WORLD = torch.compile(
     query_world,
     fullgraph=True,
@@ -266,8 +321,10 @@ def query_world_maybe_compiled(
 
 
 __all__ = [
+    "JointMpcLandingRegionQuery",
     "JointMpcPerceptiveQuery",
     "JointMpcTerrainQuery",
+    "query_landing_region_world",
     "query_perceptive_world",
     "query_world",
     "query_world_maybe_compiled",
