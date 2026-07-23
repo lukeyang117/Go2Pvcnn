@@ -158,15 +158,17 @@ def test_nonzero_translation_does_not_apply_zero_drift_metric() -> None:
 
     metrics = applicable_metrics("flat", (0.2, 0.0, 0.0))
 
-    assert "root_zero_drift_m" not in metrics
+    assert "root_zero_drift_one_gait_m" not in metrics
+    assert "root_zero_drift_10_gaits_m" not in metrics
+    assert "root_zero_drift_1000_refresh_m" not in metrics
 
 
-def test_zero_translation_marks_ratio_carry_na_but_keeps_absolute_stance_metrics() -> None:
+def test_zero_translation_keeps_stance_metrics_including_carry_diagnostic() -> None:
     from .joint_metrics import applicable_metrics
 
     metrics = applicable_metrics("flat", (0.0, 0.0, 0.0))
 
-    assert "stance_root_carry_ratio_abs" not in metrics
+    assert "stance_root_carry_ratio_abs" in metrics
     assert "stance_xy_slip_max_m" in metrics
     assert "stance_xy_slip_mean_m" in metrics
     assert "stance_stationary_ratio" in metrics
@@ -247,3 +249,89 @@ def test_all_stationary_stance_edges_use_an_exact_boolean_ratio(monkeypatch) -> 
     monkeypatch.setattr(joint_metrics, "_masked_mean", inexact_float_mean)
 
     assert joint_metrics.accumulate_joint_metrics(stationary)["stance_stationary_ratio"] == 1.0
+
+
+def test_final_metric_schema_contains_every_frozen_design_id() -> None:
+    from .joint_metrics import FINAL_METRIC_IDS
+
+    required = {
+        "joint_acceleration_mean_rps2",
+        "joint_acceleration_p95_rps2",
+        "joint_jerk_max_rps3",
+        "root_zero_drift_one_gait_m",
+        "root_zero_drift_10_gaits_m",
+        "root_zero_drift_1000_refresh_m",
+        "alpha0_selected_ratio",
+        "alpha0_selected_max_run",
+        "line_search_no_feasible_ratio",
+        "publish_ratio",
+        "stop_ratio",
+        "warm_shift_rebase_error",
+        "retarget_trajectory_change_norm",
+        "map_age_frames_max",
+        "map_state_frame_mismatch_count",
+        "world_query_transform_error",
+        "target_change_normal_m",
+        "target_change_due_to_command_m",
+        "target_change_due_to_map_m",
+        "target_change_due_to_unsafe_invalidation_m",
+        "latched_target_drift_m",
+        "cross_direction_margin_mps",
+        "kkt_primal_residual",
+        "kkt_dual_residual",
+        "nominal_safe_after_retarget",
+        "nominal_min_clearance_after_retarget",
+    }
+
+    assert required <= FINAL_METRIC_IDS
+
+
+def test_zero_translation_keeps_common_swing_lead_and_stance_metrics() -> None:
+    from .joint_metrics import applicable_metrics
+
+    metrics = applicable_metrics("small", (0.0, 0.0, 0.0))
+
+    assert "root_direction_error" not in metrics
+    assert "strict_cross_success" not in metrics
+    assert "cross_direction_margin_mps" not in metrics
+    assert "swing_active_motion_ratio" in metrics
+    assert "foot_root_lead_time_min_ms" in metrics
+    assert "foot_root_lead_time_max_ms" in metrics
+    assert "stance_root_carry_ratio_abs" in metrics
+
+
+def test_every_metric_report_records_its_evidence_source() -> None:
+    from .joint_metrics import evaluate_trace
+
+    report = evaluate_trace(_root_carried_trace(), scenario="small")
+
+    assert report.metrics
+    assert all(metric.source for metric in report.metrics.values())
+    assert report.metric("base_collision_frame_rate").source == "P+A+M"
+    assert report.metric("map_age_frames_max").source == "M"
+
+
+def test_actual_world_collision_fails_even_when_planned_geometry_is_safe() -> None:
+    from .joint_metrics import evaluate_trace
+
+    trace = _root_carried_trace()
+    planned = {
+        part: torch.zeros((1, 4), dtype=torch.bool)
+        for part in ("foot", "knee", "calf", "thigh", "base")
+    }
+    actual = {part: value.clone() for part, value in planned.items()}
+    actual["calf"][0, 2] = True
+
+    report = evaluate_trace(
+        replace(
+            trace,
+            planned_part_collision=planned,
+            actual_part_collision=actual,
+        ),
+        scenario="small",
+    )
+
+    metric = report.metric("calf_collision_frame_rate")
+    assert metric.value == 0.25
+    assert metric.passed is False
+    assert metric.source == "P+A+M"

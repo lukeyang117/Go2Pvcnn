@@ -97,6 +97,7 @@ def test_acceptance_report_round_trips_complete_metric_metadata() -> None:
         threshold=0.012,
         passed=True,
         worst_case_key=cell.key,
+        source="P+A+M",
     )
     report = AcceptanceReport(
         stage="flat",
@@ -111,6 +112,7 @@ def test_acceptance_report_round_trips_complete_metric_metadata() -> None:
     assert payload["cells"][0]["cell"]["command"] == [0.2, 0.0, 0.0]
     assert payload["cells"][0]["metrics"]["stance_ground_gap"]["valid_count"] == 31
     assert payload["cells"][0]["metrics"]["stance_ground_gap"]["worst_case_key"] == list(cell.key)
+    assert payload["cells"][0]["metrics"]["stance_ground_gap"]["source"] == "P+A+M"
 
 
 def test_acceptance_report_deserializes_complete_metric_metadata() -> None:
@@ -134,6 +136,7 @@ def test_acceptance_report_deserializes_complete_metric_metadata() -> None:
         threshold=0.95,
         passed=True,
         worst_case_key=cell.key,
+        source="P+A+M",
     )
     original = AcceptanceReport(
         stage="small",

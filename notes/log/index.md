@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-23 | Final actual-world metrics schema | Task 14 P/A/M metrics, applicability, strict crossing | pass | 72 final IDs; planned/actual collision OR; focused `57 passed` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md](2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md) |
+
 | 2026-07-23 | Final RTI diagnostics/viewer/profiler | Task 13 fixed diagnostics, eight stages, same-refresh overlays | pass | diagnostics/pipeline/rolling/viewer `61 passed`; one refresh; CUDA events and graph replay pass | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md](2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md) |
 
 | 2026-07-23 | Final H30/H32 associative scan | Task 10 five-level recovery / CUDA graph / B40 smoke | correctness pass; performance red | CPU `14 passed`; CUDA rolling `11 passed`; B40 `122.67ms`, `1410.72MiB`, nonfinite `0` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-associative-scan.md](2026-07-23-joint-mpc-rti-final-associative-scan.md) |

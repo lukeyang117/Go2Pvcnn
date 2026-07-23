@@ -2,6 +2,8 @@
 
 ## Current State
 
+- Final-plan Task 14 defines 72 frozen P/A/M metric IDs, exact source metadata, small-inherits-common applicability, planned/actual collision OR, and strict swing-foot crossing with continuous footprint, height, direction, landing, and whole-body checks. Focused metrics/runner/watchdog/small verification is `57 passed`. Flat/small behavior gates remain open. See [final actual-world metrics schema](../log/2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md).
+
 - Final-plan Task 13 exposes fixed same-refresh selector/region/warm/nominal/KKT/line-search diagnostics, eight ordered profiler stages, and viewer overlays for touchdown candidates, region corners, nominal, five alpha paths, selected trajectory, gait phase, publish/stop, and clearance. The viewer still runs exactly one production refresh; focused diagnostics/pipeline/rolling/viewer verification is `61 passed`. Real visual behavior remains for Tasks 16-18 and B=1024 performance remains red. See [final diagnostics/viewer/profiler](../log/2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md).
 
 - Final-plan Task 10 now uses the required associative architecture: each active refinement builds a fixed-band augmented system, maps it to 36D separator conditional factors, pads H30 to H32 with two neutral factors, executes five explicit combine levels, and recovers all 31 nodes. The sequential block solver is deleted. CPU scan/QP/diagnostics is `14 passed`; CUDA rolling capture/replay is `11 passed`. B=40 graph smoke is finite but slow at `122.67ms/refresh` and `1410.72MiB` peak, so Task 19 remains a real optimization gate. See [final associative scan](../log/2026-07-23-joint-mpc-rti-final-associative-scan.md).

@@ -100,6 +100,90 @@ def test_offset_small_obstacle_intersects_swept_robot_footprint() -> None:
     assert result.intersected_footprint.item()
 
 
+def _strict_foot_cross_inputs(*, moving_root: bool = True):
+    root = torch.tensor(
+        [[[-0.30, 0.0], [-0.10, 0.0], [0.10, 0.0], [0.30, 0.0]]]
+    )
+    if not moving_root:
+        root.zero_()
+    foot = torch.zeros((1, 4, 4, 3))
+    foot[..., 2] = 0.022
+    foot[:, :, 0, 0] = torch.tensor((-0.20, -0.10, 0.10, 0.20))
+    foot[:, 1:3, 0, 2] = 0.25
+    contact = torch.ones((1, 4, 4), dtype=torch.bool)
+    contact[:, 1:3, 0] = False
+    collision = {
+        part: torch.zeros((1, 4), dtype=torch.bool)
+        for part in ("foot", "knee", "calf", "thigh", "base")
+    }
+    return root, foot, contact, collision
+
+
+def test_strict_cross_requires_swept_sole_height_landing_and_body_safety() -> None:
+    from .run_joint_acceptance import strict_crossing_event
+
+    root, foot, contact, collision = _strict_foot_cross_inputs()
+    result = strict_crossing_event(
+        root,
+        torch.tensor([[0.2, 0.0]]),
+        torch.zeros((1, 2)),
+        radius_m=0.06,
+        foot_pos_w=foot,
+        contact_state=contact,
+        obstacle_top_z=torch.tensor([0.16]),
+        part_collision=collision,
+        landing_safe=torch.ones((1, 4), dtype=torch.bool),
+        dt=0.02,
+    )
+
+    assert result.opportunity.item()
+    assert result.over_xy.item()
+    assert result.over_z.item()
+    assert result.direction_ok.item()
+    assert result.after.item()
+    assert result.land_ok.item()
+    assert result.body_ok.item()
+    assert result.success.item()
+
+    collision["calf"][0, 2] = True
+    unsafe = strict_crossing_event(
+        root,
+        torch.tensor([[0.2, 0.0]]),
+        torch.zeros((1, 2)),
+        radius_m=0.06,
+        foot_pos_w=foot,
+        contact_state=contact,
+        obstacle_top_z=torch.tensor([0.16]),
+        part_collision=collision,
+        landing_safe=torch.ones((1, 4), dtype=torch.bool),
+        dt=0.02,
+    )
+    assert not unsafe.body_ok.item()
+    assert not unsafe.success.item()
+
+
+def test_cross_opportunity_with_no_actual_root_progress_is_failure_not_na() -> None:
+    from .run_joint_acceptance import strict_crossing_event
+
+    root, foot, contact, collision = _strict_foot_cross_inputs(moving_root=False)
+    result = strict_crossing_event(
+        root,
+        torch.tensor([[0.2, 0.0]]),
+        torch.zeros((1, 2)),
+        radius_m=0.06,
+        foot_pos_w=foot,
+        contact_state=contact,
+        obstacle_top_z=torch.tensor([0.16]),
+        part_collision=collision,
+        landing_safe=torch.ones((1, 4), dtype=torch.bool),
+        dt=0.02,
+    )
+
+    assert result.opportunity.item()
+    assert not result.direction_applicable.item()
+    assert not result.success.item()
+
+
 def test_zero_translation_and_pure_yaw_mark_crossing_not_applicable() -> None:
     from .joint_metrics import applicable_metrics
 

@@ -4,6 +4,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-07-23 final Task 14: the acceptance layer now uses 72 frozen P/A/M metrics and strict foot-event crossing; focused verification is `57 passed`. This closes schema correctness, not flat/small behavior. See [final actual-world metrics schema](log/2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md).
+
 - 2026-07-23 final Task 13: fixed same-refresh diagnostics, eight-stage profiler, and viewer overlays now share one production refresh. Diagnostics/pipeline/rolling/viewer regression is `61 passed`; actual visual behavior and performance are not claimed. See [final diagnostics/viewer/profiler](log/2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md).
 
 - 2026-07-23 final Task 10: the temporary sequential block solve is removed. New full-horizon constraints are folded into fixed-band augmented systems, then solved through 36D separator factors, H30->H32 neutral padding, five explicit combine levels, and boundary recovery. Dense parity and CUDA Graph pass, but B=40 is `122.67ms/refresh`; Task 19 performance remains red. See [final associative scan](log/2026-07-23-joint-mpc-rti-final-associative-scan.md).

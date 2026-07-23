@@ -13,13 +13,16 @@ JOINT_LOWER = torch.tensor((-1.0472, -0.6632, -2.721) * 4)
 JOINT_UPPER = torch.tensor((1.0472, 2.966, -0.837) * 4)
 PARTS = ("foot", "knee", "calf", "thigh", "base")
 
-FLAT_METRICS = frozenset(
+COMMON_METRICS = frozenset(
     {
         "joint_position_violation",
         "joint_velocity_violation",
         "joint_safe_margin_min_rad",
         "joint_step_max_rad",
         "joint_acceleration_max_rps2",
+        "joint_acceleration_mean_rps2",
+        "joint_acceleration_p95_rps2",
+        "joint_jerk_max_rps3",
         "stance_ground_gap",
         "stance_ground_penetration",
         "stance_anchor_residual",
@@ -35,27 +38,46 @@ FLAT_METRICS = frozenset(
         "root_velocity_error",
         "root_direction_error",
         "root_yaw_rate_error",
-        "root_zero_drift_m",
+        "root_zero_drift_one_gait_m",
+        "root_zero_drift_10_gaits_m",
+        "root_zero_drift_1000_refresh_m",
         "root_step_jump_m",
         "root_roll_deviation_rad",
         "root_pitch_deviation_rad",
-        "line_alpha_zero_ratio",
-        "line_alpha_zero_run",
-        "warm_start_jump_max",
+        "alpha0_selected_ratio",
+        "alpha0_selected_max_run",
+        "line_search_no_feasible_ratio",
+        "publish_ratio",
+        "stop_ratio",
+        "warm_shift_rebase_error",
+        "retarget_trajectory_change_norm",
         "trajectory_valid_ratio",
         "nonfinite_count",
         "x0_injection_error",
         "published_x1_error",
         "map_valid_ratio",
+        "map_age_frames_max",
+        "map_state_frame_mismatch_count",
+        "world_query_transform_error",
         "cold_start_count",
         "warm_start_count",
         "unexpected_cold_restart_count",
         "warm_cache_invariant_fault_count",
+        "target_change_normal_m",
+        "target_change_due_to_command_m",
+        "target_change_due_to_map_m",
+        "target_change_due_to_unsafe_invalidation_m",
+        "latched_target_drift_m",
+        "kkt_primal_residual",
+        "kkt_dual_residual",
+        "nominal_safe_after_retarget",
+        "nominal_min_clearance_after_retarget",
     }
 )
 SMALL_METRICS = frozenset(
     {
         "strict_cross_success",
+        "cross_direction_margin_mps",
         "touchdown_on_small",
         "stance_on_small",
         "airborne_touchdown",
@@ -67,6 +89,33 @@ SMALL_METRICS = frozenset(
         *(f"{part}_collision_frame_rate" for part in PARTS),
     }
 )
+FLAT_METRICS = COMMON_METRICS
+FINAL_METRIC_IDS = COMMON_METRICS | SMALL_METRICS
+
+SOURCE_BY_METRIC = {
+    **{name: "P+A" for name in COMMON_METRICS},
+    **{name: "P+A+M" for name in SMALL_METRICS},
+    **{f"{part}_collision_frame_rate": "P+A+M" for part in PARTS},
+    "stance_ground_gap": "P+A+M",
+    "stance_ground_penetration": "P+A+M",
+    "swing_surface_clearance_min_m": "P+A+M",
+    "airborne_touchdown": "P+A+M",
+    "map_valid_ratio": "M",
+    "map_age_frames_max": "M",
+    "world_query_transform_error": "M",
+    "map_state_frame_mismatch_count": "A+M",
+    "x0_injection_error": "P+A",
+    "published_x1_error": "P+A",
+    "target_change_normal_m": "P+M",
+    "target_change_due_to_command_m": "P+M",
+    "target_change_due_to_map_m": "P+M",
+    "target_change_due_to_unsafe_invalidation_m": "P+M",
+    "latched_target_drift_m": "P+M",
+    "nominal_safe_after_retarget": "P+M",
+    "nominal_min_clearance_after_retarget": "P+M",
+    "kkt_primal_residual": "P",
+    "kkt_dual_residual": "P",
+}
 
 
 @dataclass(frozen=True)
@@ -100,6 +149,26 @@ class JointMetricTrace:
     cold_start: Tensor | None = None
     warm_start: Tensor | None = None
     warm_cache_invariant_fault: Tensor | None = None
+    line_search_feasible: Tensor | None = None
+    publish: Tensor | None = None
+    stop: Tensor | None = None
+    warm_shift_rebase_error: Tensor | None = None
+    retarget_trajectory_change: Tensor | None = None
+    map_age_frames: Tensor | None = None
+    map_state_frame_mismatch: Tensor | None = None
+    world_query_transform_error: Tensor | None = None
+    touchdown_target_change: Tensor | None = None
+    touchdown_target_change_reason_bits: Tensor | None = None
+    latched_target_drift: Tensor | None = None
+    cross_direction_margin: Tensor | None = None
+    kkt_primal_residual: Tensor | None = None
+    kkt_dual_residual: Tensor | None = None
+    nominal_safe_after_retarget: Tensor | None = None
+    nominal_min_clearance_after_retarget: Tensor | None = None
+    planned_part_collision: dict[str, Tensor] | None = None
+    actual_part_collision: dict[str, Tensor] | None = None
+    planned_part_penetration_m: dict[str, Tensor] | None = None
+    actual_part_penetration_m: dict[str, Tensor] | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +183,7 @@ class MetricResult:
     threshold: float | None
     passed: bool | None
     worst_case_key: tuple[str, ...] | None
+    source: str = "P"
 
 
 @dataclass(frozen=True)
@@ -176,20 +246,38 @@ def _max_true_run(mask: Tensor) -> int:
     return maximum
 
 
+def _optional_max(value: Tensor | None, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    tensor = torch.as_tensor(value)
+    return default if tensor.numel() == 0 else float(tensor.max().item())
+
+
+def _optional_min(value: Tensor | None, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    tensor = torch.as_tensor(value)
+    return default if tensor.numel() == 0 else float(tensor.min().item())
+
+
+def _drift_through(root: Tensor, valid: Tensor, nodes: int) -> float:
+    stop = min(int(root.shape[1]), int(nodes))
+    delta = torch.linalg.vector_norm(root[:, :stop, :2] - root[:, :1, :2], dim=-1)
+    return _masked_max(delta, valid[:, :stop])
+
+
 def applicable_metrics(scenario: str, command: tuple[float, float, float] | None = None) -> frozenset[str]:
     if scenario not in ("flat", "small"):
         raise ValueError("scenario must be flat or small")
-    metrics = set(FLAT_METRICS if scenario == "flat" else FLAT_METRICS | SMALL_METRICS)
+    metrics = set(COMMON_METRICS if scenario == "flat" else FINAL_METRIC_IDS)
     if command is not None and math.hypot(command[0], command[1]) <= 1.0e-8:
         metrics.discard("strict_cross_success")
         metrics.discard("root_direction_error")
-        metrics.discard("swing_active_motion_ratio")
-        metrics.discard("foot_root_lead_time_min_ms")
-        metrics.discard("foot_root_lead_time_max_ms")
-        metrics.discard("root_leak_before_foot_m")
-        metrics.discard("stance_root_carry_ratio_abs")
+        metrics.discard("cross_direction_margin_mps")
     else:
-        metrics.discard("root_zero_drift_m")
+        metrics.discard("root_zero_drift_one_gait_m")
+        metrics.discard("root_zero_drift_10_gaits_m")
+        metrics.discard("root_zero_drift_1000_refresh_m")
     return frozenset(metrics)
 
 
@@ -242,6 +330,11 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     upper = JOINT_UPPER.to(joint)
     velocity = joint_step / float(trace.dt)
     acceleration = (velocity[:, 1:] - velocity[:, :-1]) / float(trace.dt)
+    acceleration_abs = acceleration.abs().amax(dim=-1)
+    acceleration_mask = valid_edge[:, 1:] & valid_edge[:, :-1]
+    acceleration_values = acceleration_abs[acceleration_mask]
+    jerk = (acceleration[:, 1:] - acceleration[:, :-1]) / float(trace.dt)
+    jerk_mask = acceleration_mask[:, 1:] & acceleration_mask[:, :-1]
     root_velocity = root_step / float(trace.dt)
     yaw0 = rpy[:, :-1, 2]
     root_velocity_body = torch.stack(
@@ -277,7 +370,10 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
             torch.where(valid[..., None], torch.minimum(joint - lower, upper - joint), torch.full_like(joint, torch.inf)).min().item()
         ),
         "joint_step_max_rad": _masked_max(joint_step.abs().amax(dim=-1), valid_edge),
-        "joint_acceleration_max_rps2": _masked_max(acceleration.abs().amax(dim=-1), valid_edge[:, 1:] & valid_edge[:, :-1]),
+        "joint_acceleration_max_rps2": _masked_max(acceleration_abs, acceleration_mask),
+        "joint_acceleration_mean_rps2": 0.0 if acceleration_values.numel() == 0 else float(acceleration_values.mean().item()),
+        "joint_acceleration_p95_rps2": 0.0 if acceleration_values.numel() == 0 else float(torch.quantile(acceleration_values, 0.95).item()),
+        "joint_jerk_max_rps3": _masked_max(jerk.abs().amax(dim=-1), jerk_mask),
         "stance_xy_slip_max_m": _masked_max(stance_slip, consecutive_stance),
         "stance_xy_slip_mean_m": _masked_mean(stance_slip, consecutive_stance),
         "stance_stationary_ratio": _masked_bool_ratio(
@@ -291,7 +387,9 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "root_velocity_error": _masked_mean(velocity_error, valid_edge),
         "root_direction_error": _masked_mean(direction_error, valid_edge & (command_norm > 1.0e-6)),
         "root_yaw_rate_error": _masked_mean(yaw_error, valid_edge),
-        "root_zero_drift_m": float(torch.linalg.vector_norm(root[:, -1, :2] - root[:, 0, :2], dim=-1).max().item()),
+        "root_zero_drift_one_gait_m": _drift_through(root, valid, 25),
+        "root_zero_drift_10_gaits_m": _drift_through(root, valid, 241),
+        "root_zero_drift_1000_refresh_m": _drift_through(root, valid, 1001),
         "root_step_jump_m": _masked_max(torch.linalg.vector_norm(root[:, 1:] - root[:, :-1], dim=-1), valid_edge),
         "root_roll_deviation_rad": _masked_max(torch.abs(rpy[..., 0] - nominal_rpy[..., 0]), valid),
         "root_pitch_deviation_rad": _masked_max(torch.abs(rpy[..., 1] - nominal_rpy[..., 1]), valid),
@@ -302,12 +400,17 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "stance_ground_gap": _masked_max(torch.clamp_min(stance_surface_error, 0.0), stance_mask),
         "stance_ground_penetration": _masked_max(torch.clamp_min(-stance_surface_error, 0.0), stance_mask),
         "swing_surface_clearance_min_m": -_masked_max(-swing_clearance, (~contact) & future_node[..., None]),
-        "line_alpha_zero_ratio": _masked_mean((torch.as_tensor(trace.line_alpha, device=root.device) == 0).to(root.dtype), valid),
-        "line_alpha_zero_run": _max_true_run((torch.as_tensor(trace.line_alpha, device=root.device) == 0) & valid),
+        "alpha0_selected_ratio": _masked_mean((torch.as_tensor(trace.line_alpha, device=root.device) == 0).to(root.dtype), valid),
+        "alpha0_selected_max_run": _max_true_run((torch.as_tensor(trace.line_alpha, device=root.device) == 0) & valid),
         "nonfinite_count": int((~torch.isfinite(root)).sum().item() + (~torch.isfinite(joint)).sum().item() + (~torch.isfinite(foot)).sum().item()),
         "map_valid_ratio": _masked_bool_ratio(
             torch.as_tensor(trace.map_valid, dtype=torch.bool, device=root.device), valid
         ),
+        "map_age_frames_max": _optional_max(trace.map_age_frames),
+        "map_state_frame_mismatch_count": 0 if trace.map_state_frame_mismatch is None else int(
+            torch.as_tensor(trace.map_state_frame_mismatch, dtype=torch.bool).sum().item()
+        ),
+        "world_query_transform_error": _optional_max(trace.world_query_transform_error),
         "cold_start_count": 1 if trace.cold_start is None else int(
             torch.as_tensor(trace.cold_start, dtype=torch.bool, device=root.device).sum().item()
         ),
@@ -319,6 +422,43 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
             torch.as_tensor(trace.warm_cache_invariant_fault, dtype=torch.bool, device=root.device).sum().item()
         ),
     }
+    alpha_feasible = trace.line_search_feasible
+    if alpha_feasible is None:
+        output["line_search_no_feasible_ratio"] = 0.0
+    else:
+        feasible = torch.as_tensor(alpha_feasible, dtype=torch.bool, device=root.device)
+        output["line_search_no_feasible_ratio"] = float((~feasible.any(dim=-1)).to(root.dtype).mean().item())
+    publish = valid if trace.publish is None else torch.as_tensor(trace.publish, dtype=torch.bool, device=root.device)
+    stop = ~publish if trace.stop is None else torch.as_tensor(trace.stop, dtype=torch.bool, device=root.device)
+    output["publish_ratio"] = float(publish.to(root.dtype).mean().item())
+    output["stop_ratio"] = float(stop.to(root.dtype).mean().item())
+    output["warm_shift_rebase_error"] = _optional_max(trace.warm_shift_rebase_error)
+    output["retarget_trajectory_change_norm"] = _optional_max(trace.retarget_trajectory_change)
+    output["kkt_primal_residual"] = _optional_max(trace.kkt_primal_residual)
+    output["kkt_dual_residual"] = _optional_max(trace.kkt_dual_residual)
+    output["nominal_safe_after_retarget"] = 1.0 if trace.nominal_safe_after_retarget is None else float(
+        torch.as_tensor(trace.nominal_safe_after_retarget, dtype=root.dtype).mean().item()
+    )
+    output["nominal_min_clearance_after_retarget"] = _optional_min(
+        trace.nominal_min_clearance_after_retarget
+    )
+    output["latched_target_drift_m"] = _optional_max(trace.latched_target_drift)
+    output["cross_direction_margin_mps"] = _optional_min(trace.cross_direction_margin)
+    target_change = trace.touchdown_target_change
+    reason_bits = trace.touchdown_target_change_reason_bits
+    reason_names = (
+        "target_change_normal_m",
+        "target_change_due_to_command_m",
+        "target_change_due_to_map_m",
+        "target_change_due_to_unsafe_invalidation_m",
+    )
+    if target_change is None or reason_bits is None:
+        output.update({name: 0.0 for name in reason_names})
+    else:
+        change = torch.as_tensor(target_change)
+        bits = torch.as_tensor(reason_bits, dtype=torch.bool, device=change.device)
+        for index, name in enumerate(reason_names):
+            output[name] = _masked_max(change, bits[..., index])
     if trace.cold_start is not None:
         cold = torch.as_tensor(trace.cold_start, dtype=torch.bool, device=root.device)
         cold_count = cold.to(torch.int64).sum(dim=1)
@@ -334,7 +474,6 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     for name, tensor in (
         ("x0_injection_error", trace.x0_injection_error),
         ("published_x1_error", trace.published_x1_error),
-        ("warm_start_jump_max", trace.warm_start_jump),
     ):
         output[name] = 0.0 if tensor is None else float(torch.as_tensor(tensor).abs().max().item())
     for name, tensor in (
@@ -346,12 +485,27 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         output[name] = 0.0 if tensor is None else float(torch.as_tensor(tensor, dtype=root.dtype).mean().item())
     penetration_values: list[Tensor] = []
     for part in PARTS:
+        planned_collision = None if trace.planned_part_collision is None else trace.planned_part_collision.get(part)
+        actual_collision = None if trace.actual_part_collision is None else trace.actual_part_collision.get(part)
         collision = trace.part_collision.get(part)
+        if planned_collision is not None or actual_collision is not None:
+            reference = planned_collision if planned_collision is not None else actual_collision
+            combined = torch.zeros_like(torch.as_tensor(reference), dtype=torch.bool)
+            if planned_collision is not None:
+                combined |= torch.as_tensor(planned_collision, dtype=torch.bool, device=combined.device)
+            if actual_collision is not None:
+                combined |= torch.as_tensor(actual_collision, dtype=torch.bool, device=combined.device)
+            collision = combined
         output[f"{part}_collision_frame_rate"] = 0.0 if collision is None else float(
             torch.as_tensor(collision, dtype=root.dtype).mean().item()
         )
-        if trace.part_penetration_m and part in trace.part_penetration_m:
-            penetration_values.append(torch.as_tensor(trace.part_penetration_m[part], dtype=root.dtype))
+        for collection in (
+            trace.part_penetration_m,
+            trace.planned_part_penetration_m,
+            trace.actual_part_penetration_m,
+        ):
+            if collection and part in collection:
+                penetration_values.append(torch.as_tensor(collection[part], dtype=root.dtype))
     output["maximum_penetration_m"] = 0.0 if not penetration_values else float(
         torch.stack(tuple(value.max() for value in penetration_values)).max().item()
     )
@@ -369,7 +523,7 @@ def evaluate_trace(
     command0 = tuple(float(value) for value in torch.as_tensor(trace.command_body)[0, 0].tolist())
     applicable = applicable_metrics(scenario, command0)
     values = accumulate_joint_metrics(trace)
-    names = FLAT_METRICS | SMALL_METRICS
+    names = FINAL_METRIC_IDS
     valid_count = int(torch.as_tensor(trace.valid, dtype=torch.bool).sum().item())
     metrics: dict[str, MetricResult] = {}
     for name in names:
@@ -399,13 +553,17 @@ def evaluate_trace(
             threshold=threshold,
             passed=passed,
             worst_case_key=key,
+            source=SOURCE_BY_METRIC.get(name, "P+A"),
         )
     return JointMetricReport(scenario=scenario, metrics=metrics)
 
 
 __all__ = [
     "FLAT_METRICS",
+    "COMMON_METRICS",
+    "FINAL_METRIC_IDS",
     "SMALL_METRICS",
+    "SOURCE_BY_METRIC",
     "JointMetricReport",
     "JointMetricTrace",
     "MetricResult",
