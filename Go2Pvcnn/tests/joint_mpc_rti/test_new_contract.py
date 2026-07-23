@@ -14,17 +14,18 @@ def test_production_contract_is_h30_24_12_and_one_rti() -> None:
     assert cfg.solver.line_search_alphas == (1.0, 0.5, 0.25, 0.125, 0.0)
 
 
-def test_loss_config_has_exactly_seven_top_level_weights() -> None:
+def test_lq_config_has_exactly_eight_residual_family_weights() -> None:
     cfg = JointMpcRtiCfg()
 
-    assert set(cfg.losses.weights()) == {
-        "command",
-        "step",
-        "contact",
-        "swing_speed",
-        "terrain",
+    assert set(cfg.lq_cost.family_names()) == {
+        "velocity",
         "posture",
+        "root",
+        "swing",
+        "touchdown",
         "smooth",
+        "warm",
+        "slack",
     }
 
 

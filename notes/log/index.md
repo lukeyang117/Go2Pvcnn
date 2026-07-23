@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-23 | Final legacy path deletion | Task 15 import graph, obsolete solver/loss/map/probe deletion | pass | focused `28 passed`; full package `247 passed`; final path only | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-legacy-deletion.md](2026-07-23-joint-mpc-rti-final-legacy-deletion.md) |
+
 | 2026-07-23 | Final actual-world metrics schema | Task 14 P/A/M metrics, applicability, strict crossing | pass | 72 final IDs; planned/actual collision OR; focused `57 passed` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md](2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md) |
 
 | 2026-07-23 | Final RTI diagnostics/viewer/profiler | Task 13 fixed diagnostics, eight stages, same-refresh overlays | pass | diagnostics/pipeline/rolling/viewer `61 passed`; one refresh; CUDA events and graph replay pass | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md](2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md) |

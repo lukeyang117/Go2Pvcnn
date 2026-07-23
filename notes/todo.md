@@ -4,6 +4,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-07-23 final Task 15: superseded seven-loss, Gaussian-map, control-rollout, adaptive-contact, duplicate solver, and old probe paths are deleted. The final import graph and full package pass (`247 passed`); Task 16 flat behavior is next. See [final legacy deletion](log/2026-07-23-joint-mpc-rti-final-legacy-deletion.md).
+
 - 2026-07-23 final Task 14: the acceptance layer now uses 72 frozen P/A/M metrics and strict foot-event crossing; focused verification is `57 passed`. This closes schema correctness, not flat/small behavior. See [final actual-world metrics schema](log/2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md).
 
 - 2026-07-23 final Task 13: fixed same-refresh diagnostics, eight-stage profiler, and viewer overlays now share one production refresh. Diagnostics/pipeline/rolling/viewer regression is `61 passed`; actual visual behavior and performance are not claimed. See [final diagnostics/viewer/profiler](log/2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md).

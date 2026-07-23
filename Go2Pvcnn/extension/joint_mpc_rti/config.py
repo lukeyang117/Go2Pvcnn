@@ -94,12 +94,7 @@ class JointMpcRtiRegionCfg:
 
 @dataclass
 class JointMpcRtiTerrainCfg:
-    small_sigma_m: float = 0.04
-    large_sigma_m: float = 0.10
-    small_gain: float = 1.0
-    large_gain: float = 1.0
     h_wall: float = 0.35
-    kernel_radius_cells: int = 20
     small_ids: tuple[int, ...] = (1,)
     large_ids: tuple[int, ...] = (2,)
     resolution: float = 0.01
@@ -154,29 +149,6 @@ class JointMpcRtiLossTermsCfg:
 
 
 @dataclass
-class JointMpcRtiLossCfg:
-    command: float = 90.0
-    step: float = 1.0
-    contact: float = 3000.0
-    swing_speed: float = 400.0
-    terrain: float = 8000.0
-    posture: float = 1.0
-    smooth: float = 14.25
-
-    def weights(self) -> dict[str, float]:
-        names = (
-            "command",
-            "step",
-            "contact",
-            "swing_speed",
-            "terrain",
-            "posture",
-            "smooth",
-        )
-        return {name: float(getattr(self, name)) for name in names}
-
-
-@dataclass
 class JointMpcRtiLqCostCfg:
     velocity_linear: float = 90.0
     velocity_yaw: float = 45.0
@@ -197,6 +169,19 @@ class JointMpcRtiLqCostCfg:
     slack_quadratic: float = 1.0e5
     slack_linear: float = 1.0e3
 
+    @staticmethod
+    def family_names() -> tuple[str, ...]:
+        return (
+            "velocity",
+            "posture",
+            "root",
+            "swing",
+            "touchdown",
+            "smooth",
+            "warm",
+            "slack",
+        )
+
 
 @dataclass
 class JointMpcRtiCfg:
@@ -208,14 +193,12 @@ class JointMpcRtiCfg:
     region: JointMpcRtiRegionCfg = field(default_factory=JointMpcRtiRegionCfg)
     terrain: JointMpcRtiTerrainCfg = field(default_factory=JointMpcRtiTerrainCfg)
     loss_terms: JointMpcRtiLossTermsCfg = field(default_factory=JointMpcRtiLossTermsCfg)
-    losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
     lq_cost: JointMpcRtiLqCostCfg = field(default_factory=JointMpcRtiLqCostCfg)
 
 
 __all__ = [
     "JointMpcRtiCfg",
     "JointMpcRtiGaitCfg",
-    "JointMpcRtiLossCfg",
     "JointMpcRtiLqCostCfg",
     "JointMpcRtiLossTermsCfg",
     "JointMpcRtiNominalCfg",

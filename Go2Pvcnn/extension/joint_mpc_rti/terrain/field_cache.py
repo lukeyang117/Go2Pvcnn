@@ -6,7 +6,6 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg, JointMpcRtiTerrainCfg
-from extension.joint_mpc_rti.terrain.cost_map import build_soft_semantic_fields
 from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
 from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
 from extension.joint_mpc_rti.types import (
@@ -197,20 +196,18 @@ class JointMpcTerrainFieldCache:
                 large_ids=self.large_ids,
                 resolution=self.resolution,
             )
-            soft = build_soft_semantic_fields(
-                height,
-                semantic,
-                self.terrain_cfg,
-                resolution=self.resolution,
-                small_ids=self.small_ids,
-                large_ids=self.large_ids,
-            )
-            self.small_occupancy.copy_(soft.small_occupancy[:, 0])
-            self.large_occupancy.copy_(soft.large_occupancy[:, 0])
-            self.small_propagated_height.copy_(soft.small_height[:, 0])
-            self.large_propagated_height.copy_(soft.large_height[:, 0])
-            self.small_occupancy_gradient_xy.copy_(soft.small_gradient_xy.permute(0, 2, 3, 1))
-            self.large_occupancy_gradient_xy.copy_(soft.large_gradient_xy.permute(0, 2, 3, 1))
+            small_mask = torch.zeros_like(semantic, dtype=torch.bool)
+            large_mask = torch.zeros_like(semantic, dtype=torch.bool)
+            for semantic_id in self.small_ids:
+                small_mask |= semantic == int(semantic_id)
+            for semantic_id in self.large_ids:
+                large_mask |= semantic == int(semantic_id)
+            self.small_occupancy.copy_(small_mask)
+            self.large_occupancy.copy_(large_mask)
+            self.small_propagated_height.copy_(torch.where(small_mask, height, 0.0))
+            self.large_propagated_height.copy_(torch.where(large_mask, height, 0.0))
+            self.small_occupancy_gradient_xy.zero_()
+            self.large_occupancy_gradient_xy.zero_()
             if self._height_stream is not None:
                 current_stream.wait_stream(self._height_stream)
             return

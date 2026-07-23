@@ -306,7 +306,7 @@ def test_small_field_recenters_on_root_without_moving_world_obstacle() -> None:
     assert query_world(field, obstacle_center[:, None]).semantic_id.item() == 1
 
 
-def test_small_field_uses_the_requested_terrain_configuration() -> None:
+def test_small_field_uses_exact_semantic_occupancy() -> None:
     from extension.joint_mpc_rti.config import JointMpcRtiTerrainCfg
     from extension.joint_mpc_rti.terrain.query import query_world
     from .run_joint_acceptance import build_small_obstacle_field
@@ -315,11 +315,11 @@ def test_small_field_uses_the_requested_terrain_configuration() -> None:
         commands=torch.tensor([[0.2, 0.0, 0.0]]),
         shapes=("sphere",),
         offsets=torch.tensor([0.0]),
-        terrain_cfg=JointMpcRtiTerrainCfg(small_gain=0.0),
+        terrain_cfg=JointMpcRtiTerrainCfg(),
         device="cpu",
     )
 
-    assert query_world(field, center[:, None]).small_occupancy.item() == 0.0
+    assert query_world(field, center[:, None]).small_occupancy.item() == 1.0
 
 
 def test_small_obstacle_starts_ahead_of_the_robot_footprint() -> None:

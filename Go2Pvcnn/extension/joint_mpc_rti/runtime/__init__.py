@@ -8,11 +8,7 @@ def __getattr__(name: str):
         from .manager import JointMpcRtiManager
 
         return JointMpcRtiManager
-    if name == "PendingReferenceBuffer":
-        from .reference_buffer import PendingReferenceBuffer
-
-        return PendingReferenceBuffer
     raise AttributeError(name)
 
 
-__all__ = ["JointMpcRtiManager", "PendingReferenceBuffer"]
+__all__ = ["JointMpcRtiManager"]

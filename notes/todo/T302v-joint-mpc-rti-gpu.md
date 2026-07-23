@@ -2,6 +2,8 @@
 
 ## Current State
 
+- Final-plan Task 15 is GREEN. The final planner/runtime import graph now contains only the current-refresh perceptive field, warm-retargeted H30 nominal, eight-family LQ, associative trajectory QP, and five-alpha hard-safe search. Superseded seven-loss, Gaussian cost-map, control-rollout, adaptive-contact/recovery, pending-reference, duplicate solver, and historical direct-probe paths are deleted. Focused import/pipeline verification is `28 passed`; the full package is `247 passed`. Task 16 flat acceptance is next; small/large/viewer/B=1024/performance remain unverified. See [final legacy deletion](../log/2026-07-23-joint-mpc-rti-final-legacy-deletion.md).
+
 - Final-plan Task 14 defines 72 frozen P/A/M metric IDs, exact source metadata, small-inherits-common applicability, planned/actual collision OR, and strict swing-foot crossing with continuous footprint, height, direction, landing, and whole-body checks. Focused metrics/runner/watchdog/small verification is `57 passed`. Flat/small behavior gates remain open. See [final actual-world metrics schema](../log/2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md).
 
 - Final-plan Task 13 exposes fixed same-refresh selector/region/warm/nominal/KKT/line-search diagnostics, eight ordered profiler stages, and viewer overlays for touchdown candidates, region corners, nominal, five alpha paths, selected trajectory, gait phase, publish/stop, and clearance. The viewer still runs exactly one production refresh; focused diagnostics/pipeline/rolling/viewer verification is `61 passed`. Real visual behavior remains for Tasks 16-18 and B=1024 performance remains red. See [final diagnostics/viewer/profiler](../log/2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md).
@@ -112,8 +114,10 @@
 
 ## Open Children
 
-- Final-plan Task 10 performance architecture: replace the graph-safe sequential block-pentadiagonal recovery with the specified H30 padded-to-H32 five-level associative solve while retaining dense parity, fixed two active refinements, CUDA Graph capture, and no per-environment host loops.
-- Final-plan Task 13: add fixed tensor diagnostics, eight-stage profiling, and viewer overlays/live parameter groups without a second planner/SQP call.
+- Final-plan Task 16: close every applicable common metric for all 19 axis-isolated flat command cells.
+- Final-plan Task 17: close all small-obstacle formal cells and 15 actual viewer crossing traces with zero world-map collision.
+- Final-plan Task 18: close large-obstacle bypass and B=1/B=1024 RL interface contracts.
+- Final-plan Task 19: optimize the unchanged final architecture and pass all three `1024 x 1000 < 5s` workloads plus same-candidate reruns.
 
 - Task 14E vertical manifold follow-up: decide whether pre-LQ nominal should ground continuing-stance z, touchdown-onset z, or both, while preserving the one-RTI/no-repair architecture. Current XY-only implementation remains behavior-red.
 - Task 14F joint continuity decision: still blocked despite current `0.34683rad` green result because the Task 14E vertical support gate is red.
@@ -140,6 +144,8 @@
 - T302v.6 performance investigation: compiled fixed-shape LQ/query/rollout is retained; single-cell EDT fusion, complementary transforms, stream chunking, brute-force reduction, and compact warp bbox experiments were evaluated. The single-cell pass was rejected and the failed CUDA experiments were removed.
 
 ## Related Logs
+
+- [Final legacy path deletion](../log/2026-07-23-joint-mpc-rti-final-legacy-deletion.md)
 
 - [Final H30/H32 associative scan](../log/2026-07-23-joint-mpc-rti-final-associative-scan.md)
 
@@ -179,14 +185,14 @@
 
 ## Git Refs
 
-- Last Feature Commit: `41f1b18`.
-- Last Verified Commit: `41f1b18` plus the current working tree (Task 14E focused `124 passed`; contract/IK/gait/terrain `47 passed`; nominal `28 passed`; pycompile/diff check pass; representative validity/root/joint/XY/clearance green but vertical support behavior red).
-- Current Work Ref: `work/joint-mpc-kinematic` at `41f1b18` plus uncommitted Task 14 work.
-- Key Files: `model/nominal.py`, `planner.py`, `solver/trajectory_qp.py`, `solver/line_search.py`, `test_nominal.py`, `joint_mpc_rti_viewer_reproduction_probe.py`.
+- Last Feature Commit: `41a67cc`.
+- Last Verified Commit: `41a67cc` plus the current Task 15 working tree (`247 passed`; import graph clean).
+- Current Work Ref: `work/joint-mpc-kinematic` at `41a67cc` plus uncommitted Task 15 cleanup.
+- Key Files: `config.py`, `planner.py`, `solver/context.py`, `solver/line_search.py`, `terrain/__init__.py`, `test_final_import_graph.py`.
 
 ## Next Step
 
-Return to design review for the Task 14E vertical manifold boundary: preserving shifted foot z leaves an `84.63mm` stance gap and one airborne touchdown despite exact continuing XY. Keep the implemented XY initialization, free-subspace seed fix and fixed x1 root XY; do not launch Task 14F/ranked/formal/Stage B, tune scalar variants, add projection/repair/another solve, change metrics, or weaken thresholds.
+Run final-plan Task 16's monitored 19-cell flat gate on the Task 15 checkpoint. Use the first failing applicable metric to create a minimal owner-level RED regression; do not weaken thresholds or start small/large/performance acceptance before all flat cells pass.
 
 ## Node Details
 

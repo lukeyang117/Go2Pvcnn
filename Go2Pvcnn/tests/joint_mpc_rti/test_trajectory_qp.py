@@ -7,13 +7,12 @@ from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.model.nominal import build_nominal
 from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
-from extension.joint_mpc_rti.losses.objective import LossContext
+from extension.joint_mpc_rti.solver.context import LossContext
 from extension.joint_mpc_rti.solver.lq_problem import build_lq_problem
 from extension.joint_mpc_rti.solver.trajectory_qp import solve_dense_qp
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState
-from .helpers import make_command, make_state
+from .helpers import make_command, make_flat_field, make_state
 from .test_perceptive_plan import _field, _warm
-from .test_trajectory_losses import _flat_field
 
 
 def _problem(*, batch: int = 1, dtype: torch.dtype = torch.float64):
@@ -63,7 +62,7 @@ def _problem(*, batch: int = 1, dtype: torch.dtype = torch.float64):
         command_body=command,
         touchdown_reference_w=nominal.touchdown_reference_w,
         schedule=schedule,
-        terrain=_flat_field(batch),
+        terrain=make_flat_field(batch),
         stance_anchor_w=nominal.foot_reference_w,
         support_height=nominal.state.new_zeros(batch, 31),
         perceptive_field=field,

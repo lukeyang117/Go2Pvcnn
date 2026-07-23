@@ -45,3 +45,20 @@ def make_flat_field(batch: int, *, device: str = "cpu"):
         small_ids=(1,),
         large_ids=(2,),
     )
+
+
+def make_state_nodes(
+    batch: int,
+    *,
+    device: str = "cpu",
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    measured = make_state(batch, device=device, dtype=dtype)
+    return torch.cat(
+        (
+            measured.root_pos_w,
+            measured.root_rpy_w,
+            measured.joint_pos,
+        ),
+        dim=-1,
+    )[:, None].expand(-1, 31, -1).clone()

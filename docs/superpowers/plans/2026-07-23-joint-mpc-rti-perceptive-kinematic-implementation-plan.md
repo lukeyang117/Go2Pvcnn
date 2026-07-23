@@ -17,7 +17,7 @@
 - Tasks 1-9 and 11 are implemented and committed through `7f15334`.
 - Task 10 is implemented: the production path no longer calls the dense reference, B=`1/8/40` direction parity is within `2e-5`, and CUDA Graph capture/replay passes through 36D separator factors padded H30->H32 with five explicit combine levels and two active-mask refinements. Performance is not closed: a B=40 graph smoke averages `122.67 ms/refresh`, so Task 19 must optimize the factor representation/kernels before the formal `1024 x 1000 <5s` gate.
 - Task 12 planner/warm-only/CUDA Graph routing is implemented in the current worktree and passes the focused Task 1-12 regression (`128 passed`). Its commit and later Task 15 legacy deletion remain open.
-- Tasks 13-14 are implemented and focused GREEN. Task 13 exposes fixed same-refresh diagnostics, eight-stage profiling, and one-refresh viewer overlays (`61 passed`). Task 14 defines the final 72-ID P/A/M schema and strict foot-event crossing (`57 passed`). Tasks 15-19 remain open; no flat/small/large/performance acceptance is claimed yet.
+- Tasks 13-15 are implemented and GREEN. Task 13 exposes fixed same-refresh diagnostics, eight-stage profiling, and one-refresh viewer overlays (`61 passed`). Task 14 defines the final 72-ID P/A/M schema and strict foot-event crossing (`57 passed`). Task 15 deletes the superseded loss/map/rollout/solver/probe paths and passes the full package (`247 passed`). Tasks 16-19 remain open; no flat/small/large/performance acceptance is claimed yet.
 
 ---
 

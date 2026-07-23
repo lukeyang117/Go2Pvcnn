@@ -9,9 +9,24 @@ from extension.joint_mpc_rti.integration.field_sync import JointMpcRayCasterFiel
 from extension.joint_mpc_rti.integration.reference_adapter import trajectory_to_reference_cache
 from extension.joint_mpc_rti.integration.isaaclab_adapter import command_from_env, scanner_from_env, state_from_env
 from extension.joint_mpc_rti.planner import step as planner_step
-from extension.joint_mpc_rti.runtime.reference_buffer import PendingReferenceBuffer
 from extension.joint_mpc_rti.runtime.cuda_graph import JointMpcCudaGraphRunner
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState, JointMpcRtiState, JointMpcRtiStepResult, JointMpcTerrainField
+
+
+class _PendingReferenceBuffer:
+    def __init__(self, *, num_envs: int, device) -> None:
+        self.valid = torch.zeros(int(num_envs), dtype=torch.bool, device=device)
+        self.reference = None
+
+    def update(self, reference) -> None:
+        self.reference = reference
+        self.valid.copy_(reference.valid)
+
+    def reset_rows(self, env_mask) -> None:
+        mask = torch.as_tensor(env_mask, dtype=torch.bool, device=self.valid.device)
+        if mask.shape != self.valid.shape:
+            raise ValueError("env_mask must have shape [B]")
+        self.valid.logical_and_(~mask)
 
 
 class JointMpcRtiManager:
@@ -22,7 +37,7 @@ class JointMpcRtiManager:
         self._cfg = getattr(task_cfg, "joint_mpc_rti_cfg", JointMpcRtiCfg())
         self._solver_state: JointMpcRtiSolverState | None = None
         self._last_result: JointMpcRtiStepResult | None = None
-        self._buffer: PendingReferenceBuffer | None = None
+        self._buffer: _PendingReferenceBuffer | None = None
         self._cache = None
         self._field_sync: JointMpcRayCasterFieldSync | None = None
         self._last_step_token = None
@@ -42,7 +57,7 @@ class JointMpcRtiManager:
         instance._cfg = cfg
         instance._solver_state = None
         instance._last_result = None
-        instance._buffer = PendingReferenceBuffer(num_envs=num_envs, device=device)
+        instance._buffer = _PendingReferenceBuffer(num_envs=num_envs, device=device)
         instance._cache = None
         instance._field_sync = None
         instance._last_step_token = None
@@ -76,7 +91,7 @@ class JointMpcRtiManager:
                 "rebuild the manager/cache/CUDA graph for the new environment count"
             )
         if self._buffer is None:
-            self._buffer = PendingReferenceBuffer(num_envs=batch_size, device=measured_state.device)
+            self._buffer = _PendingReferenceBuffer(num_envs=batch_size, device=measured_state.device)
         use_graph = (
             bool(self._cfg.solver.use_cuda_graph)
             and measured_state.device.type == "cuda"

@@ -9,7 +9,7 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
-from extension.joint_mpc_rti.losses.objective import LossContext
+from extension.joint_mpc_rti.solver.context import LossContext
 from extension.joint_mpc_rti.model.go2_kinematics import (
     complete_body_sample_jacobian,
     complete_foot_jacobian,

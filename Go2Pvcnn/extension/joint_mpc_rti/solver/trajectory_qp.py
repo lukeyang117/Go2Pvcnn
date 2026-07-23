@@ -87,9 +87,20 @@ class ActiveConstraints:
 
     @staticmethod
     def validate_compile_budget(*, constraint_rows: int) -> dict[str, int]:
-        from extension.joint_mpc_rti.solver.primal_dual_ilqr import joint_kkt_compile_budget
-
-        return joint_kkt_compile_budget(state_dim=18, constraint_rows=constraint_rows)
+        rows = int(constraint_rows)
+        if rows < 0 or rows > 32:
+            raise ValueError("constraint rows must be between 0 and 32")
+        padded_rows = 1 if rows == 0 else 1 << (rows - 1).bit_length()
+        combined_rhs = 18 + rows
+        block_r = 1 << max(0, combined_rhs - 1).bit_length()
+        if combined_rhs > 51 or block_r > 64:
+            raise ValueError("fixed KKT right-hand side exceeds the compile budget")
+        return {
+            "constraint_rows": rows,
+            "padded_constraint_rows": padded_rows,
+            "combined_rhs": combined_rhs,
+            "block_r": block_r,
+        }
 
 
 @dataclass(frozen=True)

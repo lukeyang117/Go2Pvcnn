@@ -6,9 +6,9 @@ from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.model.nominal import NominalTrajectory
-from extension.joint_mpc_rti.losses.objective import LossContext
+from extension.joint_mpc_rti.solver.context import LossContext
 from extension.joint_mpc_rti.solver.lq_problem import build_lq_problem, lq_residuals
-from .test_trajectory_losses import _flat_field, _state
+from .helpers import make_flat_field, make_state_nodes
 
 
 EXPECTED_FAMILIES = {
@@ -26,7 +26,7 @@ EXPECTED_FAMILIES = {
 def _nominal_and_context(
     *, batch: int = 1, dtype: torch.dtype = torch.float64
 ) -> tuple[NominalTrajectory, LossContext]:
-    state = _state(batch=batch).to(dtype)
+    state = make_state_nodes(batch, dtype=dtype)
     state[:, 1:, 0] += torch.linspace(0.0, 0.12, 30, dtype=dtype)
     state[:, 1:, 5] += torch.linspace(0.0, 0.03, 30, dtype=dtype)
     nodes = int(state.shape[1])
@@ -54,7 +54,7 @@ def _nominal_and_context(
         command_body=state.new_tensor((0.2, 0.0, 0.1)).expand(batch, -1),
         touchdown_reference_w=touchdown,
         schedule=schedule,
-        terrain=_flat_field(batch),
+        terrain=make_flat_field(batch),
         stance_anchor_w=foot.detach().clone(),
         support_height=state.new_zeros(batch, nodes),
     )

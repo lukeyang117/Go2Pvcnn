@@ -689,12 +689,9 @@ def _run_small_case(
     joint_nominal_foot = joint_nominal_geometry.foot_pos_w[0, :, joint_leg_index]
     joint_touchdown_target = joint_diagnostics.touchdown_reference_w[0, :, joint_leg_index]
     stacked_foot_heights = torch.stack(foot_heights, dim=1)
-    loss_weights = manager._cfg.losses.weights()
     joint_node_loss = {
         name: {
-            "weight": float(loss_weights[name]),
-            "unweighted": [float(value) for value in energy[0].tolist()],
-            "weighted": [float(loss_weights[name] * value) for value in energy[0].tolist()],
+            "weighted": [float(value) for value in energy[0].tolist()],
         }
         for name, energy in joint_diagnostics.node_loss_breakdown.items()
     }

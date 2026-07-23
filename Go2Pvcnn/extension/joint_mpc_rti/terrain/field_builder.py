@@ -6,7 +6,6 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiTerrainCfg
-from extension.joint_mpc_rti.terrain.cost_map import build_soft_semantic_fields
 from extension.joint_mpc_rti.terrain.distance_field import distance_gradient, semantic_mask, signed_boundary_distance
 from extension.joint_mpc_rti.types import JointMpcTerrainField
 
@@ -56,14 +55,11 @@ def build_field_batch(
         large_distance = signed_boundary_distance(large_mask, resolution=resolution)
         small_gradient = distance_gradient(small_distance, resolution=resolution)
         large_gradient = distance_gradient(large_distance, resolution=resolution)
-    soft = build_soft_semantic_fields(
-        height,
-        semantic,
-        JointMpcRtiTerrainCfg() if terrain_cfg is None else terrain_cfg,
-        resolution=resolution,
-        small_ids=small_ids,
-        large_ids=large_ids,
-    )
+    small_mask = semantic_mask(semantic, small_ids)
+    large_mask = semantic_mask(semantic, large_ids)
+    small_occupancy = small_mask.to(height.dtype)
+    large_occupancy = large_mask.to(height.dtype)
+    zero_gradient = height.new_zeros(*height.shape, 2)
     return JointMpcTerrainField(
         height_w=height.contiguous(),
         semantic_id=semantic.contiguous(),
@@ -77,12 +73,12 @@ def build_field_batch(
         timestamp=stamp.contiguous(),
         version=field_version.contiguous(),
         resolution=float(resolution),
-        small_occupancy=soft.small_occupancy[:, 0].contiguous(),
-        large_occupancy=soft.large_occupancy[:, 0].contiguous(),
-        small_propagated_height=soft.small_height[:, 0].contiguous(),
-        large_propagated_height=soft.large_height[:, 0].contiguous(),
-        small_occupancy_gradient_xy=soft.small_gradient_xy.permute(0, 2, 3, 1).contiguous(),
-        large_occupancy_gradient_xy=soft.large_gradient_xy.permute(0, 2, 3, 1).contiguous(),
+        small_occupancy=small_occupancy.contiguous(),
+        large_occupancy=large_occupancy.contiguous(),
+        small_propagated_height=torch.where(small_mask, height, torch.zeros_like(height)).contiguous(),
+        large_propagated_height=torch.where(large_mask, height, torch.zeros_like(height)).contiguous(),
+        small_occupancy_gradient_xy=zero_gradient,
+        large_occupancy_gradient_xy=zero_gradient,
     )
 
 

@@ -1,16 +1,16 @@
-"""World-coordinate height and semantic distance fields."""
+"""Current-refresh world-coordinate perceptive terrain fields."""
 
-from .cost_map import SoftSemanticFields, build_soft_semantic_fields, effective_surface
 from .field_builder import build_field_batch
-from .field_cache import JointMpcTerrainFieldCache
+from .field_cache import JointMpcPerceptiveFieldCache, JointMpcTerrainFieldCache
+from .perceptive_field import build_perceptive_field, validate_frame_freshness
 from .query import JointMpcTerrainQuery, query_world
 
 __all__ = [
+    "JointMpcPerceptiveFieldCache",
     "JointMpcTerrainFieldCache",
     "JointMpcTerrainQuery",
-    "SoftSemanticFields",
     "build_field_batch",
-    "build_soft_semantic_fields",
-    "effective_surface",
+    "build_perceptive_field",
     "query_world",
+    "validate_frame_freshness",
 ]

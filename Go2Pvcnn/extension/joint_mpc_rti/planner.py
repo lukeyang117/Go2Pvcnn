@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
-from extension.joint_mpc_rti.losses.objective import LossContext
+from extension.joint_mpc_rti.solver.context import LossContext
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.model.nominal import (
