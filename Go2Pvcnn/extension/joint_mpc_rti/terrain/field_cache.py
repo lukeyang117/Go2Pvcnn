@@ -5,10 +5,107 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.config import JointMpcRtiTerrainCfg
+from extension.joint_mpc_rti.config import JointMpcRtiCfg, JointMpcRtiTerrainCfg
 from extension.joint_mpc_rti.terrain.cost_map import build_soft_semantic_fields
 from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
-from extension.joint_mpc_rti.types import JointMpcTerrainField
+from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+from extension.joint_mpc_rti.types import (
+    JointMpcFieldFrame,
+    JointMpcPerceptiveField,
+    JointMpcTerrainField,
+)
+
+
+class JointMpcPerceptiveFieldCache:
+    """Preallocated current-frame field storage with row-wise atomic publication."""
+
+    def __init__(
+        self,
+        *,
+        num_envs: int,
+        grid_size: int,
+        device: torch.device | str,
+        cfg: JointMpcRtiCfg,
+    ) -> None:
+        batch = int(num_envs)
+        size = int(grid_size)
+        shape = (batch, size, size)
+        self.cfg = cfg
+        self.height_w = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.semantic_id = torch.zeros(shape, dtype=torch.long, device=device)
+        self.valid_mask = torch.zeros(shape, dtype=torch.bool, device=device)
+        self.small_mask = torch.zeros(shape, dtype=torch.bool, device=device)
+        self.large_mask = torch.zeros(shape, dtype=torch.bool, device=device)
+        self.unknown_mask = torch.ones(shape, dtype=torch.bool, device=device)
+        self.inflated_height_w = torch.zeros(
+            batch, 5, size, size, dtype=torch.float32, device=device
+        )
+        self.landing_safe = torch.zeros(shape, dtype=torch.bool, device=device)
+        self.slope_xy = torch.zeros(*shape, 2, dtype=torch.float32, device=device)
+        self.slope_rad = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.roughness = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.semantic_edge_mask = torch.zeros(shape, dtype=torch.bool, device=device)
+        self.origin_w = torch.zeros(batch, 3, dtype=torch.float32, device=device)
+        self.yaw_w = torch.zeros(batch, dtype=torch.float32, device=device)
+        self.timestamp = torch.zeros(batch, dtype=torch.float32, device=device)
+        self.refresh_id = torch.full((batch,), -1, dtype=torch.long, device=device)
+        self.ready = torch.zeros(batch, dtype=torch.bool, device=device)
+
+    def update_rows(
+        self,
+        *,
+        env_ids: Tensor,
+        height_w: Tensor,
+        semantic_id: Tensor,
+        valid_mask: Tensor,
+        frame: JointMpcFieldFrame,
+    ) -> None:
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.refresh_id.device)
+        if int(ids.numel()) != int(torch.as_tensor(height_w).shape[0]):
+            raise ValueError("env_ids and field rows must have the same length")
+        built = build_perceptive_field(height_w, semantic_id, valid_mask, frame, self.cfg)
+        for name in (
+            "height_w",
+            "semantic_id",
+            "valid_mask",
+            "small_mask",
+            "large_mask",
+            "unknown_mask",
+            "inflated_height_w",
+            "landing_safe",
+            "slope_xy",
+            "slope_rad",
+            "roughness",
+            "semantic_edge_mask",
+            "origin_w",
+            "yaw_w",
+            "timestamp",
+            "refresh_id",
+        ):
+            destination = getattr(self, name)
+            destination.index_copy_(0, ids, getattr(built, name).to(device=destination.device))
+        self.ready.index_fill_(0, ids, True)
+
+    def as_field(self) -> JointMpcPerceptiveField:
+        return JointMpcPerceptiveField(
+            height_w=self.height_w,
+            semantic_id=self.semantic_id,
+            valid_mask=self.valid_mask,
+            small_mask=self.small_mask,
+            large_mask=self.large_mask,
+            unknown_mask=self.unknown_mask,
+            inflated_height_w=self.inflated_height_w,
+            landing_safe=self.landing_safe,
+            slope_xy=self.slope_xy,
+            slope_rad=self.slope_rad,
+            roughness=self.roughness,
+            semantic_edge_mask=self.semantic_edge_mask,
+            origin_w=self.origin_w,
+            yaw_w=self.yaw_w,
+            timestamp=self.timestamp,
+            refresh_id=self.refresh_id,
+            resolution=float(self.cfg.terrain.resolution),
+        )
 
 
 class JointMpcTerrainFieldCache:
@@ -177,4 +274,4 @@ class JointMpcTerrainFieldCache:
         )
 
 
-__all__ = ["JointMpcTerrainFieldCache"]
+__all__ = ["JointMpcPerceptiveFieldCache", "JointMpcTerrainFieldCache"]

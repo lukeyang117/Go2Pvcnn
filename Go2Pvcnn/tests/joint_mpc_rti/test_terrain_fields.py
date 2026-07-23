@@ -373,16 +373,20 @@ def test_raycaster_field_sync_updates_the_same_env_ids_pose_and_timestamp() -> N
     sync.on_raycaster_update(scanner, torch.tensor([0, 2]))
     assert torch.equal(sync.ready, torch.tensor([False, False, False, False]))
     field = sync.latest_field()
+    perceptive = sync.latest_perceptive_field()
 
     assert torch.equal(field.version, torch.tensor([0, -1, 0, -1]))
+    assert torch.equal(perceptive.refresh_id, torch.tensor([0, -1, 0, -1]))
     assert torch.equal(sync.ready, torch.tensor([True, False, True, False]))
     torch.testing.assert_close(field.height_w[[0, 2], 0, 0], torch.tensor([0.1, 0.3]))
     torch.testing.assert_close(field.origin_w[[0, 2]], scanner.data.pos_w[[0, 2]])
     torch.testing.assert_close(field.timestamp[[0, 2]], scanner._timestamp[[0, 2]])
     torch.testing.assert_close(field.origin_w[[1, 3]], torch.zeros(2, 3))
+    assert perceptive.valid_mask[[0, 2]].all()
+    assert not perceptive.valid_mask[[1, 3]].any()
 
 
-def test_latest_field_rebuilds_once_per_call_without_a_new_callback() -> None:
+def test_latest_field_does_not_rebuild_without_a_new_scanner_callback() -> None:
     from extension.joint_mpc_rti.integration.field_sync import JointMpcRayCasterFieldSync
 
     batch = 2
@@ -409,7 +413,7 @@ def test_latest_field_rebuilds_once_per_call_without_a_new_callback() -> None:
     second_version = sync.latest_field().version.clone()
 
     assert torch.equal(first_version, torch.zeros(batch, dtype=torch.long))
-    assert torch.equal(second_version, torch.ones(batch, dtype=torch.long))
+    assert torch.equal(second_version, first_version)
 
 
 def test_semantic_raycaster_notifies_optional_field_observer_after_map_writes() -> None:

@@ -7,7 +7,12 @@ import math
 import torch
 
 from extension.convention import extract_yaw_batch
-from extension.joint_mpc_rti.terrain.field_cache import JointMpcTerrainFieldCache
+from extension.joint_mpc_rti.config import JointMpcRtiCfg
+from extension.joint_mpc_rti.terrain.field_cache import (
+    JointMpcPerceptiveFieldCache,
+    JointMpcTerrainFieldCache,
+)
+from extension.joint_mpc_rti.types import JointMpcFieldFrame
 
 
 class JointMpcRayCasterFieldSync:
@@ -33,6 +38,16 @@ class JointMpcRayCasterFieldSync:
             small_ids=small_ids,
             large_ids=large_ids,
         )
+        perceptive_cfg = JointMpcRtiCfg()
+        perceptive_cfg.terrain.resolution = float(resolution)
+        perceptive_cfg.terrain.small_ids = tuple(small_ids)
+        perceptive_cfg.terrain.large_ids = tuple(large_ids)
+        self._perceptive_cache = JointMpcPerceptiveFieldCache(
+            num_envs=num_envs,
+            grid_size=grid_size,
+            device=self._device,
+            cfg=perceptive_cfg,
+        )
         self._scanner = None
         self._pending_env_ids: list[object] = []
 
@@ -51,7 +66,9 @@ class JointMpcRayCasterFieldSync:
             if self._pending_env_ids:
                 raise RuntimeError("RayCaster field sync has pending rows without an attached scanner")
             return
-        pending = self._pending_env_ids or [slice(0, self._num_envs)]
+        if not self._pending_env_ids:
+            return
+        pending = self._pending_env_ids
         self._pending_env_ids = []
         id_tensors = []
         for env_ids in pending:
@@ -80,19 +97,47 @@ class JointMpcRayCasterFieldSync:
             timestamp = torch.as_tensor(timestamp_source, dtype=torch.float32, device=self._device).reshape(-1)
 
         full_refresh = int(ids.numel()) == self._num_envs
+        selected_height = (ray_hits if full_refresh else ray_hits.index_select(0, ids))[
+            ..., 2
+        ].reshape(-1, side, side)
+        selected_semantic = (
+            semantic if full_refresh else semantic.index_select(0, ids)
+        ).reshape(-1, side, side)
+        selected_origin = pos_w if full_refresh else pos_w.index_select(0, ids)
+        selected_yaw = extract_yaw_batch(
+            quat_w if full_refresh else quat_w.index_select(0, ids)
+        )
+        selected_timestamp = timestamp if full_refresh else timestamp.index_select(0, ids)
+        next_refresh_id = self._cache.version.index_select(0, ids) + 1
         self._cache.update_rows(
             env_ids=ids,
-            height_w=(ray_hits if full_refresh else ray_hits.index_select(0, ids))[..., 2].reshape(-1, side, side),
-            semantic_id=(semantic if full_refresh else semantic.index_select(0, ids)).reshape(-1, side, side),
-            origin_w=pos_w if full_refresh else pos_w.index_select(0, ids),
-            yaw_w=extract_yaw_batch(quat_w if full_refresh else quat_w.index_select(0, ids)),
-            timestamp=timestamp if full_refresh else timestamp.index_select(0, ids),
+            height_w=selected_height,
+            semantic_id=selected_semantic,
+            origin_w=selected_origin,
+            yaw_w=selected_yaw,
+            timestamp=selected_timestamp,
             ordered_full_batch=full_refresh,
+        )
+        self._perceptive_cache.update_rows(
+            env_ids=ids,
+            height_w=selected_height,
+            semantic_id=selected_semantic,
+            valid_mask=torch.isfinite(selected_height),
+            frame=JointMpcFieldFrame(
+                origin_w=selected_origin,
+                yaw_w=selected_yaw,
+                timestamp=selected_timestamp,
+                refresh_id=next_refresh_id,
+            ),
         )
 
     def latest_field(self):
         self._flush_pending()
         return self._cache.as_field()
+
+    def latest_perceptive_field(self):
+        self._flush_pending()
+        return self._perceptive_cache.as_field()
 
     def attach(self, scanner) -> None:
         self._scanner = scanner

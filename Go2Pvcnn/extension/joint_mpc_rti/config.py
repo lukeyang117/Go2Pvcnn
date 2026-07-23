@@ -63,6 +63,20 @@ class JointMpcRtiTerrainCfg:
     kernel_radius_cells: int = 20
     small_ids: tuple[int, ...] = (1,)
     large_ids: tuple[int, ...] = (2,)
+    resolution: float = 0.01
+    foot_radius_m: float = 0.022
+    knee_radius_m: float = 0.030
+    calf_radius_m: float = 0.025
+    thigh_radius_m: float = 0.035
+    base_radius_m: float = 0.120
+    foot_margin_m: float = 0.010
+    link_margin_m: float = 0.015
+    base_margin_m: float = 0.025
+    landing_margin_m: float = 0.010
+    slope_max_rad: float = 0.60
+    roughness_max_m: float = 0.030
+    edge_margin_m: float = 0.020
+    roughness_radius_m: float = 0.010
 
     @property
     def virtual_wall_height(self) -> float:

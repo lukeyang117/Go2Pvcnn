@@ -120,6 +120,46 @@ class JointMpcRtiSolverState:
 
 
 @dataclass(frozen=True)
+class JointMpcFieldFrame:
+    origin_w: Tensor
+    yaw_w: Tensor
+    timestamp: Tensor
+    refresh_id: Tensor
+
+    def __post_init__(self) -> None:
+        _require_shape("origin_w", self.origin_w, (3,))
+        batch = int(self.origin_w.shape[0])
+        for name, tensor in (
+            ("yaw_w", self.yaw_w),
+            ("timestamp", self.timestamp),
+            ("refresh_id", self.refresh_id),
+        ):
+            if tensor.shape != (batch,):
+                raise ValueError(f"{name} must have shape [B]")
+
+
+@dataclass(frozen=True)
+class JointMpcPerceptiveField:
+    height_w: Tensor
+    semantic_id: Tensor
+    valid_mask: Tensor
+    small_mask: Tensor
+    large_mask: Tensor
+    unknown_mask: Tensor
+    inflated_height_w: Tensor
+    landing_safe: Tensor
+    slope_xy: Tensor
+    slope_rad: Tensor
+    roughness: Tensor
+    semantic_edge_mask: Tensor
+    origin_w: Tensor
+    yaw_w: Tensor
+    timestamp: Tensor
+    refresh_id: Tensor
+    resolution: float
+
+
+@dataclass(frozen=True)
 class JointMpcPendingReference:
     root_pos_w: Tensor
     root_rpy_w: Tensor
@@ -153,6 +193,8 @@ class JointMpcTerrainField:
 
 
 __all__ = [
+    "JointMpcFieldFrame",
+    "JointMpcPerceptiveField",
     "JointMpcRtiState",
     "JointMpcRtiSolverState",
     "JointMpcRtiStepResult",

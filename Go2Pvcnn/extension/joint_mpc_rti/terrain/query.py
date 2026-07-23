@@ -7,12 +7,13 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from extension.joint_mpc_rti.types import JointMpcTerrainField
+from extension.joint_mpc_rti.types import JointMpcPerceptiveField, JointMpcTerrainField
 
 
 @dataclass(frozen=True)
 class JointMpcTerrainQuery:
     height_w: Tensor
+    height_gradient_w: Tensor
     small_distance_m: Tensor
     large_distance_m: Tensor
     small_gradient_w: Tensor
@@ -25,6 +26,23 @@ class JointMpcTerrainQuery:
     small_occupancy_gradient_w: Tensor
     large_occupancy_gradient_w: Tensor
     semantic_id: Tensor
+
+
+@dataclass(frozen=True)
+class JointMpcPerceptiveQuery:
+    height_w: Tensor
+    semantic_id: Tensor
+    valid: Tensor
+    small_mask: Tensor
+    large_mask: Tensor
+    unknown_mask: Tensor
+    inflated_height_w: Tensor
+    landing_safe: Tensor
+    slope_xy: Tensor
+    slope_rad: Tensor
+    roughness: Tensor
+    semantic_edge_mask: Tensor
+    boundary_distance_m: Tensor
 
 
 def _gather_grid(grid: Tensor, flat_index: Tensor) -> Tensor:
@@ -147,9 +165,16 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
     large_soft_gradient = zero_vector if field.large_occupancy_gradient_xy is None else field.large_occupancy_gradient_xy
     nearest_x = torch.round(index_x).to(dtype=torch.long).clamp(0, nx - 1)
     nearest_y = torch.round(index_y).to(dtype=torch.long).clamp(0, ny - 1)
+    height_w, height_gradient_local = _bilinear_scalar_with_gradient(
+        field.height_w,
+        index_x,
+        index_y,
+        resolution=field.resolution,
+    )
 
     return JointMpcTerrainQuery(
-        height_w=_bilinear(field.height_w, index_x, index_y),
+        height_w=height_w,
+        height_gradient_w=rotate_gradient(height_gradient_local),
         small_distance_m=small_distance,
         large_distance_m=large_distance,
         small_gradient_w=rotate_gradient(small_gradient_local),
@@ -162,6 +187,62 @@ def query_world(field: JointMpcTerrainField, points_w: Tensor) -> JointMpcTerrai
         small_occupancy_gradient_w=rotate_gradient(_bilinear(small_soft_gradient, index_x, index_y)),
         large_occupancy_gradient_w=rotate_gradient(_bilinear(large_soft_gradient, index_x, index_y)),
         semantic_id=_gather_grid(field.semantic_id, nearest_x * ny + nearest_y),
+    )
+
+
+def query_perceptive_world(
+    field: JointMpcPerceptiveField,
+    points_w: Tensor,
+) -> JointMpcPerceptiveQuery:
+    points = torch.as_tensor(points_w, dtype=field.height_w.dtype, device=field.height_w.device)
+    if points.ndim != 3 or int(points.shape[-1]) not in (2, 3):
+        raise ValueError("points_w must have shape [B,N,2 or 3]")
+    field_batch, nx, ny = map(int, field.height_w.shape)
+    query_batch = int(points.shape[0])
+    if query_batch % field_batch != 0:
+        raise ValueError("points_w batch must be an integer repeat of field batch")
+    repeats = query_batch // field_batch
+    origin_w = field.origin_w.repeat_interleave(repeats, dim=0)
+    yaw_w = field.yaw_w.repeat_interleave(repeats, dim=0)
+    delta = points[..., :2] - origin_w[:, None, :2]
+    cosine = torch.cos(yaw_w)[:, None]
+    sine = torch.sin(yaw_w)[:, None]
+    local_x = cosine * delta[..., 0] + sine * delta[..., 1]
+    local_y = -sine * delta[..., 0] + cosine * delta[..., 1]
+    index_x = local_x / float(field.resolution) + 0.5 * float(nx - 1)
+    index_y = local_y / float(field.resolution) + 0.5 * float(ny - 1)
+    boundary_distance = torch.minimum(
+        torch.minimum(index_x, index_y),
+        torch.minimum(float(nx - 1) - index_x, float(ny - 1) - index_y),
+    ) * float(field.resolution)
+    inside = boundary_distance >= 0.0
+    sampled_valid = _bilinear(
+        field.valid_mask.to(dtype=field.height_w.dtype), index_x, index_y
+    ) > 0.999
+    valid = inside & sampled_valid
+    nearest_x = torch.round(index_x).to(dtype=torch.long).clamp(0, nx - 1)
+    nearest_y = torch.round(index_y).to(dtype=torch.long).clamp(0, ny - 1)
+    nearest_index = nearest_x * ny + nearest_y
+
+    def nearest_mask(mask: Tensor) -> Tensor:
+        return _gather_grid(mask, nearest_index).to(dtype=torch.bool)
+
+    inflated = field.inflated_height_w.permute(0, 2, 3, 1)
+    return JointMpcPerceptiveQuery(
+        height_w=_bilinear(field.height_w, index_x, index_y),
+        semantic_id=_gather_grid(field.semantic_id, nearest_index),
+        valid=valid,
+        small_mask=nearest_mask(field.small_mask),
+        large_mask=nearest_mask(field.large_mask),
+        unknown_mask=(~valid) | nearest_mask(field.unknown_mask),
+        inflated_height_w=_bilinear(inflated, index_x, index_y),
+        landing_safe=inside
+        & (_bilinear(field.landing_safe.to(field.height_w.dtype), index_x, index_y) > 0.999),
+        slope_xy=_bilinear(field.slope_xy, index_x, index_y),
+        slope_rad=_bilinear(field.slope_rad, index_x, index_y),
+        roughness=_bilinear(field.roughness, index_x, index_y),
+        semantic_edge_mask=nearest_mask(field.semantic_edge_mask),
+        boundary_distance_m=boundary_distance,
     )
 
 
@@ -184,4 +265,10 @@ def query_world_maybe_compiled(
     return query_world(field, points_w)
 
 
-__all__ = ["JointMpcTerrainQuery", "query_world", "query_world_maybe_compiled"]
+__all__ = [
+    "JointMpcPerceptiveQuery",
+    "JointMpcTerrainQuery",
+    "query_perceptive_world",
+    "query_world",
+    "query_world_maybe_compiled",
+]
