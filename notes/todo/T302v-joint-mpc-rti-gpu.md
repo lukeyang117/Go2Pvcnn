@@ -2,6 +2,8 @@
 
 ## Current State
 
+- Final-plan Task 10 now uses the required associative architecture: each active refinement builds a fixed-band augmented system, maps it to 36D separator conditional factors, pads H30 to H32 with two neutral factors, executes five explicit combine levels, and recovers all 31 nodes. The sequential block solver is deleted. CPU scan/QP/diagnostics is `14 passed`; CUDA rolling capture/replay is `11 passed`. B=40 graph smoke is finite but slow at `122.67ms/refresh` and `1410.72MiB` peak, so Task 19 remains a real optimization gate. See [final associative scan](../log/2026-07-23-joint-mpc-rti-final-associative-scan.md).
+
 - The 2026-07-23 final perceptive-kinematic branch now routes selector -> warm-retargeted nominal -> eight-family LQ -> fixed-shape constrained trajectory solve -> five-alpha hard-safe search -> publish/stop. The production `LqProblem` path no longer calls the eager dense reference; B=`1/8/40` direction parity is within `2e-5`, CUDA Graph capture/replay passes, and `preview_tail_state` is copied through fixed-address graph state. The Task 1-12 focused union is `128 passed`. This is a correctness/capture checkpoint, not Stage B closure: the current block-pentadiagonal solve is temporally sequential and must still be replaced by true H30->H32 five-level associative recovery before `1024 x 1000 < 5s`. See [final pipeline CUDA checkpoint](../log/2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md).
 
 - Task 14E-Z方案 A is implemented: all published x1 stance legs use raw-ground analytic IK in warm nominal, and the existing fourth filter checks continuing XY, all-stance ground and swing floor. Focused regression is `127 passed` plus `47 passed`, but the real viewer rejects behavior closure. A post-obstacle onset shifted XY queries the `100.26mm` small-obstacle top, then the next continuing cycle drops `100.75mm` to ordinary ground; joint step is `0.59164rad`, validity `0.97959`, airborne touchdown `0.020408`, and phase 23 has no published-kinematics-feasible alpha. Root/XY/clearance/collision/crossing/lifecycle stay green. Stop before Task 14F/ranked/formal/Stage B; redesign touchdown XY ownership or pre-touchdown descent timing. See [Task 14E-Z implementation](../log/2026-07-22-joint-mpc-rti-all-stance-ground-implementation.md).
@@ -134,6 +136,8 @@
 - T302v.6 performance investigation: compiled fixed-shape LQ/query/rollout is retained; single-cell EDT fusion, complementary transforms, stream chunking, brute-force reduction, and compact warp bbox experiments were evaluated. The single-cell pass was rejected and the failed CUDA experiments were removed.
 
 ## Related Logs
+
+- [Final H30/H32 associative scan](../log/2026-07-23-joint-mpc-rti-final-associative-scan.md)
 
 - [Final perceptive-kinematic pipeline CUDA checkpoint](../log/2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md)
 

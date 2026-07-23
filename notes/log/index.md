@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-23 | Final H30/H32 associative scan | Task 10 five-level recovery / CUDA graph / B40 smoke | correctness pass; performance red | CPU `14 passed`; CUDA rolling `11 passed`; B40 `122.67ms`, `1410.72MiB`, nonfinite `0` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-associative-scan.md](2026-07-23-joint-mpc-rti-final-associative-scan.md) |
+
 | 2026-07-23 | Final perceptive-kinematic RTI pipeline CUDA checkpoint | Task 10 correctness/capture + Task 12 routing | checkpoint pass; associative performance work open | dense parity B=1/8/40 `<2e-5`; rolling CUDA `11 passed`; final Task 1-12 union `128 passed` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md](2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md) |
 
 | 2026-07-22 | Joint MPC RTI CUDA Graph capture fix | graph-safe constants / fixed general solve / alpha-zero fallback | runtime capture fixed | CPU `26 passed`; GPU scan compile + graph capture/replay `2 passed`; pycompile/diff clean | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-22-joint-mpc-rti-cuda-graph-capture-fix.md](2026-07-22-joint-mpc-rti-cuda-graph-capture-fix.md) |

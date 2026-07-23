@@ -107,3 +107,11 @@ def test_production_scan_does_not_call_dense_reference() -> None:
 
     source = inspect.getsource(module.solve_trajectory_qp_scan)
     assert "solve_dense_qp" not in source
+
+
+def test_lq_problem_uses_five_level_recovery_not_sequential_block_solve() -> None:
+    import extension.joint_mpc_rti.solver.trajectory_scan as module
+
+    source = inspect.getsource(module._solve_lq_problem)
+    assert "_solve_augmented_associative" in source
+    assert "_solve_block_pentadiagonal" not in inspect.getsource(module)

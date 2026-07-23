@@ -12,6 +12,7 @@ from extension.joint_mpc_rti.solver.associative_scan import (
     combine_conditional_value_factors,
 )
 from extension.joint_mpc_rti.solver.lq_problem import LqProblem
+from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
 from extension.joint_mpc_rti.solver.fixed_spd import fixed_spd_solve
 from extension.joint_mpc_rti.solver.trajectory_qp import (
     QpSolution,
@@ -24,6 +25,8 @@ from extension.joint_mpc_rti.tensor_constants import constant_like
 
 INTERVALS = 30
 PADDED_INTERVALS = 32
+STATE_DIM = 18
+SEPARATOR_DIM = 36
 
 
 @dataclass(frozen=True)
@@ -44,8 +47,13 @@ def pad_h30_factors(
         raise ValueError("trajectory factors must contain exactly 30 intervals")
     matrix_a, vector_c, matrix_c, vector_p, matrix_p = factors
     dimension = int(matrix_a.shape[-1])
-    identity = torch.eye(
-        dimension, dtype=matrix_a.dtype, device=matrix_a.device
+    identity = constant_like(
+        matrix_a,
+        f"trajectory_factor_identity_{dimension}",
+        tuple(
+            tuple(1.0 if row == column else 0.0 for column in range(dimension))
+            for row in range(dimension)
+        ),
     ).expand(2, *matrix_a.shape[1:-2], dimension, dimension)
 
     def append_zeros(value: Tensor) -> Tensor:
@@ -58,7 +66,11 @@ def pad_h30_factors(
         append_zeros(vector_p),
         append_zeros(matrix_p),
     )
-    valid = torch.arange(PADDED_INTERVALS, device=matrix_a.device) < INTERVALS
+    valid = constant_like(
+        matrix_a,
+        "trajectory_factor_valid_mask",
+        (1.0,) * INTERVALS + (0.0,) * (PADDED_INTERVALS - INTERVALS),
+    ).to(torch.bool)
     return padded, valid
 
 
@@ -83,6 +95,136 @@ def factor_tree_shapes() -> tuple[int, ...]:
     return (32, 16, 8, 4, 2, 1)
 
 
+def _trajectory_factors_from_blocks(
+    diagonal: Tensor,
+    first_offdiag: Tensor,
+    second_offdiag: Tensor,
+    gradient: Tensor,
+) -> ConditionalValueFactor:
+    """Map a direct-state pentadiagonal objective to 36D separator factors."""
+    batch = int(gradient.shape[0])
+    identity = constant_like(
+        gradient,
+        "trajectory_scan_state_identity",
+        tuple(
+            tuple(1.0 if row == column else 0.0 for column in range(STATE_DIM))
+            for row in range(STATE_DIM)
+        ),
+    )
+    dynamics_a = gradient.new_zeros(batch, INTERVALS, SEPARATOR_DIM, SEPARATOR_DIM)
+    dynamics_a[..., :STATE_DIM, STATE_DIM:] = identity
+    dynamics_b = gradient.new_zeros(batch, INTERVALS, SEPARATOR_DIM, STATE_DIM)
+    dynamics_b[..., STATE_DIM:, :] = identity
+    cross = gradient.new_zeros(batch, INTERVALS, SEPARATOR_DIM, STATE_DIM)
+    cross[..., STATE_DIM:, :] = first_offdiag
+    cross[:, 1:, :STATE_DIM, :] = second_offdiag
+
+    control_hessian = diagonal[:, 1:]
+    control_gradient = gradient[:, 1:]
+    solve_b_and_gradient = fixed_spd_solve(
+        control_hessian,
+        torch.cat(
+            (dynamics_b.transpose(-1, -2), control_gradient.unsqueeze(-1)), dim=-1
+        ),
+    )
+    solve_cross = fixed_spd_solve(
+        control_hessian, cross.transpose(-1, -2)
+    )
+    b_inverse = solve_b_and_gradient[..., :SEPARATOR_DIM].transpose(-1, -2)
+    inverse_gradient = solve_b_and_gradient[..., SEPARATOR_DIM]
+    cross_inverse = solve_cross.transpose(-1, -2)
+    matrix_a = dynamics_a - b_inverse @ cross.transpose(-1, -2)
+    vector_c = -(dynamics_b @ inverse_gradient.unsqueeze(-1)).squeeze(-1)
+    matrix_c = b_inverse @ dynamics_b.transpose(-1, -2)
+    vector_p = -(cross @ inverse_gradient.unsqueeze(-1)).squeeze(-1)
+    matrix_p = -(cross_inverse @ cross.transpose(-1, -2))
+    return tuple(
+        value.movedim(1, 0)
+        for value in (matrix_a, vector_c, matrix_c, vector_p, matrix_p)
+    )
+
+
+def _split_boundaries(
+    left: ConditionalValueFactor,
+    right: ConditionalValueFactor,
+    state_left: Tensor,
+    costate_right: Tensor,
+) -> tuple[Tensor, Tensor]:
+    a_left, c_left, c_matrix_left, _, _ = left
+    a_right, _, _, p_right, p_matrix_right = right
+    dimension = int(a_left.shape[-1])
+    identity = constant_like(
+        a_left,
+        f"trajectory_split_identity_{dimension}",
+        tuple(
+            tuple(1.0 if row == column else 0.0 for column in range(dimension))
+            for row in range(dimension)
+        ),
+    )
+    right_value = p_right + (
+        a_right.transpose(-1, -2) @ costate_right.unsqueeze(-1)
+    ).squeeze(-1)
+    rhs = (
+        (a_left @ state_left.unsqueeze(-1)).squeeze(-1)
+        + c_left
+        - (c_matrix_left @ right_value.unsqueeze(-1)).squeeze(-1)
+    )
+    state_middle = fixed_general_solve(
+        identity + c_matrix_left @ p_matrix_right, rhs.unsqueeze(-1)
+    ).squeeze(-1)
+    costate_middle = right_value + (
+        p_matrix_right @ state_middle.unsqueeze(-1)
+    ).squeeze(-1)
+    return state_middle, costate_middle
+
+
+def _expand_boundaries(
+    child_factors: ConditionalValueFactor,
+    state_left: Tensor,
+    costate_right: Tensor,
+) -> tuple[Tensor, Tensor]:
+    left = tuple(value[0::2] for value in child_factors)
+    right = tuple(value[1::2] for value in child_factors)
+    state_middle, costate_middle = _split_boundaries(
+        left, right, state_left, costate_right
+    )
+    state_children = torch.stack((state_left, state_middle), dim=1).flatten(0, 1)
+    costate_children = torch.stack((costate_middle, costate_right), dim=1).flatten(0, 1)
+    return state_children, costate_children
+
+
+def _recover_direction(
+    levels: tuple[ConditionalValueFactor, ...], batch: int
+) -> Tensor:
+    root = levels[-1]
+    state_left = root[0].new_zeros(1, batch, SEPARATOR_DIM)
+    costate_right = root[0].new_zeros(1, batch, SEPARATOR_DIM)
+    for child_factors in reversed(levels[:-1]):
+        state_left, costate_right = _expand_boundaries(
+            child_factors, state_left, costate_right
+        )
+    final_state = (
+        levels[0][0][-1] @ state_left[-1].unsqueeze(-1)
+    ).squeeze(-1) + levels[0][1][-1] - (
+        levels[0][2][-1] @ costate_right[-1].unsqueeze(-1)
+    ).squeeze(-1)
+    boundaries = torch.cat((state_left, final_state.unsqueeze(0)), dim=0)
+    return boundaries[:31, :, STATE_DIM:].movedim(0, 1)
+
+
+def _solve_augmented_associative(
+    diagonal: Tensor,
+    first_offdiag: Tensor,
+    second_offdiag: Tensor,
+    gradient: Tensor,
+) -> Tensor:
+    factors = _trajectory_factors_from_blocks(
+        diagonal, first_offdiag, second_offdiag, gradient
+    )
+    padded, _ = pad_h30_factors(factors)
+    return _recover_direction(fixed_five_level_tree(padded), int(gradient.shape[0]))
+
+
 def _from_qp_solution(
     solution: QpSolution, parity_reference: QpSolution
 ) -> TrajectoryScanSolution:
@@ -95,81 +237,6 @@ def _from_qp_solution(
         active_constraint_count=solution.active_constraint_count,
         dense_parity_error=parity,
     )
-
-
-def _solve_block_pentadiagonal(
-    diagonal: Tensor,
-    first_offdiag: Tensor,
-    second_offdiag: Tensor,
-    gradient: Tensor,
-) -> Tensor:
-    """Solve one fixed-width symmetric block-pentadiagonal system."""
-    nodes = int(diagonal.shape[1])
-    schur: list[Tensor] = []
-    lower_one: list[Tensor] = []
-    lower_two: list[Tensor] = []
-    rhs: list[Tensor] = []
-
-    for node in range(nodes):
-        current = 0.5 * (
-            diagonal[:, node] + diagonal[:, node].transpose(-1, -2)
-        )
-        current_rhs = -gradient[:, node]
-        if node == 0:
-            one = torch.zeros_like(current)
-            two = torch.zeros_like(current)
-        elif node == 1:
-            lower = first_offdiag[:, 0].transpose(-1, -2)
-            one = fixed_spd_solve(
-                schur[0], lower.transpose(-1, -2)
-            ).transpose(-1, -2)
-            two = torch.zeros_like(one)
-            current = current - one @ schur[0] @ one.transpose(-1, -2)
-            current_rhs = current_rhs - (one @ rhs[0].unsqueeze(-1)).squeeze(-1)
-        else:
-            lower_second = second_offdiag[:, node - 2].transpose(-1, -2)
-            two = fixed_spd_solve(
-                schur[node - 2], lower_second.transpose(-1, -2)
-            ).transpose(-1, -2)
-            lower_first = first_offdiag[:, node - 1].transpose(-1, -2)
-            adjusted_first = lower_first - lower_second @ lower_one[node - 1].transpose(-1, -2)
-            one = fixed_spd_solve(
-                schur[node - 1], adjusted_first.transpose(-1, -2)
-            ).transpose(-1, -2)
-            current = (
-                current
-                - one @ schur[node - 1] @ one.transpose(-1, -2)
-                - two @ schur[node - 2] @ two.transpose(-1, -2)
-            )
-            current_rhs = (
-                current_rhs
-                - (one @ rhs[node - 1].unsqueeze(-1)).squeeze(-1)
-                - (two @ rhs[node - 2].unsqueeze(-1)).squeeze(-1)
-            )
-        schur.append(0.5 * (current + current.transpose(-1, -2)))
-        lower_one.append(one)
-        lower_two.append(two)
-        rhs.append(current_rhs)
-
-    solved_diagonal = [
-        fixed_spd_solve(matrix, value.unsqueeze(-1)).squeeze(-1)
-        for matrix, value in zip(schur, rhs)
-    ]
-    solution_reverse: list[Tensor] = []
-    for node in range(nodes - 1, -1, -1):
-        value = solved_diagonal[node]
-        if node + 1 < nodes:
-            value = value - (
-                lower_one[node + 1].transpose(-1, -2)
-                @ solution_reverse[-1].unsqueeze(-1)
-            ).squeeze(-1)
-        if node + 2 < nodes:
-            value = value - (
-                lower_two[node + 2].transpose(-1, -2)
-                @ solution_reverse[-2].unsqueeze(-1)
-            ).squeeze(-1)
-        solution_reverse.append(value)
-    return torch.stack(solution_reverse[::-1], dim=1)
 
 
 def _add_local_rows(
@@ -336,7 +403,9 @@ def _solve_lq_problem(problem: LqProblem) -> TrajectoryScanSolution:
         diagonal, first, second, gradient = _augmented_system(
             problem, direction, active, penalty=penalty
         )
-        direction = _solve_block_pentadiagonal(diagonal, first, second, gradient)
+        direction = _solve_augmented_associative(
+            diagonal, first, second, gradient
+        )
         direction[:, 0] = 0.0
         active = _merge_activity(active, _constraint_activity(problem, direction))
 

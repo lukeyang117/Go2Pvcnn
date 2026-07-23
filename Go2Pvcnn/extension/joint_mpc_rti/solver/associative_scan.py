@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
+from extension.joint_mpc_rti.tensor_constants import constant_like
 
 
 ConditionalValueFactor = tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
@@ -19,10 +20,13 @@ def combine_conditional_value_factors(
     matrix_a_left, vector_c_left, matrix_c_left, vector_p_left, matrix_p_left = left
     matrix_a_right, vector_c_right, matrix_c_right, vector_p_right, matrix_p_right = right
     dimension = int(matrix_a_left.shape[-1])
-    identity = torch.eye(
-        dimension,
-        dtype=matrix_a_left.dtype,
-        device=matrix_a_left.device,
+    identity = constant_like(
+        matrix_a_left,
+        f"conditional_factor_identity_{dimension}",
+        tuple(
+            tuple(1.0 if row == column else 0.0 for column in range(dimension))
+            for row in range(dimension)
+        ),
     )
     coupling = identity + matrix_c_left @ matrix_p_right
     right_elimination = fixed_general_solve(

@@ -15,7 +15,7 @@
 ## Execution Status (2026-07-23)
 
 - Tasks 1-9 and 11 are implemented and committed through `7f15334`.
-- Task 10 correctness/capture checkpoint is implemented but not complete: the production path no longer calls the dense reference, B=`1/8/40` direction parity is within `2e-5`, and CUDA Graph capture/replay passes. The current solver is a fixed-shape batched block-pentadiagonal factorization with two active-mask refinements; Step 2's true H30->H32 five-level associative recovery remains open before the performance gate.
+- Task 10 is implemented: the production path no longer calls the dense reference, B=`1/8/40` direction parity is within `2e-5`, and CUDA Graph capture/replay passes through 36D separator factors padded H30->H32 with five explicit combine levels and two active-mask refinements. Performance is not closed: a B=40 graph smoke averages `122.67 ms/refresh`, so Task 19 must optimize the factor representation/kernels before the formal `1024 x 1000 <5s` gate.
 - Task 12 planner/warm-only/CUDA Graph routing is implemented in the current worktree and passes the focused Task 1-12 regression (`128 passed`). Its commit and later Task 15 legacy deletion remain open.
 - Tasks 13-19 have not started under this final plan.
 
