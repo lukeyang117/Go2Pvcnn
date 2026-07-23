@@ -89,7 +89,7 @@ class ActiveConstraints:
     def validate_compile_budget(*, constraint_rows: int) -> dict[str, int]:
         from extension.joint_mpc_rti.solver.primal_dual_ilqr import joint_kkt_compile_budget
 
-        return joint_kkt_compile_budget(constraint_rows=constraint_rows)
+        return joint_kkt_compile_budget(state_dim=18, constraint_rows=constraint_rows)
 
 
 @dataclass(frozen=True)
