@@ -103,10 +103,16 @@ def perceptive_sqp_rti_update(
     nominal: NominalTrajectory,
     context: LossContext,
     cfg: JointMpcRtiCfg,
+    *,
+    stage_profiler=None,
 ) -> SqpRtiUpdate:
     """Build one final LQ/QP and run one five-alpha exact line search."""
     problem = build_lq_problem(nominal, context, cfg)
+    if stage_profiler is not None:
+        stage_profiler.record("linearization")
     scan = solve_trajectory_qp_scan(problem)
+    if stage_profiler is not None:
+        stage_profiler.record("scan_qp")
     batch = int(nominal.state.shape[0])
 
     def objective(candidate: Tensor) -> Tensor:
@@ -122,6 +128,8 @@ def perceptive_sqp_rti_update(
     search = hard_safe_line_search(
         nominal, scan.direction, objective, context, problem, cfg
     )
+    if stage_profiler is not None:
+        stage_profiler.record("line_search_safety")
     return SqpRtiUpdate(
         state=search.state,
         direction=scan.direction,

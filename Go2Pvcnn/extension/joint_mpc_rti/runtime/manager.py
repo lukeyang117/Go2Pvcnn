@@ -64,6 +64,8 @@ class JointMpcRtiManager:
         measured_state: JointMpcRtiState,
         command_body,
         terrain_field: JointMpcTerrainField,
+        *,
+        stage_profiler=None,
     ) -> JointMpcRtiStepResult:
         batch_size = measured_state.batch_size
         if self._num_envs is None:
@@ -79,6 +81,7 @@ class JointMpcRtiManager:
             bool(self._cfg.solver.use_cuda_graph)
             and measured_state.device.type == "cuda"
             and self._solver_state is not None
+            and stage_profiler is None
         )
         if use_graph and self._graph_runner is None:
             self._graph_runner = JointMpcCudaGraphRunner(
@@ -102,7 +105,14 @@ class JointMpcRtiManager:
             else:
                 result = self._graph_runner.run(measured_state, command_body, terrain_field)
         else:
-            result = planner_step(measured_state, command_body, terrain_field, self._solver_state, self._cfg)
+            result = planner_step(
+                measured_state,
+                command_body,
+                terrain_field,
+                self._solver_state,
+                self._cfg,
+                stage_profiler=stage_profiler,
+            )
         self._last_result = result
         self._solver_state = self._graph_runner.solver_state if use_graph and self._graph_runner is not None else result.solver_state
         self._buffer.update(result.pending_reference)
@@ -142,7 +152,19 @@ class JointMpcRtiManager:
             raise RuntimeError("no joint MPC RTI trajectory is available")
         return self._last_result.full_trajectory
 
-    def refresh_from_env(self, env, *, command_body=None, force: bool = False):
+    def latest_result(self) -> JointMpcRtiStepResult:
+        if self._last_result is None:
+            raise RuntimeError("no joint MPC RTI result is available")
+        return self._last_result
+
+    def refresh_from_env(
+        self,
+        env,
+        *,
+        command_body=None,
+        force: bool = False,
+        stage_profiler=None,
+    ):
         root = getattr(env, "unwrapped", env)
         step_token = getattr(root, "common_step_counter", None)
         if not force and step_token is not None and self._cache is not None and step_token == self._last_step_token:
@@ -174,7 +196,9 @@ class JointMpcRtiManager:
                 torch.arange(measured_state.batch_size, dtype=torch.long, device=measured_state.device),
             )
         field = self._field_sync.latest_field()
-        self.plan_from_tensors(measured_state, command, field)
+        self.plan_from_tensors(
+            measured_state, command, field, stage_profiler=stage_profiler
+        )
         self._last_step_token = step_token
         root._trajectory_reference_cache = self._cache
         return self._cache

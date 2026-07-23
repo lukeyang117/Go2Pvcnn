@@ -620,6 +620,7 @@ def select_touchdowns(
     cfg: JointMpcRtiCfg,
     *,
     previous_plan: TouchdownPlan | None = None,
+    stage_profiler=None,
 ) -> TouchdownPlan:
     command = torch.as_tensor(command_body, dtype=measured.root_pos_w.dtype, device=measured.device)
     warm = torch.as_tensor(warm_nodes, dtype=measured.root_pos_w.dtype, device=measured.device)
@@ -681,12 +682,16 @@ def select_touchdowns(
     query = query_perceptive_world(field, candidate_xy.reshape(batch, 100, 2))
     candidate_z = query.height_w.reshape(batch, 4, 25) + float(cfg.gait.foot_contact_offset)
     candidate_w = torch.cat((candidate_xy, candidate_z[..., None]), dim=-1)
+    if stage_profiler is not None:
+        stage_profiler.begin_region()
     candidate_regions = _build_candidate_regions(
         candidate_w,
         yaw,
         field,
         cfg,
     )
+    if stage_profiler is not None:
+        stage_profiler.end_region()
     candidate_w = torch.cat(
         (
             candidate_xy,
@@ -926,9 +931,13 @@ def select_touchdowns(
         ),
         dim=-1,
     )
+    if stage_profiler is not None:
+        stage_profiler.begin_region()
     preview_regions = _build_candidate_regions(
         preview_seed, preview_yaw, field, cfg
     )
+    if stage_profiler is not None:
+        stage_profiler.end_region()
     preview_candidate_w = torch.cat(
         (
             preview_candidate_xy,

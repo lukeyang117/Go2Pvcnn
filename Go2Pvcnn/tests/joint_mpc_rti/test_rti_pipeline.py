@@ -114,9 +114,9 @@ def test_current_field_is_forwarded_to_lq_and_line_search(monkeypatch) -> None:
     seen = []
     original = sqp_rti.perceptive_sqp_rti_update
 
-    def spy(nominal, context, cfg):
+    def spy(nominal, context, cfg, **kwargs):
         seen.append(context.perceptive_field.refresh_id.clone())
-        return original(nominal, context, cfg)
+        return original(nominal, context, cfg, **kwargs)
 
     monkeypatch.setattr(sqp_rti, "perceptive_sqp_rti_update", spy)
     monkeypatch.setattr(planner, "perceptive_sqp_rti_update", spy)

@@ -133,6 +133,15 @@ class JointMpcRtiStepDiagnostics:
     alpha_reject_bits: Tensor | None = None
     alpha_min_clearance: Tensor | None = None
     selected_alpha: Tensor | None = None
+    touchdown_candidate_w: Tensor | None = None
+    touchdown_candidate_safe: Tensor | None = None
+    touchdown_candidate_reject_bits: Tensor | None = None
+    selected_target_w: Tensor | None = None
+    previous_target_w: Tensor | None = None
+    region_A: Tensor | None = None
+    region_b: Tensor | None = None
+    region_plane: Tensor | None = None
+    region_corners_w: Tensor | None = None
 
 
 @dataclass(frozen=True)

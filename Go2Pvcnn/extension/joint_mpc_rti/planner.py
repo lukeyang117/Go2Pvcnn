@@ -100,6 +100,8 @@ def step(
     terrain_field: JointMpcTerrainField,
     solver_state: JointMpcRtiSolverState | None,
     cfg: JointMpcRtiCfg,
+    *,
+    stage_profiler=None,
 ) -> JointMpcRtiStepResult:
     command = torch.as_tensor(command_body, dtype=measured_state.root_pos_w.dtype, device=measured_state.device)
     if command.shape != (measured_state.batch_size, 3):
@@ -136,6 +138,8 @@ def step(
         frame,
         cfg,
     )
+    if stage_profiler is not None:
+        stage_profiler.record("field")
     warm_nodes = build_rebased_seed(
         measured_state, command, previous.gait_phase, previous, cfg
     )
@@ -146,7 +150,11 @@ def step(
         warm_nodes,
         perceptive_field,
         cfg,
+        stage_profiler=stage_profiler,
     )
+    if stage_profiler is not None:
+        stage_profiler.record("selector")
+        stage_profiler.record("region")
     nominal = build_nominal(
         measured_state,
         command,
@@ -156,6 +164,8 @@ def step(
         previous=previous,
         cfg=cfg,
     )
+    if stage_profiler is not None:
+        stage_profiler.record("nominal_ik")
     context = build_loss_context(
         nominal,
         command,
@@ -164,7 +174,9 @@ def step(
         cfg,
         perceptive_field=perceptive_field,
     )
-    update = perceptive_sqp_rti_update(nominal, context, cfg)
+    update = perceptive_sqp_rti_update(
+        nominal, context, cfg, stage_profiler=stage_profiler
+    )
     state = update.state
     foot_pos_w = _foot_positions(state)
     nominal_foot_w = _foot_positions(nominal.state)
@@ -251,13 +263,13 @@ def step(
             )
         ),
     )
-    return JointMpcRtiStepResult(
+    result = JointMpcRtiStepResult(
         full_trajectory=trajectory,
         pending_reference=pending,
         solver_state=next_solver_state,
         diagnostics=JointMpcRtiStepDiagnostics(
-            nominal_state=nominal.state[:, :2],
-            qp_direction=update.direction[:, :2],
+            nominal_state=nominal.state,
+            qp_direction=update.direction,
             stance_anchor_w=context.stance_anchor_w[:, 0],
             touchdown_reference_w=context.touchdown_reference_w[:, :2],
             candidate_loss=getattr(
@@ -331,8 +343,22 @@ def step(
             alpha_reject_bits=update.alpha_reject_bits,
             alpha_min_clearance=update.alpha_min_clearance,
             selected_alpha=update.alpha,
+            touchdown_candidate_w=perceptive_plan.candidate_w,
+            touchdown_candidate_safe=perceptive_plan.safe_mask,
+            touchdown_candidate_reject_bits=~torch.stack(
+                tuple(perceptive_plan.valid_components.values()), dim=-1
+            ),
+            selected_target_w=perceptive_plan.target_w,
+            previous_target_w=warm_event_foot,
+            region_A=perceptive_plan.region.A,
+            region_b=perceptive_plan.region.b,
+            region_plane=perceptive_plan.region.plane,
+            region_corners_w=perceptive_plan.region.corners_w,
         ),
     )
+    if stage_profiler is not None:
+        stage_profiler.record("cache_diagnostics")
+    return result
 
 
 __all__ = ["build_loss_context", "step"]

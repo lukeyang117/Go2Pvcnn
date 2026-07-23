@@ -732,3 +732,133 @@ def test_viewer_step_mode_updates_visualizer_only_when_frame_is_permitted() -> N
     viewer._viewer_update_visualizer_when_permitted(frame_permitted=True, update_fn=record_update)
 
     assert calls == ["update"]
+
+
+def test_joint_manager_exposes_the_complete_latest_refresh_result() -> None:
+    from extension.joint_mpc_rti.runtime.manager import JointMpcRtiManager
+
+    manager = object.__new__(JointMpcRtiManager)
+    expected = object()
+    manager._last_result = expected
+
+    assert manager.latest_result() is expected
+
+
+def test_joint_viewer_uses_one_refresh_and_adapts_its_same_refresh_diagnostics(
+    monkeypatch,
+) -> None:
+    from extension.joint_mpc_rti.config import JointMpcRtiCfg
+    from extension.joint_mpc_rti.planner import step
+    from Go2Pvcnn.tests.joint_mpc_rti.helpers import (
+        make_command,
+        make_flat_field,
+        make_state,
+    )
+
+    step_result = step(
+        make_state(1),
+        make_command(1),
+        make_flat_field(1),
+        None,
+        JointMpcRtiCfg(),
+    )
+
+    class _Manager:
+        def __init__(self) -> None:
+            self.refresh_count = 0
+
+        def refresh_from_env(self, *_args, **_kwargs):
+            self.refresh_count += 1
+
+        def latest_result(self):
+            return step_result
+
+        def latest_trajectory(self):
+            raise AssertionError("viewer must adapt the complete same-refresh result")
+
+    manager = _Manager()
+    result = viewer._plan_joint_viewer_trajectory(
+        manager=manager,
+        env=object(),
+        command=make_command(1),
+    )
+
+    assert manager.refresh_count == 1
+    assert result.joint_mpc_diagnostics is step_result.diagnostics
+    assert result.nominal_state.shape == (1, 31, 18)
+    assert result.alpha_candidate_state.shape == (1, 5, 31, 18)
+    torch.testing.assert_close(
+        result.alpha_candidate_state[:, -1], result.nominal_state
+    )
+    torch.testing.assert_close(
+        result.planned_touchdown_w, step_result.diagnostics.selected_target_w
+    )
+    torch.testing.assert_close(result.gait_phase, step_result.solver_state.gait_phase)
+    torch.testing.assert_close(result.publish, step_result.full_trajectory.publish)
+    torch.testing.assert_close(result.stop, step_result.full_trajectory.stop)
+
+    overlay = viewer._joint_mpc_overlay_data(result)
+    assert overlay["candidate_w"].shape == (4, 25, 3)
+    assert overlay["candidate_safe"].shape == (4, 25)
+    assert overlay["nominal_root_w"].shape == (31, 3)
+    assert overlay["alpha_root_w"].shape == (5, 31, 3)
+    assert overlay["selected_target_w"].shape == (4, 3)
+    assert overlay["region_corners_w"].shape == (4, 4, 3)
+    assert int(overlay["candidate_safe"].sum()) + int(
+        (~overlay["candidate_safe"]).sum()
+    ) == 100
+    text = viewer._format_joint_mpc_diagnostics(result)
+    assert "alpha=" in text
+    assert "publish=" in text
+    assert "kkt=" in text
+    assert "clearance=" in text
+
+
+def test_joint_viewer_profile_mode_records_the_same_single_refresh() -> None:
+    from extension.joint_mpc_rti.diagnostics.profiler import STAGE_NAMES
+
+    step_result = SimpleNamespace(
+        full_trajectory=SimpleNamespace(),
+        diagnostics=SimpleNamespace(),
+    )
+
+    class _Manager:
+        _device = "cpu"
+
+        def __init__(self) -> None:
+            self.refresh_count = 0
+
+        def refresh_from_env(self, *_args, stage_profiler=None, **_kwargs):
+            self.refresh_count += 1
+            assert stage_profiler is not None
+            for stage in STAGE_NAMES:
+                stage_profiler.record(stage)
+
+        def latest_result(self):
+            return step_result
+
+    manager = _Manager()
+    adapted = viewer.ViewerTrajectoryResult(
+        num_frames=1,
+        root_pos_w=torch.zeros((1, 1, 3)),
+        root_quat_w=torch.zeros((1, 1, 4)),
+        joint_angles=torch.zeros((1, 1, 12)),
+        foot_pos_w=torch.zeros((1, 1, 4, 3)),
+        foot_pos_root=torch.zeros((1, 1, 4, 3)),
+        contact_state=torch.zeros((1, 1, 4), dtype=torch.bool),
+        planned_touchdown_w=torch.zeros((1, 4, 3)),
+    )
+    original = viewer._adapt_joint_mpc_rti_result_for_viewer
+    viewer._adapt_joint_mpc_rti_result_for_viewer = lambda _result: adapted
+    try:
+        result = viewer._plan_joint_viewer_trajectory(
+            manager=manager,
+            env=object(),
+            command=torch.zeros((1, 3)),
+            profile=True,
+        )
+    finally:
+        viewer._adapt_joint_mpc_rti_result_for_viewer = original
+
+    assert manager.refresh_count == 1
+    assert tuple(result.stage_timings_ms) == STAGE_NAMES

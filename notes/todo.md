@@ -4,6 +4,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-07-23 final Task 13: fixed same-refresh diagnostics, eight-stage profiler, and viewer overlays now share one production refresh. Diagnostics/pipeline/rolling/viewer regression is `61 passed`; actual visual behavior and performance are not claimed. See [final diagnostics/viewer/profiler](log/2026-07-23-joint-mpc-rti-final-diagnostics-viewer-profiler.md).
+
 - 2026-07-23 final Task 10: the temporary sequential block solve is removed. New full-horizon constraints are folded into fixed-band augmented systems, then solved through 36D separator factors, H30->H32 neutral padding, five explicit combine levels, and boundary recovery. Dense parity and CUDA Graph pass, but B=40 is `122.67ms/refresh`; Task 19 performance remains red. See [final associative scan](log/2026-07-23-joint-mpc-rti-final-associative-scan.md).
 
 - 2026-07-23 final perceptive-kinematic continuation: the new `LqProblem` production path no longer enters the eager dense QP. A fixed-shape batched block-pentadiagonal solve with two active-mask refinements matches the dense reference within `2e-5`; real CUDA Graph capture/replay, preview-tail copy-back, and the Task 1-12 focused union pass (`128 passed`). True five-level H30/32 associative recovery is still open before performance acceptance. See [final RTI pipeline checkpoint](log/2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md).

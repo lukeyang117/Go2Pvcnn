@@ -80,6 +80,13 @@ class ViewerTrajectoryResult:
     hard_reason_names: tuple[str, ...] | None = None
     status_names: tuple[str, ...] | None = None
     loss_breakdown: dict[str, torch.Tensor] | None = None
+    joint_mpc_diagnostics: object | None = None
+    nominal_state: torch.Tensor | None = None
+    alpha_candidate_state: torch.Tensor | None = None
+    gait_phase: torch.Tensor | None = None
+    publish: torch.Tensor | None = None
+    stop: torch.Tensor | None = None
+    stage_timings_ms: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +141,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yaw-scale", type=float, default=1, help="Teleop yaw-rate command.")
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")
     parser.add_argument("--heightmap-viz-stride", type=int, default=10, help="Subsample stride for heightmap markers.")
+    parser.add_argument(
+        "--joint-mpc-profile",
+        action="store_true",
+        default=False,
+        help="Record the eight joint MPC refresh stages for the viewer diagnostics.",
+    )
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
     parser.add_argument("--warmup-steps", type=int, default=6, help="Number of zero-action warmup steps before visualization.")
@@ -1004,6 +1017,58 @@ class PlannerVisualizer:
             copy.deepcopy(GREEN_ARROW_X_MARKER_CFG).replace(prim_path="/Visuals/BatchedPlanner/command_arrow")
         )
         self.command_arrow.set_visibility(False)
+        self.joint_candidate_safe = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/JointMpcRTI/candidate_safe",
+                radius=0.014,
+                color=(0.1, 0.9, 0.25),
+            )
+        )
+        self.joint_candidate_rejected = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/JointMpcRTI/candidate_rejected",
+                radius=0.012,
+                color=(0.95, 0.15, 0.1),
+            )
+        )
+        self.joint_previous_target = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/JointMpcRTI/previous_target",
+                radius=0.022,
+                color=(0.5, 0.5, 0.5),
+            )
+        )
+        self.joint_region = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/JointMpcRTI/region_corners",
+                radius=0.012,
+                color=(1.0, 0.85, 0.1),
+            )
+        )
+        self.joint_nominal_root = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/JointMpcRTI/nominal_root",
+                radius=0.018,
+                color=(0.1, 0.8, 0.9),
+            )
+        )
+        alpha_colors = (
+            (0.9, 0.2, 0.9),
+            (0.7, 0.3, 0.9),
+            (0.5, 0.4, 0.9),
+            (0.3, 0.5, 0.9),
+            (0.2, 0.7, 0.8),
+        )
+        self.joint_alpha_root = [
+            VisualizationMarkers(
+                _make_marker_cfg(
+                    f"/Visuals/JointMpcRTI/alpha_root_{alpha_index}",
+                    radius=0.010,
+                    color=color,
+                )
+            )
+            for alpha_index, color in enumerate(alpha_colors)
+        ]
         self.foot_traj = []
         self.touchdowns = []
         for leg_idx, color in enumerate(LEG_COLORS):
@@ -1075,6 +1140,47 @@ class PlannerVisualizer:
             else:
                 markers.set_visibility(True)
                 markers.visualize(translations=points.to(torch.float32))
+
+        overlay = _joint_mpc_overlay_data(result)
+        if overlay:
+            candidate_w = overlay["candidate_w"]
+            candidate_safe = overlay["candidate_safe"]
+            safe_points = candidate_w[candidate_safe]
+            rejected_points = candidate_w[~candidate_safe]
+            for markers, points in (
+                (self.joint_candidate_safe, safe_points),
+                (self.joint_candidate_rejected, rejected_points),
+            ):
+                markers.set_visibility(bool(points.numel()))
+                if points.numel():
+                    markers.visualize(translations=points.to(torch.float32))
+            self.joint_previous_target.set_visibility(True)
+            self.joint_previous_target.visualize(
+                translations=overlay["previous_target_w"].to(torch.float32)
+            )
+            self.joint_region.set_visibility(True)
+            self.joint_region.visualize(
+                translations=overlay["region_corners_w"].reshape(-1, 3).to(torch.float32)
+            )
+            self.joint_nominal_root.set_visibility(True)
+            self.joint_nominal_root.visualize(
+                translations=overlay["nominal_root_w"].to(torch.float32)
+            )
+            for alpha_index, markers in enumerate(self.joint_alpha_root):
+                markers.set_visibility(True)
+                markers.visualize(
+                    translations=overlay["alpha_root_w"][alpha_index].to(torch.float32)
+                )
+        else:
+            for markers in (
+                self.joint_candidate_safe,
+                self.joint_candidate_rejected,
+                self.joint_previous_target,
+                self.joint_region,
+                self.joint_nominal_root,
+                *self.joint_alpha_root,
+            ):
+                markers.set_visibility(False)
 
         cmd_xy = command[0, :2]
         speed = float(torch.linalg.norm(cmd_xy).item())
@@ -1642,10 +1748,15 @@ def _adapt_mpc_result_for_viewer(result) -> ViewerTrajectoryResult:
     )
 
 
-def _adapt_joint_mpc_rti_result_for_viewer(trajectory) -> ViewerTrajectoryResult:
+def _adapt_joint_mpc_rti_result_for_viewer(step_result) -> ViewerTrajectoryResult:
     from extension.convention import euler_to_quat_batch
     from extension.joint_mpc_rti.integration.reference_adapter import trajectory_to_reference_cache
+    from extension.joint_mpc_rti.solver.line_search import ALPHAS
 
+    trajectory = step_result.full_trajectory
+    diagnostics = step_result.diagnostics
+    if diagnostics is None:
+        raise RuntimeError("joint MPC RTI viewer requires same-refresh diagnostics")
     state = torch.as_tensor(trajectory.state).detach().contiguous()
     root_pos_w = state[..., :3]
     root_rpy = state[..., 3:6]
@@ -1653,6 +1764,16 @@ def _adapt_joint_mpc_rti_result_for_viewer(trajectory) -> ViewerTrajectoryResult
     foot_pos_w = torch.as_tensor(trajectory.foot_pos_w, dtype=state.dtype, device=state.device).detach().contiguous()
     reference_cache = trajectory_to_reference_cache(trajectory)
     zeros_vel = torch.zeros_like(root_pos_w)
+    nominal_state = torch.as_tensor(diagnostics.nominal_state).detach().contiguous()
+    qp_direction = torch.as_tensor(diagnostics.qp_direction).detach().contiguous()
+    alphas = state.new_tensor(ALPHAS)
+    alpha_candidate_state = (
+        nominal_state[:, None] + alphas[None, :, None, None] * qp_direction[:, None]
+    )
+    alpha_candidate_state[:, -1] = nominal_state
+    selected_target = torch.as_tensor(
+        diagnostics.selected_target_w, dtype=state.dtype, device=state.device
+    ).detach().contiguous()
     return ViewerTrajectoryResult(
         num_frames=int(state.shape[1]),
         root_pos_w=root_pos_w,
@@ -1661,7 +1782,7 @@ def _adapt_joint_mpc_rti_result_for_viewer(trajectory) -> ViewerTrajectoryResult
         foot_pos_w=foot_pos_w,
         foot_pos_root=reference_cache.foot_pos_root,
         contact_state=torch.as_tensor(trajectory.contact_state, device=state.device).detach().contiguous(),
-        planned_touchdown_w=foot_pos_w,
+        planned_touchdown_w=selected_target,
         root_lin_vel_w=zeros_vel,
         root_ang_vel_w=zeros_vel.clone(),
         status=torch.as_tensor(trajectory.status, device=state.device).detach(),
@@ -1672,12 +1793,97 @@ def _adapt_joint_mpc_rti_result_for_viewer(trajectory) -> ViewerTrajectoryResult
             str(name): torch.as_tensor(value, device=state.device).detach().contiguous()
             for name, value in trajectory.loss_breakdown.items()
         },
+        joint_mpc_diagnostics=diagnostics,
+        nominal_state=nominal_state,
+        alpha_candidate_state=alpha_candidate_state,
+        gait_phase=torch.as_tensor(step_result.solver_state.gait_phase).detach(),
+        publish=torch.as_tensor(trajectory.publish, dtype=torch.bool).detach(),
+        stop=torch.as_tensor(trajectory.stop, dtype=torch.bool).detach(),
     )
 
 
-def _plan_joint_viewer_trajectory(*, manager, env, command: torch.Tensor) -> ViewerTrajectoryResult:
-    manager.refresh_from_env(env, command_body=command, force=True)
-    return _adapt_joint_mpc_rti_result_for_viewer(manager.latest_trajectory())
+def _joint_mpc_overlay_data(result: ViewerTrajectoryResult) -> dict[str, torch.Tensor]:
+    diagnostics = result.joint_mpc_diagnostics
+    if diagnostics is None or result.nominal_state is None or result.alpha_candidate_state is None:
+        return {}
+    return {
+        "candidate_w": torch.as_tensor(diagnostics.touchdown_candidate_w)[0],
+        "candidate_safe": torch.as_tensor(diagnostics.touchdown_candidate_safe)[0],
+        "candidate_reject_bits": torch.as_tensor(
+            diagnostics.touchdown_candidate_reject_bits
+        )[0],
+        "selected_target_w": torch.as_tensor(diagnostics.selected_target_w)[0],
+        "previous_target_w": torch.as_tensor(diagnostics.previous_target_w)[0],
+        "nominal_root_w": torch.as_tensor(result.nominal_state)[0, :, :3],
+        "alpha_root_w": torch.as_tensor(result.alpha_candidate_state)[0, :, :, :3],
+        "region_A": torch.as_tensor(diagnostics.region_A)[0],
+        "region_b": torch.as_tensor(diagnostics.region_b)[0],
+        "region_plane": torch.as_tensor(diagnostics.region_plane)[0],
+        "region_corners_w": torch.as_tensor(diagnostics.region_corners_w)[0],
+    }
+
+
+def _format_joint_mpc_diagnostics(result: ViewerTrajectoryResult) -> str:
+    diagnostics = result.joint_mpc_diagnostics
+    if diagnostics is None:
+        return ""
+    selected_alpha = float(torch.as_tensor(diagnostics.selected_alpha).reshape(-1)[0].item())
+    publish = bool(torch.as_tensor(result.publish).reshape(-1)[0].item())
+    stop = bool(torch.as_tensor(result.stop).reshape(-1)[0].item())
+    primal = float(torch.as_tensor(diagnostics.kkt_primal_residual).reshape(-1)[0].item())
+    dual = float(torch.as_tensor(diagnostics.kkt_dual_residual).reshape(-1)[0].item())
+    clearance = torch.as_tensor(diagnostics.alpha_min_clearance)[0]
+    selected_index = int(
+        torch.argmin(
+            torch.abs(
+                clearance.new_tensor((1.0, 0.5, 0.25, 0.125, 0.0))
+                - selected_alpha
+            )
+        ).item()
+    )
+    selected_clearance = float(clearance[selected_index].amin().item())
+    parts = [
+        "[JointMpcRTI]",
+        f"alpha={selected_alpha:0.3f}",
+        f"publish={publish}",
+        f"stop={stop}",
+        f"kkt=({primal:0.3e},{dual:0.3e})",
+        f"clearance={selected_clearance:+0.4f}",
+    ]
+    if result.gait_phase is not None:
+        parts.append(f"phase={int(torch.as_tensor(result.gait_phase).reshape(-1)[0].item())}")
+    if result.stage_timings_ms:
+        stage_text = ",".join(
+            f"{name}:{value:0.2f}" for name, value in result.stage_timings_ms.items()
+        )
+        parts.append(f"stages_ms=({stage_text})")
+    return " ".join(parts)
+
+
+def _plan_joint_viewer_trajectory(
+    *,
+    manager,
+    env,
+    command: torch.Tensor,
+    profile: bool = False,
+) -> ViewerTrajectoryResult:
+    profiler = None
+    if profile:
+        from extension.joint_mpc_rti.diagnostics.profiler import RefreshStageProfiler
+
+        profiler = RefreshStageProfiler(device=manager._device)
+    manager.refresh_from_env(
+        env,
+        command_body=command,
+        force=True,
+        stage_profiler=profiler,
+    )
+    result = _adapt_joint_mpc_rti_result_for_viewer(manager.latest_result())
+    if profiler is None:
+        return result
+    if torch.device(manager._device).type == "cuda":
+        torch.cuda.synchronize(torch.device(manager._device))
+    return replace(result, stage_timings_ms=profiler.elapsed_ms())
 
 
 def _plan_viewer_trajectory(
@@ -1885,6 +2091,7 @@ def main() -> int:
                             manager=trajectory_manager,
                             env=base_env,
                             command=active_cmd.values,
+                            profile=bool(args_cli.joint_mpc_profile),
                         )
                         ray_hits = torch.as_tensor(scanner.data.ray_hits_w[0], dtype=torch.float32)
                     else:
@@ -1914,6 +2121,8 @@ def main() -> int:
                     #     flush=True,
                     # )
                     playback_frame = 0
+                    if joint_backend:
+                        print(_format_joint_mpc_diagnostics(result), flush=True)
 
                     def _update_step_visualizer() -> None:
                         planner_state = _planner_state_from_reference_result(result, frame_idx=0)
