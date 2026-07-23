@@ -169,6 +169,28 @@ class JointMpcRtiLossCfg:
 
 
 @dataclass
+class JointMpcRtiLqCostCfg:
+    velocity_linear: float = 90.0
+    velocity_yaw: float = 45.0
+    posture_joint: float = 1.2
+    hold_velocity_scale: float = 0.20
+    hold_roughness_scale: float = 0.03
+    root_height: float = 1.0
+    root_roll_pitch: float = 16000.0
+    root_corridor: float = 0.0
+    root_rate: float = 3.0
+    swing_position: float = 400.0
+    swing_velocity: float = 20.0
+    touchdown_xy: float = 80.0
+    touchdown_z: float = 320.0
+    smooth_first: float = 14.25 * 3.0
+    smooth_second: float = 14.25
+    warm: float = 3.0
+    slack_quadratic: float = 1.0e5
+    slack_linear: float = 1.0e3
+
+
+@dataclass
 class JointMpcRtiCfg:
     runtime: JointMpcRtiRuntimeCfg = field(default_factory=JointMpcRtiRuntimeCfg)
     solver: JointMpcRtiSolverCfg = field(default_factory=JointMpcRtiSolverCfg)
@@ -179,12 +201,14 @@ class JointMpcRtiCfg:
     terrain: JointMpcRtiTerrainCfg = field(default_factory=JointMpcRtiTerrainCfg)
     loss_terms: JointMpcRtiLossTermsCfg = field(default_factory=JointMpcRtiLossTermsCfg)
     losses: JointMpcRtiLossCfg = field(default_factory=JointMpcRtiLossCfg)
+    lq_cost: JointMpcRtiLqCostCfg = field(default_factory=JointMpcRtiLqCostCfg)
 
 
 __all__ = [
     "JointMpcRtiCfg",
     "JointMpcRtiGaitCfg",
     "JointMpcRtiLossCfg",
+    "JointMpcRtiLqCostCfg",
     "JointMpcRtiLossTermsCfg",
     "JointMpcRtiNominalCfg",
     "JointMpcRtiRegionCfg",
