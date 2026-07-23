@@ -46,6 +46,7 @@ class SqpRtiUpdate:
     slack_max: dict[str, Tensor] | None = None
     active_constraint_count: dict[str, Tensor] | None = None
     alpha_reject_bits: Tensor | None = None
+    alpha_min_clearance: Tensor | None = None
     publish: Tensor | None = None
     stop: Tensor | None = None
 
@@ -142,6 +143,7 @@ def perceptive_sqp_rti_update(
         slack_max=scan.slack_max,
         active_constraint_count=scan.active_constraint_count,
         alpha_reject_bits=search.alpha_reject_bits,
+        alpha_min_clearance=search.minimum_clearance_by_part,
         publish=search.publish,
         stop=search.stop,
     )

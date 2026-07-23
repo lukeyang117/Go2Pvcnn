@@ -101,6 +101,38 @@ class JointMpcRtiStepDiagnostics:
     candidate_swing_safe_z: Tensor
     support_target: Tensor
     node_loss_breakdown: dict[str, Tensor]
+    selector_candidate_valid_count: Tensor | None = None
+    selector_candidate_reject_reason_count: Tensor | None = None
+    selector_candidate_behind_count: Tensor | None = None
+    selector_candidate_sweep_safe_count: Tensor | None = None
+    selector_selected_index: Tensor | None = None
+    selector_selected_rank: Tensor | None = None
+    selector_score_components: Tensor | None = None
+    region_valid: Tensor | None = None
+    region_area: Tensor | None = None
+    region_min_half_extent: Tensor | None = None
+    region_plane_residual: Tensor | None = None
+    region_distance_to_forbidden: Tensor | None = None
+    warm_shift_rebase_error: Tensor | None = None
+    touchdown_target_change: Tensor | None = None
+    touchdown_target_change_reason_bits: Tensor | None = None
+    retarget_trajectory_change: Tensor | None = None
+    nominal_safe: Tensor | None = None
+    nominal_min_clearance: Tensor | None = None
+    nominal_stance_anchor_error: Tensor | None = None
+    nominal_touchdown_error: Tensor | None = None
+    nominal_joint_margin: Tensor | None = None
+    unsafe_candidate_retry_count: Tensor | None = None
+    kkt_primal_residual: Tensor | None = None
+    kkt_dual_residual: Tensor | None = None
+    delta_z_norm: Tensor | None = None
+    slack_max: Tensor | None = None
+    active_constraint_count: Tensor | None = None
+    alpha_feasible: Tensor | None = None
+    alpha_cost: Tensor | None = None
+    alpha_reject_bits: Tensor | None = None
+    alpha_min_clearance: Tensor | None = None
+    selected_alpha: Tensor | None = None
 
 
 @dataclass(frozen=True)

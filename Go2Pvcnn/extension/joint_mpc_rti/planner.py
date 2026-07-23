@@ -16,6 +16,8 @@ from extension.joint_mpc_rti.model.nominal import (
 )
 from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
 from extension.joint_mpc_rti.solver.sqp_rti import perceptive_sqp_rti_update
+from extension.joint_mpc_rti.solver.trajectory_qp import JOINT_LOWER, JOINT_UPPER
+from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
 from extension.joint_mpc_rti.terrain.query import query_world
 from extension.joint_mpc_rti.types import (
@@ -71,6 +73,12 @@ def _foot_positions(state: Tensor) -> Tensor:
         state[..., 6:].reshape(batch * nodes, 12),
     )
     return geometry.foot_pos_w.reshape(batch, nodes, 4, 3)
+
+
+def _selected_components(values: dict[str, Tensor], selected_index: Tensor) -> Tensor:
+    stacked = torch.stack(tuple(values.values()), dim=-1)
+    index = selected_index[..., None, None].expand(-1, -1, 1, stacked.shape[-1])
+    return torch.gather(stacked, 2, index).squeeze(2)
 
 
 def _stance_anchors_from_state(
@@ -159,6 +167,32 @@ def step(
     update = perceptive_sqp_rti_update(nominal, context, cfg)
     state = update.state
     foot_pos_w = _foot_positions(state)
+    nominal_foot_w = _foot_positions(nominal.state)
+    warm_foot_w = _foot_positions(warm_nodes)
+    event_index = perceptive_plan.event_step[..., None, None].expand(-1, -1, 1, 3)
+    warm_event_foot = torch.gather(warm_foot_w.transpose(1, 2), 2, event_index).squeeze(2)
+    nominal_event_foot = torch.gather(
+        nominal_foot_w.transpose(1, 2), 2, event_index
+    ).squeeze(2)
+    target_change = (
+        perceptive_plan.target_w - warm_event_foot
+    ).square().sum(dim=-1).sqrt()
+    target_reason = state.new_zeros(state.shape[0], 4, 4, dtype=torch.bool)
+    unsafe_retarget = nominal.candidate_retry_rank > 0
+    target_reason[..., 3] = unsafe_retarget
+    target_reason[..., 0] = (target_change > 1.0e-7) & ~unsafe_retarget
+    stance_error = (
+        nominal_foot_w - context.stance_anchor_w
+    ).square().sum(dim=-1).sqrt()
+    stance_error = torch.where(
+        context.schedule.stance, stance_error, torch.zeros_like(stance_error)
+    ).amax(dim=1)
+    joint_lower = constant_like(state, "diagnostic_joint_lower", JOINT_LOWER).view(1, 1, 4, 3)
+    joint_upper = constant_like(state, "diagnostic_joint_upper", JOINT_UPPER).view(1, 1, 4, 3)
+    nominal_joint = nominal.state[..., 6:].reshape(state.shape[0], 31, 4, 3)
+    joint_margin = torch.minimum(
+        nominal_joint - joint_lower, joint_upper - nominal_joint
+    ).amin(dim=(1, 3))
     derived_velocity = (state[:, 1:] - state[:, :-1]) / float(cfg.runtime.dt)
     finite = torch.isfinite(state).all(dim=(1, 2)) & torch.isfinite(foot_pos_w).all(dim=(1, 2, 3))
     publish = (
@@ -249,6 +283,54 @@ def step(
                 state.new_zeros(state.shape[0], 6),
             ),
             node_loss_breakdown=update.node_loss_breakdown,
+            selector_candidate_valid_count=perceptive_plan.safe_mask.sum(dim=-1),
+            selector_candidate_reject_reason_count=(
+                ~torch.stack(tuple(perceptive_plan.valid_components.values()), dim=-1)
+            ).sum(dim=-2),
+            selector_candidate_behind_count=perceptive_plan.small_after_mask.sum(dim=-1),
+            selector_candidate_sweep_safe_count=(
+                perceptive_plan.valid_components.get(
+                    "sweep_safe", torch.zeros_like(perceptive_plan.safe_mask)
+                ).sum(dim=-1)
+            ),
+            selector_selected_index=perceptive_plan.selected_index,
+            selector_selected_rank=torch.zeros_like(perceptive_plan.selected_index),
+            selector_score_components=_selected_components(
+                perceptive_plan.score_components, perceptive_plan.selected_index
+            ),
+            region_valid=perceptive_plan.region.valid,
+            region_area=perceptive_plan.region.area,
+            region_min_half_extent=perceptive_plan.region.half_extent.amin(dim=-1),
+            region_plane_residual=perceptive_plan.region.plane_residual,
+            region_distance_to_forbidden=perceptive_plan.region.distance_to_forbidden,
+            warm_shift_rebase_error=(nominal.rebased_state[:, 0] - state[:, 0]).abs().amax(dim=-1),
+            touchdown_target_change=target_change,
+            touchdown_target_change_reason_bits=target_reason,
+            retarget_trajectory_change=(nominal.state[:, 1:] - nominal.rebased_state[:, 1:]).square().mean(dim=(1, 2)).sqrt(),
+            nominal_safe=nominal.nominal_safe,
+            nominal_min_clearance=nominal.minimum_clearance_by_part,
+            nominal_stance_anchor_error=stance_error,
+            nominal_touchdown_error=(
+                nominal_event_foot - perceptive_plan.target_w
+            ).square().sum(dim=-1).sqrt(),
+            nominal_joint_margin=joint_margin,
+            unsafe_candidate_retry_count=nominal.candidate_retry_rank,
+            kkt_primal_residual=update.kkt_primal_residual,
+            kkt_dual_residual=update.kkt_dual_residual,
+            delta_z_norm=update.direction[:, 1:].square().mean(dim=(1, 2)).sqrt(),
+            slack_max=torch.stack(tuple(update.slack_max.values()), dim=-1)
+            if update.slack_max
+            else state.new_zeros(state.shape[0], 0),
+            active_constraint_count=torch.stack(tuple(update.active_constraint_count.values()), dim=-1)
+            if update.active_constraint_count
+            else state.new_zeros(state.shape[0], 0),
+            alpha_feasible=~update.alpha_reject_bits.any(dim=-1)
+            if update.alpha_reject_bits is not None
+            else state.new_zeros(state.shape[0], 5, dtype=torch.bool),
+            alpha_cost=update.candidate_loss,
+            alpha_reject_bits=update.alpha_reject_bits,
+            alpha_min_clearance=update.alpha_min_clearance,
+            selected_alpha=update.alpha,
         ),
     )
 
