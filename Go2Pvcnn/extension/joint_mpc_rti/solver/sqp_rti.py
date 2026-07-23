@@ -14,6 +14,9 @@ from extension.joint_mpc_rti.losses.objective import (
     trajectory_loss_diagnostics,
 )
 from extension.joint_mpc_rti.model.gait_schedule import FixedTrotSchedule
+from extension.joint_mpc_rti.model.nominal import NominalTrajectory
+from extension.joint_mpc_rti.solver.lq_problem import build_lq_problem, lq_residuals
+from extension.joint_mpc_rti.solver.line_search import hard_safe_line_search
 from extension.joint_mpc_rti.solver.line_search import parallel_line_search
 from extension.joint_mpc_rti.solver.linearization import linearize_trajectory
 from extension.joint_mpc_rti.solver.trajectory_qp import ActiveConstraints, JOINT_LOWER, JOINT_UPPER
@@ -35,9 +38,16 @@ class SqpRtiUpdate:
     candidate_filter_valid: Tensor
     candidate_swing_safe_z: Tensor
     support_target: Tensor
-    active: ActiveConstraints
+    active: ActiveConstraints | None
     loss_breakdown: dict[str, Tensor]
     node_loss_breakdown: dict[str, Tensor]
+    kkt_primal_residual: Tensor | None = None
+    kkt_dual_residual: Tensor | None = None
+    slack_max: dict[str, Tensor] | None = None
+    active_constraint_count: dict[str, Tensor] | None = None
+    alpha_reject_bits: Tensor | None = None
+    publish: Tensor | None = None
+    stop: Tensor | None = None
 
 
 def published_stance_filter_mask(schedule: FixedTrotSchedule) -> Tensor:
@@ -61,6 +71,65 @@ def _repeat_context(context: LossContext, repeats: int) -> LossContext:
         terrain=context.terrain,
         stance_anchor_w=context.stance_anchor_w.repeat_interleave(repeats, dim=0),
         support_height=context.support_height.repeat_interleave(repeats, dim=0),
+        perceptive_field=context.perceptive_field,
+    )
+
+
+def perceptive_sqp_rti_update(
+    nominal: NominalTrajectory,
+    context: LossContext,
+    cfg: JointMpcRtiCfg,
+) -> SqpRtiUpdate:
+    """Build one final LQ/QP and run one five-alpha exact line search."""
+    problem = build_lq_problem(nominal, context, cfg)
+    scan = solve_trajectory_qp_scan(problem)
+    batch = int(nominal.state.shape[0])
+
+    def objective(candidate: Tensor) -> Tensor:
+        repeats = int(candidate.shape[0]) // batch
+        repeated_context = _repeat_context(context, repeats)
+        repeated_nominal = NominalTrajectory(
+            **{
+                name: (
+                    value.repeat_interleave(repeats, dim=0)
+                    if isinstance(value, Tensor) and value.shape[0] == batch
+                    else value
+                )
+                for name, value in vars(nominal).items()
+            }
+        )
+        residuals = lq_residuals(candidate, repeated_nominal, repeated_context, cfg)
+        total = candidate.new_zeros(candidate.shape[0])
+        for value in residuals.values():
+            total = total + 0.5 * value.square().sum(dim=1)
+        return total
+
+    search = hard_safe_line_search(
+        nominal, scan.direction, objective, context, problem, cfg
+    )
+    return SqpRtiUpdate(
+        state=search.state,
+        direction=scan.direction,
+        alpha=search.alpha,
+        loss_before=objective(nominal.state),
+        selected_loss=search.selected_loss,
+        selected_index=search.selected_index,
+        used_nominal=search.selected_index == len(search.alphas) - 1,
+        status=search.stop.to(torch.long),
+        candidate_loss=search.candidate_loss,
+        candidate_filter_valid=~search.alpha_reject_bits,
+        candidate_swing_safe_z=nominal.state.new_zeros(batch, 5, 4),
+        support_target=problem.stance_target[:, 1].reshape(batch, -1),
+        active=None,
+        loss_breakdown=problem.cost_breakdown,
+        node_loss_breakdown={},
+        kkt_primal_residual=scan.kkt_primal_residual,
+        kkt_dual_residual=scan.kkt_dual_residual,
+        slack_max=scan.slack_max,
+        active_constraint_count=scan.active_constraint_count,
+        alpha_reject_bits=search.alpha_reject_bits,
+        publish=search.publish,
+        stop=search.stop,
     )
 
 
@@ -132,4 +201,9 @@ def sqp_rti_update(
     )
 
 
-__all__ = ["SqpRtiUpdate", "published_stance_filter_mask", "sqp_rti_update"]
+__all__ = [
+    "SqpRtiUpdate",
+    "perceptive_sqp_rti_update",
+    "published_stance_filter_mask",
+    "sqp_rti_update",
+]
