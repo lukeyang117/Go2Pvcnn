@@ -100,11 +100,7 @@ def test_cuda_graph_runtime_flag_falls_back_cleanly_on_cpu() -> None:
 
     result = manager.plan_from_tensors(make_state(2), make_command(2), make_flat_field(2))
 
-<<<<<<< HEAD
     assert result.full_trajectory.state.shape == (2, cfg.runtime.horizon_steps + 1, 18)
-=======
-    assert result.full_trajectory.state.shape == (2, 31, 18)
->>>>>>> 156a6c0 (refactor: route joint mpc through pure kinematic rti)
     assert manager._graph_runner is None
 
 
@@ -156,12 +152,17 @@ def test_cuda_graph_runner_captures_and_replays_planner_step() -> None:
     replayed = runner.run(measured, command, field)
     torch.cuda.synchronize()
 
-    assert runner.solver_state.stance_dual is not None
-    assert runner.solver_state.command_start_age is not None
-    assert runner.solver_state.command_start_origin_w is not None
-    assert runner.solver_state.previous_command_body is not None
-    assert torch.isfinite(replayed.full_trajectory.state).all()
-    assert torch.isfinite(replayed.full_trajectory.control).all()
+    assert set(runner.solver_state.__dataclass_fields__) == {
+        "trajectory",
+        "gait_phase",
+        "initialized",
+        "stance_anchor_w",
+    }
+    assert runner.solver_state.initialized.all()
+    assert torch.isfinite(replayed.full_trajectory.state_nodes).all()
+    assert torch.isfinite(replayed.full_trajectory.future_state).all()
+    assert replayed.full_trajectory.state_nodes.shape == (1, 31, 18)
+    assert replayed.full_trajectory.future_state.shape == (1, 30, 18)
 
 
 def test_manager_requires_rebuild_when_environment_batch_size_changes() -> None:

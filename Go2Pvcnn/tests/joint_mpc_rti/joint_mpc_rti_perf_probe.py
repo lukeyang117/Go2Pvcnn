@@ -23,12 +23,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--compile-kernels", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cuda-graph", action=argparse.BooleanOptionalAction, default=True)
-<<<<<<< HEAD
-    parser.add_argument("--line-search-alphas", type=float, nargs="+", default=(1.0, 0.5, 0.25))
-    parser.add_argument("--coupled-state-riccati", action=argparse.BooleanOptionalAction, default=True)
-=======
     parser.add_argument("--line-search-alphas", type=float, nargs="+", default=(1.0, 0.5, 0.25, 0.125, 0.0))
->>>>>>> 4ed0ce9 (test: unify flat-small metrics and monitored runner)
+    parser.add_argument("--coupled-state-riccati", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--diagonal-state-riccati", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--profile", action="store_true")
     return parser.parse_args()

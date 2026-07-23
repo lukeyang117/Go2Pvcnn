@@ -10,9 +10,11 @@ import torch
 @dataclass
 class JointMpcRtiRuntimeCfg:
     horizon_steps: int = 30
+    future_frames: int = 30
+    state_nodes: int = 31
     dt: float = 0.02
     sqp_iterations_per_step: int = 1
-    max_field_age_steps: int = 2
+    max_field_age_steps: int = 0
     dtype: torch.dtype = torch.float32
 
 

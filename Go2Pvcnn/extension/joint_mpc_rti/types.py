@@ -70,6 +70,24 @@ class JointMpcRtiTrajectory:
     cold_start: Tensor | None = None
     warm_start: Tensor | None = None
     warm_cache_invariant_fault: Tensor | None = None
+    state_nodes: Tensor | None = None
+    future_state: Tensor | None = None
+    publish: Tensor | None = None
+    stop: Tensor | None = None
+
+    def __post_init__(self) -> None:
+        nodes = self.state if self.state_nodes is None else self.state_nodes
+        if nodes.ndim != 3 or tuple(nodes.shape[1:]) != (31, 18):
+            raise ValueError("state_nodes must have shape [B,31,18]")
+        future = nodes[:, 1:] if self.future_state is None else self.future_state
+        if future.ndim != 3 or tuple(future.shape[1:]) != (30, 18):
+            raise ValueError("future_state must have shape [B,30,18]")
+        if int(future.shape[0]) != int(nodes.shape[0]):
+            raise ValueError("state_nodes and future_state must share the batch dimension")
+        object.__setattr__(self, "state_nodes", nodes)
+        object.__setattr__(self, "future_state", future)
+        object.__setattr__(self, "publish", self.valid if self.publish is None else self.publish)
+        object.__setattr__(self, "stop", ~self.valid if self.stop is None else self.stop)
 
 
 @dataclass(frozen=True)
