@@ -11,10 +11,16 @@ from torch import Tensor
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.losses.objective import LossContext
 from extension.joint_mpc_rti.model.go2_kinematics import (
+    complete_body_sample_jacobian,
     complete_foot_jacobian,
+    complete_knee_jacobian,
+    complete_link_sample_jacobians,
+    go2_collision_geometry,
     go2_fk,
 )
 from extension.joint_mpc_rti.model.nominal import NominalTrajectory
+from extension.joint_mpc_rti.terrain.query import query_inflated_height_world
+from extension.joint_mpc_rti.tensor_constants import constant_like
 
 
 RESIDUAL_FAMILIES = (
@@ -43,6 +49,27 @@ class LqProblem:
     first_offdiag: Tensor
     second_offdiag: Tensor
     gradient: Tensor
+    lower: Tensor
+    upper: Tensor
+    rate_lower: Tensor
+    rate_upper: Tensor
+    stance_rows: Tensor
+    stance_target: Tensor
+    stance_active: Tensor
+    touchdown_region_rows: Tensor
+    touchdown_region_target: Tensor
+    touchdown_region_active: Tensor
+    touchdown_plane_rows: Tensor
+    touchdown_plane_target: Tensor
+    touchdown_plane_active: Tensor
+    clearance_rows: Tensor
+    clearance_target: Tensor
+    clearance_active: Tensor
+    slack_caps: dict[str, float]
+
+    @property
+    def z0_fixed(self) -> Tensor:
+        return ((self.lower[:, 0] == 0.0) & (self.upper[:, 0] == 0.0)).all(dim=-1)
 
     @property
     def total_cost(self) -> Tensor:
@@ -361,6 +388,225 @@ def _accumulate_term(
         )
 
 
+def _trajectory_bounds(
+    state: Tensor, context: LossContext, cfg: JointMpcRtiCfg
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    solver = cfg.solver
+    trust_values = state.new_tensor(
+        (solver.root_position_trust,) * 3
+        + (solver.root_roll_pitch_trust,) * 2
+        + (solver.root_yaw_trust,)
+        + (solver.joint_trust,) * 12
+    ).view(1, 1, 18)
+    lower = -trust_values.expand_as(state).clone()
+    upper = trust_values.expand_as(state).clone()
+
+    joint_lower = state.new_tensor(
+        (-1.0472, -0.6632, -2.721) * 4
+    ).view(1, 1, 12) + float(solver.joint_margin)
+    joint_upper = state.new_tensor(
+        (1.0472, 2.966, -0.837) * 4
+    ).view(1, 1, 12) - float(solver.joint_margin)
+    lower[..., 6:] = torch.maximum(lower[..., 6:], joint_lower - state[..., 6:])
+    upper[..., 6:] = torch.minimum(upper[..., 6:], joint_upper - state[..., 6:])
+
+    support_reference = context.support_height + float(
+        cfg.loss_terms.posture_root_clearance
+    )
+    root_z_lower = support_reference + float(solver.root_height_min_offset)
+    root_z_upper = support_reference + float(solver.root_height_max_offset)
+    lower[..., 2] = torch.maximum(lower[..., 2], root_z_lower - state[..., 2])
+    upper[..., 2] = torch.minimum(upper[..., 2], root_z_upper - state[..., 2])
+    reference_rp = state[:, :1, 3:5].detach()
+    lower[..., 3:5] = torch.maximum(
+        lower[..., 3:5],
+        reference_rp - float(solver.root_roll_pitch_limit) - state[..., 3:5],
+    )
+    upper[..., 3:5] = torch.minimum(
+        upper[..., 3:5],
+        reference_rp + float(solver.root_roll_pitch_limit) - state[..., 3:5],
+    )
+    lower[:, 0] = 0.0
+    upper[:, 0] = 0.0
+
+    rate_coordinates = torch.cat((state[..., 2:5], state[..., 6:]), dim=-1)
+    nominal_rate_step = rate_coordinates[:, 1:] - rate_coordinates[:, :-1]
+    maximum_step = state.new_tensor(
+        (float(solver.root_z_velocity_limit) * float(cfg.runtime.dt),)
+        + (float(solver.root_roll_pitch_rate_limit) * float(cfg.runtime.dt),) * 2
+        + (float(solver.joint_velocity_limit) * float(cfg.runtime.dt),) * 12
+    ).view(1, 1, 15)
+    return lower, upper, -maximum_step - nominal_rate_step, maximum_step - nominal_rate_step
+
+
+def _stance_constraints(
+    state: Tensor, nominal: NominalTrajectory, context: LossContext
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    batch, nodes = state.shape[:2]
+    flat = state.reshape(batch * nodes, 18)
+    foot = go2_fk(flat[:, :3], flat[:, 3:6], flat[:, 6:]).foot_pos_w.reshape(
+        batch, nodes, 4, 3
+    )
+    jacobian = complete_foot_jacobian(
+        flat[:, :3], flat[:, 3:6], flat[:, 6:]
+    ).reshape(batch, nodes, 4, 3, 18)
+    target = nominal.foot_reference_w - foot
+    return foot, jacobian, target, context.schedule.stance.to(torch.bool), flat
+
+
+def _touchdown_constraints(
+    state: Tensor,
+    nominal: NominalTrajectory,
+    context: LossContext,
+    cfg: JointMpcRtiCfg,
+    foot: Tensor,
+    foot_jacobian: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    batch, nodes = state.shape[:2]
+    region_rows = state.new_zeros(batch, nodes, 4, 18, 4)
+    region_target = state.new_zeros(batch, nodes, 4, 4)
+    region_active = torch.zeros(batch, nodes, 4, 4, dtype=torch.bool, device=state.device)
+    plane_rows = state.new_zeros(batch, nodes, 4, 18)
+    plane_target = state.new_zeros(batch, nodes, 4)
+    plane_active = torch.zeros(batch, nodes, 4, dtype=torch.bool, device=state.device)
+    plan = nominal.perceptive_plan
+    if plan is None:
+        return (
+            region_rows,
+            region_target,
+            region_active,
+            plane_rows,
+            plane_target,
+            plane_active,
+        )
+    A = plan.region.A.to(dtype=state.dtype, device=state.device)
+    b = plan.region.b.to(dtype=state.dtype, device=state.device)
+    region_jacobian = torch.einsum("blij,bnljd->bnlid", A, foot_jacobian[..., :2, :])
+    region_rows = region_jacobian.permute(0, 1, 2, 4, 3).contiguous()
+    nominal_margin = torch.einsum("blij,bnlj->bnli", A, foot[..., :2]) + b[:, None]
+    region_target = -nominal_margin
+    node = torch.arange(nodes, device=state.device).view(1, nodes, 1)
+    selected_stance = context.schedule.stance & (node >= plan.event_step[:, None])
+    region_active = (
+        selected_stance[..., None]
+        & plan.region.valid[:, None, :, None]
+    ).expand(-1, -1, -1, 4)
+
+    plane = plan.region.plane.to(dtype=state.dtype, device=state.device)
+    slope = plane[..., 1:]
+    plane_rows = foot_jacobian[..., 2, :] - torch.einsum(
+        "bli,bnlid->bnld", slope, foot_jacobian[..., :2, :]
+    )
+    plane_height = plane[:, None, :, 0] + torch.einsum(
+        "bli,bnli->bnl", slope, foot[..., :2] - plan.target_w[:, None, :, :2]
+    )
+    plane_residual = foot[..., 2] - plane_height - float(cfg.gait.foot_contact_offset)
+    plane_target = -plane_residual
+    plane_active = selected_stance & plan.region.valid[:, None]
+    return (
+        region_rows,
+        region_target,
+        region_active,
+        plane_rows,
+        plane_target,
+        plane_active,
+    )
+
+
+def _sample_five(endpoints: Tensor) -> Tensor:
+    fraction = endpoints.new_tensor((0.0, 0.25, 0.5, 0.75, 1.0)).view(1, 1, 5, 1)
+    return endpoints[..., :1, :] + fraction * (
+        endpoints[..., 1:2, :] - endpoints[..., :1, :]
+    )
+
+
+def _clearance_points_and_jacobians(state: Tensor) -> tuple[tuple[Tensor, Tensor, int], ...]:
+    batch, nodes = state.shape[:2]
+    flat = state.reshape(batch * nodes, 18)
+    root, rpy, joint = flat[:, :3], flat[:, 3:6], flat[:, 6:]
+    geometry = go2_collision_geometry(root, rpy, joint)
+    foot_jacobian = complete_foot_jacobian(root, rpy, joint)
+    knee_jacobian = complete_knee_jacobian(root, rpy, joint)
+    links = complete_link_sample_jacobians(root, rpy, joint)
+    calf_jacobian = torch.cat(
+        (knee_jacobian[:, :, None], links.calf_samples, foot_jacobian[:, :, None]),
+        dim=2,
+    )
+    hip_jacobian = complete_body_sample_jacobian(
+        rpy, geometry.thigh_endpoints_w[..., 0, :], root
+    )
+    thigh_jacobian = torch.cat(
+        (hip_jacobian[:, :, None], links.thigh_samples, knee_jacobian[:, :, None]),
+        dim=2,
+    )
+    base_index = torch.tensor(
+        (0, 1, 2, 6, 7, 8, 12, 13, 14), dtype=torch.long, device=state.device
+    )
+    base_points = geometry.base_bottom_samples_w[:, base_index]
+    base_jacobian = complete_body_sample_jacobian(rpy, base_points, root)
+
+    def reshape(points: Tensor, jacobian: Tensor) -> tuple[Tensor, Tensor]:
+        samples = int(points.shape[1] * points.shape[2]) if points.ndim == 4 else int(points.shape[1])
+        return (
+            points.reshape(batch, nodes, samples, 3),
+            jacobian.reshape(batch, nodes, samples, 3, 18),
+        )
+
+    foot = reshape(geometry.foot_center_w[:, :, None], foot_jacobian[:, :, None])
+    calf = reshape(_sample_five(geometry.calf_endpoints_w), calf_jacobian)
+    thigh = reshape(_sample_five(geometry.thigh_endpoints_w), thigh_jacobian)
+    base = reshape(base_points, base_jacobian)
+    return (
+        (foot[0], foot[1], 0),
+        (calf[0], calf[1], 2),
+        (thigh[0], thigh[1], 3),
+        (base[0], base[1], 4),
+    )
+
+
+def _clearance_constraints(
+    state: Tensor, context: LossContext
+) -> tuple[Tensor, Tensor, Tensor]:
+    batch, nodes = state.shape[:2]
+    rows = state.new_zeros(batch, nodes, 53, 18)
+    target = state.new_zeros(batch, nodes, 53)
+    active = torch.zeros(batch, nodes, 53, dtype=torch.bool, device=state.device)
+    field = context.perceptive_field
+    if field is None:
+        return rows, target, active
+    cursor = 0
+    epsilon = float(field.resolution)
+    for points, point_jacobian, channel in _clearance_points_and_jacobians(state):
+        samples = int(points.shape[2])
+        flat_points = points.reshape(batch, nodes * samples, 3)
+        height, valid = query_inflated_height_world(field, flat_points, channel=channel)
+        offset_x = flat_points.new_tensor((epsilon, 0.0, 0.0)).view(1, 1, 3)
+        offset_y = flat_points.new_tensor((0.0, epsilon, 0.0)).view(1, 1, 3)
+        height_px, valid_px = query_inflated_height_world(field, flat_points + offset_x, channel=channel)
+        height_mx, valid_mx = query_inflated_height_world(field, flat_points - offset_x, channel=channel)
+        height_py, valid_py = query_inflated_height_world(field, flat_points + offset_y, channel=channel)
+        height_my, valid_my = query_inflated_height_world(field, flat_points - offset_y, channel=channel)
+        gradient = torch.stack(
+            ((height_px - height_mx) / (2.0 * epsilon), (height_py - height_my) / (2.0 * epsilon)),
+            dim=-1,
+        ).to(state.dtype).reshape(batch, nodes, samples, 2)
+        height = height.to(state.dtype).reshape(batch, nodes, samples)
+        valid = (valid & valid_px & valid_mx & valid_py & valid_my).reshape(
+            batch, nodes, samples
+        )
+        clearance = points[..., 2] - height
+        jacobian = point_jacobian[..., 2, :] - torch.einsum(
+            "bnsi,bnsid->bnsd", gradient, point_jacobian[..., :2, :]
+        )
+        rows[:, :, cursor : cursor + samples] = jacobian
+        target[:, :, cursor : cursor + samples] = -clearance
+        active[:, :, cursor : cursor + samples] = valid
+        cursor += samples
+    if cursor != 53:
+        raise RuntimeError(f"clearance layout must contain 53 points, got {cursor}")
+    return rows, target, active
+
+
 def build_lq_problem(
     nominal: NominalTrajectory,
     context: LossContext,
@@ -388,6 +634,23 @@ def build_lq_problem(
     regularization = float(cfg.solver.regularization)
     if regularization:
         diagonal = diagonal + regularization * _state_identity(state)
+    lower, upper, rate_lower, rate_upper = _trajectory_bounds(state, context, cfg)
+    foot, stance_rows, stance_target, stance_active, _ = _stance_constraints(
+        state, nominal, context
+    )
+    (
+        touchdown_region_rows,
+        touchdown_region_target,
+        touchdown_region_active,
+        touchdown_plane_rows,
+        touchdown_plane_target,
+        touchdown_plane_active,
+    ) = _touchdown_constraints(
+        state, nominal, context, cfg, foot, stance_rows
+    )
+    clearance_rows, clearance_target, clearance_active = _clearance_constraints(
+        state, context
+    )
     return LqProblem(
         residuals=residuals,
         cost_breakdown=cost_breakdown,
@@ -395,6 +658,26 @@ def build_lq_problem(
         first_offdiag=first_offdiag,
         second_offdiag=second_offdiag,
         gradient=gradient,
+        lower=lower,
+        upper=upper,
+        rate_lower=rate_lower,
+        rate_upper=rate_upper,
+        stance_rows=stance_rows,
+        stance_target=stance_target,
+        stance_active=stance_active,
+        touchdown_region_rows=touchdown_region_rows,
+        touchdown_region_target=touchdown_region_target,
+        touchdown_region_active=touchdown_region_active,
+        touchdown_plane_rows=touchdown_plane_rows,
+        touchdown_plane_target=touchdown_plane_target,
+        touchdown_plane_active=touchdown_plane_active,
+        clearance_rows=clearance_rows,
+        clearance_target=clearance_target,
+        clearance_active=clearance_active,
+        slack_caps={
+            "collision": float(cfg.solver.collision_slack_cap),
+            "region": float(cfg.solver.region_slack_cap),
+        },
     )
 
 

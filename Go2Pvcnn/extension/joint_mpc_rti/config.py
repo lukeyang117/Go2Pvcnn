@@ -31,6 +31,14 @@ class JointMpcRtiSolverCfg:
     joint_trust: float = 0.25
     active_set_refinements: int = 2
     joint_velocity_limit: float = 30.0
+    joint_margin: float = 0.05
+    root_height_min_offset: float = -0.10
+    root_height_max_offset: float = 0.12
+    root_roll_pitch_limit: float = 0.35
+    root_z_velocity_limit: float = 0.50
+    root_roll_pitch_rate_limit: float = 1.50
+    collision_slack_cap: float = 0.01
+    region_slack_cap: float = 0.005
     compile_kernels: bool = False
     use_cuda_graph: bool = False
 

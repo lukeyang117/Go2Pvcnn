@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
 from extension.joint_mpc_rti.tensor_constants import constant_like
+
+if TYPE_CHECKING:
+    from extension.joint_mpc_rti.solver.lq_problem import LqProblem
 
 
 JOINT_LOWER = (-1.0472, -0.6632, -2.721) * 4
@@ -92,6 +96,15 @@ class ActiveConstraints:
 class ActiveSetSolution:
     direction: Tensor
     active: ActiveConstraints
+
+
+@dataclass(frozen=True)
+class QpSolution:
+    direction: Tensor
+    kkt_primal_residual: Tensor
+    kkt_dual_residual: Tensor
+    slack_max: dict[str, Tensor]
+    active_constraint_count: dict[str, Tensor]
 
 
 def select_active_constraints(
@@ -306,14 +319,271 @@ def trajectory_bounds(nominal: Tensor, cfg) -> tuple[Tensor, Tensor, Tensor, Ten
     return lower, upper, difference_lower, difference_upper
 
 
+def _dense_local_rows(
+    local_rows: Tensor,
+    target: Tensor,
+    active: Tensor,
+    *,
+    nodes: int,
+    state_dim: int,
+) -> tuple[Tensor, Tensor]:
+    """Materialize fixed-shape node-local rows for one eager reference batch."""
+    row_shape = local_rows.shape[:-1]
+    node_index = torch.arange(nodes, device=local_rows.device)
+    node_index = node_index.view(nodes, *((1,) * (len(row_shape) - 1))).expand(row_shape)
+    selected_row = local_rows[active]
+    selected_target = target[active]
+    selected_node = node_index[active]
+    matrix = local_rows.new_zeros(selected_row.shape[0], nodes * state_dim)
+    if int(selected_row.shape[0]):
+        column = selected_node[:, None] * state_dim + torch.arange(
+            state_dim, device=local_rows.device
+        )[None]
+        matrix.scatter_(1, column, selected_row)
+    return matrix, selected_target
+
+
+def _dense_constraints_for_batch(
+    problem: "LqProblem", batch_index: int
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, dict[str, Tensor]]:
+    nodes, state_dim = problem.gradient.shape[1:]
+    dtype, device = problem.gradient.dtype, problem.gradient.device
+    identity = torch.eye(nodes * state_dim, dtype=dtype, device=device)
+    fixed = problem.lower[batch_index] == problem.upper[batch_index]
+    fixed_flat = fixed.flatten()
+    equality = [identity[fixed_flat]]
+    equality_target = [problem.lower[batch_index].flatten()[fixed_flat]]
+
+    stance_active = problem.stance_active[batch_index][..., None].expand(-1, -1, 3).clone()
+    stance_active[0] = False
+    stance_matrix, stance_target = _dense_local_rows(
+        problem.stance_rows[batch_index],
+        problem.stance_target[batch_index],
+        stance_active,
+        nodes=nodes,
+        state_dim=state_dim,
+    )
+    equality.append(stance_matrix)
+    equality_target.append(stance_target)
+
+    box_free = ~fixed_flat
+    inequality = [identity[box_free], -identity[box_free]]
+    inequality_target = [
+        problem.lower[batch_index].flatten()[box_free],
+        -problem.upper[batch_index].flatten()[box_free],
+    ]
+    inequality_type = [
+        torch.zeros(int(box_free.sum()) * 2, dtype=torch.long, device=device)
+    ]
+
+    rate_coordinates = torch.tensor(
+        (2, 3, 4) + tuple(range(6, 18)), dtype=torch.long, device=device
+    )
+    edge = torch.arange(nodes - 1, device=device)[:, None]
+    coordinate = rate_coordinates[None].expand(nodes - 1, -1)
+    rate_matrix = problem.gradient.new_zeros((nodes - 1) * 15, nodes * state_dim)
+    row = torch.arange((nodes - 1) * 15, device=device)
+    rate_matrix[row, (edge * state_dim + coordinate).flatten()] = -1.0
+    rate_matrix[row, ((edge + 1) * state_dim + coordinate).flatten()] = 1.0
+    inequality.extend((rate_matrix, -rate_matrix))
+    inequality_target.extend(
+        (
+            problem.rate_lower[batch_index].flatten(),
+            -problem.rate_upper[batch_index].flatten(),
+        )
+    )
+    inequality_type.append(
+        torch.ones(2 * rate_matrix.shape[0], dtype=torch.long, device=device)
+    )
+
+    region_rows = problem.touchdown_region_rows[batch_index].transpose(-1, -2)
+    region_matrix, region_target = _dense_local_rows(
+        region_rows,
+        problem.touchdown_region_target[batch_index],
+        problem.touchdown_region_active[batch_index],
+        nodes=nodes,
+        state_dim=state_dim,
+    )
+    inequality.append(region_matrix)
+    inequality_target.append(
+        region_target - float(problem.slack_caps["region"])
+    )
+    inequality_type.append(
+        torch.full((region_matrix.shape[0],), 2, dtype=torch.long, device=device)
+    )
+
+    clearance_matrix, clearance_target = _dense_local_rows(
+        problem.clearance_rows[batch_index],
+        problem.clearance_target[batch_index],
+        problem.clearance_active[batch_index],
+        nodes=nodes,
+        state_dim=state_dim,
+    )
+    inequality.append(clearance_matrix)
+    inequality_target.append(
+        clearance_target - float(problem.slack_caps["collision"])
+    )
+    inequality_type.append(
+        torch.full((clearance_matrix.shape[0],), 3, dtype=torch.long, device=device)
+    )
+
+    exact_targets = {
+        "region": region_target,
+        "collision": clearance_target,
+        "region_matrix": region_matrix,
+        "collision_matrix": clearance_matrix,
+    }
+    return (
+        torch.cat(equality, dim=0),
+        torch.cat(equality_target, dim=0),
+        torch.cat(inequality, dim=0),
+        torch.cat(inequality_target, dim=0),
+        torch.cat(inequality_type, dim=0),
+        exact_targets,
+    )
+
+
+def _solve_equality_kkt(
+    hessian: Tensor,
+    gradient: Tensor,
+    matrix: Tensor,
+    target: Tensor,
+) -> tuple[Tensor, Tensor]:
+    if int(matrix.shape[0]) == 0:
+        return torch.linalg.solve(hessian, -gradient), gradient.new_zeros(0)
+    zeros = hessian.new_zeros(matrix.shape[0], matrix.shape[0])
+    kkt = torch.cat(
+        (
+            torch.cat((hessian, matrix.transpose(0, 1)), dim=1),
+            torch.cat((matrix, zeros), dim=1),
+        ),
+        dim=0,
+    )
+    rhs = torch.cat((-gradient, target), dim=0)
+    solution = torch.linalg.lstsq(kkt, rhs.unsqueeze(-1)).solution[:, 0]
+    return solution[: gradient.shape[0]], solution[gradient.shape[0] :]
+
+
+def solve_dense_qp(problem: "LqProblem", *, refinements: int = 2) -> QpSolution:
+    """Solve the fixed-shape constrained LQ as an eager dense test reference."""
+    if int(refinements) != 2:
+        raise ValueError("dense reference uses exactly two active refinements")
+    hessian, gradient = problem.to_dense()
+    directions: list[Tensor] = []
+    primal: list[Tensor] = []
+    dual: list[Tensor] = []
+    collision_slack: list[Tensor] = []
+    region_slack: list[Tensor] = []
+    count_values = {
+        name: []
+        for name in (
+            "box",
+            "rate",
+            "stance",
+            "touchdown_region",
+            "touchdown_plane",
+            "clearance",
+        )
+    }
+    for batch_index in range(problem.gradient.shape[0]):
+        eq, eq_target, ineq, ineq_target, ineq_type, exact = _dense_constraints_for_batch(
+            problem, batch_index
+        )
+        direction, multiplier = _solve_equality_kkt(
+            hessian[batch_index], gradient[batch_index], eq, eq_target
+        )
+        active = torch.zeros(ineq.shape[0], dtype=torch.bool, device=ineq.device)
+        active_multiplier = direction.new_zeros(0)
+        for _ in range(refinements):
+            violated = torch.einsum("ri,i->r", ineq, direction) < ineq_target - 1.0e-8
+            active = active | violated
+            combined = torch.cat((eq, ineq[active]), dim=0)
+            combined_target = torch.cat((eq_target, ineq_target[active]), dim=0)
+            direction, combined_multiplier = _solve_equality_kkt(
+                hessian[batch_index], gradient[batch_index], combined, combined_target
+            )
+            multiplier = combined_multiplier[: eq.shape[0]]
+            active_multiplier = combined_multiplier[eq.shape[0] :]
+
+        equality_error = torch.einsum("ri,i->r", eq, direction) - eq_target
+        hard_mask = ineq_type < 2
+        hard_violation = (
+            ineq_target[hard_mask]
+            - torch.einsum("ri,i->r", ineq[hard_mask], direction)
+        ).clamp_min(0.0)
+        region_violation = (
+            exact["region"]
+            - torch.einsum("ri,i->r", exact["region_matrix"], direction)
+        ).clamp_min(0.0)
+        collision_violation = (
+            exact["collision"]
+            - torch.einsum("ri,i->r", exact["collision_matrix"], direction)
+        ).clamp_min(0.0)
+        plane_rows, plane_target = _dense_local_rows(
+            problem.touchdown_plane_rows[batch_index],
+            problem.touchdown_plane_target[batch_index],
+            problem.touchdown_plane_active[batch_index],
+            nodes=problem.gradient.shape[1],
+            state_dim=problem.gradient.shape[2],
+        )
+        plane_error = torch.einsum("ri,i->r", plane_rows, direction) - plane_target
+        residual_terms = (
+            equality_error.abs(),
+            hard_violation,
+            (region_violation - float(problem.slack_caps["region"])).clamp_min(0.0),
+            (collision_violation - float(problem.slack_caps["collision"])).clamp_min(0.0),
+            plane_error.abs(),
+        )
+        primal.append(
+            torch.cat(tuple(value.flatten() for value in residual_terms)).amax()
+        )
+        stationarity = hessian[batch_index] @ direction + gradient[batch_index]
+        stationarity = stationarity + eq.transpose(0, 1) @ multiplier
+        if int(active.sum()):
+            stationarity = stationarity + ineq[active].transpose(0, 1) @ active_multiplier
+        dual.append(stationarity.abs().amax())
+        directions.append(direction.reshape(problem.gradient.shape[1:]))
+        region_slack.append(
+            region_violation.amax() if region_violation.numel() else direction.new_zeros(())
+        )
+        collision_slack.append(
+            collision_violation.amax()
+            if collision_violation.numel()
+            else direction.new_zeros(())
+        )
+        count_values["box"].append((active & (ineq_type == 0)).sum())
+        count_values["rate"].append((active & (ineq_type == 1)).sum())
+        count_values["touchdown_region"].append((active & (ineq_type == 2)).sum())
+        count_values["clearance"].append((active & (ineq_type == 3)).sum())
+        count_values["stance"].append(problem.stance_active[batch_index].sum() * 3)
+        count_values["touchdown_plane"].append(
+            problem.touchdown_plane_active[batch_index].sum()
+        )
+    return QpSolution(
+        direction=torch.stack(directions),
+        kkt_primal_residual=torch.stack(primal),
+        kkt_dual_residual=torch.stack(dual),
+        slack_max={
+            "collision": torch.stack(collision_slack),
+            "region": torch.stack(region_slack),
+        },
+        active_constraint_count={
+            name: torch.stack(values).to(torch.long)
+            for name, values in count_values.items()
+        },
+    )
+
+
 __all__ = [
     "ActiveConstraints",
     "ActiveSetSolution",
     "JOINT_LOWER",
     "JOINT_UPPER",
     "TrajectoryQp",
+    "QpSolution",
     "refine_active_set",
     "select_active_constraints",
     "solve_dense_active_kkt",
+    "solve_dense_qp",
     "trajectory_bounds",
 ]

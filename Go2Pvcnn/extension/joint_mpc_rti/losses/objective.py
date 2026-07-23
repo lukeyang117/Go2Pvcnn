@@ -17,7 +17,7 @@ from extension.joint_mpc_rti.losses.step import step_residual
 from extension.joint_mpc_rti.losses.swing_speed import swing_speed_residual
 from extension.joint_mpc_rti.losses.terrain import terrain_residual
 from extension.joint_mpc_rti.model.gait_schedule import FixedTrotSchedule
-from extension.joint_mpc_rti.types import JointMpcTerrainField
+from extension.joint_mpc_rti.types import JointMpcPerceptiveField, JointMpcTerrainField
 
 
 LOSS_NAMES = ("command", "step", "contact", "swing_speed", "terrain", "posture", "smooth")
@@ -31,6 +31,7 @@ class LossContext:
     terrain: JointMpcTerrainField
     stance_anchor_w: Tensor
     support_height: Tensor
+    perceptive_field: JointMpcPerceptiveField | None = None
 
 
 def trajectory_residuals(state: Tensor, context: LossContext, cfg: JointMpcRtiCfg) -> dict[str, Tensor]:
