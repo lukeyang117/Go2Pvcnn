@@ -23,6 +23,23 @@ def test_go2_fk_returns_planner_leg_order_and_link_samples() -> None:
     assert geometry.foot_pos_w[0, 2, 1] > geometry.foot_pos_w[0, 3, 1]
 
 
+def test_collision_geometry_base_obb_corners_follow_root_rotation() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry
+
+    root_pos = torch.tensor([[0.2, -0.1, 0.34]])
+    root_rpy = torch.tensor([[0.0, 0.0, torch.pi / 2]])
+    joint = torch.tensor([[0.0, 0.8, -1.5] * 4])
+    geometry = go2_collision_geometry(root_pos, root_rpy, joint)
+
+    local = geometry.base_corners_w - root_pos[:, None]
+    assert local[..., 0].abs().max() == pytest.approx(
+        geometry.base_half_extents[0, 1].item()
+    )
+    assert local[..., 1].abs().max() == pytest.approx(
+        geometry.base_half_extents[0, 0].item()
+    )
+
+
 def test_go2_foot_only_fk_matches_full_geometry() -> None:
     from extension.joint_mpc_rti.model.go2_kinematics import go2_fk, go2_foot_pos
 

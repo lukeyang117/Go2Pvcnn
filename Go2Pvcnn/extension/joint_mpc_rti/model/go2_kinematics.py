@@ -20,6 +20,9 @@ LEG_SIDE_SIGNS = (1.0, -1.0, 1.0, -1.0)
 THIGH_LENGTH = 0.213
 CALF_LENGTH = 0.213
 HIP_OFFSET_Y = 0.0955
+FOOT_RADIUS = 0.022
+SOLE_HALF_EXTENTS = (0.030, 0.020)
+BASE_HALF_EXTENTS = (0.320, 0.090, 0.080)
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,20 @@ class Go2Geometry:
 class Go2LinkJacobians:
     calf_samples: Tensor
     thigh_samples: Tensor
+
+
+@dataclass(frozen=True)
+class Go2CollisionGeometry:
+    foot_center_w: Tensor
+    sole_corners_w: Tensor
+    knee_center_w: Tensor
+    calf_endpoints_w: Tensor
+    thigh_endpoints_w: Tensor
+    base_center_w: Tensor
+    base_rotation_w: Tensor
+    base_half_extents: Tensor
+    base_corners_w: Tensor
+    base_bottom_samples_w: Tensor
 
 
 def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
@@ -218,6 +235,94 @@ def go2_fk(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Go2Geom
         shank_samples_w=shank_world.reshape(*leading_shape, 4, 3, 3),
         thigh_samples_w=thigh_world.reshape(*leading_shape, 4, 3, 3),
         body_samples_w=body_world.reshape(*leading_shape, body_world.shape[-2], 3),
+    )
+
+
+def go2_collision_geometry(
+    root_pos_w: Tensor,
+    root_rpy_w: Tensor,
+    joint_pos: Tensor,
+) -> Go2CollisionGeometry:
+    """Return world-coordinate sphere, capsule, sole, and base OBB primitives."""
+    root_input = torch.as_tensor(root_pos_w)
+    root_rpy_input = torch.as_tensor(
+        root_rpy_w, dtype=root_input.dtype, device=root_input.device
+    )
+    joint_input = torch.as_tensor(
+        joint_pos, dtype=root_input.dtype, device=root_input.device
+    )
+    if root_input.ndim < 2 or root_input.shape[-1] != 3:
+        raise ValueError("root_pos_w must have shape [...,3]")
+    if root_rpy_input.shape != root_input.shape:
+        raise ValueError("root_rpy_w must match root_pos_w")
+    if joint_input.shape != root_input.shape[:-1] + (12,):
+        raise ValueError("joint_pos must have shape [...,12]")
+
+    leading_shape = root_input.shape[:-1]
+    root_pos = root_input.reshape(-1, 3)
+    root_rpy = root_rpy_input.reshape(-1, 3)
+    joint = joint_input.reshape(-1, 12)
+    upper_body, knee_body, foot_body = _leg_points_body(joint)
+    rotation = rpy_to_rotation_matrix(root_rpy)
+
+    def to_world(points_body: Tensor) -> Tensor:
+        return torch.einsum("bij,b...j->b...i", rotation, points_body) + root_pos.view(
+            root_pos.shape[0], *((1,) * (points_body.ndim - 2)), 3
+        )
+
+    foot_world = to_world(foot_body)
+    knee_world = to_world(knee_body)
+    upper_world = to_world(upper_body)
+    sole_offsets = constant_like(
+        joint,
+        "go2_sole_corner_offsets",
+        (
+            (SOLE_HALF_EXTENTS[0], SOLE_HALF_EXTENTS[1], -FOOT_RADIUS),
+            (SOLE_HALF_EXTENTS[0], -SOLE_HALF_EXTENTS[1], -FOOT_RADIUS),
+            (-SOLE_HALF_EXTENTS[0], SOLE_HALF_EXTENTS[1], -FOOT_RADIUS),
+            (-SOLE_HALF_EXTENTS[0], -SOLE_HALF_EXTENTS[1], -FOOT_RADIUS),
+        ),
+    ).view(1, 1, 4, 3)
+    sole_world = to_world(foot_body.unsqueeze(2) + sole_offsets)
+
+    half_extents = constant_like(
+        joint, "go2_base_half_extents", BASE_HALF_EXTENTS
+    ).view(1, 3).expand(root_pos.shape[0], -1)
+    base_corners_body = constant_like(
+        joint,
+        "go2_base_corners",
+        tuple(
+            (sx * BASE_HALF_EXTENTS[0], sy * BASE_HALF_EXTENTS[1], sz * BASE_HALF_EXTENTS[2])
+            for sx in (-1.0, 1.0)
+            for sy in (-1.0, 1.0)
+            for sz in (-1.0, 1.0)
+        ),
+    ).view(1, 8, 3)
+    base_bottom_body = constant_like(
+        joint,
+        "go2_base_bottom_samples",
+        tuple(
+            (sx * BASE_HALF_EXTENTS[0], sy * BASE_HALF_EXTENTS[1], -BASE_HALF_EXTENTS[2])
+            for sx in (-1.0, -0.5, 0.0, 0.5, 1.0)
+            for sy in (-1.0, 0.0, 1.0)
+        ),
+    ).view(1, 15, 3)
+    base_corners_world = to_world(base_corners_body)
+    base_bottom_world = to_world(base_bottom_body)
+    calf_endpoints = torch.stack((knee_world, foot_world), dim=-2)
+    thigh_endpoints = torch.stack((upper_world, knee_world), dim=-2)
+
+    return Go2CollisionGeometry(
+        foot_center_w=foot_world.reshape(*leading_shape, 4, 3),
+        sole_corners_w=sole_world.reshape(*leading_shape, 4, 4, 3),
+        knee_center_w=knee_world.reshape(*leading_shape, 4, 3),
+        calf_endpoints_w=calf_endpoints.reshape(*leading_shape, 4, 2, 3),
+        thigh_endpoints_w=thigh_endpoints.reshape(*leading_shape, 4, 2, 3),
+        base_center_w=root_input,
+        base_rotation_w=rotation.reshape(*leading_shape, 3, 3),
+        base_half_extents=half_extents.reshape(*leading_shape, 3),
+        base_corners_w=base_corners_world.reshape(*leading_shape, 8, 3),
+        base_bottom_samples_w=base_bottom_world.reshape(*leading_shape, 15, 3),
     )
 
 
@@ -454,6 +559,9 @@ def complete_link_sample_jacobians(
 
 
 __all__ = [
+    "BASE_HALF_EXTENTS",
+    "FOOT_RADIUS",
+    "Go2CollisionGeometry",
     "Go2Geometry",
     "Go2LinkJacobians",
     "CALF_LENGTH",
@@ -469,6 +577,7 @@ __all__ = [
     "foot_jacobian_joint",
     "foot_jacobian_leg",
     "go2_fk",
+    "go2_collision_geometry",
     "go2_foot_pos",
     "link_sample_jacobians",
     "rpy_to_rotation_matrix",

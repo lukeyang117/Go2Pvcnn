@@ -70,13 +70,16 @@ class JointMpcRtiTerrainCfg:
     thigh_radius_m: float = 0.035
     base_radius_m: float = 0.120
     foot_margin_m: float = 0.010
-    link_margin_m: float = 0.015
+    link_margin_m: float = 0.003
     base_margin_m: float = 0.025
     landing_margin_m: float = 0.010
     slope_max_rad: float = 0.60
     roughness_max_m: float = 0.030
     edge_margin_m: float = 0.020
     roughness_radius_m: float = 0.010
+    sweep_subdivisions: int = 8
+    capsule_samples: int = 17
+    stance_ground_tolerance_m: float = 0.012
 
     @property
     def virtual_wall_height(self) -> float:
