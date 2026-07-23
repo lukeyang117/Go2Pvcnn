@@ -189,9 +189,9 @@
 
 ## Git Refs
 
-- Last Feature Commit: `02b089f` (final Task 16 flat gate).
-- Last Verified Commit: `02b089f` (`115` focused, `284` package, formal flat `19/19`).
-- Current Work Ref: `work/joint-mpc-kinematic` at `02b089f`; Task 17 small-obstacle gate next.
+- Last Feature Commit: `5250bf1` (final Task 16 flat gate).
+- Last Verified Commit: `5250bf1` (`115` focused, `284` package, formal flat `19/19`).
+- Current Work Ref: `work/joint-mpc-kinematic` after `5250bf1`; Task 17 small-obstacle gate next.
 - Key Files: `config.py`, `planner.py`, `solver/context.py`, `solver/line_search.py`, `terrain/__init__.py`, `test_final_import_graph.py`.
 
 ## Next Step
