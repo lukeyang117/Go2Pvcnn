@@ -10,7 +10,10 @@ from torch import Tensor
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry
 from extension.joint_mpc_rti.tensor_constants import constant_like
-from extension.joint_mpc_rti.terrain.query import query_perceptive_world
+from extension.joint_mpc_rti.terrain.query import (
+    query_inflated_height_world,
+    query_perceptive_world,
+)
 from extension.joint_mpc_rti.types import JointMpcPerceptiveField
 
 
@@ -52,13 +55,15 @@ def _part_clearance(
     batch, nodes = int(points_w.shape[0]), int(points_w.shape[1])
     points_per_node = int(points_w.numel() // (batch * nodes * 3))
     points = points_w.reshape(batch, nodes * points_per_node, 3)
-    query = query_perceptive_world(field, points)
+    inflated_height, valid_query = query_inflated_height_world(
+        field, points, channel=channel
+    )
     clearance = (
         points[..., 2]
-        - query.inflated_height_w[..., int(channel)]
+        - inflated_height
         - float(vertical_margin)
     ).reshape(batch, nodes, points_per_node)
-    valid = query.valid.reshape(batch, nodes, points_per_node)
+    valid = valid_query.reshape(batch, nodes, points_per_node)
     finite_clearance = torch.where(
         valid,
         clearance,
@@ -108,14 +113,28 @@ def _sole_support_safe(
     ground_tolerance: float,
 ) -> tuple[Tensor, Tensor]:
     batch, nodes = map(int, sole_corners_w.shape[:2])
-    points = sole_corners_w.reshape(batch, nodes * 16, 3)
+    center_w = sole_corners_w.mean(dim=-2, keepdim=True)
+    sole_samples = torch.cat((sole_corners_w, center_w), dim=-2)
+    points = sole_samples.reshape(batch, nodes * 20, 3)
     query = query_perceptive_world(field, points)
-    landing = query.landing_safe.reshape(batch, nodes, 4, 4).all(dim=-1)
-    valid = query.valid.reshape(batch, nodes, 4, 4).all(dim=-1)
+    sample_shape = (batch, nodes, 4, 5)
+    valid_samples = query.valid.reshape(sample_shape)
+    raw_safe = (
+        valid_samples[..., :4]
+        & ~query.small_mask.reshape(sample_shape)[..., :4]
+        & ~query.large_mask.reshape(sample_shape)[..., :4]
+        & ~query.unknown_mask.reshape(sample_shape)[..., :4]
+        & ~query.semantic_edge_mask.reshape(sample_shape)[..., :4]
+    ).all(dim=-1)
+    center_safe = query.landing_safe.reshape(sample_shape)[..., 4]
+    landing = raw_safe & center_safe
+    valid = valid_samples.all(dim=-1)
     ground_error = (
         points[..., 2] - query.height_w
-    ).reshape(batch, nodes, 4, 4)
-    on_ground = (ground_error.abs() <= float(ground_tolerance)).all(dim=-1)
+    ).reshape(sample_shape)
+    on_ground = (
+        ground_error[..., :4].abs() <= float(ground_tolerance)
+    ).all(dim=-1)
     sole_safe = landing & valid & on_ground
     if contact_state is None:
         return torch.ones_like(sole_safe), torch.zeros(batch, nodes, dtype=torch.bool, device=points.device)

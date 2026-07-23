@@ -346,6 +346,7 @@ def test_solver_state_contains_only_warm_lifecycle_state() -> None:
         "gait_phase",
         "initialized",
         "stance_anchor_w",
+        "preview_tail_state",
     )
 
 

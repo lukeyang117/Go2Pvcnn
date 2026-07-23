@@ -136,6 +136,28 @@ def test_compact_region_query_matches_the_corresponding_packed_channels() -> Non
     torch.testing.assert_close(compact.roughness, packed.roughness)
 
 
+def test_single_inflated_height_query_matches_the_packed_query() -> None:
+    from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+    from extension.joint_mpc_rti.terrain.query import (
+        query_inflated_height_world,
+        query_perceptive_world,
+    )
+
+    height, semantic, valid, frame = _inputs(batch=1)
+    field = build_perceptive_field(height, semantic, valid, frame, JointMpcRtiCfg())
+    points = torch.tensor([[[0.0, 0.0], [0.11, -0.07], [-0.15, 0.13]]])
+    packed = query_perceptive_world(field, points)
+
+    for channel in range(5):
+        selected, selected_valid = query_inflated_height_world(
+            field, points, channel=channel
+        )
+        torch.testing.assert_close(
+            selected, packed.inflated_height_w[..., channel]
+        )
+        assert torch.equal(selected_valid, packed.valid)
+
+
 def test_perceptive_cache_overwrites_selected_rows_and_preserves_refresh_id_on_read() -> None:
     from extension.joint_mpc_rti.terrain.field_cache import JointMpcPerceptiveFieldCache
     from extension.joint_mpc_rti.types import JointMpcFieldFrame

@@ -54,6 +54,14 @@ class Go2CollisionGeometry:
     base_bottom_samples_w: Tensor
 
 
+@dataclass(frozen=True)
+class Go2SelectedLegCollisionGeometry:
+    foot_center_w: Tensor
+    knee_center_w: Tensor
+    calf_endpoints_w: Tensor
+    thigh_endpoints_w: Tensor
+
+
 def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
     """Return body-to-world rotation matrices for XYZ fixed-axis RPY."""
     rpy = torch.as_tensor(root_rpy_w)
@@ -326,6 +334,90 @@ def go2_collision_geometry(
     )
 
 
+def go2_selected_leg_collision_geometry(
+    root_pos_w: Tensor,
+    root_rpy_w: Tensor,
+    joint_pos_leg: Tensor,
+    leg_index: Tensor,
+) -> Go2SelectedLegCollisionGeometry:
+    """Return collision primitives for one selected leg per leading element."""
+    root = torch.as_tensor(root_pos_w)
+    rpy = torch.as_tensor(root_rpy_w, dtype=root.dtype, device=root.device)
+    joint = torch.as_tensor(joint_pos_leg, dtype=root.dtype, device=root.device)
+    index = torch.as_tensor(leg_index, dtype=torch.long, device=root.device)
+    if root.ndim < 2 or root.shape[-1] != 3 or rpy.shape != root.shape:
+        raise ValueError("root_pos_w and root_rpy_w must have matching [...,3] shapes")
+    if joint.shape != root.shape or index.shape != root.shape[:-1]:
+        raise ValueError("joint_pos_leg and leg_index must have shapes [...,3] and [...]")
+
+    leading = root.shape[:-1]
+    flat_root = root.reshape(-1, 3)
+    flat_rpy = rpy.reshape(-1, 3)
+    flat_joint = joint.reshape(-1, 3)
+    flat_index = index.reshape(-1)
+    side = torch.index_select(
+        constant_like(flat_joint, "selected_leg_side_signs", LEG_SIDE_SIGNS),
+        0,
+        flat_index,
+    )
+    hip = torch.index_select(
+        constant_like(flat_joint, "selected_leg_hip_offsets", HIP_OFFSETS),
+        0,
+        flat_index,
+    )
+    abad, thigh_angle, calf_angle = flat_joint.unbind(dim=-1)
+    lateral = HIP_OFFSET_Y * side
+    knee_x = -THIGH_LENGTH * torch.sin(thigh_angle)
+    knee_z = -THIGH_LENGTH * torch.cos(thigh_angle)
+    calf_absolute = thigh_angle + calf_angle
+    foot_x = knee_x - CALF_LENGTH * torch.sin(calf_absolute)
+    foot_z = knee_z - CALF_LENGTH * torch.cos(calf_absolute)
+    cosine = torch.cos(abad)
+    sine = torch.sin(abad)
+    upper_body = torch.stack(
+        (
+            hip[:, 0],
+            hip[:, 1] + cosine * lateral,
+            hip[:, 2] + sine * lateral,
+        ),
+        dim=-1,
+    )
+    knee_body = torch.stack(
+        (
+            hip[:, 0] + knee_x,
+            hip[:, 1] + cosine * lateral - sine * knee_z,
+            hip[:, 2] + sine * lateral + cosine * knee_z,
+        ),
+        dim=-1,
+    )
+    foot_body = torch.stack(
+        (
+            hip[:, 0] + foot_x,
+            hip[:, 1] + cosine * lateral - sine * foot_z,
+            hip[:, 2] + sine * lateral + cosine * foot_z,
+        ),
+        dim=-1,
+    )
+    rotation = rpy_to_rotation_matrix(flat_rpy)
+
+    def to_world(point_body: Tensor) -> Tensor:
+        return torch.einsum("bij,bj->bi", rotation, point_body) + flat_root
+
+    upper_w = to_world(upper_body)
+    knee_w = to_world(knee_body)
+    foot_w = to_world(foot_body)
+    return Go2SelectedLegCollisionGeometry(
+        foot_center_w=foot_w.reshape(*leading, 3),
+        knee_center_w=knee_w.reshape(*leading, 3),
+        calf_endpoints_w=torch.stack((knee_w, foot_w), dim=-2).reshape(
+            *leading, 2, 3
+        ),
+        thigh_endpoints_w=torch.stack((upper_w, knee_w), dim=-2).reshape(
+            *leading, 2, 3
+        ),
+    )
+
+
 def go2_foot_pos(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor) -> Tensor:
     """Compute only planner-order foot positions for nominal-shape references."""
     root_input = torch.as_tensor(root_pos_w)
@@ -564,6 +656,7 @@ __all__ = [
     "Go2CollisionGeometry",
     "Go2Geometry",
     "Go2LinkJacobians",
+    "Go2SelectedLegCollisionGeometry",
     "CALF_LENGTH",
     "HIP_OFFSETS",
     "HIP_OFFSET_Y",
@@ -578,6 +671,7 @@ __all__ = [
     "foot_jacobian_leg",
     "go2_fk",
     "go2_collision_geometry",
+    "go2_selected_leg_collision_geometry",
     "go2_foot_pos",
     "link_sample_jacobians",
     "rpy_to_rotation_matrix",

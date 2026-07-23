@@ -147,6 +147,31 @@ def test_event_preview_keeps_touchdown_after_h30_when_horizon_ends_in_swing() ->
     assert (preview > 30).any()
 
 
+def test_preview_touchdown_runs_full_candidate_region_and_sweep_selection() -> None:
+    from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
+
+    plan = select_touchdowns(
+        make_state(1),
+        make_command(1, vx=0.3),
+        fixed_trot_schedule(torch.tensor([6])),
+        _warm(1),
+        _field(),
+        JointMpcRtiCfg(),
+    )
+
+    assert plan.preview_candidate_w.shape == (1, 4, 25, 3)
+    assert plan.preview_safe_mask.shape == (1, 4, 25)
+    assert plan.preview_ranked_index.shape == (1, 4, 25)
+    assert plan.preview_target_w.shape == (1, 4, 3)
+    assert plan.preview_region.A.shape == (1, 4, 4, 2)
+    containment = torch.einsum(
+        "blij,blj->bli", plan.preview_region.A, plan.preview_target_w[..., :2]
+    ) + plan.preview_region.b
+    assert (containment >= -1.0e-6).all()
+    assert plan.preview_valid.all()
+    assert plan.preview_selected_sweep_safe.all()
+
+
 def test_selected_touchdown_has_a_containing_safe_region_and_local_plane() -> None:
     from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
     from extension.joint_mpc_rti.terrain.query import query_perceptive_world
@@ -184,10 +209,27 @@ def test_selected_touchdown_has_a_containing_safe_region_and_local_plane() -> No
     assert corner_query.landing_safe.all()
     torch.testing.assert_close(
         plan.target_w[..., 2],
-        plan.region_plane[..., 0] + cfg.terrain.foot_radius_m,
+        plan.region_plane[..., 0] + cfg.gait.foot_contact_offset,
         atol=1.0e-6,
         rtol=0.0,
     )
+
+
+def test_every_retry_candidate_keeps_its_maximal_safe_region() -> None:
+    from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
+
+    cfg = JointMpcRtiCfg()
+    plan = select_touchdowns(
+        make_state(1),
+        make_command(1),
+        fixed_trot_schedule(torch.tensor([0])),
+        _warm(1),
+        _field(),
+        cfg,
+    )
+
+    expected = cfg.region.cap_m - cfg.region.margin_m - 1.0e-6
+    assert (plan.candidate_region.half_extent[plan.safe_mask] >= expected).all()
 
 
 def test_region_never_expands_through_forbidden_cells_and_invalid_candidates_fallback() -> None:

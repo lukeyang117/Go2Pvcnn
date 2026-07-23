@@ -9,11 +9,18 @@ from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.losses.objective import LossContext
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
-from extension.joint_mpc_rti.model.nominal import NominalTrajectory, build_nominal
+from extension.joint_mpc_rti.model.nominal import (
+    NominalTrajectory,
+    build_nominal,
+    build_rebased_seed,
+)
+from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
 from extension.joint_mpc_rti.solver.sqp_rti import sqp_rti_update
+from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
 from extension.joint_mpc_rti.terrain.query import query_world
 from extension.joint_mpc_rti.types import (
     JointMpcPendingReference,
+    JointMpcFieldFrame,
     JointMpcRtiSolverState,
     JointMpcRtiState,
     JointMpcRtiStepDiagnostics,
@@ -102,11 +109,39 @@ def step(
         )
     else:
         previous = solver_state
+    schedule = fixed_trot_schedule(
+        previous.gait_phase, horizon_steps=int(cfg.runtime.horizon_steps)
+    )
+    frame = JointMpcFieldFrame(
+        origin_w=terrain_field.origin_w,
+        yaw_w=terrain_field.yaw_w,
+        timestamp=terrain_field.timestamp,
+        refresh_id=terrain_field.version,
+    )
+    perceptive_field = build_perceptive_field(
+        terrain_field.height_w,
+        terrain_field.semantic_id,
+        terrain_field.valid_mask,
+        frame,
+        cfg,
+    )
+    warm_nodes = build_rebased_seed(
+        measured_state, command, previous.gait_phase, previous, cfg
+    )
+    perceptive_plan = select_touchdowns(
+        measured_state,
+        command,
+        schedule,
+        warm_nodes,
+        perceptive_field,
+        cfg,
+    )
     nominal = build_nominal(
         measured_state,
         command,
-        terrain_field,
+        perceptive_field,
         previous.gait_phase,
+        perceptive_plan=perceptive_plan,
         previous=previous,
         cfg=cfg,
     )
@@ -154,6 +189,7 @@ def step(
             foot_pos_w[:, 1],
             nominal.current_stance_anchor_w,
         ),
+        preview_tail_state=nominal.preview_tail_state,
     )
     return JointMpcRtiStepResult(
         full_trajectory=trajectory,

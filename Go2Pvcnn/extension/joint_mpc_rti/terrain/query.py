@@ -256,6 +256,50 @@ def query_perceptive_world(
     )
 
 
+def query_inflated_height_world(
+    field: JointMpcPerceptiveField,
+    points_w: Tensor,
+    *,
+    channel: int,
+) -> tuple[Tensor, Tensor]:
+    """Query one inflated-height channel without materializing packed channels."""
+    points = torch.as_tensor(
+        points_w, dtype=field.height_w.dtype, device=field.height_w.device
+    )
+    if points.ndim != 3 or int(points.shape[-1]) not in (2, 3):
+        raise ValueError("points_w must have shape [B,N,2 or 3]")
+    if channel < 0 or channel >= int(field.inflated_height_w.shape[1]):
+        raise ValueError("channel is outside inflated_height_w")
+    field_batch, nx, ny = map(int, field.height_w.shape)
+    query_batch = int(points.shape[0])
+    if query_batch % field_batch != 0:
+        raise ValueError("points batch must be an integer repeat of field batch")
+    repeats = query_batch // field_batch
+    origin_w = field.origin_w.repeat_interleave(repeats, dim=0)
+    yaw_w = field.yaw_w.repeat_interleave(repeats, dim=0)
+    delta = points[..., :2] - origin_w[:, None, :2]
+    cosine = torch.cos(yaw_w)[:, None]
+    sine = torch.sin(yaw_w)[:, None]
+    index_x = (cosine * delta[..., 0] + sine * delta[..., 1]) / float(
+        field.resolution
+    ) + 0.5 * float(nx - 1)
+    index_y = (-sine * delta[..., 0] + cosine * delta[..., 1]) / float(
+        field.resolution
+    ) + 0.5 * float(ny - 1)
+    inside = (
+        (index_x >= 0.0)
+        & (index_x <= float(nx - 1))
+        & (index_y >= 0.0)
+        & (index_y <= float(ny - 1))
+    )
+    sampled_valid = _bilinear(
+        field.valid_mask.to(dtype=field.height_w.dtype), index_x, index_y
+    ) > 0.999
+    valid = inside & sampled_valid
+    height = _bilinear(field.inflated_height_w[:, channel], index_x, index_y)
+    return height, valid
+
+
 def query_landing_region_world(
     field: JointMpcPerceptiveField,
     points_w: Tensor,
@@ -325,6 +369,7 @@ __all__ = [
     "JointMpcPerceptiveQuery",
     "JointMpcTerrainQuery",
     "query_landing_region_world",
+    "query_inflated_height_world",
     "query_perceptive_world",
     "query_world",
     "query_world_maybe_compiled",

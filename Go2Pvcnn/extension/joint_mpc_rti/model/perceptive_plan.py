@@ -8,15 +8,22 @@ import torch
 from torch import Tensor
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
-from extension.joint_mpc_rti.model.analytic_ik import go2_analytic_ik
+from extension.joint_mpc_rti.model.analytic_ik import (
+    go2_analytic_ik,
+    go2_analytic_ik_selected,
+)
 from extension.joint_mpc_rti.model.gait_schedule import FixedTrotSchedule
 from extension.joint_mpc_rti.model.go2_kinematics import (
     HIP_OFFSETS,
+    LEG_SIDE_SIGNS,
     go2_collision_geometry,
+    go2_fk,
+    go2_selected_leg_collision_geometry,
 )
 from extension.joint_mpc_rti.solver.fixed_general import fixed_general_solve
 from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.terrain.query import (
+    query_inflated_height_world,
     query_landing_region_world,
     query_perceptive_world,
 )
@@ -37,6 +44,7 @@ class TouchdownPlan:
     safe_mask: Tensor
     score: Tensor
     selected_index: Tensor
+    ranked_index: Tensor
     target_w: Tensor
     event_step: Tensor
     preview_touchdown_step: Tensor
@@ -45,9 +53,21 @@ class TouchdownPlan:
     latched: Tensor
     small_cross_required: Tensor
     small_after_mask: Tensor
+    candidate_region: JointMpcTouchdownRegion
     region: JointMpcTouchdownRegion
+    preview_candidate_w: Tensor
+    preview_safe_mask: Tensor
+    preview_score: Tensor
+    preview_selected_index: Tensor
+    preview_ranked_index: Tensor
+    preview_target_w: Tensor
+    preview_selected_sweep_safe: Tensor
+    preview_valid: Tensor
+    preview_candidate_region: JointMpcTouchdownRegion
+    preview_region: JointMpcTouchdownRegion
     score_components: dict[str, Tensor]
     valid_components: dict[str, Tensor]
+    preview_valid_components: dict[str, Tensor]
 
     @property
     def region_A(self) -> Tensor:
@@ -326,7 +346,7 @@ def _build_candidate_regions(
         "blci,blcki->blck", plane[..., 1:], corner_xy - candidate_w[..., None, :2]
     )
     corners_w = torch.cat(
-        (corner_xy, (corner_height + float(cfg.terrain.foot_radius_m))[..., None]), dim=-1
+        (corner_xy, (corner_height + float(cfg.gait.foot_contact_offset))[..., None]), dim=-1
     )
 
     hip_x = torch.stack((torch.cos(yaw), torch.sin(yaw)), dim=-1)
@@ -399,20 +419,27 @@ def _world_command_axis(command: Tensor, yaw: Tensor) -> tuple[Tensor, Tensor]:
 
 
 def _candidate_leg_sweep_safe(
-    measured: JointMpcRtiState,
+    start_root: Tensor,
+    start_rpy: Tensor,
+    start_joint: Tensor,
     root_target: Tensor,
     rpy_target: Tensor,
     candidate_joint: Tensor,
     field: JointMpcPerceptiveField,
     cfg: JointMpcRtiCfg,
-) -> Tensor:
+    *,
+    samples_override: int | None = None,
+) -> tuple[Tensor, Tensor]:
     batch, legs, candidates = map(int, candidate_joint.shape[:3])
-    current_leg = measured.joint_pos.reshape(batch, 1, 1, 4, 3)
-    leg_selector = torch.eye(4, dtype=torch.bool, device=measured.device).view(1, 4, 1, 4, 1)
+    current_leg = start_joint.reshape(batch, legs, 1, 1, 4, 3)
+    leg_selector = torch.eye(4, dtype=torch.bool, device=start_root.device).view(
+        1, 4, 1, 1, 4, 1
+    )
+    endpoint_selector = leg_selector.squeeze(3)
     end_leg = torch.where(
-        leg_selector,
+        endpoint_selector,
         candidate_joint.unsqueeze(3),
-        current_leg,
+        current_leg.squeeze(3),
     )
     end_joint = end_leg.reshape(batch, legs, candidates, 12)
     end_state = torch.cat(
@@ -423,30 +450,112 @@ def _candidate_leg_sweep_safe(
         ),
         dim=-1,
     )
-    start = measured.as_vector()[:, None, None].expand(-1, legs, candidates, -1)
-    samples = int(cfg.touchdown.swing_samples)
+    start_state = torch.cat((start_root, start_rpy, start_joint), dim=-1)
+    start = start_state[:, :, None].expand(-1, -1, candidates, -1)
+    samples = (
+        int(cfg.touchdown.swing_samples)
+        if samples_override is None
+        else int(samples_override)
+    )
     fraction = constant_like(
         start,
         f"selector_swing_fraction_{samples}",
         tuple(index / float(samples - 1) for index in range(samples)),
     ).view(1, 1, 1, samples, 1)
-    state = start[:, :, :, None] + fraction * (end_state[:, :, :, None] - start[:, :, :, None])
-    geometry = go2_collision_geometry(state[..., :3], state[..., 3:6], state[..., 6:])
-    def select_leg(points: Tensor) -> Tensor:
-        index_shape = (1, legs, 1, 1, 1) + (1,) * (points.ndim - 5)
-        leg_index = torch.arange(legs, device=state.device).view(index_shape)
-        index = leg_index.expand(
-            batch, legs, candidates, samples, 1, *points.shape[5:]
-        )
-        return torch.gather(points, 4, index).squeeze(4)
+    root_start = start_root[:, :, None, None]
+    root = (
+        root_start + fraction * (root_target[:, :, None, None] - root_start)
+    ).expand(-1, -1, candidates, -1, -1)
+    rpy_start = start_rpy[:, :, None, None]
+    rpy_delta = rpy_target[:, :, None, None] - rpy_start
+    yaw_delta = torch.remainder(rpy_delta[..., 2:3] + torch.pi, 2.0 * torch.pi) - torch.pi
+    rpy_delta = torch.cat((rpy_delta[..., :2], yaw_delta), dim=-1)
+    rpy = (rpy_start + fraction * rpy_delta).expand(-1, -1, candidates, -1, -1)
 
-    foot = select_leg(geometry.foot_center_w)
-    knee = select_leg(geometry.knee_center_w)
-    calf_endpoints = select_leg(geometry.calf_endpoints_w)
-    thigh_endpoints = select_leg(geometry.thigh_endpoints_w)
+    start_geometry = go2_collision_geometry(
+        start_root, start_rpy, start_joint
+    )
+    lift_index = torch.arange(legs, device=start.device).view(1, legs, 1, 1)
+    lift = torch.gather(
+        start_geometry.foot_center_w,
+        2,
+        lift_index.expand(batch, legs, 1, 3),
+    ).squeeze(2)[:, :, None, None]
+    endpoint_geometry = go2_collision_geometry(
+        end_state[..., :3], end_state[..., 3:6], end_state[..., 6:]
+    )
+    endpoint_index = torch.arange(legs, device=start_root.device).view(1, legs, 1, 1, 1)
+    endpoint_index = endpoint_index.expand(batch, legs, candidates, 1, 3)
+    target = torch.gather(
+        endpoint_geometry.foot_center_w, 3, endpoint_index
+    ).squeeze(3)[:, :, :, None]
+
+    tau = fraction
+    smooth = 10.0 * tau.pow(3) - 15.0 * tau.pow(4) + 6.0 * tau.pow(5)
+    bump = 64.0 * tau.pow(3) * (1.0 - tau).pow(3)
+    side = constant_like(start, "selector_leg_side", LEG_SIDE_SIGNS).view(1, legs, 1, 1)
+    endpoint_yaw = rpy_target[..., 2][:, :, None, None]
+    outward = torch.stack(
+        (-torch.sin(endpoint_yaw) * side, torch.cos(endpoint_yaw) * side), dim=-1
+    )
+    foot_xy = (
+        lift[..., :2]
+        + smooth * (target[..., :2] - lift[..., :2])
+        + bump * float(cfg.nominal.swing_outward_offset_m) * outward
+    )
+    apex_query = query_perceptive_world(
+        field, foot_xy.reshape(batch, legs * candidates * samples, 2)
+    )
+    apex_height = apex_query.inflated_height_w[..., 0].reshape(
+        batch, legs, candidates, samples
+    )
+    apex_valid = apex_query.valid.reshape(batch, legs, candidates, samples)
+    apex_height = torch.where(
+        apex_valid, apex_height, torch.full_like(apex_height, -torch.inf)
+    )
+    apex_z = (
+        apex_height.amax(dim=-1)
+        + float(cfg.terrain.foot_radius_m)
+        + float(cfg.nominal.swing_apex_margin_m)
+    )[..., None, None]
+    apex_z = torch.maximum(
+        apex_z,
+        torch.maximum(lift[..., 2:3], target[..., 2:3]),
+    )
+    first_tau = (2.0 * tau).clamp(0.0, 1.0)
+    second_tau = (2.0 * tau - 1.0).clamp(0.0, 1.0)
+    first_smooth = (
+        10.0 * first_tau.pow(3)
+        - 15.0 * first_tau.pow(4)
+        + 6.0 * first_tau.pow(5)
+    )
+    second_smooth = (
+        10.0 * second_tau.pow(3)
+        - 15.0 * second_tau.pow(4)
+        + 6.0 * second_tau.pow(5)
+    )
+    foot_z = torch.where(
+        tau <= 0.5,
+        lift[..., 2:3] + first_smooth * (apex_z - lift[..., 2:3]),
+        apex_z + second_smooth * (target[..., 2:3] - apex_z),
+    )
+    foot_path = torch.cat((foot_xy, foot_z), dim=-1)
+
+    leg_index = torch.arange(legs, device=start_root.device).view(1, legs, 1, 1)
+    leg_index = leg_index.expand(batch, legs, candidates, samples)
+    selected_joint, selected_reachable = go2_analytic_ik_selected(
+        root, rpy, foot_path, leg_index
+    )
+    geometry = go2_selected_leg_collision_geometry(
+        root, rpy, selected_joint, leg_index
+    )
+    foot = geometry.foot_center_w
+    knee = geometry.knee_center_w
+    calf_endpoints = geometry.calf_endpoints_w
+    thigh_endpoints = geometry.thigh_endpoints_w
     capsule_samples = int(cfg.touchdown.selector_capsule_samples)
     capsule_fraction = constant_like(
-        state,
+        root,
         f"selector_capsule_fraction_{capsule_samples}",
         tuple(index / float(capsule_samples - 1) for index in range(capsule_samples)),
     ).view(1, 1, 1, 1, capsule_samples, 1)
@@ -460,18 +569,46 @@ def _candidate_leg_sweep_safe(
     def part_safe(points: Tensor, channel: int, vertical: float) -> Tensor:
         points_per_candidate = int(points.numel() // (batch * legs * candidates * 3))
         flattened = points.reshape(batch, legs * candidates * points_per_candidate, 3)
-        query = query_perceptive_world(field, flattened)
-        clearance = flattened[..., 2] - query.inflated_height_w[..., channel] - float(vertical)
-        safe = query.valid & (clearance >= 0.0)
+        inflated_height, valid_query = query_inflated_height_world(
+            field, flattened, channel=channel
+        )
+        clearance = flattened[..., 2] - inflated_height - float(vertical)
+        safe = valid_query & (clearance >= 0.0)
         return safe.reshape(batch, legs, candidates, points_per_candidate).all(dim=-1)
 
+    def segment_resolved(points: Tensor) -> Tensor:
+        motion = torch.linalg.vector_norm(
+            points[:, :, :, 1:] - points[:, :, :, :-1], dim=-1
+        )
+        return (
+            motion.reshape(batch, legs, candidates, -1).amax(dim=-1)
+            <= float(field.resolution)
+        )
+
     terrain = cfg.terrain
-    return (
-        part_safe(foot, 0, terrain.foot_radius_m)
+    lower = constant_like(root, "selector_path_joint_lower", JOINT_LOWER)
+    upper = constant_like(root, "selector_path_joint_upper", JOINT_UPPER)
+    joint_safe = (
+        (selected_joint >= lower + float(cfg.touchdown.joint_margin_rad))
+        & (selected_joint <= upper - float(cfg.touchdown.joint_margin_rad))
+    ).all(dim=(-1, -2))
+    resolved = (
+        segment_resolved(foot)
+        & segment_resolved(knee)
+        & segment_resolved(calf)
+        & segment_resolved(thigh)
+    )
+    safe = (
+        apex_valid.all(dim=-1)
+        & selected_reachable.all(dim=-1)
+        & joint_safe
+        & resolved
+        & part_safe(foot, 0, terrain.foot_radius_m)
         & part_safe(knee, 1, terrain.knee_radius_m + terrain.link_margin_m)
         & part_safe(calf, 2, terrain.calf_radius_m + terrain.link_margin_m)
         & part_safe(thigh, 3, terrain.thigh_radius_m + terrain.link_margin_m)
     )
+    return safe, resolved
 
 
 def select_touchdowns(
@@ -542,26 +679,18 @@ def select_touchdowns(
             candidate_xy,
         )
     query = query_perceptive_world(field, candidate_xy.reshape(batch, 100, 2))
-    candidate_z = query.height_w.reshape(batch, 4, 25) + float(cfg.terrain.foot_radius_m)
+    candidate_z = query.height_w.reshape(batch, 4, 25) + float(cfg.gait.foot_contact_offset)
     candidate_w = torch.cat((candidate_xy, candidate_z[..., None]), dim=-1)
-    minimum_region_cap = (
-        round(
-            (float(cfg.region.min_half_extent_m) + float(cfg.region.margin_m))
-            / float(field.resolution)
-        )
-        * float(field.resolution)
-    )
     candidate_regions = _build_candidate_regions(
         candidate_w,
         yaw,
         field,
         cfg,
-        cap_m=minimum_region_cap,
     )
     candidate_w = torch.cat(
         (
             candidate_xy,
-            (candidate_regions.plane[..., :1] + float(cfg.terrain.foot_radius_m)),
+            (candidate_regions.plane[..., :1] + float(cfg.gait.foot_contact_offset)),
         ),
         dim=-1,
     )
@@ -619,8 +748,10 @@ def select_touchdowns(
         candidate_progress >= obstacle_out + float(cfg.touchdown.landing_after_margin_m)
     )
     corridor_safe = corridor_valid & ~large_corridor.any(dim=-1)
-    sweep_safe = _candidate_leg_sweep_safe(
-        measured,
+    sweep_safe, sweep_resolved = _candidate_leg_sweep_safe(
+        measured.root_pos_w[:, None].expand(-1, 4, -1),
+        measured.root_rpy_w[:, None].expand(-1, 4, -1),
+        measured.joint_pos[:, None].expand(-1, 4, -1),
         root_event,
         rpy_event,
         candidate_joint,
@@ -694,65 +825,287 @@ def select_touchdowns(
         )
         selected_index = torch.where(keep, previous_index, selected_index)
 
+    candidate_index = constant_like(
+        candidate_w,
+        "touchdown_rank_candidate_index",
+        tuple(float(value) for value in range(25)),
+    ).to(torch.long).view(1, 1, 25)
+    ranking_score = torch.where(
+        candidate_index == selected_index[..., None],
+        torch.full_like(masked_score, -torch.inf),
+        masked_score,
+    )
+    ranked_index = torch.argsort(ranking_score, dim=-1, stable=True)
+
     selected_candidate = _gather_candidate(candidate_w, selected_index)
     selected_sweep = _gather_candidate(sweep_safe, selected_index)
-    maximum_region = _build_candidate_regions(
-        selected_candidate.unsqueeze(2), yaw, field, cfg
-    )
-    use_maximum = maximum_region.valid[..., 0]
-
-    def select_region_value(maximum: Tensor, minimum: Tensor) -> Tensor:
-        maximum_value = maximum[:, :, 0]
-        condition = use_maximum.view(
-            *use_maximum.shape,
-            *((1,) * (maximum_value.ndim - use_maximum.ndim)),
-        )
-        return torch.where(condition, maximum_value, minimum)
-
     selected_region = JointMpcTouchdownRegion(
-        A=select_region_value(
-            maximum_region.A, _gather_candidate(candidate_regions.A, selected_index)
+        A=_gather_candidate(candidate_regions.A, selected_index),
+        b=_gather_candidate(candidate_regions.b, selected_index),
+        half_extent=_gather_candidate(candidate_regions.half_extent, selected_index),
+        corners_w=_gather_candidate(candidate_regions.corners_w, selected_index),
+        plane=_gather_candidate(candidate_regions.plane, selected_index),
+        normal_w=_gather_candidate(candidate_regions.normal_w, selected_index),
+        plane_residual=_gather_candidate(candidate_regions.plane_residual, selected_index),
+        area=_gather_candidate(candidate_regions.area, selected_index),
+        distance_to_forbidden=_gather_candidate(
+            candidate_regions.distance_to_forbidden, selected_index
         ),
-        b=select_region_value(
-            maximum_region.b, _gather_candidate(candidate_regions.b, selected_index)
-        ),
-        half_extent=select_region_value(
-            maximum_region.half_extent,
-            _gather_candidate(candidate_regions.half_extent, selected_index),
-        ),
-        corners_w=select_region_value(
-            maximum_region.corners_w,
-            _gather_candidate(candidate_regions.corners_w, selected_index),
-        ),
-        plane=select_region_value(
-            maximum_region.plane,
-            _gather_candidate(candidate_regions.plane, selected_index),
-        ),
-        normal_w=select_region_value(
-            maximum_region.normal_w,
-            _gather_candidate(candidate_regions.normal_w, selected_index),
-        ),
-        plane_residual=select_region_value(
-            maximum_region.plane_residual,
-            _gather_candidate(candidate_regions.plane_residual, selected_index),
-        ),
-        area=select_region_value(
-            maximum_region.area,
-            _gather_candidate(candidate_regions.area, selected_index),
-        ),
-        distance_to_forbidden=select_region_value(
-            maximum_region.distance_to_forbidden,
-            _gather_candidate(candidate_regions.distance_to_forbidden, selected_index),
-        ),
-        valid=(use_maximum | _gather_candidate(candidate_regions.valid, selected_index))
-        & valid,
+        valid=_gather_candidate(candidate_regions.valid, selected_index) & valid,
     )
     selected = torch.cat(
         (
             selected_candidate[..., :2],
-            (selected_region.plane[..., :1] + float(cfg.terrain.foot_radius_m)),
+            (selected_region.plane[..., :1] + float(cfg.gait.foot_contact_offset)),
         ),
         dim=-1,
+    )
+
+    selected_joint = _gather_candidate(candidate_joint, selected_index)
+    start_leg = measured.joint_pos.reshape(batch, 1, 4, 3).expand(-1, 4, -1, -1)
+    leg_eye = constant_like(
+        warm,
+        "preview_start_leg_eye",
+        tuple(
+            tuple(float(row == column) for column in range(4))
+            for row in range(4)
+        ),
+    ).to(torch.bool).view(1, 4, 4, 1)
+    preview_start_joint = torch.where(
+        leg_eye, selected_joint[:, :, None], start_leg
+    ).reshape(batch, 4, 12)
+
+    duration = float(cfg.gait.period_steps) * float(cfg.runtime.dt)
+    scaled_command = command * float(cfg.nominal.command_scale)
+    preview_displacement = torch.stack(
+        (
+            torch.cos(yaw) * scaled_command[:, None, 0]
+            - torch.sin(yaw) * scaled_command[:, None, 1],
+            torch.sin(yaw) * scaled_command[:, None, 0]
+            + torch.cos(yaw) * scaled_command[:, None, 1],
+        ),
+        dim=-1,
+    ) * duration
+    preview_root = torch.cat(
+        (
+            root_event[..., :2] + preview_displacement,
+            root_event[..., 2:3],
+        ),
+        dim=-1,
+    )
+    preview_rpy = rpy_event.clone()
+    preview_rpy[..., 2] = preview_rpy[..., 2] + scaled_command[:, None, 2] * duration
+    preview_yaw = preview_rpy[..., 2]
+    preview_cosine = torch.cos(preview_yaw)
+    preview_sine = torch.sin(preview_yaw)
+    preview_hip_xy = preview_root[..., :2] + torch.stack(
+        (
+            preview_cosine * hip[..., 0] - preview_sine * hip[..., 1],
+            preview_sine * hip[..., 0] + preview_cosine * hip[..., 1],
+        ),
+        dim=-1,
+    )
+    preview_rotated_offset = torch.stack(
+        (
+            preview_cosine[..., None] * offset[None, None, :, 0]
+            - preview_sine[..., None] * offset[None, None, :, 1],
+            preview_sine[..., None] * offset[None, None, :, 0]
+            + preview_cosine[..., None] * offset[None, None, :, 1],
+        ),
+        dim=-1,
+    )
+    preview_candidate_xy = preview_hip_xy[:, :, None] + preview_rotated_offset
+    preview_query = query_perceptive_world(
+        field, preview_candidate_xy.reshape(batch, 100, 2)
+    )
+    preview_candidate_z = preview_query.height_w.reshape(batch, 4, 25)
+    preview_seed = torch.cat(
+        (
+            preview_candidate_xy,
+            (preview_candidate_z + float(cfg.gait.foot_contact_offset))[..., None],
+        ),
+        dim=-1,
+    )
+    preview_regions = _build_candidate_regions(
+        preview_seed, preview_yaw, field, cfg
+    )
+    preview_candidate_w = torch.cat(
+        (
+            preview_candidate_xy,
+            (
+                preview_regions.plane[..., :1]
+                + float(cfg.gait.foot_contact_offset)
+            ),
+        ),
+        dim=-1,
+    )
+    preview_map_safe = (
+        preview_query.valid & preview_query.landing_safe
+    ).reshape(batch, 4, 25)
+    preview_plane_safe = (
+        (preview_query.slope_rad <= float(cfg.terrain.slope_max_rad))
+        & (preview_query.roughness <= float(cfg.terrain.roughness_max_m))
+    ).reshape(batch, 4, 25)
+    preview_root_ik = preview_root[:, :, None].expand(-1, -1, 25, -1)
+    preview_rpy_ik = preview_rpy[:, :, None].expand(-1, -1, 25, -1)
+    preview_targets = preview_candidate_w.unsqueeze(3).expand(-1, -1, -1, 4, -1)
+    preview_all_joint, preview_all_reachable = go2_analytic_ik(
+        preview_root_ik, preview_rpy_ik, preview_targets
+    )
+    preview_candidate_joint = (
+        preview_all_joint.diagonal(dim1=1, dim2=3).permute(0, 3, 1, 2)
+    )
+    preview_reachable = (
+        preview_all_reachable.diagonal(dim1=1, dim2=3).permute(0, 2, 1)
+    )
+    preview_joint_safe = (
+        (
+            preview_candidate_joint
+            >= lower + float(cfg.touchdown.joint_margin_rad)
+        )
+        & (
+            preview_candidate_joint
+            <= upper - float(cfg.touchdown.joint_margin_rad)
+        )
+    ).all(dim=-1)
+
+    preview_corridor_xy = selected[:, :, None, None, :2] + corridor_fraction * (
+        preview_candidate_xy[:, :, :, None] - selected[:, :, None, None, :2]
+    )
+    preview_corridor_query = query_perceptive_world(
+        field,
+        preview_corridor_xy.reshape(batch, 4 * 25 * corridor_samples, 2),
+    )
+    preview_small_corridor = preview_corridor_query.small_mask.reshape(
+        batch, 4, 25, corridor_samples
+    )
+    preview_large_corridor = preview_corridor_query.large_mask.reshape(
+        batch, 4, 25, corridor_samples
+    )
+    preview_corridor_valid = preview_corridor_query.valid.reshape(
+        batch, 4, 25, corridor_samples
+    ).all(dim=-1)
+    preview_axis, preview_speed = _world_command_axis(
+        command[:, None].expand(-1, 4, -1), preview_yaw
+    )
+    preview_relative = preview_corridor_xy - selected[:, :, None, None, :2]
+    preview_projected = (
+        preview_relative * preview_axis[:, :, None, None]
+    ).sum(dim=-1)
+    preview_obstacle_out = torch.where(
+        preview_small_corridor,
+        preview_projected,
+        torch.full_like(preview_projected, -torch.inf),
+    ).amax(dim=-1)
+    preview_cross_required = preview_small_corridor.any(dim=-1) & (
+        preview_speed[:, :, None] > 1.0e-6
+    )
+    preview_progress = (
+        (preview_candidate_xy - selected[:, :, None, :2])
+        * preview_axis[:, :, None]
+    ).sum(dim=-1)
+    preview_small_after = (~preview_cross_required) | (
+        preview_progress
+        >= preview_obstacle_out + float(cfg.touchdown.landing_after_margin_m)
+    )
+    preview_corridor_safe = preview_corridor_valid & ~preview_large_corridor.any(
+        dim=-1
+    )
+    preview_sweep_safe, preview_sweep_resolved = _candidate_leg_sweep_safe(
+        root_event,
+        rpy_event,
+        preview_start_joint,
+        preview_root,
+        preview_rpy,
+        preview_candidate_joint,
+        field,
+        cfg,
+        samples_override=int(cfg.touchdown.preview_swing_samples),
+    )
+
+    preview_command_target = selected[..., :2] + preview_displacement
+    previous_preview_target = (
+        preview_command_target
+        if previous_plan is None
+        else previous_plan.preview_target_w[..., :2]
+    )
+    preview_command_score = (
+        preview_candidate_xy - preview_command_target[:, :, None]
+    ).square().sum(dim=-1)
+    preview_warm_score = (
+        preview_candidate_xy - previous_preview_target[:, :, None]
+    ).square().sum(dim=-1)
+    preview_slope_score = preview_query.slope_rad.reshape(batch, 4, 25).square()
+    preview_roughness_score = preview_query.roughness.reshape(batch, 4, 25).square()
+    preview_edge_score = (
+        preview_query.boundary_distance_m.reshape(batch, 4, 25)
+        .clamp_min(0.01)
+        .reciprocal()
+    )
+    preview_score = (
+        float(cfg.touchdown.w_command) * preview_command_score
+        + float(cfg.touchdown.w_warm) * preview_warm_score
+        + float(cfg.touchdown.w_slope) * preview_slope_score
+        + float(cfg.touchdown.w_roughness) * preview_roughness_score
+        + float(cfg.touchdown.w_edge) * preview_edge_score
+    )
+    preview_pre_region_safe = (
+        preview_map_safe
+        & preview_plane_safe
+        & preview_reachable
+        & preview_joint_safe
+        & preview_small_after
+        & preview_corridor_safe
+        & preview_sweep_safe
+    )
+    preview_safe = preview_pre_region_safe & preview_regions.valid
+    preview_masked_score = torch.where(
+        preview_safe, preview_score, torch.full_like(preview_score, torch.inf)
+    )
+    preview_selected_index = preview_masked_score.argmin(dim=-1)
+    preview_valid = preview_safe.any(dim=-1)
+    preview_ranking_score = torch.where(
+        candidate_index == preview_selected_index[..., None],
+        torch.full_like(preview_masked_score, -torch.inf),
+        preview_masked_score,
+    )
+    preview_ranked_index = torch.argsort(
+        preview_ranking_score, dim=-1, stable=True
+    )
+    preview_selected_candidate = _gather_candidate(
+        preview_candidate_w, preview_selected_index
+    )
+    preview_selected_region = JointMpcTouchdownRegion(
+        A=_gather_candidate(preview_regions.A, preview_selected_index),
+        b=_gather_candidate(preview_regions.b, preview_selected_index),
+        half_extent=_gather_candidate(
+            preview_regions.half_extent, preview_selected_index
+        ),
+        corners_w=_gather_candidate(preview_regions.corners_w, preview_selected_index),
+        plane=_gather_candidate(preview_regions.plane, preview_selected_index),
+        normal_w=_gather_candidate(preview_regions.normal_w, preview_selected_index),
+        plane_residual=_gather_candidate(
+            preview_regions.plane_residual, preview_selected_index
+        ),
+        area=_gather_candidate(preview_regions.area, preview_selected_index),
+        distance_to_forbidden=_gather_candidate(
+            preview_regions.distance_to_forbidden, preview_selected_index
+        ),
+        valid=_gather_candidate(preview_regions.valid, preview_selected_index)
+        & preview_valid,
+    )
+    preview_selected = torch.cat(
+        (
+            preview_selected_candidate[..., :2],
+            (
+                preview_selected_region.plane[..., :1]
+                + float(cfg.gait.foot_contact_offset)
+            ),
+        ),
+        dim=-1,
+    )
+    preview_selected_sweep = _gather_candidate(
+        preview_sweep_safe, preview_selected_index
     )
 
     return TouchdownPlan(
@@ -760,6 +1113,7 @@ def select_touchdowns(
         safe_mask=safe,
         score=score,
         selected_index=selected_index,
+        ranked_index=ranked_index,
         target_w=selected,
         event_step=event_step,
         preview_touchdown_step=preview_step,
@@ -768,7 +1122,40 @@ def select_touchdowns(
         latched=latched,
         small_cross_required=small_cross_required,
         small_after_mask=small_after,
+        candidate_region=JointMpcTouchdownRegion(
+            A=candidate_regions.A,
+            b=candidate_regions.b,
+            half_extent=candidate_regions.half_extent,
+            corners_w=candidate_regions.corners_w,
+            plane=candidate_regions.plane,
+            normal_w=candidate_regions.normal_w,
+            plane_residual=candidate_regions.plane_residual,
+            area=candidate_regions.area,
+            distance_to_forbidden=candidate_regions.distance_to_forbidden,
+            valid=candidate_regions.valid,
+        ),
         region=selected_region,
+        preview_candidate_w=preview_candidate_w,
+        preview_safe_mask=preview_safe,
+        preview_score=preview_score,
+        preview_selected_index=preview_selected_index,
+        preview_ranked_index=preview_ranked_index,
+        preview_target_w=preview_selected,
+        preview_selected_sweep_safe=preview_selected_sweep,
+        preview_valid=preview_valid,
+        preview_candidate_region=JointMpcTouchdownRegion(
+            A=preview_regions.A,
+            b=preview_regions.b,
+            half_extent=preview_regions.half_extent,
+            corners_w=preview_regions.corners_w,
+            plane=preview_regions.plane,
+            normal_w=preview_regions.normal_w,
+            plane_residual=preview_regions.plane_residual,
+            area=preview_regions.area,
+            distance_to_forbidden=preview_regions.distance_to_forbidden,
+            valid=preview_regions.valid,
+        ),
+        preview_region=preview_selected_region,
         score_components={
             "command": command_score,
             "warm": warm_score,
@@ -784,8 +1171,21 @@ def select_touchdowns(
             "small_after": small_after,
             "corridor": corridor_safe,
             "sweep": sweep_safe,
+            "sweep_resolved": sweep_resolved,
             "pre_region": pre_region_safe,
             "region": candidate_regions.valid,
+        },
+        preview_valid_components={
+            "map": preview_map_safe,
+            "plane": preview_plane_safe,
+            "reachable": preview_reachable,
+            "joint": preview_joint_safe,
+            "small_after": preview_small_after,
+            "corridor": preview_corridor_safe,
+            "sweep": preview_sweep_safe,
+            "sweep_resolved": preview_sweep_resolved,
+            "pre_region": preview_pre_region_safe,
+            "region": preview_regions.valid,
         },
     )
 

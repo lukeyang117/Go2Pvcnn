@@ -41,7 +41,7 @@ class JointMpcRtiGaitCfg:
     swing_steps: int = 12
     stance_steps: int = 12
     h_swing: float = 0.08
-    foot_contact_offset: float = 0.022
+    foot_contact_offset: float = 0.0221
     nominal_joint_pos: tuple[float, ...] = (0.0, 0.8, -1.5) * 4
 
 
@@ -51,6 +51,10 @@ class JointMpcRtiNominalCfg:
     step_reference_scale: float = 0.5
     unreachable_step_scale: float = 0.5
     measurement_decay_nodes: int = 6
+    terminal_command_fill_scale: float = 0.5
+    ik_blend_scale: float = 1.0
+    swing_outward_offset_m: float = 0.015
+    swing_apex_margin_m: float = 0.08
 
 
 @dataclass
@@ -61,7 +65,8 @@ class JointMpcRtiTouchdownCfg:
     landing_after_margin_m: float = 0.025
     joint_margin_rad: float = 0.10
     corridor_samples: int = 33
-    swing_samples: int = 9
+    swing_samples: int = 33
+    preview_swing_samples: int = 65
     selector_capsule_samples: int = 5
     latch_phase: int = 6
     w_command: float = 8.0
@@ -103,7 +108,7 @@ class JointMpcRtiTerrainCfg:
     roughness_max_m: float = 0.030
     edge_margin_m: float = 0.020
     roughness_radius_m: float = 0.010
-    sweep_subdivisions: int = 8
+    sweep_subdivisions: int = 24
     capsule_samples: int = 17
     stance_ground_tolerance_m: float = 0.012
 

@@ -55,6 +55,40 @@ def test_collision_geometry_exposes_spheres_capsules_sole_and_base_obb() -> None
     assert geometry.base_half_extents.shape == (1, 3)
 
 
+def test_selected_leg_geometry_matches_whole_robot_geometry() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import (
+        go2_collision_geometry,
+        go2_selected_leg_collision_geometry,
+    )
+
+    state = _state()
+    root = state[:, None, :3].expand(-1, 4, -1)
+    rpy = state[:, None, 3:6].expand(-1, 4, -1)
+    joint = state[:, 6:].reshape(1, 4, 3)
+    selected = go2_selected_leg_collision_geometry(
+        root, rpy, joint, torch.arange(4).view(1, 4)
+    )
+    whole = go2_collision_geometry(
+        root, rpy, state[:, None, 6:].expand(-1, 4, -1)
+    )
+    diagonal = torch.arange(4)
+
+    torch.testing.assert_close(
+        selected.foot_center_w, whole.foot_center_w[0, diagonal, diagonal][None]
+    )
+    torch.testing.assert_close(
+        selected.knee_center_w, whole.knee_center_w[0, diagonal, diagonal][None]
+    )
+    torch.testing.assert_close(
+        selected.calf_endpoints_w,
+        whole.calf_endpoints_w[0, diagonal, diagonal][None],
+    )
+    torch.testing.assert_close(
+        selected.thigh_endpoints_w,
+        whole.thigh_endpoints_w[0, diagonal, diagonal][None],
+    )
+
+
 def test_interval_collision_detects_safe_endpoints_with_unsafe_middle() -> None:
     from extension.joint_mpc_rti.terrain.swept_safety import (
         evaluate_nodes,
@@ -127,6 +161,27 @@ def test_each_part_has_independent_clearance_and_reject_bit(part: str) -> None:
 
     assert result.collision_by_part[part].any()
     assert result.minimum_clearance_by_part[part].min() < 0.0
+    assert not result.safe.all()
+
+
+def test_micrometer_negative_clearance_remains_a_collision() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry
+    from extension.joint_mpc_rti.terrain.swept_safety import evaluate_nodes
+
+    cfg = JointMpcRtiCfg()
+    state = _state()
+    foot = go2_collision_geometry(
+        state[:, :3], state[:, 3:6], state[:, 6:]
+    ).foot_center_w[0, 0]
+    field = _field_with_point_obstacle(
+        foot,
+        float(foot[2] - cfg.terrain.foot_radius_m + 2.0e-6),
+    )
+
+    result = evaluate_nodes(state[:, None], field, cfg)
+
+    assert result.minimum_clearance_by_part["foot"].min() < 0.0
+    assert result.collision_by_part["foot"].any()
     assert not result.safe.all()
 
 

@@ -57,3 +57,22 @@ def test_analytic_ik_source_has_no_python_time_or_leg_loop() -> None:
     tree = ast.parse(textwrap.dedent(source))
 
     assert not any(isinstance(node, (ast.For, ast.While)) for node in ast.walk(tree))
+
+
+def test_selected_leg_ik_matches_all_leg_ik() -> None:
+    from extension.joint_mpc_rti.model.analytic_ik import go2_analytic_ik_selected
+
+    root_pos, root_rpy, foot_target = _reachable_targets(batch=2, nodes=1)
+    all_joint, all_reachable = go2_analytic_ik(root_pos, root_rpy, foot_target)
+    leg = torch.tensor(((0,), (3,)))
+    batch = torch.arange(2)[:, None]
+    node = torch.zeros(2, 1, dtype=torch.long)
+    selected_joint, selected_reachable = go2_analytic_ik_selected(
+        root_pos,
+        root_rpy,
+        foot_target[batch, node, leg],
+        leg,
+    )
+
+    torch.testing.assert_close(selected_joint, all_joint[batch, node, leg])
+    assert torch.equal(selected_reachable, all_reachable[batch, node, leg])
