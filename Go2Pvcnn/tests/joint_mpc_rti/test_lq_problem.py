@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
@@ -8,6 +10,7 @@ from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
 from extension.joint_mpc_rti.model.nominal import NominalTrajectory
 from extension.joint_mpc_rti.solver.context import LossContext
 from extension.joint_mpc_rti.solver.lq_problem import build_lq_problem, lq_residuals
+from extension.joint_mpc_rti.planner import _stance_anchors_from_state
 from .helpers import make_flat_field, make_state_nodes
 
 
@@ -21,6 +24,27 @@ EXPECTED_FAMILIES = {
     "warm",
     "slack",
 }
+
+
+def test_stance_anchor_switches_to_touchdown_after_swing() -> None:
+    state = make_state_nodes(1)
+    schedule = fixed_trot_schedule(torch.tensor([0]))
+    current = state.new_tensor(
+        (((0.20, 0.10, 0.02), (0.20, -0.10, 0.02),
+          (-0.20, 0.10, 0.02), (-0.20, -0.10, 0.02)),)
+    )
+    touchdown = current[:, None].expand(-1, 31, -1, -1).clone()
+    touchdown[..., 0] += torch.arange(31, dtype=state.dtype)[None, :, None] * 0.01
+
+    anchor = _stance_anchors_from_state(state, touchdown, current, schedule)
+    future_stance = schedule.stance_node & (
+        schedule.swing.to(torch.int64).cumsum(dim=1) > 0
+    )
+    expected = torch.where(
+        future_stance[..., None], touchdown, current[:, None]
+    )
+
+    torch.testing.assert_close(anchor, expected)
 
 
 def _nominal_and_context(
@@ -73,6 +97,70 @@ def test_lq_problem_has_exact_residual_families_and_h30_bands() -> None:
     assert problem.second_offdiag.shape == (2, 29, 18, 18)
     assert problem.gradient.shape == (2, 31, 18)
     assert problem.residuals["slack"].shape == (2, 0)
+
+
+def test_clearance_target_includes_foot_vertical_radius() -> None:
+    from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+    from extension.joint_mpc_rti.terrain.query import query_inflated_height_world
+    from extension.joint_mpc_rti.types import JointMpcFieldFrame
+
+    cfg = JointMpcRtiCfg()
+    nominal, context = _nominal_and_context(dtype=torch.float32)
+    terrain = context.terrain
+    field = build_perceptive_field(
+        terrain.height_w,
+        terrain.semantic_id,
+        terrain.valid_mask,
+        JointMpcFieldFrame(
+            origin_w=terrain.origin_w,
+            yaw_w=terrain.yaw_w,
+            timestamp=terrain.timestamp,
+            refresh_id=terrain.version,
+        ),
+        cfg,
+    )
+    problem = build_lq_problem(
+        nominal, replace(context, perceptive_field=field), cfg
+    )
+    foot = go2_fk(
+        nominal.state[..., :3], nominal.state[..., 3:6], nominal.state[..., 6:]
+    ).foot_pos_w
+    height, _ = query_inflated_height_world(
+        field, foot.reshape(1, 31 * 4, 3), channel=0
+    )
+    expected = -(
+        foot[..., 2]
+        - height.reshape(1, 31, 4)
+        - float(cfg.terrain.foot_radius_m)
+    )
+
+    torch.testing.assert_close(problem.clearance_target[..., :4], expected)
+
+
+def test_warm_lq_holds_only_published_root_xy_until_swing_foot_onset() -> None:
+    nominal, context = _nominal_and_context(batch=3)
+    phase = torch.tensor([0, 1, 2], dtype=torch.long)
+    schedule = fixed_trot_schedule(phase)
+    rebased = nominal.rebased_state.clone()
+    rebased[:2, 1, :2] = rebased[:2, 0, :2]
+    rebased[2, 1, 0] = rebased[2, 0, 0] + 0.01
+    nominal = replace(
+        nominal,
+        contact_state=schedule.stance_node,
+        rebased_state=rebased,
+        used_cold_start=torch.zeros(3, dtype=torch.bool),
+        used_warm_start=torch.ones(3, dtype=torch.bool),
+    )
+    context = replace(context, schedule=schedule)
+
+    problem = build_lq_problem(nominal, context, JointMpcRtiCfg())
+
+    assert torch.equal(problem.lower[:2, 1, :2], torch.zeros(2, 2))
+    assert torch.equal(problem.upper[:2, 1, :2], torch.zeros(2, 2))
+    assert (problem.lower[:2, 2:, :2] < 0.0).all()
+    assert (problem.upper[:2, 2:, :2] > 0.0).all()
+    assert (problem.lower[2, 1, :2] < 0.0).all()
+    assert (problem.upper[2, 1, :2] > 0.0).all()
 
 
 def test_lq_gradient_matches_finite_difference() -> None:

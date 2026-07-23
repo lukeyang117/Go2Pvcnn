@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-23 | Final flat gate first diagnosis | Task 16 nominal/preview/swept/CUDA scan and formal flat | solver fixed; behavior red | focused `51 passed`; CUDA scan `9 passed`; current-map B3 `[24,24,24]`; formal flat `19/19` failed in `47.629s` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md](2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md) |
+
 | 2026-07-23 | Final legacy path deletion | Task 15 import graph, obsolete solver/loss/map/probe deletion | pass | focused `28 passed`; full package `247 passed`; final path only | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-legacy-deletion.md](2026-07-23-joint-mpc-rti-final-legacy-deletion.md) |
 
 | 2026-07-23 | Final actual-world metrics schema | Task 14 P/A/M metrics, applicability, strict crossing | pass | 72 final IDs; planned/actual collision OR; focused `57 passed` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md](2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md) |
@@ -159,6 +161,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | Time | Topic | Stage | Result | Key Metrics | Todo | File |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-23 | Joint MPC RTI final flat closure | final Task 16 / real KKT / formal CUDA | pass; Task 17 unblocked | focused `115 passed`; package `284 passed`; flat `19/19`; KKT `5.133e-5/9.014e-5`; `54.746s`, `1842MiB` GPU | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-flat-gate-closure.md](2026-07-23-joint-mpc-rti-final-flat-gate-closure.md) |
 | 2026-07-22 | Joint MPC RTI warm x1 manifold implementation | Task 14E pre-LQ warm nominal / real viewer | solver-valid; behavior red on vertical support | focused `124 passed`; validity `1.0`; root `0.10739m/s`; joint `0.34683rad`; stance gap `84.63mm`; airborne `0.020408` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [Task 14E implementation](2026-07-22-joint-mpc-rti-warm-x1-manifold-implementation.md) |
 | 2026-07-22 | Joint MPC RTI warm x1 support manifold plan | Task 14E design / pre-LQ warm nominal | approved and planned; TDD next | shifted-x2 error `6mm`; analytic IK residual `1.49e-8m`; max correction `0.01797rad`; root unchanged | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [Task 14E plan](2026-07-22-joint-mpc-rti-warm-x1-manifold-plan.md) |
 | 2026-07-18 | Joint MPC H30 implementation plan amendment | T302v.8 planning | original plan amended; Stage A execution next | fixed H30; Tasks 8A-9A Stage A; H30 Stage B blocked until green; final same-candidate rerun | [T302v.8](../todo/T302v-joint-mpc-rti-gpu.md) | [plan amendment](2026-07-18-joint-mpc-h30-implementation-plan-amendment.md) |

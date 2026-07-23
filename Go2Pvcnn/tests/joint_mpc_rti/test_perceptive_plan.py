@@ -68,6 +68,54 @@ def test_selector_uses_25_candidates_per_leg_without_four_leg_product() -> None:
     assert plan.selected_sweep_safe.all()
 
 
+@pytest.mark.parametrize("vx", (-0.2, 0.2))
+def test_cold_flat_touchdown_leads_predicted_hip_in_command_direction(
+    vx: float,
+) -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry
+    from extension.joint_mpc_rti.model.nominal import build_rebased_seed
+    from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
+    from extension.joint_mpc_rti.types import JointMpcRtiSolverState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=vx)
+    phase = torch.tensor([0])
+    measured_foot = go2_collision_geometry(
+        measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
+    ).foot_center_w
+    previous = JointMpcRtiSolverState(
+        trajectory=_warm(1),
+        gait_phase=phase,
+        initialized=torch.zeros(1, dtype=torch.bool),
+        stance_anchor_w=measured_foot,
+    )
+    warm = build_rebased_seed(measured, command, phase, previous, cfg)
+    plan = select_touchdowns(
+        measured,
+        command,
+        fixed_trot_schedule(phase),
+        warm,
+        _field(),
+        cfg,
+    )
+
+    root_event = torch.gather(
+        warm[..., :2].unsqueeze(2).expand(-1, -1, 4, -1),
+        1,
+        plan.event_step[:, None, :, None].expand(-1, 1, -1, 2),
+    ).squeeze(1)
+    command_axis = torch.tensor((1.0 if vx > 0.0 else -1.0, 0.0))
+    relative_change = (
+        plan.target_w[..., :2]
+        - root_event
+        - (measured_foot[..., :2] - measured.root_pos_w[:, None, :2])
+    )
+    lead = (relative_change * command_axis).sum(-1)
+
+    assert (lead >= 0.01).all()
+
+
 def test_small_cross_candidates_that_intersect_corridor_must_land_after_obstacle() -> None:
     from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
 

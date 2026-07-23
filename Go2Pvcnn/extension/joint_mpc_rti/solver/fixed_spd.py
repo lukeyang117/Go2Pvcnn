@@ -18,7 +18,7 @@ def fixed_spd_solve(matrix: Tensor, rhs: Tensor) -> Tensor:
     if system.is_cuda:
         from extension.joint_mpc_rti.solver.fixed_spd_triton import fixed_spd_solve_cuda
 
-        return fixed_spd_solve_cuda(system, right)
+        return fixed_spd_solve_cuda(system.contiguous(), right.contiguous())
 
     rows: list[Tensor] = []
     for row_index in range(dimension):

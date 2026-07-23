@@ -9,7 +9,11 @@ from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.model.gait_schedule import fixed_trot_schedule
 from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry, go2_fk
 from extension.joint_mpc_rti.model.analytic_ik import go2_analytic_ik
-from extension.joint_mpc_rti.model.nominal import build_nominal
+from extension.joint_mpc_rti.model.nominal import (
+    _current_swing_height,
+    build_nominal,
+    build_rebased_seed,
+)
 from extension.joint_mpc_rti.model.perceptive_plan import TouchdownPlan, select_touchdowns
 from extension.joint_mpc_rti.runtime.warm_start import shift_rebase_trajectory
 from extension.joint_mpc_rti.types import (
@@ -20,6 +24,105 @@ from extension.joint_mpc_rti.types import (
 
 from .helpers import make_command, make_state
 from .test_perceptive_plan import _field
+
+
+def test_current_swing_height_keeps_the_absolute_apex_phase() -> None:
+    node = torch.arange(3, dtype=torch.float32).view(1, 3, 1)
+    height = _current_swing_height(
+        measured_z=torch.tensor([[0.14]]),
+        apex_z=torch.tensor([[0.15]]),
+        touchdown_z=torch.tensor([[0.02]]),
+        phase0=torch.tensor([[10]]),
+        node=node,
+        swing_steps=12,
+    )
+    torch.testing.assert_close(
+        height[0, :, 0], torch.tensor([0.14, 0.08, 0.02]), atol=1.0e-6, rtol=0.0
+    )
+
+
+def test_cold_root_waits_three_edges_for_swing_foot_onset() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.4)
+    phase = torch.tensor([0])
+    field = _field()
+    previous = _seed(measured, phase, initialized=False)
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+
+    torch.testing.assert_close(
+        result.rebased_state[:, 1:4, :2],
+        measured.root_pos_w[:, None, :2].expand(-1, 3, -1),
+    )
+    assert result.rebased_state[:, 4, 0].gt(measured.root_pos_w[:, 0]).all()
+
+
+def test_cold_swing_foot_moves_before_delayed_root() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    phase = torch.tensor([0])
+    field = _field()
+    previous = _seed(measured, phase, initialized=False)
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    foot = go2_fk(
+        result.state[..., :3], result.state[..., 3:6], result.state[..., 6:]
+    ).foot_pos_w
+    relative_x = foot[..., 0] - result.state[..., None, 0]
+    swing_leg_progress = relative_x[:, 3, (0, 3)] - relative_x[:, 0, (0, 3)]
+
+    assert swing_leg_progress.max() >= 0.001
+
+
+def test_warm_seed_delays_published_root_xy_for_only_two_swing_phases() -> None:
+    measured = make_state(2)
+    phase = torch.tensor([1, 2])
+    trajectory = measured.as_vector()[:, None].expand(-1, 31, -1).clone()
+    trajectory[..., 0] += 0.004 * torch.arange(31, dtype=trajectory.dtype)
+    previous = _seed(
+        measured,
+        phase,
+        initialized=True,
+        trajectory=trajectory,
+    )
+
+    rebased = build_rebased_seed(
+        measured,
+        make_command(2, vx=0.2),
+        phase,
+        previous,
+        JointMpcRtiCfg(),
+    )
+
+    torch.testing.assert_close(rebased[0, 1, :2], measured.root_pos_w[0, :2])
+    assert rebased[0, 2, 0] > measured.root_pos_w[0, 0]
+    assert rebased[1, 1, 0] > measured.root_pos_w[1, 0]
+
+
+def test_warm_root_profile_uses_fast_near_edges_and_bounded_far_edges() -> None:
+    measured = make_state(1)
+    phase = torch.tensor([2])
+    previous = _seed(measured, phase, initialized=True)
+    cfg = JointMpcRtiCfg()
+
+    assert cfg.nominal.command_scale == pytest.approx(0.85)
+    assert cfg.nominal.step_reference_scale == pytest.approx(0.0)
+
+    rebased = build_rebased_seed(
+        measured,
+        make_command(1, vx=1.0),
+        phase,
+        previous,
+        cfg,
+    )
+
+    assert rebased[0, 1, 0] == pytest.approx(0.85 * cfg.runtime.dt)
+    assert rebased[0, 12, 0] == pytest.approx(12 * 0.85 * cfg.runtime.dt)
+    assert rebased[0, -1, 0] == pytest.approx(
+        12 * 0.85 * cfg.runtime.dt
+    )
 
 
 def _to_device(field: JointMpcPerceptiveField, device: str) -> JointMpcPerceptiveField:
@@ -129,6 +232,20 @@ def test_only_first_optimize_after_reset_is_cold() -> None:
     assert not second.used_cold_start.any()
     torch.testing.assert_close(first.state[:, 0], measured.as_vector())
     torch.testing.assert_close(second.state[:, 0], measured.as_vector())
+
+
+def test_cold_pure_yaw_uses_full_nominal_yaw_scale() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.0, yaw=1.0)
+    phase = torch.tensor([0])
+    field = _field()
+    previous = _seed(measured, phase, initialized=False)
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    expected = measured.root_rpy_w[:, 2:3] + torch.arange(31)[None] * 0.02
+
+    torch.testing.assert_close(result.state[..., 5], expected)
 
 
 def test_initialized_nonfinite_cache_is_a_warm_fault_not_a_cold_fallback() -> None:
@@ -248,7 +365,7 @@ def test_warm_current_swing_preserves_shifted_boundary_velocity() -> None:
     cfg = JointMpcRtiCfg()
     measured = make_state(1)
     command = make_command(1, vx=0.3)
-    phase = torch.tensor([5])
+    phase = torch.tensor([0])
     field = _field()
     seed = _seed(measured, phase, initialized=False)
     first_plan = _plan(measured, command, phase, field, seed.trajectory)
@@ -303,7 +420,7 @@ def test_warm_current_swing_preserves_shifted_boundary_velocity() -> None:
     assert second.nominal_safe.all()
 
 
-def test_warm_swing_ik_uses_phase_dependent_quintic_blend() -> None:
+def test_warm_current_swing_blends_but_future_swing_uses_full_ik() -> None:
     measured = make_state(1)
     command = make_command(1, vx=0.2)
     phase = torch.tensor([0])
@@ -323,13 +440,38 @@ def test_warm_swing_ik_uses_phase_dependent_quintic_blend() -> None:
     def quintic(value: float) -> float:
         return 10.0 * value**3 - 15.0 * value**4 + 6.0 * value**5
 
-    for node, tau, legs in ((1, 1.0 / 12.0, (0, 3)), (25, 1.0 / 12.0, (0, 3))):
-        expected = rebased_joint[:, node, legs] + quintic(tau) * (
-            ik_joint[:, node, legs] - rebased_joint[:, node, legs]
-        )
-        torch.testing.assert_close(
-            actual_joint[:, node, legs], expected, atol=2.0e-5, rtol=0.0
-        )
+    current_expected = rebased_joint[:, 1, (0, 3)] + quintic(1.0 / 12.0) * (
+        ik_joint[:, 1, (0, 3)] - rebased_joint[:, 1, (0, 3)]
+    )
+    torch.testing.assert_close(
+        actual_joint[:, 1, (0, 3)], current_expected, atol=2.0e-5, rtol=0.0
+    )
+    torch.testing.assert_close(
+        actual_joint[:, 25, (0, 3)], ik_joint[:, 25, (0, 3)], atol=2.0e-5, rtol=0.0
+    )
+
+
+def test_warm_future_swing_remains_hard_safe_on_flat_ground() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.0)
+    phase = torch.tensor([7])
+    field = _field()
+    previous = _seed(measured, phase, initialized=True)
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    actual_foot = go2_fk(
+        result.state[..., :3], result.state[..., 3:6], result.state[..., 6:]
+    ).foot_pos_w
+    future_swing = fixed_trot_schedule(phase).swing & (
+        torch.arange(31)[None, :, None] >= 17
+    )
+
+    torch.testing.assert_close(
+        actual_foot[future_swing], result.foot_reference_w[future_swing], atol=2.0e-4, rtol=0.0
+    )
+    assert actual_foot[..., 2][future_swing].min() >= 0.022
+    assert result.nominal_safe.all()
 
 
 def test_phase12_node_reaches_touchdown_without_phase11_freeze() -> None:
@@ -397,6 +539,45 @@ def test_h30_preview_tail_keeps_moving_toward_touchdown_outside_horizon() -> Non
     assert torch.linalg.vector_norm(delta[:, -2:], dim=-1)[late_swing[:, 1:]].max() > 0.0
 
 
+@pytest.mark.parametrize("phase_value", (0, 7))
+def test_preview_tail_marks_only_unmodeled_third_swing_as_support(
+    phase_value: int,
+) -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.0)
+    phase = torch.tensor([phase_value])
+    field = _field()
+    previous = _seed(measured, phase, initialized=True)
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    schedule = fixed_trot_schedule(phase, horizon_steps=42)
+    global_node = torch.arange(30, 43)[None, :, None]
+    second_touchdown = plan.event_step + 24
+    held_after_primary_preview = (second_touchdown <= 30)[:, None] & (
+        global_node >= second_touchdown[:, None]
+    )
+    expected = schedule.stance_node[:, 30:] | held_after_primary_preview
+
+    torch.testing.assert_close(result.preview_contact_state, expected)
+
+
+def test_preview_tail_holds_terminal_root_pose_outside_h30() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.8, yaw=0.5)
+    phase = torch.tensor([7])
+    field = _field()
+    previous = _seed(measured, phase, initialized=True)
+    previous.trajectory[:, -2, 2] = 0.34
+    previous.trajectory[:, -1, 2] = 0.347
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    expected = result.rebased_state[:, -1:, :6].expand(-1, 12, -1)
+
+    torch.testing.assert_close(result.preview_tail_state[:, 1:, :6], expected)
+
+
 def test_h30_preview_tail_runs_whole_leg_safety_to_real_touchdown() -> None:
     from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
     from extension.joint_mpc_rti.terrain.swept_safety import (
@@ -411,13 +592,7 @@ def test_h30_preview_tail_runs_whole_leg_safety_to_real_touchdown() -> None:
     phase = torch.tensor([6])
     flat = _field()
     previous = _seed(measured, phase, initialized=False)
-    selector_warm = previous.trajectory.clone()
-    selector_warm[..., 0] += (
-        torch.arange(31, dtype=selector_warm.dtype)[None]
-        * command[:, :1]
-        * cfg.nominal.command_scale
-        * cfg.runtime.dt
-    )
+    selector_warm = build_rebased_seed(measured, command, phase, previous, cfg)
     flat_plan = _plan(measured, command, phase, flat, selector_warm)
     flat_result = _build(measured, command, flat, phase, flat_plan, previous)
     assert flat_result.preview_tail_state.shape == (1, 13, 18)

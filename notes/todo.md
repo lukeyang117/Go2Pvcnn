@@ -4,6 +4,10 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-07-23 final Task 16 flat closure: real same-refresh KKT is wired into acceptance, focused tests are `115 passed`, the full package is `284 passed`, and formal CUDA flat v13 passes `19/19` cells with primal/dual maxima `5.133e-5/9.014e-5`. Task 17 small-obstacle crossing is next; large/viewer/performance remain blocked. See [final flat closure](log/2026-07-23-joint-mpc-rti-final-flat-gate-closure.md).
+
+- 2026-07-23 final Task 16 first flat diagnosis: future-swing/preview/swept issues and a severe CUDA SPD stride bug are fixed and guarded. Current-map B3 rolling validity is `[24,24,24]`, but the formal 19-cell flat gate remains `19/19` red on alpha-zero fallback, cold joint step, root/foot ordering, tracking, and several publish ratios. Small/large/viewer/performance remain blocked. See [final flat gate first diagnosis](log/2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md).
+
 - 2026-07-23 final Task 15: superseded seven-loss, Gaussian-map, control-rollout, adaptive-contact, duplicate solver, and old probe paths are deleted. The final import graph and full package pass (`247 passed`); Task 16 flat behavior is next. See [final legacy deletion](log/2026-07-23-joint-mpc-rti-final-legacy-deletion.md).
 
 - 2026-07-23 final Task 14: the acceptance layer now uses 72 frozen P/A/M metrics and strict foot-event crossing; focused verification is `57 passed`. This closes schema correctness, not flat/small behavior. See [final actual-world metrics schema](log/2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md).
@@ -171,7 +175,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
-- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): Task 14E-Z all-stance raw-ground nominal/filter is implemented and locally green, but representative behavior is red because onset shifted XY can query the small-obstacle top, followed by a `100.75mm` continuing drop, `0.59164rad` joint step and one no-feasible-alpha switch. Redesign touchdown XY ownership or pre-touchdown descent before ranked/formal or Stage B.
+- [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): final Task 16 flat is closed (`19/19`, real KKT, full package `284 passed`). Task 17 small-obstacle crossing is the active behavior gate; Tasks 18-19 large/viewer/RL-batch/performance remain blocked behind it.
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
@@ -211,7 +215,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Open Leaves
 
-- T302v Task 14 one-RTI nonlinear feasibility: fixed published x1 root XY is solver-correct and makes root tracking green, but `6mm` continuing-stance corrections make all five candidates fail exact FK for phases `13..23`; validity is `0.77551` and joint step is `0.37823rad`. Choose a new approved architecture before behavior edits; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [evidence](log/2026-07-22-joint-mpc-rti-published-root-xy-priority.md).
+- T302v Task 17 small-obstacle gate: start with one controlled cuboid at `vx=0.2m/s`, require safe behind touchdown, convex region, nominal and whole-leg sweep safety, strict crossing, and zero world-map collision before expanding phases/shapes/speeds; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [flat prerequisite](log/2026-07-23-joint-mpc-rti-final-flat-gate-closure.md).
 - T302v.7 support-driven gait quality: current root command integration carries both stance and swing feet; define stance-slip, swing touchdown-lead, and root/support phase metrics before behavior changes; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [quantification](log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
 - T302v realistic signed performance: single-cell acceptance was rejected; `11x11` small plus `41x41` large footprints remain above `5s` despite compiled MPC and multiple exact-EDT experiments. Requires a new batched exact EDT architecture or explicit contract change; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [revalidation](log/2026-07-17-joint-mpc-rti-full-design-revalidation.md).
 - T302v real-1024 boundary: separately measure Isaac physics and RayCaster ray generation after the planner-side performance contract is resolved; [branch page](todo/T302v-joint-mpc-rti-gpu.md).

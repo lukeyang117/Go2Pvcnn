@@ -274,6 +274,10 @@ def applicable_metrics(scenario: str, command: tuple[float, float, float] | None
         metrics.discard("strict_cross_success")
         metrics.discard("root_direction_error")
         metrics.discard("cross_direction_margin_mps")
+        metrics.discard("swing_active_motion_ratio")
+        metrics.discard("foot_root_lead_time_min_ms")
+        metrics.discard("foot_root_lead_time_max_ms")
+        metrics.discard("root_leak_before_foot_m")
     else:
         metrics.discard("root_zero_drift_one_gait_m")
         metrics.discard("root_zero_drift_10_gaits_m")
@@ -303,7 +307,7 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
     consecutive_stance = contact[:, 1:] & contact[:, :-1] & valid_edge[..., None]
     stance_slip = torch.linalg.vector_norm(foot_step, dim=-1)
     root_denominator = torch.linalg.vector_norm(root_step, dim=-1).unsqueeze(-1).clamp_min(1.0e-8)
-    carry = torch.linalg.vector_norm(foot_step, dim=-1) / root_denominator
+    carry = foot_progress.abs() / root_progress.abs().unsqueeze(-1).clamp_min(0.0005)
     relative_progress = foot_progress - root_progress.unsqueeze(-1)
     swing = ~contact[:, 1:] & valid[:, 1:, None]
 
@@ -385,7 +389,12 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "foot_root_lead_time_max_ms": max(lead_values) if lead_values else 0.0,
         "root_leak_before_foot_m": max(leak_values) if leak_values else 0.0,
         "root_velocity_error": _masked_mean(velocity_error, valid_edge),
-        "root_direction_error": _masked_mean(direction_error, valid_edge & (command_norm > 1.0e-6)),
+        "root_direction_error": _masked_mean(
+            direction_error,
+            valid_edge
+            & (command_norm >= 0.05)
+            & (movement_norm / float(trace.dt) >= 0.05),
+        ),
         "root_yaw_rate_error": _masked_mean(yaw_error, valid_edge),
         "root_zero_drift_one_gait_m": _drift_through(root, valid, 25),
         "root_zero_drift_10_gaits_m": _drift_through(root, valid, 241),

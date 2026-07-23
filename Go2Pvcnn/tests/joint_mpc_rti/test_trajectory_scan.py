@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import fields
 
 import pytest
 import torch
@@ -14,6 +15,9 @@ from extension.joint_mpc_rti.solver.trajectory_scan import (
     solve_trajectory_qp_scan,
 )
 from extension.joint_mpc_rti.solver.trajectory_qp import solve_dense_qp
+from extension.joint_mpc_rti.config import JointMpcRtiCfg
+from extension.joint_mpc_rti import planner
+from .helpers import make_command, make_flat_field, make_state
 from .test_trajectory_qp import _problem
 
 
@@ -91,6 +95,211 @@ def test_scan_matches_dense_constrained_solution(batch: int) -> None:
     )
     torch.testing.assert_close(
         scan.direction[:, 0], torch.zeros_like(scan.direction[:, 0])
+    )
+
+
+@pytest.mark.parametrize("vx,command_scale", ((0.4, 0.45), (0.8, 0.60)))
+def test_production_scan_satisfies_flat_full_horizon_stance_equalities(
+    vx: float, command_scale: float
+) -> None:
+    cfg = JointMpcRtiCfg()
+    cfg.nominal.command_scale = command_scale
+    result = planner.step(
+        make_state(1),
+        make_command(1, vx=vx),
+        make_flat_field(1),
+        None,
+        cfg,
+    )
+
+    assert result.diagnostics.kkt_primal_residual.max() <= 1.0e-4
+
+
+def test_production_scan_reports_scaled_dual_kkt_residual() -> None:
+    result = planner.step(
+        make_state(1),
+        make_command(1, vx=0.2),
+        make_flat_field(1),
+        None,
+        JointMpcRtiCfg(),
+    )
+
+    assert result.diagnostics.kkt_dual_residual.max() <= 1.0e-4
+
+
+def test_warm_scan_eliminates_fixed_published_root_before_stance_solve() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=0.4)
+    field = make_flat_field(1)
+    solver_state = None
+    result = None
+    for _ in range(7):
+        origin = field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        state = result.full_trajectory.state_nodes[:, 1]
+        velocity = result.full_trajectory.derived_velocity[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    assert result is not None
+    assert result.diagnostics.kkt_primal_residual.max() <= 1.0e-4
+
+
+def test_warm_scan_keeps_high_translation_stance_residual_below_one_mm() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    cfg.nominal.command_scale = 0.6
+    measured = make_state(1)
+    command = make_command(1, vx=0.8)
+    field = make_flat_field(1)
+    solver_state = None
+    residuals = []
+    for _ in range(9):
+        origin = field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        residuals.append(result.diagnostics.kkt_primal_residual)
+        state = result.full_trajectory.state_nodes[:, 1]
+        velocity = result.full_trajectory.derived_velocity[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    assert torch.stack(residuals).max() <= 1.0e-3
+
+
+def test_associative_scan_matches_dense_warm_augmented_system(monkeypatch) -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti.solver import trajectory_scan
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    associative_solve = trajectory_scan._solve_augmented_associative
+    comparisons: list[tuple[torch.Tensor, torch.Tensor]] = []
+
+    def compare_with_dense(diagonal, first, second, gradient):
+        direction = associative_solve(diagonal, first, second, gradient)
+        batch, nodes, state_dim = gradient.shape
+        dense = gradient.new_zeros(batch, nodes * state_dim, nodes * state_dim)
+        for node in range(nodes):
+            row = slice(node * state_dim, (node + 1) * state_dim)
+            dense[:, row, row] = diagonal[:, node]
+        for node in range(nodes - 1):
+            row = slice(node * state_dim, (node + 1) * state_dim)
+            column = slice((node + 1) * state_dim, (node + 2) * state_dim)
+            dense[:, row, column] = first[:, node]
+            dense[:, column, row] = first[:, node].transpose(-1, -2)
+        for node in range(nodes - 2):
+            row = slice(node * state_dim, (node + 1) * state_dim)
+            column = slice((node + 2) * state_dim, (node + 3) * state_dim)
+            dense[:, row, column] = second[:, node]
+            dense[:, column, row] = second[:, node].transpose(-1, -2)
+        dense_direction = torch.linalg.solve(dense, -gradient.flatten(1)).reshape_as(
+            gradient
+        )
+        comparisons.append((direction.detach(), dense_direction.detach()))
+        return direction
+
+    monkeypatch.setattr(
+        trajectory_scan, "_solve_augmented_associative", compare_with_dense
+    )
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=0.4)
+    field = make_flat_field(1)
+    solver_state = None
+    for _ in range(7):
+        origin = field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        state = result.full_trajectory.state_nodes[:, 1]
+        velocity = result.full_trajectory.derived_velocity[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    scan_direction, dense_direction = comparisons[-1]
+    torch.testing.assert_close(
+        scan_direction, dense_direction, atol=2.0e-5, rtol=2.0e-5
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA parity requires a GPU")
+def test_cuda_scan_matches_cpu_for_same_lq_problem() -> None:
+    problem, _, _, _ = _problem(batch=3)
+    problem = type(problem)(
+        **{
+            item.name: (
+                getattr(problem, item.name).float()
+                if isinstance(getattr(problem, item.name), torch.Tensor)
+                and getattr(problem, item.name).is_floating_point()
+                else getattr(problem, item.name)
+            )
+            for item in fields(problem)
+        }
+    )
+    cpu = solve_trajectory_qp_scan(problem)
+    cuda_problem = type(problem)(
+        **{
+            item.name: (
+                getattr(problem, item.name).cuda()
+                if isinstance(getattr(problem, item.name), torch.Tensor)
+                else getattr(problem, item.name)
+            )
+            for item in fields(problem)
+        }
+    )
+
+    cuda = solve_trajectory_qp_scan(cuda_problem)
+
+    torch.testing.assert_close(
+        cuda.direction.cpu(), cpu.direction, atol=2.0e-5, rtol=2.0e-5
     )
 
 

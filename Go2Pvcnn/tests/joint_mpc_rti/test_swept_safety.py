@@ -39,6 +39,27 @@ def _field_with_point_obstacle(point_w: torch.Tensor, height_m: float, *, size: 
     )
 
 
+def _flat_field(*, size: int = 151):
+    from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+    from extension.joint_mpc_rti.types import JointMpcFieldFrame
+
+    height = torch.zeros(1, size, size)
+    semantic = torch.zeros(1, size, size, dtype=torch.long)
+    frame = JointMpcFieldFrame(
+        origin_w=torch.zeros(1, 3),
+        yaw_w=torch.zeros(1),
+        timestamp=torch.zeros(1),
+        refresh_id=torch.zeros(1, dtype=torch.long),
+    )
+    return build_perceptive_field(
+        height,
+        semantic,
+        torch.ones_like(semantic, dtype=torch.bool),
+        frame,
+        JointMpcRtiCfg(),
+    )
+
+
 def test_collision_geometry_exposes_spheres_capsules_sole_and_base_obb() -> None:
     from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry
 
@@ -129,6 +150,43 @@ def test_small_semantic_is_crossable_in_swing_but_forbidden_for_support_sole() -
     assert not support.sole_safe[..., 0].any()
     assert support.collision_by_part["foot"].any()
     assert not support.safe.all()
+
+
+def test_stance_sole_tolerance_allows_support_contact_but_not_swing_penetration() -> None:
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry
+    from extension.joint_mpc_rti.terrain.swept_safety import (
+        evaluate_nodes,
+        evaluate_swept_intervals,
+    )
+
+    cfg = JointMpcRtiCfg()
+    state = _state()
+    state[:, 2] -= 0.0071
+    assert go2_collision_geometry(
+        state[:, :3], state[:, 3:6], state[:, 6:]
+    ).foot_center_w[..., 2].min() < cfg.terrain.foot_radius_m
+    field = _flat_field()
+    contact = torch.ones(1, 1, 4, dtype=torch.bool)
+
+    trajectory = state[:, None].expand(-1, 2, -1)
+    support_node = evaluate_nodes(state[:, None], field, cfg, contact_state=contact)
+    support_swept = evaluate_swept_intervals(
+        trajectory, field, cfg, contact_state=contact.expand(-1, 2, -1)
+    )
+    swing_swept = evaluate_swept_intervals(
+        trajectory,
+        field,
+        cfg,
+        contact_state=torch.zeros(1, 2, 4, dtype=torch.bool),
+    )
+
+    assert support_swept.minimum_clearance_by_part["foot"].item() == pytest.approx(
+        -4.0e-4, abs=2.0e-5
+    )
+    assert not support_node.safe.all()
+    assert support_swept.sole_safe.all()
+    assert support_swept.safe.all()
+    assert not swing_swept.safe.all()
 
 
 @pytest.mark.parametrize("part", ("foot", "knee", "calf", "thigh", "base"))

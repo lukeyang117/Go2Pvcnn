@@ -20,12 +20,12 @@ class JointMpcRtiRuntimeCfg:
 
 @dataclass
 class JointMpcRtiSolverCfg:
-    regularization: float = 3.0
+    regularization: float = 20.0
     line_search_alphas: tuple[float, ...] = (1.0, 0.5, 0.25, 0.125, 0.0)
     line_search_tie_tolerance: float = 1.0e-7
     published_stance_tolerance: float = 0.0005
     published_swing_clearance_buffer: float = 0.0
-    root_position_trust: float = 0.01
+    root_position_trust: float = 0.10
     root_roll_pitch_trust: float = 0.10
     root_yaw_trust: float = 0.02
     joint_trust: float = 0.25
@@ -37,7 +37,7 @@ class JointMpcRtiSolverCfg:
     root_roll_pitch_limit: float = 0.35
     root_z_velocity_limit: float = 0.50
     root_roll_pitch_rate_limit: float = 1.50
-    collision_slack_cap: float = 0.01
+    collision_slack_cap: float = 0.0
     region_slack_cap: float = 0.005
     compile_kernels: bool = False
     use_cuda_graph: bool = False
@@ -55,8 +55,10 @@ class JointMpcRtiGaitCfg:
 
 @dataclass
 class JointMpcRtiNominalCfg:
-    command_scale: float = 0.45
-    step_reference_scale: float = 0.5
+    command_scale: float = 0.85
+    yaw_command_scale: float = 1.0
+    published_root_hold_phases: int = 2
+    step_reference_scale: float = 0.0
     unreachable_step_scale: float = 0.5
     measurement_decay_nodes: int = 6
     terminal_command_fill_scale: float = 0.5
@@ -67,13 +69,13 @@ class JointMpcRtiNominalCfg:
 
 @dataclass
 class JointMpcRtiTouchdownCfg:
-    candidate_x_m: tuple[float, ...] = (-0.12, -0.06, 0.0, 0.06, 0.12)
+    candidate_x_m: tuple[float, ...] = (-0.12, -0.03, 0.0, 0.03, 0.12)
     candidate_y_m: tuple[float, ...] = (-0.12, -0.06, 0.0, 0.06, 0.12)
     command_prediction_scale: float = 0.5
     landing_after_margin_m: float = 0.025
     joint_margin_rad: float = 0.10
     corridor_samples: int = 33
-    swing_samples: int = 33
+    swing_samples: int = 65
     preview_swing_samples: int = 65
     selector_capsule_samples: int = 5
     latch_phase: int = 6
@@ -111,7 +113,7 @@ class JointMpcRtiTerrainCfg:
     roughness_max_m: float = 0.030
     edge_margin_m: float = 0.020
     roughness_radius_m: float = 0.010
-    sweep_subdivisions: int = 24
+    sweep_subdivisions: int = 48
     capsule_samples: int = 17
     stance_ground_tolerance_m: float = 0.012
 

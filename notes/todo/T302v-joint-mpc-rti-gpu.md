@@ -2,6 +2,10 @@
 
 ## Current State
 
+- Final-plan Task 16 is GREEN. Acceptance now consumes real same-refresh KKT diagnostics and reports the scaled dual stationarity residual instead of treating missing KKT as zero. The focused owner union is `115 passed`, the full package is `284 passed`, and formal CUDA flat v13 passes `19/19` cells in `54.746s`; worst primal/dual KKT are `5.133e-5/9.014e-5`, minimum joint margin is `0.19032rad`, maximum joint step is `0.33438rad`, publication is `1.0`, and alpha-zero ratio is `0`. Task 17 controlled small-obstacle crossing is now the active behavior front; large/viewer/performance remain blocked behind it. See [flat closure](../log/2026-07-23-joint-mpc-rti-final-flat-gate-closure.md).
+
+- Final-plan Task 16 is still RED after the first full diagnosis. Future swing IK, preview contact/root extension, swept support interpolation, primary/preview region filtering, and CUDA SPD contiguous input are corrected. Focused nominal/safety/line-search/pipeline is `51` passing tests; scan including CUDA parity is `9 passed`; current-map B3 rolling validity for `vx=[0,0.2,0.8]` is `[24,24,24]`. The monitored formal flat matrix still fails `19/19` cells in `47.629s`, primarily on alpha-zero use, cold joint step, root/foot ordering, command tracking, and high lateral/yaw publication. See [first diagnosis](../log/2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md).
+
 - Final-plan Task 15 is GREEN. The final planner/runtime import graph now contains only the current-refresh perceptive field, warm-retargeted H30 nominal, eight-family LQ, associative trajectory QP, and five-alpha hard-safe search. Superseded seven-loss, Gaussian cost-map, control-rollout, adaptive-contact/recovery, pending-reference, duplicate solver, and historical direct-probe paths are deleted. Focused import/pipeline verification is `28 passed`; the full package is `247 passed`. Task 16 flat acceptance is next; small/large/viewer/B=1024/performance remain unverified. See [final legacy deletion](../log/2026-07-23-joint-mpc-rti-final-legacy-deletion.md).
 
 - Final-plan Task 14 defines 72 frozen P/A/M metric IDs, exact source metadata, small-inherits-common applicability, planned/actual collision OR, and strict swing-foot crossing with continuous footprint, height, direction, landing, and whole-body checks. Focused metrics/runner/watchdog/small verification is `57 passed`. Flat/small behavior gates remain open. See [final actual-world metrics schema](../log/2026-07-23-joint-mpc-rti-final-actual-world-metrics-schema.md).
@@ -185,12 +189,14 @@
 
 ## Git Refs
 
-- Last Feature Commit: `41a67cc`.
-- Last Verified Commit: `41a67cc` plus the current Task 15 working tree (`247 passed`; import graph clean).
-- Current Work Ref: `work/joint-mpc-kinematic` at `41a67cc` plus uncommitted Task 15 cleanup.
+- Last Feature Commit: `02b089f` (final Task 16 flat gate).
+- Last Verified Commit: `02b089f` (`115` focused, `284` package, formal flat `19/19`).
+- Current Work Ref: `work/joint-mpc-kinematic` at `02b089f`; Task 17 small-obstacle gate next.
 - Key Files: `config.py`, `planner.py`, `solver/context.py`, `solver/line_search.py`, `terrain/__init__.py`, `test_final_import_graph.py`.
 
 ## Next Step
+
+Continue Task 16 with owner-level RED regressions in this order: cold first-step joint continuity, nonlinear-feasible stance-preserving QP direction, then command tracking scale. Re-run the monitored 19-cell flat gate after each coherent behavior fix. Do not start small, large, viewer, B=1024, or performance acceptance while flat is red.
 
 Run final-plan Task 16's monitored 19-cell flat gate on the Task 15 checkpoint. Use the first failing applicable metric to create a minimal owner-level RED regression; do not weaken thresholds or start small/large/performance acceptance before all flat cells pass.
 

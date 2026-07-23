@@ -90,30 +90,44 @@ def _touchdown_filters(
     node = constant_like(
         candidates, "hard_line_search_node_index", tuple(range(nodes))
     ).to(torch.long).view(1, 1, nodes, 1)
-    active = (
-        context.schedule.stance[:, None]
-        & (node >= plan.event_step[:, None, None])
-        & plan.region.valid[:, None, None]
+    stance = context.schedule.stance[:, None]
+
+    def interval_filters(region, target: Tensor, start: Tensor) -> tuple[Tensor, Tensor]:
+        active = (
+            stance
+            & (node >= start[:, None, None])
+            & (node < (start + int(cfg.gait.stance_steps))[:, None, None])
+            & region.valid[:, None, None]
+        )
+        region_value = torch.einsum(
+            "blij,banlj->banli", region.A, foot[..., :2]
+        ) + region.b[:, None, None]
+        region_ok = ((region_value >= -1.0e-6) | ~active[..., None]).all(
+            dim=(2, 3, 4)
+        )
+        plane = region.plane
+        plane_height = plane[:, None, None, :, 0] + torch.einsum(
+            "bli,banli->banl",
+            plane[..., 1:],
+            foot[..., :2] - target[:, None, None, :, :2],
+        )
+        plane_error = (
+            foot[..., 2] - plane_height - float(cfg.gait.foot_contact_offset)
+        ).abs()
+        plane_ok = (
+            (plane_error <= float(cfg.terrain.stance_ground_tolerance_m)) | ~active
+        ).all(dim=(2, 3))
+        return region_ok, plane_ok
+
+    region_ok, plane_ok = interval_filters(
+        plan.region, plan.target_w, plan.event_step
     )
-    region_value = torch.einsum(
-        "blij,banlj->banli", plan.region.A, foot[..., :2]
-    ) + plan.region.b[:, None, None]
-    region_ok = ((region_value >= -1.0e-6) | ~active[..., None]).all(
-        dim=(2, 3, 4)
+    preview_region_ok, preview_plane_ok = interval_filters(
+        plan.preview_region,
+        plan.preview_target_w,
+        plan.event_step + int(cfg.gait.period_steps),
     )
-    plane = plan.region.plane
-    plane_height = plane[:, None, None, :, 0] + torch.einsum(
-        "bli,banli->banl",
-        plane[..., 1:],
-        foot[..., :2] - plan.target_w[:, None, None, :, :2],
-    )
-    plane_error = (
-        foot[..., 2] - plane_height - float(cfg.gait.foot_contact_offset)
-    ).abs()
-    plane_ok = (
-        (plane_error <= float(cfg.terrain.stance_ground_tolerance_m)) | ~active
-    ).all(dim=(2, 3))
-    return region_ok, plane_ok
+    return region_ok & preview_region_ok, plane_ok & preview_plane_ok
 
 
 def _preview_filter(
@@ -129,8 +143,31 @@ def _preview_filter(
     tail = nominal.preview_tail_state
     repeated_tail = tail.repeat_interleave(alpha_count, dim=0)
     repeated_field = _repeat_perceptive_field(field, alpha_count)
-    safety = evaluate_swept_intervals(repeated_tail, repeated_field, cfg)
-    return safety.safe.all(dim=1).reshape(nominal.state.shape[0], alpha_count)
+    repeated_contact = (
+        None
+        if nominal.preview_contact_state is None
+        else nominal.preview_contact_state.repeat_interleave(alpha_count, dim=0)
+    )
+    safety = evaluate_swept_intervals(
+        repeated_tail,
+        repeated_field,
+        cfg,
+        contact_state=repeated_contact,
+    )
+    batch = int(nominal.state.shape[0])
+    safe = safety.safe.reshape(batch, alpha_count, -1)
+    plan = nominal.perceptive_plan
+    if plan is None:
+        return safe.all(dim=2)
+    preview_step = plan.preview_touchdown_step
+    batch_limit = torch.where(
+        preview_step > 30, preview_step, preview_step.new_full((), 30)
+    ).amax(dim=-1)
+    edge = constant_like(
+        tail, "line_search_preview_global_edge", tuple(range(30, 42))
+    ).view(1, 1, 12)
+    edge_active = edge < batch_limit[:, None, None]
+    return torch.where(edge_active, safe, torch.ones_like(safe)).all(dim=2)
 
 
 def hard_safe_line_search(

@@ -51,6 +51,7 @@ class NominalTrajectory:
     preview_touchdown_reference_w: Tensor | None = None
     swing_apex_w: Tensor | None = None
     preview_tail_state: Tensor | None = None
+    preview_contact_state: Tensor | None = None
     candidate_retry_rank: Tensor | None = None
     preview_candidate_retry_rank: Tensor | None = None
     perceptive_plan: TouchdownPlan | None = None
@@ -116,14 +117,45 @@ def _quintic(value: Tensor) -> Tensor:
     return 10.0 * value.pow(3) - 15.0 * value.pow(4) + 6.0 * value.pow(5)
 
 
-def _quintic_start_velocity_basis(value: Tensor) -> Tensor:
-    return value - 6.0 * value.pow(3) + 8.0 * value.pow(4) - 3.0 * value.pow(5)
+def _current_swing_height(
+    measured_z: Tensor,
+    apex_z: Tensor,
+    touchdown_z: Tensor,
+    phase0: Tensor,
+    node: Tensor,
+    *,
+    swing_steps: int,
+) -> Tensor:
+    apex_phase = int(swing_steps) // 2
+    phase = phase0[:, None].to(measured_z.dtype)
+    before_apex = phase0 < apex_phase
+    nodes_to_apex = (float(apex_phase) - phase).clamp_min(1.0)
+    ascent_tau = (node / nodes_to_apex).clamp(0.0, 1.0)
+    ascent = measured_z[:, None] + _quintic(ascent_tau) * (
+        apex_z[:, None] - measured_z[:, None]
+    )
+    descent_tau = (
+        (node - nodes_to_apex) / float(int(swing_steps) - apex_phase)
+    ).clamp(0.0, 1.0)
+    descent = apex_z[:, None] + _quintic(descent_tau) * (
+        touchdown_z[:, None] - apex_z[:, None]
+    )
+    early_swing = torch.where(node <= nodes_to_apex, ascent, descent)
+
+    remaining = (float(swing_steps) - phase).clamp_min(1.0)
+    late_tau = (node / remaining).clamp(0.0, 1.0)
+    late_swing = measured_z[:, None] + _quintic(late_tau) * (
+        touchdown_z[:, None] - measured_z[:, None]
+    )
+    return torch.where(before_apex[:, None], early_swing, late_swing)
 
 
 def _cold_root_trajectory(
     measured: JointMpcRtiState,
     command: Tensor,
     cfg: JointMpcRtiCfg,
+    *,
+    translation_delay_edges: int = 3,
 ) -> tuple[Tensor, Tensor]:
     nodes = int(cfg.runtime.state_nodes)
     node = constant_like(
@@ -131,21 +163,31 @@ def _cold_root_trajectory(
         f"nominal_node_index_{nodes}",
         tuple(float(index) for index in range(nodes)),
     )
-    scaled = command * float(cfg.nominal.command_scale)
+    edge_scale = torch.where(
+        node[:-1] < float(cfg.gait.stance_steps),
+        node.new_full((), float(cfg.nominal.command_scale)),
+        node.new_full((), float(cfg.nominal.step_reference_scale)),
+    )
+    scaled_yaw = command[:, 2:3] * float(cfg.nominal.yaw_command_scale)
     yaw = (
         measured.root_rpy_w[:, 2:3]
-        + scaled[:, 2:3] * float(cfg.runtime.dt) * node[None]
+        + scaled_yaw * float(cfg.runtime.dt) * node[None]
     )
     edge_yaw = yaw[:, :-1]
+    scaled_xy = command[:, None, :2] * edge_scale[None, :, None]
     world_velocity = torch.stack(
         (
-            torch.cos(edge_yaw) * scaled[:, None, 0]
-            - torch.sin(edge_yaw) * scaled[:, None, 1],
-            torch.sin(edge_yaw) * scaled[:, None, 0]
-            + torch.cos(edge_yaw) * scaled[:, None, 1],
+            torch.cos(edge_yaw) * scaled_xy[..., 0]
+            - torch.sin(edge_yaw) * scaled_xy[..., 1],
+            torch.sin(edge_yaw) * scaled_xy[..., 0]
+            + torch.cos(edge_yaw) * scaled_xy[..., 1],
         ),
         dim=-1,
     )
+    translation_active = (node[:-1] >= float(translation_delay_edges)).to(
+        world_velocity.dtype
+    )
+    world_velocity = world_velocity * translation_active[None, :, None]
     displacement = torch.cat(
         (
             torch.zeros_like(world_velocity[:, :1]),
@@ -174,6 +216,7 @@ def _build_rebased_state(
     measured: JointMpcRtiState,
     command: Tensor,
     previous: JointMpcRtiSolverState,
+    gait_phase: Tensor,
     initialized: Tensor,
     cache_finite: Tensor,
     cfg: JointMpcRtiCfg,
@@ -202,6 +245,9 @@ def _build_rebased_state(
         terminal_state=terminal_state,
     )
     cold_root, cold_rpy = _cold_root_trajectory(measured, command, cfg)
+    warm_root, warm_rpy = _cold_root_trajectory(
+        measured, command, cfg, translation_delay_edges=0
+    )
     cold = torch.cat(
         (
             cold_root,
@@ -211,6 +257,34 @@ def _build_rebased_state(
         dim=-1,
     )
     rebased = torch.where(initialized[:, None, None], warm, cold)
+    warm_profile = torch.cat(
+        (
+            warm_root[..., :2],
+            warm[..., 2:5],
+            warm_rpy[..., 2:3],
+            warm[..., 6:],
+        ),
+        dim=-1,
+    )
+    rebased = torch.where(initialized[:, None, None], warm_profile, rebased)
+    zero_translation = command[:, :2].abs().amax(dim=-1) <= 1.0e-7
+    hold_published_root = zero_translation | (
+        initialized
+        & (gait_phase < int(cfg.nominal.published_root_hold_phases))
+    )
+    rebased_x1 = torch.where(
+        hold_published_root[:, None],
+        measured.root_pos_w[:, :2],
+        rebased[:, 1, :2],
+    )
+    rebased = torch.cat(
+        (
+            rebased[:, :1],
+            torch.cat((rebased_x1, rebased[:, 1, 2:]), dim=-1)[:, None],
+            rebased[:, 2:],
+        ),
+        dim=1,
+    )
     return torch.cat((measured_vector[:, None], rebased[:, 1:]), dim=1)
 
 
@@ -328,7 +402,6 @@ def _foot_references(
     schedule: FixedTrotSchedule,
     plan: _SelectedTouchdownPlan,
     current_anchor_w: Tensor,
-    preserve_warm_boundary: Tensor,
     field: JointMpcPerceptiveField,
     cfg: JointMpcRtiCfg,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
@@ -342,7 +415,7 @@ def _foot_references(
     first_touchdown = plan.event_step
     first_liftoff = torch.where(
         phase0 < int(cfg.gait.swing_steps),
-        torch.zeros_like(first_touchdown),
+        -phase0,
         first_touchdown - int(cfg.gait.swing_steps),
     )
     second_liftoff = first_touchdown + int(cfg.gait.stance_steps)
@@ -361,7 +434,7 @@ def _foot_references(
         measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
     ).foot_center_w
     current_swing = phase0 < int(cfg.gait.swing_steps)
-    first_lift = torch.where(current_swing[..., None], measured_foot, current_anchor_w)
+    first_lift = current_anchor_w
     first_duration = (first_touchdown - first_liftoff).clamp_min(1).to(rebased.dtype)
     first_tau = (node - first_liftoff[:, None].to(rebased.dtype)) / first_duration[:, None]
     first_segment = _swing_segment(
@@ -373,24 +446,29 @@ def _foot_references(
         cfg,
         name="first",
     )
-    shifted_foot = go2_fk(
-        rebased[..., :3], rebased[..., 3:6], rebased[..., 6:]
-    ).foot_pos_w
-    first_tau_clamped = first_tau.clamp(0.0, 1.0)
-    first_step_tau = first_duration.reciprocal()
-    velocity_basis = _quintic_start_velocity_basis(first_tau_clamped)
-    first_step_basis = _quintic_start_velocity_basis(first_step_tau).clamp_min(1.0e-6)
-    boundary_correction = shifted_foot[:, 1] - first_segment.foot_w[:, 1]
-    correction_mask = preserve_warm_boundary[:, None] & current_swing
-    corrected_first_foot = first_segment.foot_w + (
-        velocity_basis / first_step_basis[:, None]
-    )[..., None] * boundary_correction[:, None] * correction_mask[:, None, :, None]
+    current_swing_z = _current_swing_height(
+        measured_foot[..., 2],
+        first_segment.apex_w[..., 2],
+        plan.target_w[..., 2],
+        phase0,
+        node,
+        swing_steps=int(cfg.gait.swing_steps),
+    )
     first_segment = _SwingSegment(
-        foot_w=corrected_first_foot,
+        foot_w=torch.cat(
+            (
+                first_segment.foot_w[..., :2],
+                torch.where(
+                    current_swing[:, None, :, None],
+                    current_swing_z[..., None],
+                    first_segment.foot_w[..., 2:3],
+                ),
+            ),
+            dim=-1,
+        ),
         apex_w=first_segment.apex_w,
         valid=first_segment.valid,
     )
-
     preview_yaw = event_rpy[..., 2] + command[:, None, 2] * (
         float(cfg.gait.period_steps) * float(cfg.runtime.dt)
     )
@@ -458,34 +536,7 @@ def _extend_rebased_to_preview(
         f"nominal_preview_step_{preview_nodes}",
         tuple(float(index) for index in range(1, preview_nodes + 1)),
     )
-    scaled = command * float(cfg.nominal.command_scale)
-    yaw0 = rebased[:, -1, 5:6]
-    yaw = yaw0 + scaled[:, 2:3] * float(cfg.runtime.dt) * step[None]
-    edge_yaw = yaw0 + scaled[:, 2:3] * float(cfg.runtime.dt) * (
-        step[None] - 1.0
-    )
-    world_velocity = torch.stack(
-        (
-            torch.cos(edge_yaw) * scaled[:, None, 0]
-            - torch.sin(edge_yaw) * scaled[:, None, 1],
-            torch.sin(edge_yaw) * scaled[:, None, 0]
-            + torch.cos(edge_yaw) * scaled[:, None, 1],
-        ),
-        dim=-1,
-    )
-    displacement = torch.cumsum(world_velocity * float(cfg.runtime.dt), dim=1)
-    root_xy = rebased[:, -1:, :2] + displacement
-    root_trend = rebased[:, -1, 2:5] - rebased[:, -2, 2:5]
-    root_z_rp = rebased[:, -1:, 2:5] + step[None, :, None] * root_trend[:, None]
-    root = torch.cat(
-        (
-            root_xy,
-            root_z_rp[..., :1],
-            root_z_rp[..., 1:],
-            yaw[..., None],
-        ),
-        dim=-1,
-    )
+    root = rebased[:, -1:, :6].expand(-1, preview_nodes, -1)
     joint_trend = (rebased[:, -1, 6:] - rebased[:, -2, 6:]).clamp(
         -float(cfg.solver.joint_velocity_limit) * float(cfg.runtime.dt),
         float(cfg.solver.joint_velocity_limit) * float(cfg.runtime.dt),
@@ -501,7 +552,6 @@ def _build_preview_tail(
     primary_state: Tensor,
     plan: _SelectedTouchdownPlan,
     current_anchor_w: Tensor,
-    preserve_warm_boundary: Tensor,
     field: JointMpcPerceptiveField,
     cfg: JointMpcRtiCfg,
     gait_phase: Tensor,
@@ -518,7 +568,6 @@ def _build_preview_tail(
         schedule,
         plan,
         current_anchor_w,
-        preserve_warm_boundary,
         field,
         cfg,
     )
@@ -542,17 +591,18 @@ def _preview_tail_safety(
     field: JointMpcPerceptiveField,
     cfg: JointMpcRtiCfg,
 ) -> tuple[Tensor, Tensor]:
+    preview_contact = _preview_contact_state(tail_schedule, plan, cfg)
     node_safety = evaluate_nodes(
         tail_state,
         field,
         cfg,
-        contact_state=tail_schedule.stance_node[:, 30:],
+        contact_state=preview_contact,
     )
     swept_safety = evaluate_swept_intervals(
         tail_state,
         field,
         cfg,
-        contact_state=tail_schedule.stance_node[:, 30:],
+        contact_state=preview_contact,
     )
     preview_step = plan.preview_touchdown_step
     batch_limit = torch.where(
@@ -575,8 +625,12 @@ def _preview_tail_safety(
         edge_active, swept_safety.safe, torch.ones_like(swept_safety.safe)
     ).all(dim=1)
     joint = tail_state[..., 6:]
-    lower = constant_like(tail_state, "preview_joint_lower", JOINT_LOWER)
-    upper = constant_like(tail_state, "preview_joint_upper", JOINT_UPPER)
+    lower = constant_like(tail_state, "preview_joint_lower", JOINT_LOWER) + float(
+        cfg.solver.joint_margin
+    )
+    upper = constant_like(tail_state, "preview_joint_upper", JOINT_UPPER) - float(
+        cfg.solver.joint_margin
+    )
     joint_position = torch.where(
         node_active[..., None],
         (joint >= lower) & (joint <= upper),
@@ -651,6 +705,23 @@ def _preview_tail_safety(
     return safe, clearance
 
 
+def _preview_contact_state(
+    tail_schedule: FixedTrotSchedule,
+    plan: _SelectedTouchdownPlan,
+    cfg: JointMpcRtiCfg,
+) -> Tensor:
+    second_touchdown = plan.event_step + int(cfg.gait.period_steps)
+    node = constant_like(
+        tail_schedule.phase_node,
+        "preview_tail_contact_global_node",
+        tuple(range(30, 43)),
+    ).to(torch.long).view(1, 13, 1)
+    held_after_primary_preview = (second_touchdown <= 30)[:, None] & (
+        node >= second_touchdown[:, None]
+    )
+    return tail_schedule.stance_node[:, 30:] | held_after_primary_preview
+
+
 def _hard_safety(
     state: Tensor,
     foot_reference_w: Tensor,
@@ -665,8 +736,12 @@ def _hard_safety(
     swept_safety = evaluate_swept_intervals(
         state, field, cfg, contact_state=schedule.stance_node
     )
-    lower = constant_like(state, "nominal_joint_lower", JOINT_LOWER)
-    upper = constant_like(state, "nominal_joint_upper", JOINT_UPPER)
+    lower = constant_like(state, "nominal_joint_lower", JOINT_LOWER) + float(
+        cfg.solver.joint_margin
+    )
+    upper = constant_like(state, "nominal_joint_upper", JOINT_UPPER) - float(
+        cfg.solver.joint_margin
+    )
     joint = state[..., 6:]
     position_safe = ((joint >= lower) & (joint <= upper)).all(dim=(1, 2))
     maximum_step = float(cfg.solver.joint_velocity_limit) * float(cfg.runtime.dt)
@@ -784,7 +859,7 @@ def _build_nominal_once(
     warm_fault = initialized & ~(cache_finite & anchor_finite)
     schedule = fixed_trot_schedule(phase, horizon_steps=int(cfg.runtime.horizon_steps))
     rebased = _build_rebased_state(
-        measured, command, previous, initialized, cache_finite, cfg
+        measured, command, previous, phase, initialized, cache_finite, cfg
     )
 
     measured_foot = go2_collision_geometry(
@@ -803,7 +878,6 @@ def _build_nominal_once(
         schedule,
         perceptive_plan,
         current_anchor,
-        initialized & ~warm_fault,
         terrain_field,
         cfg,
     )
@@ -820,13 +894,10 @@ def _build_nominal_once(
         cfg.nominal.ik_blend_scale
     )
     current_swing = schedule.phase_node[:, 0] < int(cfg.gait.swing_steps)
-    cold_current_tau = (
-        node / perceptive_plan.event_step.clamp_min(1)[:, None].to(rebased.dtype)
-    ).clamp(0.0, 1.0)
     cold_swing_gamma = torch.where(
         current_swing[:, None]
         & (node <= perceptive_plan.event_step[:, None]),
-        _quintic(cold_current_tau),
+        torch.ones_like(warm_swing_gamma),
         torch.ones_like(warm_swing_gamma),
     )
     swing_gamma = torch.where(
@@ -835,6 +906,19 @@ def _build_nominal_once(
     swing_gamma = torch.where(
         initialized[:, None, None]
         & (schedule.phase_node == int(cfg.gait.swing_steps - 1)),
+        torch.ones_like(swing_gamma),
+        swing_gamma,
+    )
+    future_liftoff_step = torch.where(
+        current_swing,
+        perceptive_plan.event_step + int(cfg.gait.stance_steps),
+        perceptive_plan.event_step - int(cfg.gait.swing_steps),
+    )
+    future_swing = schedule.swing & (
+        node >= future_liftoff_step[:, None]
+    )
+    swing_gamma = torch.where(
+        initialized[:, None, None] & future_swing,
         torch.ones_like(swing_gamma),
         swing_gamma,
     )
@@ -866,7 +950,6 @@ def _build_nominal_once(
         state,
         perceptive_plan,
         current_anchor,
-        initialized & ~warm_fault,
         terrain_field,
         cfg,
         phase,
@@ -908,6 +991,7 @@ def _build_nominal_once(
         preview_touchdown_reference_w=preview_target,
         swing_apex_w=apex,
         preview_tail_state=tail_state,
+        preview_contact_state=_preview_contact_state(tail_schedule, perceptive_plan, cfg),
     )
 
 
@@ -1049,7 +1133,7 @@ def build_rebased_seed(
     initialized = normalized.initialized.to(dtype=torch.bool, device=measured.device)
     cache_finite = torch.isfinite(normalized.trajectory).all(dim=(1, 2))
     return _build_rebased_state(
-        measured, command, normalized, initialized, cache_finite, cfg
+        measured, command, normalized, gait_phase, initialized, cache_finite, cfg
     )
 
 

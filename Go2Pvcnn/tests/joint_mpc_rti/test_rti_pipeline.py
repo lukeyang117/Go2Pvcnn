@@ -107,6 +107,20 @@ def test_published_x1_and_measured_x0_are_exact() -> None:
     )
 
 
+def test_lq_context_does_not_move_current_nominal_stance_anchor() -> None:
+    from extension.joint_mpc_rti import planner
+
+    result = planner.step(
+        make_state(1),
+        make_command(1, vx=0.8),
+        make_flat_field(1),
+        None,
+        JointMpcRtiCfg(),
+    )
+
+    assert result.diagnostics.nominal_stance_anchor_error.max() <= 1.0e-4
+
+
 def test_current_field_is_forwarded_to_lq_and_line_search(monkeypatch) -> None:
     from extension.joint_mpc_rti import planner
     from extension.joint_mpc_rti.solver import sqp_rti
@@ -125,3 +139,273 @@ def test_current_field_is_forwarded_to_lq_and_line_search(monkeypatch) -> None:
 
     assert len(seen) == 1
     torch.testing.assert_close(seen[0], field.version)
+
+
+def test_zero_command_first_eight_refreshes_remain_publishable() -> None:
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=0.0)
+    field = make_flat_field(1)
+    solver_state = None
+    published = []
+
+    for _ in range(8):
+        result = planner.step(measured, command, field, solver_state, cfg)
+        trajectory = result.full_trajectory
+        state = trajectory.state_nodes[:, 1]
+        velocity = trajectory.derived_velocity[:, 0]
+        published.append(trajectory.publish)
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    assert torch.stack(published, dim=1).all()
+
+
+def test_fast_forward_one_gait_remains_publishable() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    cfg.nominal.command_scale = 0.85
+    cfg.nominal.step_reference_scale = 0.0
+    measured = make_state(1)
+    command = make_command(1, vx=1.0)
+    field = make_flat_field(1)
+    solver_state = None
+    published = []
+
+    for _ in range(24):
+        origin = field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        trajectory = result.full_trajectory
+        state = trajectory.state_nodes[:, 1]
+        velocity = trajectory.derived_velocity[:, 0]
+        published.append(trajectory.publish)
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    assert torch.stack(published, dim=1).all()
+
+
+def test_startup_root_hold_does_not_repeat_after_one_gait() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    field = make_flat_field(1)
+    solver_state = None
+    phase_24_step = None
+
+    for refresh in range(25):
+        origin = field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        trajectory = result.full_trajectory
+        if refresh == 24:
+            phase_24_step = trajectory.state_nodes[:, 1, :2] - measured.root_pos_w[:, :2]
+        state = trajectory.state_nodes[:, 1]
+        velocity = trajectory.derived_velocity[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    assert solver_state.gait_phase.item() == 25
+    assert phase_24_step is not None and phase_24_step[0, 0] > 0.0
+
+
+def test_cold_lq_preserves_the_three_edge_root_translation_lead_window() -> None:
+    from extension.joint_mpc_rti import planner
+
+    result = planner.step(
+        make_state(1),
+        make_command(1, vx=0.2),
+        make_flat_field(1),
+        None,
+        JointMpcRtiCfg(),
+    )
+
+    torch.testing.assert_close(
+        result.diagnostics.qp_direction[:, 1:4, :2],
+        torch.zeros_like(result.diagnostics.qp_direction[:, 1:4, :2]),
+        atol=1.0e-7,
+        rtol=0.0,
+    )
+
+
+def test_published_root_does_not_leak_before_swing_foot_progress() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.model.go2_kinematics import go2_fk
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    base_field = make_flat_field(1)
+    initial_root = measured.root_pos_w[:, :2].clone()
+    initial_foot = go2_fk(
+        measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
+    ).foot_pos_w[..., :2]
+    initial_relative = initial_foot - initial_root[:, None]
+    solver_state = None
+    foot_progressed = False
+
+    for _ in range(12):
+        origin = base_field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(base_field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        trajectory = result.full_trajectory
+        state = trajectory.state_nodes[:, 1]
+        foot = trajectory.foot_pos_w[:, 1, :, :2]
+        relative_progress = (
+            foot[..., 0] - state[:, None, 0] - initial_relative[..., 0]
+        )
+        swing = ~trajectory.contact_state[:, 1]
+        foot_progressed = bool((swing & (relative_progress >= 0.001)).any())
+        if foot_progressed:
+            break
+        assert torch.linalg.vector_norm(state[:, :2] - initial_root, dim=-1).max() <= 0.0005
+
+        velocity = trajectory.derived_velocity[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+    assert foot_progressed
+
+
+def test_zero_xy_commands_keep_published_root_xy_exact() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(2)
+    command = torch.tensor(((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    base_field = make_flat_field(2)
+    initial_xy = measured.root_pos_w[:, :2].clone()
+    solver_state = None
+
+    for _ in range(8):
+        origin = base_field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(base_field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        trajectory = result.full_trajectory
+        state = trajectory.state_nodes[:, 1]
+        torch.testing.assert_close(state[:, :2], initial_xy, atol=1.0e-7, rtol=0.0)
+        velocity = trajectory.derived_velocity[:, 0]
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        solver_state = result.solver_state
+
+
+def test_zero_command_one_gait_respects_published_joint_step_limit() -> None:
+    from dataclasses import replace
+
+    from extension.joint_mpc_rti import planner
+    from extension.joint_mpc_rti.types import JointMpcRtiState
+
+    cfg = JointMpcRtiCfg()
+    measured = make_state(1)
+    command = make_command(1, vx=0.0)
+    base_field = make_flat_field(1)
+    solver_state = None
+    previous_joint = measured.joint_pos
+    maximum_step = measured.joint_pos.new_zeros(())
+
+    for _ in range(24):
+        origin = base_field.origin_w.clone()
+        origin[:, :2] = measured.root_pos_w[:, :2]
+        result = planner.step(
+            measured,
+            command,
+            replace(base_field, origin_w=origin),
+            solver_state,
+            cfg,
+        )
+        trajectory = result.full_trajectory
+        state = trajectory.state_nodes[:, 1]
+        velocity = trajectory.derived_velocity[:, 0]
+        maximum_step = torch.maximum(
+            maximum_step, (state[:, 6:] - previous_joint).abs().amax()
+        )
+        measured = JointMpcRtiState(
+            root_pos_w=state[:, :3],
+            root_rpy_w=state[:, 3:6],
+            joint_pos=state[:, 6:],
+            root_lin_vel_b=velocity[:, :3],
+            root_ang_vel_b=velocity[:, 3:6],
+            joint_vel=velocity[:, 6:],
+        )
+        previous_joint = state[:, 6:]
+        solver_state = result.solver_state
+
+    assert maximum_step <= 0.35

@@ -685,6 +685,8 @@ def simulate_flat_trace(
     x1_errors = [torch.zeros(batch, device=device)]
     cold_start_rows = [torch.zeros(batch, dtype=torch.bool, device=device)]
     warm_start_rows = [torch.zeros(batch, dtype=torch.bool, device=device)]
+    kkt_primal_rows = []
+    kkt_dual_rows = []
     timestamps = [torch.zeros(batch, device=device)]
     initial_geometry = go2_fk(measured.root_pos_w, measured.root_rpy_w, measured.joint_pos)
     foot_rows.append(initial_geometry.foot_pos_w)
@@ -731,6 +733,8 @@ def simulate_flat_trace(
         x1_errors.append(x1_error)
         cold_start_rows.append(trajectory.cold_start)
         warm_start_rows.append(trajectory.warm_start)
+        kkt_primal_rows.append(result.diagnostics.kkt_primal_residual)
+        kkt_dual_rows.append(result.diagnostics.kkt_dual_residual)
         timestamps.append(torch.full((batch,), (step_index + 1) * float(cfg.runtime.dt), device=device))
 
     try:
@@ -775,6 +779,8 @@ def simulate_flat_trace(
         cold_start=torch.stack(cold_start_rows, dim=1),
         warm_start=torch.stack(warm_start_rows, dim=1),
         warm_cache_invariant_fault=torch.zeros_like(valid),
+        kkt_primal_residual=torch.stack(kkt_primal_rows, dim=1),
+        kkt_dual_residual=torch.stack(kkt_dual_rows, dim=1),
     )
 
 

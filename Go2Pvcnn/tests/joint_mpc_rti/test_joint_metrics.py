@@ -81,6 +81,33 @@ def test_swing_progress_rotates_body_command_into_world_frame() -> None:
     assert metrics["swing_active_motion_ratio"] > 0.90
 
 
+def test_stance_carry_ignores_submillimeter_stationary_noise() -> None:
+    from .joint_metrics import accumulate_joint_metrics
+
+    trace = _root_carried_trace()
+    root = trace.root_pos_w[:, :1].expand_as(trace.root_pos_w).clone()
+    foot = trace.foot_pos_w[:, :1].expand_as(trace.foot_pos_w).clone()
+    foot[:, 1:, :, 0] += 5.0e-8
+
+    metrics = accumulate_joint_metrics(
+        replace(trace, root_pos_w=root, foot_pos_w=foot)
+    )
+
+    assert metrics["stance_root_carry_ratio_abs"] <= 0.10
+
+
+def test_root_direction_excludes_startup_edges_below_v_min() -> None:
+    from .joint_metrics import accumulate_joint_metrics
+
+    trace = _root_carried_trace()
+    root = trace.root_pos_w.clone()
+    root[..., 0] = torch.tensor((0.0, 0.0, 0.004, 0.008))
+
+    metrics = accumulate_joint_metrics(replace(trace, root_pos_w=root))
+
+    assert metrics["root_direction_error"] <= 1.0e-6
+
+
 def test_universal_stance_failure_rejects_crossing_cell() -> None:
     from .acceptance_thresholds import evaluate_metric_cell
 
@@ -286,7 +313,7 @@ def test_final_metric_schema_contains_every_frozen_design_id() -> None:
     assert required <= FINAL_METRIC_IDS
 
 
-def test_zero_translation_keeps_common_swing_lead_and_stance_metrics() -> None:
+def test_zero_translation_marks_directional_swing_lead_metrics_not_applicable() -> None:
     from .joint_metrics import applicable_metrics
 
     metrics = applicable_metrics("small", (0.0, 0.0, 0.0))
@@ -294,10 +321,19 @@ def test_zero_translation_keeps_common_swing_lead_and_stance_metrics() -> None:
     assert "root_direction_error" not in metrics
     assert "strict_cross_success" not in metrics
     assert "cross_direction_margin_mps" not in metrics
-    assert "swing_active_motion_ratio" in metrics
-    assert "foot_root_lead_time_min_ms" in metrics
-    assert "foot_root_lead_time_max_ms" in metrics
+    assert "swing_active_motion_ratio" not in metrics
+    assert "foot_root_lead_time_min_ms" not in metrics
+    assert "foot_root_lead_time_max_ms" not in metrics
+    assert "root_leak_before_foot_m" not in metrics
     assert "stance_root_carry_ratio_abs" in metrics
+
+
+def test_foot_root_lead_is_report_only_while_root_leak_remains_a_gate() -> None:
+    from .acceptance_thresholds import THRESHOLDS
+
+    assert "foot_root_lead_time_min_ms" not in THRESHOLDS
+    assert "foot_root_lead_time_max_ms" not in THRESHOLDS
+    assert THRESHOLDS["root_leak_before_foot_m"] == ("le", 0.0005)
 
 
 def test_every_metric_report_records_its_evidence_source() -> None:

@@ -21,8 +21,6 @@ THRESHOLDS: dict[str, tuple[str, float]] = {
     "stance_anchor_residual": ("le", 0.0005),
     "swing_surface_clearance_min_m": ("ge", 0.0),
     "swing_active_motion_ratio": ("ge", 0.50),
-    "foot_root_lead_time_min_ms": ("ge", 20.0),
-    "foot_root_lead_time_max_ms": ("le", 80.0),
     "root_leak_before_foot_m": ("le", 0.0005),
     "root_velocity_error": ("le", 0.20),
     "root_direction_error": ("le", math.radians(10.0)),

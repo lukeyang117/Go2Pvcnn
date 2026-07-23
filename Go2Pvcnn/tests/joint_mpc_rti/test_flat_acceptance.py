@@ -65,6 +65,21 @@ def test_flat_simulator_returns_x0_to_x1_trace_without_control_variable() -> Non
     assert float(trace.x0_injection_error.max()) <= 1.0e-6
 
 
+def test_flat_simulator_records_real_kkt_residuals_for_every_refresh() -> None:
+    import torch
+
+    from .run_joint_acceptance import simulate_flat_trace
+
+    trace = simulate_flat_trace(torch.tensor([[0.2, 0.0, 0.0]]), steps=2)
+
+    assert trace.kkt_primal_residual is not None
+    assert trace.kkt_dual_residual is not None
+    assert trace.kkt_primal_residual.shape == (1, 2)
+    assert trace.kkt_dual_residual.shape == (1, 2)
+    assert torch.isfinite(trace.kkt_primal_residual).all()
+    assert torch.isfinite(trace.kkt_dual_residual).all()
+
+
 def test_acceptance_initial_state_matches_configured_flat_contact_geometry() -> None:
     from extension.joint_mpc_rti.config import JointMpcRtiCfg
     from extension.joint_mpc_rti.model.go2_kinematics import go2_fk

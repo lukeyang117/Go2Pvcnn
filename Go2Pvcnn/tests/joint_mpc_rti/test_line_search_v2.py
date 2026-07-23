@@ -4,11 +4,14 @@ from dataclasses import replace
 
 import torch
 
+from extension.joint_mpc_rti import planner
+from extension.joint_mpc_rti.config import JointMpcRtiCfg
 from extension.joint_mpc_rti.solver.line_search import (
     ALPHAS,
     HARD_FILTER_NAMES,
     hard_safe_line_search,
 )
+from .helpers import make_command, make_flat_field, make_state
 from .test_trajectory_qp import _problem
 
 
@@ -31,6 +34,24 @@ def test_hard_line_search_builds_exactly_five_packed_candidates() -> None:
     assert result.minimum_clearance_by_part.shape == (2, 5, 5)
     assert result.selected_index.shape == (2,)
     assert not result.stop.any()
+
+
+def test_alpha_zero_preview_filter_matches_safe_nominal_event_window() -> None:
+    cfg = JointMpcRtiCfg()
+    cfg.nominal.command_scale = 0.65
+
+    result = planner.step(
+        make_state(1),
+        make_command(1, vx=0.8),
+        make_flat_field(1),
+        None,
+        cfg,
+    )
+
+    preview = HARD_FILTER_NAMES.index("preview_safety")
+    assert result.diagnostics.nominal_safe.all()
+    assert not result.diagnostics.alpha_reject_bits[:, 4, preview].any()
+    assert result.full_trajectory.publish.all()
 
 
 def test_alpha_zero_receives_same_filters_and_invalid_nominal_stops() -> None:

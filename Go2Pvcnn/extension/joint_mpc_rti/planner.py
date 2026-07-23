@@ -49,11 +49,6 @@ def build_loss_context(
         nominal.current_stance_anchor_w,
         schedule,
     ).clone()
-    anchor_shape = stance_anchor_w.shape
-    anchor_height = query_world(
-        terrain_field, stance_anchor_w.reshape(anchor_shape[0], -1, 3)
-    ).height_w.reshape(anchor_shape[:-1])
-    stance_anchor_w[..., 2] = anchor_height + float(cfg.gait.foot_contact_offset)
     return LossContext(
         command_body=command_body,
         touchdown_reference_w=nominal.touchdown_reference_w,
@@ -87,11 +82,16 @@ def _stance_anchors_from_state(
     current_stance_anchor_w: Tensor,
     schedule,
 ) -> Tensor:
-    del touchdown_reference_w, schedule
     anchor = torch.as_tensor(
         current_stance_anchor_w, dtype=state.dtype, device=state.device
     )
-    return anchor[:, None].expand(-1, state.shape[1], -1, -1)
+    touchdown = torch.as_tensor(
+        touchdown_reference_w, dtype=state.dtype, device=state.device
+    )
+    future_stance = schedule.stance_node & (
+        schedule.swing.to(torch.int64).cumsum(dim=1) > 0
+    )
+    return torch.where(future_stance[..., None], touchdown, anchor[:, None])
 
 
 def step(
@@ -242,7 +242,7 @@ def step(
     accepted_state = torch.where(valid[:, None, None], state, previous.trajectory)
     next_solver_state = JointMpcRtiSolverState(
         trajectory=accepted_state,
-        gait_phase=torch.remainder(previous.gait_phase + 1, int(cfg.gait.period_steps)),
+        gait_phase=previous.gait_phase + 1,
         initialized=previous.initialized | nominal.used_cold_start,
         stance_anchor_w=torch.where(
             (

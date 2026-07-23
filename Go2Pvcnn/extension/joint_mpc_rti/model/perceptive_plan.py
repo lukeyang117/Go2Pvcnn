@@ -611,6 +611,46 @@ def _candidate_leg_sweep_safe(
     return safe, resolved
 
 
+def _candidate_support_joint_safe(
+    warm: Tensor,
+    candidate_w: Tensor,
+    event_step: Tensor,
+    cfg: JointMpcRtiCfg,
+) -> Tensor:
+    batch, legs, candidates = map(int, candidate_w.shape[:3])
+    offsets = constant_like(
+        warm,
+        "selector_support_node_offsets",
+        tuple(range(int(cfg.gait.stance_steps) + 1)),
+    ).to(torch.long)
+    node = (
+        event_step[:, None]
+        + offsets.view(1, -1, 1)
+    ).clamp_max(int(cfg.runtime.horizon_steps))
+    samples = int(offsets.numel())
+
+    def gather_root(values: Tensor) -> Tensor:
+        expanded = values.unsqueeze(2).expand(-1, -1, legs, -1)
+        index = node[..., None].expand(-1, -1, -1, int(values.shape[-1]))
+        return torch.gather(expanded, 1, index).permute(0, 2, 1, 3)
+
+    root = gather_root(warm[..., :3])[:, :, None].expand(
+        -1, -1, candidates, -1, -1
+    )
+    rpy = gather_root(warm[..., 3:6])[:, :, None].expand_as(root)
+    target = candidate_w[..., None, :].expand(-1, -1, -1, samples, -1)
+    leg_index = torch.arange(legs, device=warm.device).view(1, legs, 1, 1)
+    leg_index = leg_index.expand(batch, legs, candidates, samples)
+    joint, reachable = go2_analytic_ik_selected(root, rpy, target, leg_index)
+    lower = constant_like(warm, "selector_support_joint_lower", JOINT_LOWER)
+    upper = constant_like(warm, "selector_support_joint_upper", JOINT_UPPER)
+    margin = float(cfg.touchdown.joint_margin_rad)
+    joint_safe = ((joint >= lower + margin) & (joint <= upper - margin)).all(
+        dim=(-1, -2)
+    )
+    return reachable.all(dim=-1) & joint_safe
+
+
 def select_touchdowns(
     measured: JointMpcRtiState,
     command_body: Tensor,
@@ -717,6 +757,9 @@ def select_touchdowns(
         (candidate_joint >= lower + float(cfg.touchdown.joint_margin_rad))
         & (candidate_joint <= upper - float(cfg.touchdown.joint_margin_rad))
     ).all(dim=-1)
+    support_joint_safe = _candidate_support_joint_safe(
+        warm, candidate_w, event_step, cfg
+    )
 
     measured_geometry = go2_collision_geometry(
         measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
@@ -766,13 +809,18 @@ def select_touchdowns(
 
     warm_geometry = go2_collision_geometry(warm[..., :3], warm[..., 3:6], warm[..., 6:])
     warm_target = _gather_nodes(warm_geometry.foot_center_w, event_step)
+    available_lead_steps = event_step.clamp_max(int(cfg.gait.stance_steps)).to(
+        warm.dtype
+    )
     command_target = warm_target[..., :2] + command_axis * (
-        command_speed * event_step.to(warm.dtype) * float(cfg.runtime.dt)
-        * float(cfg.touchdown.command_prediction_scale)
+        command_speed
+        * (0.5 * available_lead_steps * float(cfg.runtime.dt))
     )[..., None]
-    previous_target = warm_target if previous_plan is None else previous_plan.target_w
+    previous_target = (
+        command_target if previous_plan is None else previous_plan.target_w[..., :2]
+    )
     command_score = (candidate_xy - command_target[:, :, None]).square().sum(dim=-1)
-    warm_score = (candidate_xy - previous_target[:, :, None, :2]).square().sum(dim=-1)
+    warm_score = (candidate_xy - previous_target[:, :, None]).square().sum(dim=-1)
     slope_score = query.slope_rad.reshape(batch, 4, 25).square()
     roughness_score = query.roughness.reshape(batch, 4, 25).square()
     edge_score = query.boundary_distance_m.reshape(batch, 4, 25).clamp_min(0.01).reciprocal()
@@ -788,6 +836,7 @@ def select_touchdowns(
         & plane_safe
         & reachable
         & joint_safe
+        & support_joint_safe
         & small_after
         & corridor_safe
         & sweep_safe
@@ -880,26 +929,14 @@ def select_touchdowns(
         leg_eye, selected_joint[:, :, None], start_leg
     ).reshape(batch, 4, 12)
 
-    duration = float(cfg.gait.period_steps) * float(cfg.runtime.dt)
-    scaled_command = command * float(cfg.nominal.command_scale)
-    preview_displacement = torch.stack(
-        (
-            torch.cos(yaw) * scaled_command[:, None, 0]
-            - torch.sin(yaw) * scaled_command[:, None, 1],
-            torch.sin(yaw) * scaled_command[:, None, 0]
-            + torch.cos(yaw) * scaled_command[:, None, 1],
-        ),
-        dim=-1,
-    ) * duration
-    preview_root = torch.cat(
-        (
-            root_event[..., :2] + preview_displacement,
-            root_event[..., 2:3],
-        ),
-        dim=-1,
+    preview_node = preview_step.clamp_max(int(cfg.runtime.horizon_steps))
+    preview_root = _gather_nodes(
+        warm[..., :3].unsqueeze(2).expand(-1, -1, 4, -1), preview_node
     )
-    preview_rpy = rpy_event.clone()
-    preview_rpy[..., 2] = preview_rpy[..., 2] + scaled_command[:, None, 2] * duration
+    preview_rpy = _gather_nodes(
+        warm[..., 3:6].unsqueeze(2).expand(-1, -1, 4, -1), preview_node
+    )
+    preview_displacement = preview_root[..., :2] - root_event[..., :2]
     preview_yaw = preview_rpy[..., 2]
     preview_cosine = torch.cos(preview_yaw)
     preview_sine = torch.sin(preview_yaw)
@@ -1177,6 +1214,7 @@ def select_touchdowns(
             "plane": plane_safe,
             "reachable": reachable,
             "joint": joint_safe,
+            "support_joint": support_joint_safe,
             "small_after": small_after,
             "corridor": corridor_safe,
             "sweep": sweep_safe,

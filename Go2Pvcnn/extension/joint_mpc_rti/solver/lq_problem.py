@@ -507,32 +507,74 @@ def _touchdown_constraints(
             plane_target,
             plane_active,
         )
-    A = plan.region.A.to(dtype=state.dtype, device=state.device)
-    b = plan.region.b.to(dtype=state.dtype, device=state.device)
-    region_jacobian = torch.einsum("blij,bnljd->bnlid", A, foot_jacobian[..., :2, :])
-    region_rows = region_jacobian.permute(0, 1, 2, 4, 3).contiguous()
-    nominal_margin = torch.einsum("blij,bnlj->bnli", A, foot[..., :2]) + b[:, None]
-    region_target = -nominal_margin
     node = constant_like(
         state, "lq_node_index", tuple(range(nodes))
     ).to(torch.long).view(1, nodes, 1)
-    selected_stance = context.schedule.stance & (node >= plan.event_step[:, None])
+    primary_stance = (
+        context.schedule.stance
+        & (node >= plan.event_step[:, None])
+        & (node < plan.event_step[:, None] + int(cfg.gait.stance_steps))
+    )
+    preview_start = plan.event_step + int(cfg.gait.period_steps)
+    preview_stance = (
+        context.schedule.stance
+        & (node >= preview_start[:, None])
+        & (
+            node
+            < preview_start[:, None] + int(cfg.gait.stance_steps)
+        )
+    )
+    selected_stance = primary_stance | preview_stance
+    use_preview = preview_stance[..., None, None]
+
+    primary_A = plan.region.A.to(dtype=state.dtype, device=state.device)[:, None]
+    preview_A = plan.preview_region.A.to(
+        dtype=state.dtype, device=state.device
+    )[:, None]
+    A = torch.where(use_preview, preview_A, primary_A)
+    primary_b = plan.region.b.to(dtype=state.dtype, device=state.device)[:, None]
+    preview_b = plan.preview_region.b.to(
+        dtype=state.dtype, device=state.device
+    )[:, None]
+    b = torch.where(preview_stance[..., None], preview_b, primary_b)
+    region_jacobian = torch.einsum(
+        "bnlij,bnljd->bnlid", A, foot_jacobian[..., :2, :]
+    )
+    region_rows = region_jacobian.permute(0, 1, 2, 4, 3).contiguous()
+    nominal_margin = torch.einsum("bnlij,bnlj->bnli", A, foot[..., :2]) + b
+    region_target = -nominal_margin
+    primary_valid = plan.region.valid.to(device=state.device)[:, None]
+    preview_valid = plan.preview_region.valid.to(device=state.device)[:, None]
+    region_valid = torch.where(preview_stance, preview_valid, primary_valid)
     region_active = (
         selected_stance[..., None]
-        & plan.region.valid[:, None, :, None]
+        & region_valid[..., None]
     ).expand(-1, -1, -1, 4)
 
-    plane = plan.region.plane.to(dtype=state.dtype, device=state.device)
+    primary_plane = plan.region.plane.to(
+        dtype=state.dtype, device=state.device
+    )[:, None]
+    preview_plane = plan.preview_region.plane.to(
+        dtype=state.dtype, device=state.device
+    )[:, None]
+    plane = torch.where(preview_stance[..., None], preview_plane, primary_plane)
     slope = plane[..., 1:]
     plane_rows = foot_jacobian[..., 2, :] - torch.einsum(
-        "bli,bnlid->bnld", slope, foot_jacobian[..., :2, :]
+        "bnli,bnlid->bnld", slope, foot_jacobian[..., :2, :]
     )
-    plane_height = plane[:, None, :, 0] + torch.einsum(
-        "bli,bnli->bnl", slope, foot[..., :2] - plan.target_w[:, None, :, :2]
+    primary_target = plan.target_w.to(dtype=state.dtype, device=state.device)[:, None]
+    preview_target = plan.preview_target_w.to(
+        dtype=state.dtype, device=state.device
+    )[:, None]
+    touchdown_target = torch.where(
+        preview_stance[..., None], preview_target, primary_target
+    )
+    plane_height = plane[..., 0] + torch.einsum(
+        "bnli,bnli->bnl", slope, foot[..., :2] - touchdown_target[..., :2]
     )
     plane_residual = foot[..., 2] - plane_height - float(cfg.gait.foot_contact_offset)
     plane_target = -plane_residual
-    plane_active = selected_stance & plan.region.valid[:, None]
+    plane_active = selected_stance & region_valid
     return (
         region_rows,
         region_target,
@@ -552,7 +594,9 @@ def _sample_five(endpoints: Tensor) -> Tensor:
     )
 
 
-def _clearance_points_and_jacobians(state: Tensor) -> tuple[tuple[Tensor, Tensor, int], ...]:
+def _clearance_points_and_jacobians(
+    state: Tensor, cfg: JointMpcRtiCfg
+) -> tuple[tuple[Tensor, Tensor, int, float], ...]:
     batch, nodes = state.shape[:2]
     flat = state.reshape(batch * nodes, 18)
     root, rpy, joint = flat[:, :3], flat[:, 3:6], flat[:, 6:]
@@ -589,15 +633,25 @@ def _clearance_points_and_jacobians(state: Tensor) -> tuple[tuple[Tensor, Tensor
     thigh = reshape(_sample_five(geometry.thigh_endpoints_w), thigh_jacobian)
     base = reshape(base_points, base_jacobian)
     return (
-        (foot[0], foot[1], 0),
-        (calf[0], calf[1], 2),
-        (thigh[0], thigh[1], 3),
-        (base[0], base[1], 4),
+        (foot[0], foot[1], 0, float(cfg.terrain.foot_radius_m)),
+        (
+            calf[0],
+            calf[1],
+            2,
+            float(cfg.terrain.calf_radius_m + cfg.terrain.link_margin_m),
+        ),
+        (
+            thigh[0],
+            thigh[1],
+            3,
+            float(cfg.terrain.thigh_radius_m + cfg.terrain.link_margin_m),
+        ),
+        (base[0], base[1], 4, float(cfg.terrain.base_margin_m)),
     )
 
 
 def _clearance_constraints(
-    state: Tensor, context: LossContext
+    state: Tensor, context: LossContext, cfg: JointMpcRtiCfg
 ) -> tuple[Tensor, Tensor, Tensor]:
     batch, nodes = state.shape[:2]
     rows = state.new_zeros(batch, nodes, 53, 18)
@@ -608,7 +662,9 @@ def _clearance_constraints(
         return rows, target, active
     cursor = 0
     epsilon = float(field.resolution)
-    for points, point_jacobian, channel in _clearance_points_and_jacobians(state):
+    for points, point_jacobian, channel, vertical_margin in (
+        _clearance_points_and_jacobians(state, cfg)
+    ):
         samples = int(points.shape[2])
         flat_points = points.reshape(batch, nodes * samples, 3)
         height, valid = query_inflated_height_world(field, flat_points, channel=channel)
@@ -630,7 +686,7 @@ def _clearance_constraints(
         valid = (valid & valid_px & valid_mx & valid_py & valid_my).reshape(
             batch, nodes, samples
         )
-        clearance = points[..., 2] - height
+        clearance = points[..., 2] - height - float(vertical_margin)
         jacobian = point_jacobian[..., 2, :] - torch.einsum(
             "bnsi,bnsid->bnsd", gradient, point_jacobian[..., :2, :]
         )
@@ -671,6 +727,31 @@ def build_lq_problem(
     if regularization:
         diagonal = diagonal + regularization * _state_identity(state)
     lower, upper, rate_lower, rate_upper = _trajectory_bounds(state, context, cfg)
+    cold_lead = nominal.used_cold_start[:, None, None]
+    lower[:, 1:4, :2] = torch.where(
+        cold_lead, torch.zeros_like(lower[:, 1:4, :2]), lower[:, 1:4, :2]
+    )
+    upper[:, 1:4, :2] = torch.where(
+        cold_lead, torch.zeros_like(upper[:, 1:4, :2]), upper[:, 1:4, :2]
+    )
+    zero_translation = context.command_body[:, :2].abs().amax(dim=-1) <= 1.0e-7
+    rebased_root_hold = (
+        nominal.rebased_state[:, 1, :2] - nominal.rebased_state[:, 0, :2]
+    ).abs().amax(dim=-1) <= 1.0e-7
+    warm_published_lead = zero_translation | (
+        nominal.used_warm_start
+        & rebased_root_hold
+    )
+    lower[:, 1, :2] = torch.where(
+        warm_published_lead[:, None],
+        torch.zeros_like(lower[:, 1, :2]),
+        lower[:, 1, :2],
+    )
+    upper[:, 1, :2] = torch.where(
+        warm_published_lead[:, None],
+        torch.zeros_like(upper[:, 1, :2]),
+        upper[:, 1, :2],
+    )
     foot, stance_rows, stance_target, stance_active, _ = _stance_constraints(
         state, nominal, context
     )
@@ -685,7 +766,7 @@ def build_lq_problem(
         state, nominal, context, cfg, foot, stance_rows
     )
     clearance_rows, clearance_target, clearance_active = _clearance_constraints(
-        state, context
+        state, context, cfg
     )
     return LqProblem(
         residuals=residuals,

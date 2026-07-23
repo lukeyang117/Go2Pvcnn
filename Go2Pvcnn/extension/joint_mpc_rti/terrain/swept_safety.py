@@ -75,6 +75,27 @@ def _part_clearance(
     return minimum, all_valid, collision
 
 
+def _foot_clearance(
+    foot_center_w: Tensor,
+    field: JointMpcPerceptiveField,
+    *,
+    vertical_margin: float,
+) -> tuple[Tensor, Tensor, Tensor]:
+    batch, nodes, legs = map(int, foot_center_w.shape[:3])
+    points = foot_center_w.reshape(batch, nodes * legs, 3)
+    inflated_height, valid_query = query_inflated_height_world(
+        field, points, channel=0
+    )
+    clearance = (
+        points[..., 2] - inflated_height - float(vertical_margin)
+    ).reshape(batch, nodes, legs)
+    valid = valid_query.reshape(batch, nodes, legs)
+    finite_clearance = torch.where(
+        valid, clearance, torch.full_like(clearance, -torch.inf)
+    )
+    return finite_clearance.amin(dim=-1), valid.all(dim=-1), (~valid) | (clearance < 0.0)
+
+
 def _base_clearance(
     points_w: Tensor,
     field: JointMpcPerceptiveField,
@@ -151,6 +172,7 @@ def evaluate_nodes(
     cfg: JointMpcRtiCfg,
     *,
     contact_state: Tensor | None = None,
+    allow_support_contact_penetration: bool = False,
 ) -> WholeRobotSafety:
     state = torch.as_tensor(trajectory_nodes)
     if state.ndim != 3 or int(state.shape[-1]) != 18:
@@ -159,10 +181,9 @@ def evaluate_nodes(
     terrain = cfg.terrain
     capsule_samples = int(terrain.capsule_samples)
 
-    foot = _part_clearance(
+    foot_minimum, foot_valid, foot_collision_by_leg = _foot_clearance(
         geometry.foot_center_w,
         field,
-        channel=0,
         vertical_margin=float(terrain.foot_radius_m),
     )
     knee = _part_clearance(
@@ -189,17 +210,27 @@ def evaluate_nodes(
         margin=float(terrain.base_margin_m),
         wall_height=float(terrain.h_wall),
     )
-    values = dict(zip(PART_NAMES, (foot, knee, calf, thigh, base), strict=True))
-    minimum_by_part = {name: value[0] for name, value in values.items()}
-    valid_by_part = {name: value[1] for name, value in values.items()}
-    collision_by_part = {name: value[2] for name, value in values.items()}
     sole_safe, support_collision = _sole_support_safe(
         geometry.sole_corners_w,
         field,
         contact_state,
         ground_tolerance=float(terrain.stance_ground_tolerance_m),
     )
-    collision_by_part["foot"] = collision_by_part["foot"] | support_collision
+    if contact_state is None or not allow_support_contact_penetration:
+        allowed_support_contact = torch.zeros_like(foot_collision_by_leg)
+    else:
+        contact = torch.as_tensor(
+            contact_state, dtype=torch.bool, device=foot_collision_by_leg.device
+        )
+        allowed_support_contact = contact & sole_safe
+    foot_collision = (
+        foot_collision_by_leg & ~allowed_support_contact
+    ).any(dim=-1) | support_collision
+    foot = (foot_minimum, foot_valid, foot_collision)
+    values = dict(zip(PART_NAMES, (foot, knee, calf, thigh, base), strict=True))
+    minimum_by_part = {name: value[0] for name, value in values.items()}
+    valid_by_part = {name: value[1] for name, value in values.items()}
+    collision_by_part = {name: value[2] for name, value in values.items()}
     stacked_clearance = torch.stack(tuple(minimum_by_part.values()), dim=-1)
     collision = torch.stack(tuple(collision_by_part.values()), dim=-1).any(dim=-1)
     finite = torch.isfinite(state).all(dim=-1)
@@ -246,6 +277,7 @@ def evaluate_swept_intervals(
         field,
         cfg,
         contact_state=swept_contact,
+        allow_support_contact_penetration=True,
     )
 
     minimum_by_part = {

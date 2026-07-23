@@ -17,7 +17,7 @@
 - Tasks 1-9 and 11 are implemented and committed through `7f15334`.
 - Task 10 is implemented: the production path no longer calls the dense reference, B=`1/8/40` direction parity is within `2e-5`, and CUDA Graph capture/replay passes through 36D separator factors padded H30->H32 with five explicit combine levels and two active-mask refinements. Performance is not closed: a B=40 graph smoke averages `122.67 ms/refresh`, so Task 19 must optimize the factor representation/kernels before the formal `1024 x 1000 <5s` gate.
 - Task 12 planner/warm-only/CUDA Graph routing is implemented in the current worktree and passes the focused Task 1-12 regression (`128 passed`). Its commit and later Task 15 legacy deletion remain open.
-- Tasks 13-15 are implemented and GREEN. Task 13 exposes fixed same-refresh diagnostics, eight-stage profiling, and one-refresh viewer overlays (`61 passed`). Task 14 defines the final 72-ID P/A/M schema and strict foot-event crossing (`57 passed`). Task 15 deletes the superseded loss/map/rollout/solver/probe paths and passes the full package (`247 passed`). Tasks 16-19 remain open; no flat/small/large/performance acceptance is claimed yet.
+- Tasks 13-16 are implemented and GREEN. Task 16 records real same-refresh KKT metrics and closes all 19 formal flat cells; focused verification is `115 passed`, the full package is `284 passed`, and formal CUDA v13 has `gate.passed=true` with primal/dual KKT maxima `5.133e-5/9.014e-5`. Tasks 17-19 remain open; no small/large/performance acceptance is claimed yet.
 
 ---
 
@@ -196,7 +196,7 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m py
 
 Expected: collection succeeds and tests affected by the final contract pass. The conflict-marker search returns no output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/joint_mpc_rti/config.py \
@@ -1021,7 +1021,7 @@ git commit -m "refactor: remove superseded joint mpc paths"
 - Rewrite: `Go2Pvcnn/tests/joint_mpc_rti/test_flat_acceptance.py`
 - Modify as required by evidence: final implementation/config files only
 
-- [ ] **Step 1: Run the 19-command flat RED gate**
+- [x] **Step 1: Run the 19-command flat RED gate**
 
 ```bash
 PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
@@ -1031,15 +1031,15 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
 
 Expected initial result: at least one `M_common` metric identifies remaining behavior work; every failure includes cell, numerator/denominator, source, worst-case key, and module diagnostics.
 
-- [ ] **Step 2: Add one RED regression per observed root cause**
+- [x] **Step 2: Add one RED regression per observed root cause**
 
 Place the smallest reproducer in the owning test file: nominal for stance/swing, LQ for residual/constraint direction, line search for exact filter, runtime for lifecycle, or metrics for evidence computation. Do not change thresholds or add scenario repair.
 
-- [ ] **Step 3: Tune only approved parameters after structural tests pass**
+- [x] **Step 3: Tune only approved parameters after structural tests pass**
 
 Use viewer-visible parameter groups. Preserve zero command, low-speed posture, stance XYZ anchors, joint bounds, collision zero, and response gates together.
 
-- [ ] **Step 4: Require complete flat GREEN**
+- [x] **Step 4: Require complete flat GREEN**
 
 ```bash
 PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest \
@@ -1048,7 +1048,7 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m py
 
 Then rerun the monitored command and require all 19 cells and every applicable `M_common` metric to pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Go2Pvcnn/extension/joint_mpc_rti Go2Pvcnn/tests/joint_mpc_rti/test_flat_acceptance.py
