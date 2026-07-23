@@ -96,7 +96,14 @@ class LqProblem:
 
 
 def _state_identity(state: Tensor) -> Tensor:
-    return torch.eye(18, dtype=state.dtype, device=state.device).view(1, 1, 18, 18)
+    return constant_like(
+        state,
+        "lq_state_identity",
+        tuple(
+            tuple(1.0 if row == column else 0.0 for column in range(18))
+            for row in range(18)
+        ),
+    ).view(1, 1, 18, 18)
 
 
 def _wrap_angle(value: Tensor) -> Tensor:
@@ -159,10 +166,19 @@ def _posture_term(state: Tensor, context: LossContext, cfg: JointMpcRtiCfg) -> _
         -roughness2 / roughness_scale2
     )
     scale = torch.sqrt(hold * float(cfg.lq_cost.posture_joint))
-    reference = state.new_tensor(cfg.gait.nominal_joint_pos).view(1, 1, 12)
+    reference = constant_like(
+        state, "lq_nominal_joint_position", cfg.gait.nominal_joint_pos
+    ).view(1, 1, 12)
     residual = scale[:, None, None] * (state[..., 6:] - reference)
     jacobian = state.new_zeros(*residual.shape, 18)
-    selector = torch.eye(12, dtype=state.dtype, device=state.device)
+    selector = constant_like(
+        state,
+        "lq_joint_identity",
+        tuple(
+            tuple(1.0 if row == column else 0.0 for column in range(12))
+            for row in range(12)
+        ),
+    )
     jacobian[..., 6:] = scale[:, None, None, None] * selector
     return _LocalTerm(residual, (jacobian,))
 
@@ -173,12 +189,14 @@ def _root_terms(
     context: LossContext,
     cfg: JointMpcRtiCfg,
 ) -> tuple[_LocalTerm, ...]:
-    root_scale = state.new_tensor(
+    root_scale = constant_like(
+        state,
+        "lq_root_scale",
         (
             math.sqrt(float(cfg.lq_cost.root_height)),
             math.sqrt(float(cfg.lq_cost.root_roll_pitch)),
             math.sqrt(float(cfg.lq_cost.root_roll_pitch)),
-        )
+        ),
     )
     root_reference = torch.stack(
         (
@@ -208,7 +226,11 @@ def _root_terms(
     )
     rate_jacobian0 = state.new_zeros(*rate_residual.shape, 18)
     rate_jacobian1 = state.new_zeros(*rate_residual.shape, 18)
-    selector = torch.eye(3, dtype=state.dtype, device=state.device)
+    selector = constant_like(
+        state,
+        "lq_xyz_identity",
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+    )
     rate_jacobian0[..., 2:5] = -rate_scale * selector
     rate_jacobian1[..., 2:5] = rate_scale * selector
     return (
@@ -270,12 +292,14 @@ def _touchdown_term(
         ),
         dim=1,
     )
-    axis_scale = state.new_tensor(
+    axis_scale = constant_like(
+        state,
+        "lq_touchdown_axis_scale",
         (
             math.sqrt(float(cfg.lq_cost.touchdown_xy)),
             math.sqrt(float(cfg.lq_cost.touchdown_xy)),
             math.sqrt(float(cfg.lq_cost.touchdown_z)),
-        )
+        ),
     )
     mask = touchdown_node.to(state.dtype)[..., None]
     residual = mask * axis_scale * (foot - context.touchdown_reference_w)
@@ -392,7 +416,9 @@ def _trajectory_bounds(
     state: Tensor, context: LossContext, cfg: JointMpcRtiCfg
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     solver = cfg.solver
-    trust_values = state.new_tensor(
+    trust_values = constant_like(
+        state,
+        "lq_trust_values",
         (solver.root_position_trust,) * 3
         + (solver.root_roll_pitch_trust,) * 2
         + (solver.root_yaw_trust,)
@@ -401,11 +427,11 @@ def _trajectory_bounds(
     lower = -trust_values.expand_as(state).clone()
     upper = trust_values.expand_as(state).clone()
 
-    joint_lower = state.new_tensor(
-        (-1.0472, -0.6632, -2.721) * 4
+    joint_lower = constant_like(
+        state, "lq_joint_lower", (-1.0472, -0.6632, -2.721) * 4
     ).view(1, 1, 12) + float(solver.joint_margin)
-    joint_upper = state.new_tensor(
-        (1.0472, 2.966, -0.837) * 4
+    joint_upper = constant_like(
+        state, "lq_joint_upper", (1.0472, 2.966, -0.837) * 4
     ).view(1, 1, 12) - float(solver.joint_margin)
     lower[..., 6:] = torch.maximum(lower[..., 6:], joint_lower - state[..., 6:])
     upper[..., 6:] = torch.minimum(upper[..., 6:], joint_upper - state[..., 6:])
@@ -431,7 +457,9 @@ def _trajectory_bounds(
 
     rate_coordinates = torch.cat((state[..., 2:5], state[..., 6:]), dim=-1)
     nominal_rate_step = rate_coordinates[:, 1:] - rate_coordinates[:, :-1]
-    maximum_step = state.new_tensor(
+    maximum_step = constant_like(
+        state,
+        "lq_rate_maximum_step",
         (float(solver.root_z_velocity_limit) * float(cfg.runtime.dt),)
         + (float(solver.root_roll_pitch_rate_limit) * float(cfg.runtime.dt),) * 2
         + (float(solver.joint_velocity_limit) * float(cfg.runtime.dt),) * 12
@@ -485,7 +513,9 @@ def _touchdown_constraints(
     region_rows = region_jacobian.permute(0, 1, 2, 4, 3).contiguous()
     nominal_margin = torch.einsum("blij,bnlj->bnli", A, foot[..., :2]) + b[:, None]
     region_target = -nominal_margin
-    node = torch.arange(nodes, device=state.device).view(1, nodes, 1)
+    node = constant_like(
+        state, "lq_node_index", tuple(range(nodes))
+    ).to(torch.long).view(1, nodes, 1)
     selected_stance = context.schedule.stance & (node >= plan.event_step[:, None])
     region_active = (
         selected_stance[..., None]
@@ -514,7 +544,9 @@ def _touchdown_constraints(
 
 
 def _sample_five(endpoints: Tensor) -> Tensor:
-    fraction = endpoints.new_tensor((0.0, 0.25, 0.5, 0.75, 1.0)).view(1, 1, 5, 1)
+    fraction = constant_like(
+        endpoints, "lq_five_link_fractions", (0.0, 0.25, 0.5, 0.75, 1.0)
+    ).view(1, 1, 5, 1)
     return endpoints[..., :1, :] + fraction * (
         endpoints[..., 1:2, :] - endpoints[..., :1, :]
     )
@@ -539,9 +571,9 @@ def _clearance_points_and_jacobians(state: Tensor) -> tuple[tuple[Tensor, Tensor
         (hip_jacobian[:, :, None], links.thigh_samples, knee_jacobian[:, :, None]),
         dim=2,
     )
-    base_index = torch.tensor(
-        (0, 1, 2, 6, 7, 8, 12, 13, 14), dtype=torch.long, device=state.device
-    )
+    base_index = constant_like(
+        state, "lq_base_sample_index", (0, 1, 2, 6, 7, 8, 12, 13, 14)
+    ).to(torch.long)
     base_points = geometry.base_bottom_samples_w[:, base_index]
     base_jacobian = complete_body_sample_jacobian(rpy, base_points, root)
 
@@ -580,8 +612,12 @@ def _clearance_constraints(
         samples = int(points.shape[2])
         flat_points = points.reshape(batch, nodes * samples, 3)
         height, valid = query_inflated_height_world(field, flat_points, channel=channel)
-        offset_x = flat_points.new_tensor((epsilon, 0.0, 0.0)).view(1, 1, 3)
-        offset_y = flat_points.new_tensor((0.0, epsilon, 0.0)).view(1, 1, 3)
+        offset_x = constant_like(
+            flat_points, "lq_clearance_offset_x", (epsilon, 0.0, 0.0)
+        ).view(1, 1, 3)
+        offset_y = constant_like(
+            flat_points, "lq_clearance_offset_y", (0.0, epsilon, 0.0)
+        ).view(1, 1, 3)
         height_px, valid_px = query_inflated_height_world(field, flat_points + offset_x, channel=channel)
         height_mx, valid_mx = query_inflated_height_world(field, flat_points - offset_x, channel=channel)
         height_py, valid_py = query_inflated_height_world(field, flat_points + offset_y, channel=channel)

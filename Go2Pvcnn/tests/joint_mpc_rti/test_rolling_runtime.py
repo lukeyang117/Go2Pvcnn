@@ -111,6 +111,8 @@ def test_cuda_graph_capture_materializes_the_first_result_before_return() -> Non
     assert source.count("self._graph.replay()") == 2
     assert "solver_state.stance_anchor_w.clone()" in source
     assert "self._solver_state.stance_anchor_w.copy_" in source
+    assert "solver_state.preview_tail_state.clone()" in source
+    assert "self._solver_state.preview_tail_state.copy_" in source
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -157,6 +159,7 @@ def test_cuda_graph_runner_captures_and_replays_planner_step() -> None:
         "gait_phase",
         "initialized",
         "stance_anchor_w",
+        "preview_tail_state",
     }
     assert runner.solver_state.initialized.all()
     assert torch.isfinite(replayed.full_trajectory.state_nodes).all()

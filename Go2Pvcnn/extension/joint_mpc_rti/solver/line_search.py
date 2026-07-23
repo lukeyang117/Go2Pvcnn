@@ -107,7 +107,9 @@ def _touchdown_filters(
     if plan is None:
         valid = torch.ones(batch, alpha_count, dtype=torch.bool, device=candidates.device)
         return valid, valid
-    node = torch.arange(nodes, device=candidates.device).view(1, 1, nodes, 1)
+    node = constant_like(
+        candidates, "hard_line_search_node_index", tuple(range(nodes))
+    ).to(torch.long).view(1, 1, nodes, 1)
     active = (
         context.schedule.stance[:, None]
         & (node >= plan.event_step[:, None, None])
@@ -179,8 +181,12 @@ def hard_safe_line_search(
     expected = field.refresh_id if expected_refresh_id is None else expected_refresh_id
     fresh = (field.refresh_id == expected)[:, None].expand(-1, alpha_count)
     finite = torch.isfinite(candidates).all(dim=(2, 3)) & torch.isfinite(candidate_loss)
-    joint_lower = base.new_tensor(JOINT_LOWER) + float(cfg.solver.joint_margin)
-    joint_upper = base.new_tensor(JOINT_UPPER) - float(cfg.solver.joint_margin)
+    joint_lower = constant_like(base, "hard_joint_lower", JOINT_LOWER) + float(
+        cfg.solver.joint_margin
+    )
+    joint_upper = constant_like(base, "hard_joint_upper", JOINT_UPPER) - float(
+        cfg.solver.joint_margin
+    )
     joints = candidates[..., 6:]
     joint_position = ((joints >= joint_lower) & (joints <= joint_upper)).all(dim=(2, 3))
     joint_velocity = (
@@ -259,7 +265,9 @@ def hard_safe_line_search(
     selected_index = torch.where(
         publish, selected_index, torch.full_like(selected_index, alpha_count - 1)
     )
-    row = torch.arange(batch, device=base.device)
+    row = constant_like(
+        base, f"hard_line_search_batch_index_{batch}", tuple(range(batch))
+    ).to(torch.long)
     minimum_clearance = torch.stack(
         tuple(node_safety.minimum_clearance_by_part[name] for name in PART_NAMES), dim=-1
     ).amin(dim=1).reshape(batch, alpha_count, len(PART_NAMES))

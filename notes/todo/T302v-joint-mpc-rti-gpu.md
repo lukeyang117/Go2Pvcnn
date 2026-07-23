@@ -2,6 +2,8 @@
 
 ## Current State
 
+- The 2026-07-23 final perceptive-kinematic branch now routes selector -> warm-retargeted nominal -> eight-family LQ -> fixed-shape constrained trajectory solve -> five-alpha hard-safe search -> publish/stop. The production `LqProblem` path no longer calls the eager dense reference; B=`1/8/40` direction parity is within `2e-5`, CUDA Graph capture/replay passes, and `preview_tail_state` is copied through fixed-address graph state. The Task 1-12 focused union is `128 passed`. This is a correctness/capture checkpoint, not Stage B closure: the current block-pentadiagonal solve is temporally sequential and must still be replaced by true H30->H32 five-level associative recovery before `1024 x 1000 < 5s`. See [final pipeline CUDA checkpoint](../log/2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md).
+
 - Task 14E-Z方案 A is implemented: all published x1 stance legs use raw-ground analytic IK in warm nominal, and the existing fourth filter checks continuing XY, all-stance ground and swing floor. Focused regression is `127 passed` plus `47 passed`, but the real viewer rejects behavior closure. A post-obstacle onset shifted XY queries the `100.26mm` small-obstacle top, then the next continuing cycle drops `100.75mm` to ordinary ground; joint step is `0.59164rad`, validity `0.97959`, airborne touchdown `0.020408`, and phase 23 has no published-kinematics-feasible alpha. Root/XY/clearance/collision/crossing/lifecycle stay green. Stop before Task 14F/ranked/formal/Stage B; redesign touchdown XY ownership or pre-touchdown descent timing. See [Task 14E-Z implementation](../log/2026-07-22-joint-mpc-rti-all-stance-ground-implementation.md).
 
 - Task 14E方案 A is implemented as the approved tensor-only pre-LQ warm operation. The 6mm exact-FK, invariance, invalid/lifecycle, support, alpha-zero and B=`1/40/512/1024` contracts pass; focused solver union is `124 passed`, contract/IK/gait/terrain is `47 passed`. The real viewer closes invalid cycles and makes validity/root/joint/XY-slip/clearance green, but preserving shifted z leaves stance ground gap `84.63mm`, airborne touchdown `0.020408`, and carry ratio `29.72`. Stop before Task 14F/ranked/formal/Stage B and review continuing/onset z ownership. See [Task 14E implementation](../log/2026-07-22-joint-mpc-rti-warm-x1-manifold-implementation.md).
@@ -104,6 +106,9 @@
 
 ## Open Children
 
+- Final-plan Task 10 performance architecture: replace the graph-safe sequential block-pentadiagonal recovery with the specified H30 padded-to-H32 five-level associative solve while retaining dense parity, fixed two active refinements, CUDA Graph capture, and no per-environment host loops.
+- Final-plan Task 13: add fixed tensor diagnostics, eight-stage profiling, and viewer overlays/live parameter groups without a second planner/SQP call.
+
 - Task 14E vertical manifold follow-up: decide whether pre-LQ nominal should ground continuing-stance z, touchdown-onset z, or both, while preserving the one-RTI/no-repair architecture. Current XY-only implementation remains behavior-red.
 - Task 14F joint continuity decision: still blocked despite current `0.34683rad` green result because the Task 14E vertical support gate is red.
 - Task 14 complete formal small matrix: run all deterministic contiguous shards for `19 x 5 x 24 x 13 = 29,640` cells and require exact-key merge coverage.
@@ -129,6 +134,8 @@
 - T302v.6 performance investigation: compiled fixed-shape LQ/query/rollout is retained; single-cell EDT fusion, complementary transforms, stream chunking, brute-force reduction, and compact warp bbox experiments were evaluated. The single-cell pass was rejected and the failed CUDA experiments were removed.
 
 ## Related Logs
+
+- [Final perceptive-kinematic pipeline CUDA checkpoint](../log/2026-07-23-joint-mpc-rti-final-pipeline-cuda-checkpoint.md)
 
 - [CUDA Graph capture fix](../log/2026-07-22-joint-mpc-rti-cuda-graph-capture-fix.md)
 - [Task 14E warm x1 manifold implementation](../log/2026-07-22-joint-mpc-rti-warm-x1-manifold-implementation.md)

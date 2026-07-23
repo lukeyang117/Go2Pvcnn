@@ -13,6 +13,7 @@ from extension.joint_mpc_rti.solver.trajectory_scan import (
     pad_h30_factors,
     solve_trajectory_qp_scan,
 )
+from extension.joint_mpc_rti.solver.trajectory_qp import solve_dense_qp
 from .test_trajectory_qp import _problem
 
 
@@ -79,12 +80,15 @@ def test_scan_matches_dense_constrained_solution(batch: int) -> None:
     problem.lower[:, 0] = 0.0
     problem.upper[:, 0] = 0.0
 
+    dense = solve_dense_qp(problem)
     scan = solve_trajectory_qp_scan(problem)
 
     assert scan.direction.shape == (batch, 31, 18)
     assert scan.kkt_primal_residual.max() <= 1.0e-4
     assert scan.kkt_dual_residual.max() <= 1.0e-4
-    assert scan.dense_parity_error.max() < 2.0e-5
+    torch.testing.assert_close(
+        scan.direction, dense.direction, atol=2.0e-5, rtol=2.0e-5
+    )
     torch.testing.assert_close(
         scan.direction[:, 0], torch.zeros_like(scan.direction[:, 0])
     )
@@ -96,3 +100,10 @@ def test_active_refinement_does_not_rebuild_lq_problem() -> None:
     source = inspect.getsource(module.solve_trajectory_qp_scan)
     assert "build_lq_problem" not in source
     assert source.count("refinement") >= 1
+
+
+def test_production_scan_does_not_call_dense_reference() -> None:
+    import extension.joint_mpc_rti.solver.trajectory_scan as module
+
+    source = inspect.getsource(module.solve_trajectory_qp_scan)
+    assert "solve_dense_qp" not in source

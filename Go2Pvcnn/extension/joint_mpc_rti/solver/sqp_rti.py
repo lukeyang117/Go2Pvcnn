@@ -71,7 +71,30 @@ def _repeat_context(context: LossContext, repeats: int) -> LossContext:
         terrain=context.terrain,
         stance_anchor_w=context.stance_anchor_w.repeat_interleave(repeats, dim=0),
         support_height=context.support_height.repeat_interleave(repeats, dim=0),
-        perceptive_field=context.perceptive_field,
+        perceptive_field=(
+            _repeat_dataclass(context.perceptive_field, repeats)
+            if context.perceptive_field is not None
+            else None
+        ),
+    )
+
+
+def _repeat_dataclass(value, repeats: int):
+    if value is None or repeats == 1:
+        return value
+    return type(value)(
+        **{
+            name: (
+                tensor.repeat_interleave(repeats, dim=0)
+                if isinstance(tensor, Tensor) and tensor.ndim > 0
+                else (
+                    _repeat_dataclass(tensor, repeats)
+                    if hasattr(tensor, "__dataclass_fields__")
+                    else tensor
+                )
+            )
+            for name, tensor in vars(value).items()
+        }
     )
 
 
@@ -88,16 +111,7 @@ def perceptive_sqp_rti_update(
     def objective(candidate: Tensor) -> Tensor:
         repeats = int(candidate.shape[0]) // batch
         repeated_context = _repeat_context(context, repeats)
-        repeated_nominal = NominalTrajectory(
-            **{
-                name: (
-                    value.repeat_interleave(repeats, dim=0)
-                    if isinstance(value, Tensor) and value.shape[0] == batch
-                    else value
-                )
-                for name, value in vars(nominal).items()
-            }
-        )
+        repeated_nominal = _repeat_dataclass(nominal, repeats)
         residuals = lq_residuals(candidate, repeated_nominal, repeated_context, cfg)
         total = candidate.new_zeros(candidate.shape[0])
         for value in residuals.values():

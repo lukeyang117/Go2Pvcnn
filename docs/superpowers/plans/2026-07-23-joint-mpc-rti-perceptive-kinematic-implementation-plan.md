@@ -12,6 +12,13 @@
 
 **Supersedes For Execution:** `docs/superpowers/plans/2026-07-20-joint-mpc-rti-kinematic-flat-small-obstacle-implementation-plan.md`. That file remains historical evidence, but its seven soft-loss objective, Gaussian occupancy field, `phase/11` swing endpoint, and x1-only support repair are not implementation sources.
 
+## Execution Status (2026-07-23)
+
+- Tasks 1-9 and 11 are implemented and committed through `7f15334`.
+- Task 10 correctness/capture checkpoint is implemented but not complete: the production path no longer calls the dense reference, B=`1/8/40` direction parity is within `2e-5`, and CUDA Graph capture/replay passes. The current solver is a fixed-shape batched block-pentadiagonal factorization with two active-mask refinements; Step 2's true H30->H32 five-level associative recovery remains open before the performance gate.
+- Task 12 planner/warm-only/CUDA Graph routing is implemented in the current worktree and passes the focused Task 1-12 regression (`128 passed`). Its commit and later Task 15 legacy deletion remain open.
+- Tasks 13-19 have not started under this final plan.
+
 ---
 
 ## Non-Negotiable Contracts

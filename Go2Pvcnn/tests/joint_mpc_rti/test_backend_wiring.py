@@ -9,29 +9,12 @@ import torch
 import pytest
 
 
-def test_root_direction_limit_replacement_does_not_need_a_cuda_index_tensor() -> None:
-    from extension.joint_mpc_rti.planner import _root_direction_limits
+def test_final_planner_has_no_post_qp_root_direction_repair() -> None:
+    source = Path("Go2Pvcnn/extension/joint_mpc_rti/planner.py").read_text()
 
-    base_limits = torch.tensor([[[1.0, 2.0, 3.0, 4.0, 5.0]]])
-    terrain_step = torch.tensor([[True]])
-
-    limits = _root_direction_limits(
-        base_limits,
-        terrain_step,
-        vertical_limit=0.25,
-        linear_limit=0.75,
-    )
-
-    torch.testing.assert_close(limits, torch.tensor([[[1.0, 2.0, 0.25, 4.0, 5.0]]]))
-    torch.testing.assert_close(
-        _root_direction_limits(
-            base_limits,
-            ~terrain_step,
-            vertical_limit=0.25,
-            linear_limit=0.75,
-        ),
-        torch.tensor([[[1.0, 2.0, 0.75, 4.0, 5.0]]]),
-    )
+    assert "_root_direction_limits" not in source
+    assert "recover_control_direction" not in source
+    assert "restore_candidate" not in source
 
 
 def test_state_from_env_reorders_robot_joint_position_and_velocity_into_planner_order() -> None:

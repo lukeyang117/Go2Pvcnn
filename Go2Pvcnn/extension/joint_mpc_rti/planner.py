@@ -15,7 +15,7 @@ from extension.joint_mpc_rti.model.nominal import (
     build_rebased_seed,
 )
 from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
-from extension.joint_mpc_rti.solver.sqp_rti import sqp_rti_update
+from extension.joint_mpc_rti.solver.sqp_rti import perceptive_sqp_rti_update
 from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
 from extension.joint_mpc_rti.terrain.query import query_world
 from extension.joint_mpc_rti.types import (
@@ -36,6 +36,8 @@ def build_loss_context(
     terrain_field: JointMpcTerrainField,
     gait_phase: Tensor,
     cfg: JointMpcRtiCfg,
+    *,
+    perceptive_field=None,
 ) -> LossContext:
     schedule = fixed_trot_schedule(gait_phase, horizon_steps=int(cfg.runtime.horizon_steps))
     support_height = query_world(terrain_field, nominal.state[..., :2]).height_w
@@ -57,6 +59,7 @@ def build_loss_context(
         terrain=terrain_field,
         stance_anchor_w=stance_anchor_w,
         support_height=support_height,
+        perceptive_field=perceptive_field,
     )
 
 
@@ -145,14 +148,25 @@ def step(
         previous=previous,
         cfg=cfg,
     )
-    context = build_loss_context(nominal, command, terrain_field, previous.gait_phase, cfg)
-    update = sqp_rti_update(nominal.state, context, cfg)
+    context = build_loss_context(
+        nominal,
+        command,
+        terrain_field,
+        previous.gait_phase,
+        cfg,
+        perceptive_field=perceptive_field,
+    )
+    update = perceptive_sqp_rti_update(nominal, context, cfg)
     state = update.state
     foot_pos_w = _foot_positions(state)
     derived_velocity = (state[:, 1:] - state[:, :-1]) / float(cfg.runtime.dt)
     finite = torch.isfinite(state).all(dim=(1, 2)) & torch.isfinite(foot_pos_w).all(dim=(1, 2, 3))
-    accepted = nominal.valid | ~update.used_nominal
-    valid = accepted & finite & (update.status == 0)
+    publish = (
+        update.publish
+        if update.publish is not None
+        else finite & (update.status == 0)
+    )
+    valid = nominal.nominal_safe & finite & publish & (update.status == 0)
     status = torch.where(valid, update.status, torch.ones_like(update.status))
     trajectory = JointMpcRtiTrajectory(
         state=state,
@@ -166,6 +180,9 @@ def step(
         loss_breakdown=update.loss_breakdown,
         cold_start=nominal.used_cold_start,
         warm_start=nominal.used_warm_start,
+        warm_cache_invariant_fault=nominal.warm_cache_invariant_fault,
+        publish=valid,
+        stop=~valid,
     )
     pending = JointMpcPendingReference(
         root_pos_w=state[:, 1, :3],
@@ -176,20 +193,29 @@ def step(
         valid=valid,
         target_step=1,
     )
+    accepted_state = torch.where(valid[:, None, None], state, previous.trajectory)
     next_solver_state = JointMpcRtiSolverState(
-        trajectory=torch.where(finite[:, None, None], state, nominal.state),
+        trajectory=accepted_state,
         gait_phase=torch.remainder(previous.gait_phase + 1, int(cfg.gait.period_steps)),
         initialized=previous.initialized | nominal.used_cold_start,
         stance_anchor_w=torch.where(
             (
                 ~nominal.contact_state[:, 0]
                 & nominal.contact_state[:, 1]
-                & finite[:, None]
+                & valid[:, None]
             )[..., None],
             foot_pos_w[:, 1],
             nominal.current_stance_anchor_w,
         ),
-        preview_tail_state=nominal.preview_tail_state,
+        preview_tail_state=(
+            nominal.preview_tail_state
+            if previous.preview_tail_state is None
+            else torch.where(
+                valid[:, None, None],
+                nominal.preview_tail_state,
+                previous.preview_tail_state,
+            )
+        ),
     )
     return JointMpcRtiStepResult(
         full_trajectory=trajectory,
