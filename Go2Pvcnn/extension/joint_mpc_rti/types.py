@@ -159,6 +159,11 @@ class JointMpcRtiSolverState:
     initialized: Tensor
     stance_anchor_w: Tensor
     preview_tail_state: Tensor | None = None
+    touchdown_target_w: Tensor | None = None
+    touchdown_selected_index: Tensor | None = None
+    touchdown_crossing: Tensor | None = None
+    touchdown_remaining_steps: Tensor | None = None
+    touchdown_swing_offset_w: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +188,7 @@ class JointMpcFieldFrame:
 @dataclass(frozen=True)
 class JointMpcPerceptiveField:
     height_w: Tensor
+    ground_support_height_w: Tensor
     semantic_id: Tensor
     valid_mask: Tensor
     small_mask: Tensor

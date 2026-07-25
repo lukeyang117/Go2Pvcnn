@@ -43,6 +43,31 @@ def _pool_height(height: Tensor, radius_m: float, resolution: float, wall: float
     return F.max_pool2d(padded, 2 * radius + 1, stride=1)[:, 0]
 
 
+def _ground_support_height(
+    height: Tensor,
+    *,
+    small: Tensor,
+    large: Tensor,
+    valid: Tensor,
+    radius_m: float,
+    resolution: float,
+    wall: float,
+) -> Tensor:
+    radius = _kernel_radius(radius_m, resolution)
+    source = valid & ~small & ~large
+    sentinel = torch.full_like(height, torch.finfo(height.dtype).max)
+    source_height = torch.where(source, height, sentinel)
+    local_minimum = -F.max_pool2d(
+        -source_height[:, None], 2 * radius + 1, stride=1, padding=radius
+    )[:, 0]
+    has_source = F.max_pool2d(
+        source[:, None].to(height.dtype), 2 * radius + 1, stride=1, padding=radius
+    )[:, 0] > 0.0
+    small_support = torch.where(has_source, local_minimum, height.new_full((), wall))
+    support = torch.where(small, small_support, height)
+    return torch.where(large | ~valid, height.new_full((), wall), support)
+
+
 def _slope_and_roughness(
     height: Tensor,
     *,
@@ -123,6 +148,15 @@ def build_perceptive_field(
     wall = float(terrain.h_wall)
     physical_height = torch.where(finite, height, torch.zeros_like(height))
     effective_height = torch.where(large | unknown, height.new_full((), wall), physical_height)
+    ground_support_height = _ground_support_height(
+        physical_height,
+        small=small,
+        large=large,
+        valid=valid,
+        radius_m=float(terrain.root_support_fill_radius_m),
+        resolution=resolution,
+        wall=wall,
+    )
 
     foot_height = _pool_height(
         effective_height,
@@ -180,6 +214,7 @@ def build_perceptive_field(
 
     return JointMpcPerceptiveField(
         height_w=physical_height.contiguous(),
+        ground_support_height_w=ground_support_height.contiguous(),
         semantic_id=semantic.contiguous(),
         valid_mask=valid.contiguous(),
         small_mask=small.contiguous(),

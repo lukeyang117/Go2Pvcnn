@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
@@ -135,6 +136,55 @@ def test_clearance_target_includes_foot_vertical_radius() -> None:
     )
 
     torch.testing.assert_close(problem.clearance_target[..., :4], expected)
+
+
+def test_loss_context_uses_underlying_ground_for_root_over_small_obstacle() -> None:
+    from extension.joint_mpc_rti.planner import build_loss_context
+    from extension.joint_mpc_rti.terrain.field_builder import build_field_batch
+    from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+    from extension.joint_mpc_rti.terrain.query import query_world
+    from extension.joint_mpc_rti.types import JointMpcFieldFrame
+
+    cfg = JointMpcRtiCfg()
+    nominal, _ = _nominal_and_context(dtype=torch.float32)
+    height = torch.zeros(1, 151, 151)
+    semantic = torch.zeros(1, 151, 151, dtype=torch.long)
+    height[:, 74:90, 72:79] = 0.16
+    semantic[:, 74:90, 72:79] = 1
+    terrain = build_field_batch(
+        height_w=height,
+        semantic_id=semantic,
+        origin_w=torch.zeros(1, 3),
+        yaw_w=torch.zeros(1),
+        timestamp=torch.zeros(1),
+        version=torch.ones(1, dtype=torch.long),
+        resolution=cfg.terrain.resolution,
+        small_ids=cfg.terrain.small_ids,
+        large_ids=cfg.terrain.large_ids,
+        terrain_cfg=cfg.terrain,
+    )
+    frame = JointMpcFieldFrame(
+        origin_w=terrain.origin_w,
+        yaw_w=terrain.yaw_w,
+        timestamp=terrain.timestamp,
+        refresh_id=terrain.version,
+    )
+    field = build_perceptive_field(
+        terrain.height_w, terrain.semantic_id, terrain.valid_mask, frame, cfg
+    )
+
+    context = build_loss_context(
+        nominal,
+        torch.tensor([[0.2, 0.0, 0.0]]),
+        terrain,
+        torch.zeros(1, dtype=torch.long),
+        cfg,
+        perceptive_field=field,
+    )
+    raw_height = query_world(terrain, nominal.state[..., :2]).height_w
+
+    assert raw_height[0, 15] > 0.15
+    assert context.support_height[0, 15] == pytest.approx(0.0, abs=1.0e-6)
 
 
 def test_warm_lq_holds_only_published_root_xy_until_swing_foot_onset() -> None:

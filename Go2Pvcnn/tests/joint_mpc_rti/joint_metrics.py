@@ -25,6 +25,8 @@ COMMON_METRICS = frozenset(
         "joint_jerk_max_rps3",
         "stance_ground_gap",
         "stance_ground_penetration",
+        "stance_on_forbidden_semantic",
+        "touchdown_on_forbidden_semantic",
         "stance_anchor_residual",
         "stance_xy_slip_max_m",
         "stance_xy_slip_mean_m",
@@ -98,6 +100,8 @@ SOURCE_BY_METRIC = {
     **{f"{part}_collision_frame_rate": "P+A+M" for part in PARTS},
     "stance_ground_gap": "P+A+M",
     "stance_ground_penetration": "P+A+M",
+    "stance_on_forbidden_semantic": "P+A+M",
+    "touchdown_on_forbidden_semantic": "P+A+M",
     "swing_surface_clearance_min_m": "P+A+M",
     "airborne_touchdown": "P+A+M",
     "map_valid_ratio": "M",
@@ -141,6 +145,8 @@ class JointMetricTrace:
     strict_cross_success: Tensor | None = None
     touchdown_on_small: Tensor | None = None
     stance_on_small: Tensor | None = None
+    stance_on_forbidden_semantic: Tensor | None = None
+    touchdown_on_forbidden_semantic: Tensor | None = None
     airborne_touchdown: Tensor | None = None
     part_penetration_m: dict[str, Tensor] | None = None
     x0_injection_error: Tensor | None = None
@@ -408,6 +414,12 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         "root_roll_pitch_rate_max_rps": _masked_max(torch.abs((rpy[:, 1:, :2] - rpy[:, :-1, :2]) / float(trace.dt)).amax(dim=-1), valid_edge),
         "stance_ground_gap": _masked_max(torch.clamp_min(stance_surface_error, 0.0), stance_mask),
         "stance_ground_penetration": _masked_max(torch.clamp_min(-stance_surface_error, 0.0), stance_mask),
+        "stance_on_forbidden_semantic": 0.0 if trace.stance_on_forbidden_semantic is None else float(
+            torch.as_tensor(trace.stance_on_forbidden_semantic, dtype=root.dtype, device=root.device).mean().item()
+        ),
+        "touchdown_on_forbidden_semantic": 0.0 if trace.touchdown_on_forbidden_semantic is None else float(
+            torch.as_tensor(trace.touchdown_on_forbidden_semantic, dtype=root.dtype, device=root.device).mean().item()
+        ),
         "swing_surface_clearance_min_m": -_masked_max(-swing_clearance, (~contact) & future_node[..., None]),
         "alpha0_selected_ratio": _masked_mean((torch.as_tensor(trace.line_alpha, device=root.device) == 0).to(root.dtype), valid),
         "alpha0_selected_max_run": _max_true_run((torch.as_tensor(trace.line_alpha, device=root.device) == 0) & valid),
@@ -489,6 +501,8 @@ def accumulate_joint_metrics(trace: JointMetricTrace) -> dict[str, float | int]:
         ("strict_cross_success", trace.strict_cross_success),
         ("touchdown_on_small", trace.touchdown_on_small),
         ("stance_on_small", trace.stance_on_small),
+        ("stance_on_forbidden_semantic", trace.stance_on_forbidden_semantic),
+        ("touchdown_on_forbidden_semantic", trace.touchdown_on_forbidden_semantic),
         ("airborne_touchdown", trace.airborne_touchdown),
     ):
         output[name] = 0.0 if tensor is None else float(torch.as_tensor(tensor, dtype=root.dtype).mean().item())

@@ -18,6 +18,8 @@ THRESHOLDS: dict[str, tuple[str, float]] = {
     "stance_root_carry_ratio_abs": ("le", 0.10),
     "stance_ground_gap": ("le", 0.012),
     "stance_ground_penetration": ("le", 0.001),
+    "stance_on_forbidden_semantic": ("le", 0.0),
+    "touchdown_on_forbidden_semantic": ("le", 0.0),
     "stance_anchor_residual": ("le", 0.0005),
     "swing_surface_clearance_min_m": ("ge", 0.0),
     "swing_active_motion_ratio": ("ge", 0.50),

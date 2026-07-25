@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 
 from extension.joint_mpc_rti.config import JointMpcRtiCfg
@@ -10,6 +12,7 @@ from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
 from extension.joint_mpc_rti.solver.context import LossContext
 from extension.joint_mpc_rti.solver.lq_problem import build_lq_problem
 from extension.joint_mpc_rti.solver.trajectory_qp import solve_dense_qp
+from extension.joint_mpc_rti.solver.trajectory_scan import solve_trajectory_qp_scan
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState
 from .helpers import make_command, make_flat_field, make_state
 from .test_perceptive_plan import _field, _warm
@@ -150,3 +153,51 @@ def test_joint_root_and_rate_bounds_are_relative_to_nominal() -> None:
     )
     assert torch.all(problem.upper[:, 1:, :3] <= cfg.solver.root_position_trust + 1.0e-12)
     assert torch.all(problem.upper[:, 1:, 3:5] <= cfg.solver.root_roll_pitch_trust + 1.0e-12)
+
+
+def test_scan_recovery_enforces_original_rate_after_stance_parameterization() -> None:
+    problem, _, _, _ = _problem(dtype=torch.float32)
+    lower = torch.full_like(problem.lower, -1.0)
+    upper = torch.full_like(problem.upper, 1.0)
+    lower[:, 0] = 0.0
+    upper[:, 0] = 0.0
+    rate_lower = torch.full_like(problem.rate_lower, -1.0)
+    rate_upper = torch.full_like(problem.rate_upper, 1.0)
+    rate_upper[:, 1, 3] = 0.60
+    stance_rows = torch.zeros_like(problem.stance_rows)
+    stance_rows[:, 1:3, 0, 0, 0] = 1.0
+    stance_rows[:, 1:3, 0, 0, 6] = 1.0
+    stance_rows[:, 1:3, 0, 1, 7] = 1.0
+    stance_rows[:, 1:3, 0, 2, 8] = 1.0
+    stance_target = torch.zeros_like(problem.stance_target)
+    stance_target[:, 2, 0, 0] = 0.65
+    stance_active = torch.zeros_like(problem.stance_active)
+    stance_active[:, 1:3, 0] = True
+    diagonal = torch.eye(18, dtype=problem.gradient.dtype)
+    diagonal[0, 0] = 1.0e6
+    synthetic = replace(
+        problem,
+        diagonal=diagonal
+        .view(1, 1, 18, 18)
+        .expand_as(problem.diagonal)
+        .clone(),
+        first_offdiag=torch.zeros_like(problem.first_offdiag),
+        second_offdiag=torch.zeros_like(problem.second_offdiag),
+        gradient=torch.zeros_like(problem.gradient),
+        lower=lower,
+        upper=upper,
+        rate_lower=rate_lower,
+        rate_upper=rate_upper,
+        stance_rows=stance_rows,
+        stance_target=stance_target,
+        stance_active=stance_active,
+        touchdown_region_active=torch.zeros_like(problem.touchdown_region_active),
+        touchdown_plane_active=torch.zeros_like(problem.touchdown_plane_active),
+        clearance_active=torch.zeros_like(problem.clearance_active),
+    )
+
+    solution = solve_trajectory_qp_scan(synthetic)
+    joint_step = solution.direction[:, 2, 6] - solution.direction[:, 1, 6]
+
+    assert joint_step.item() <= 0.60 + 1.0e-5
+    assert solution.kkt_primal_residual.item() <= 1.0e-5

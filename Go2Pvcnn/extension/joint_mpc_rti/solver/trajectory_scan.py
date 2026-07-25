@@ -40,6 +40,18 @@ class TrajectoryScanSolution:
     dense_parity_error: Tensor
 
 
+@dataclass(frozen=True)
+class _AdjacentRateRows:
+    left: Tensor
+    right: Tensor
+
+
+def _rate_value(rows: _AdjacentRateRows, direction: Tensor) -> Tensor:
+    return torch.einsum("beri,bei->ber", rows.left, direction[:, :-1]) + torch.einsum(
+        "beri,bei->ber", rows.right, direction[:, 1:]
+    )
+
+
 def pad_h30_factors(
     factors: ConditionalValueFactor,
 ) -> tuple[ConditionalValueFactor, Tensor]:
@@ -269,6 +281,7 @@ def _add_local_rows(
 
 def _augmented_system(
     problem: LqProblem,
+    rate_rows: _AdjacentRateRows,
     direction: Tensor,
     active: dict[str, Tensor],
     multipliers: dict[str, Tensor],
@@ -330,30 +343,26 @@ def _augmented_system(
     rate_high = active["rate_high"].to(diagonal.dtype)
     rate_weight = rate_low + rate_high
     rate_target = rate_low * problem.rate_lower + rate_high * problem.rate_upper
-    rate_coordinates = constant_like(
-        diagonal, "scan_rate_coordinates", (2, 3, 4) + tuple(range(6, 18))
-    ).to(torch.long)
-    rate_diagonal = torch.zeros_like(first[..., 0])
-    rate_diagonal.scatter_add_(2, rate_coordinates.view(1, 1, -1).expand_as(rate_weight), rate_weight)
-    diagonal[:, :-1] = diagonal[:, :-1] + float(penalty) * torch.diag_embed(rate_diagonal)
-    diagonal[:, 1:] = diagonal[:, 1:] + float(penalty) * torch.diag_embed(rate_diagonal)
-    rate_first = torch.zeros_like(first[..., 0])
-    rate_first.scatter_add_(2, rate_coordinates.view(1, 1, -1).expand_as(rate_weight), -rate_weight)
-    first = first + float(penalty) * torch.diag_embed(rate_first)
-    rate_gradient = torch.zeros_like(gradient)
-    rate_gradient[:, :-1].scatter_add_(2, rate_coordinates.view(1, 1, -1).expand_as(rate_target), float(penalty) * rate_target)
-    rate_gradient[:, 1:].scatter_add_(2, rate_coordinates.view(1, 1, -1).expand_as(rate_target), -float(penalty) * rate_target)
-    rate_gradient[:, :-1].scatter_add_(
-        2,
-        rate_coordinates.view(1, 1, -1).expand_as(rate_target),
-        -rate_weight * multipliers["rate"],
+    weighted_left = rate_rows.left * rate_weight[..., None]
+    weighted_right = rate_rows.right * rate_weight[..., None]
+    diagonal[:, :-1] = diagonal[:, :-1] + float(penalty) * torch.einsum(
+        "beri,berj->beij", weighted_left, rate_rows.left
     )
-    rate_gradient[:, 1:].scatter_add_(
-        2,
-        rate_coordinates.view(1, 1, -1).expand_as(rate_target),
-        rate_weight * multipliers["rate"],
+    diagonal[:, 1:] = diagonal[:, 1:] + float(penalty) * torch.einsum(
+        "beri,berj->beij", weighted_right, rate_rows.right
     )
-    gradient = gradient + rate_gradient
+    first = first + float(penalty) * torch.einsum(
+        "beri,berj->beij", weighted_left, rate_rows.right
+    )
+    rate_residual = rate_weight * (
+        multipliers["rate"] - float(penalty) * rate_target
+    )
+    gradient[:, :-1] = gradient[:, :-1] + torch.einsum(
+        "beri,ber->bei", rate_rows.left, rate_residual
+    )
+    gradient[:, 1:] = gradient[:, 1:] + torch.einsum(
+        "beri,ber->bei", rate_rows.right, rate_residual
+    )
 
     fixed = problem.lower == problem.upper
     free = (~fixed).to(diagonal.dtype)
@@ -367,17 +376,13 @@ def _augmented_system(
     return diagonal, first, second, gradient
 
 
-def _constraint_activity(problem: LqProblem, direction: Tensor) -> dict[str, Tensor]:
+def _constraint_activity(
+    problem: LqProblem, rate_rows: _AdjacentRateRows, direction: Tensor
+) -> dict[str, Tensor]:
     fixed = problem.lower == problem.upper
     box_low = (direction < problem.lower - 1.0e-7) & ~fixed
     box_high = (direction > problem.upper + 1.0e-7) & ~fixed & ~box_low
-    rate_value = torch.cat(
-        (
-            direction[:, 1:, 2:5] - direction[:, :-1, 2:5],
-            direction[:, 1:, 6:] - direction[:, :-1, 6:],
-        ),
-        dim=-1,
-    )
+    rate_value = _rate_value(rate_rows, direction)
     rate_low = rate_value < problem.rate_lower - 1.0e-7
     rate_high = (rate_value > problem.rate_upper + 1.0e-7) & ~rate_low
     region_value = torch.einsum(
@@ -408,7 +413,9 @@ def _merge_activity(left: dict[str, Tensor], right: dict[str, Tensor]) -> dict[s
     return {name: left[name] | right[name] for name in left}
 
 
-def _stance_parameterization(problem: LqProblem) -> tuple[LqProblem, Tensor, Tensor]:
+def _stance_parameterization(
+    problem: LqProblem,
+) -> tuple[LqProblem, Tensor, Tensor, _AdjacentRateRows]:
     batch, nodes, state_dim = problem.gradient.shape
     transform = torch.eye(
         state_dim, dtype=problem.gradient.dtype, device=problem.gradient.device
@@ -495,6 +502,16 @@ def _stance_parameterization(problem: LqProblem) -> tuple[LqProblem, Tensor, Ten
     clearance_rows, clearance_target = transform_rows(
         problem.clearance_rows, problem.clearance_target
     )
+    rate_coordinates = constant_like(
+        transform, "scan_rate_coordinates", (2, 3, 4) + tuple(range(6, 18))
+    ).to(torch.long)
+    rate_offset = (
+        offset[:, 1:, rate_coordinates] - offset[:, :-1, rate_coordinates]
+    )
+    rate_rows = _AdjacentRateRows(
+        left=-transform[:, :-1, rate_coordinates],
+        right=transform[:, 1:, rate_coordinates],
+    )
     lower = torch.where(dependent, torch.zeros_like(problem.lower), problem.lower)
     upper = torch.where(dependent, torch.zeros_like(problem.upper), problem.upper)
     transformed_problem = replace(
@@ -505,6 +522,8 @@ def _stance_parameterization(problem: LqProblem) -> tuple[LqProblem, Tensor, Ten
         gradient=gradient,
         lower=lower,
         upper=upper,
+        rate_lower=problem.rate_lower - rate_offset,
+        rate_upper=problem.rate_upper - rate_offset,
         stance_target=torch.zeros_like(problem.stance_target),
         stance_active=torch.zeros_like(problem.stance_active),
         touchdown_region_rows=region_rows.transpose(-1, -2),
@@ -514,7 +533,7 @@ def _stance_parameterization(problem: LqProblem) -> tuple[LqProblem, Tensor, Ten
         clearance_rows=clearance_rows,
         clearance_target=clearance_target,
     )
-    return transformed_problem, transform, offset
+    return transformed_problem, transform, offset, rate_rows
 
 
 def _fraction_to_original_constraints(
@@ -604,9 +623,31 @@ def _fraction_to_original_constraints(
     return scale.clamp(0.0, 1.0)
 
 
+def _normalize_objective(problem: LqProblem) -> LqProblem:
+    scale = torch.stack(
+        (
+            problem.diagonal.abs().flatten(1).amax(1),
+            problem.first_offdiag.abs().flatten(1).amax(1),
+            problem.second_offdiag.abs().flatten(1).amax(1),
+            problem.gradient.abs().flatten(1).amax(1),
+        ),
+        dim=-1,
+    ).amax(dim=-1).clamp_min(1.0)
+    matrix_scale = scale[:, None, None, None]
+    vector_scale = scale[:, None, None]
+    return replace(
+        problem,
+        diagonal=problem.diagonal / matrix_scale,
+        first_offdiag=problem.first_offdiag / matrix_scale,
+        second_offdiag=problem.second_offdiag / matrix_scale,
+        gradient=problem.gradient / vector_scale,
+    )
+
+
 def _solve_lq_problem(problem: LqProblem) -> TrajectoryScanSolution:
     original_problem = problem
-    problem, stance_transform, stance_offset = _stance_parameterization(problem)
+    problem = _normalize_objective(problem)
+    problem, stance_transform, stance_offset, rate_rows = _stance_parameterization(problem)
     fixed = problem.lower == problem.upper
     empty = {
         "box_low": fixed,
@@ -632,6 +673,7 @@ def _solve_lq_problem(problem: LqProblem) -> TrajectoryScanSolution:
     for _refinement in range(5):
         diagonal, first, second, gradient = _augmented_system(
             problem,
+            rate_rows,
             direction,
             active,
             multipliers,
@@ -664,13 +706,7 @@ def _solve_lq_problem(problem: LqProblem) -> TrajectoryScanSolution:
         rate_target = torch.where(
             active["rate_low"], problem.rate_lower, problem.rate_upper
         )
-        rate_value = torch.cat(
-            (
-                direction[:, 1:, 2:5] - direction[:, :-1, 2:5],
-                direction[:, 1:, 6:] - direction[:, :-1, 6:],
-            ),
-            dim=-1,
-        )
+        rate_value = _rate_value(rate_rows, direction)
         multipliers["rate"] = multipliers["rate"] + float(penalty) * rate_mask * (
             rate_value - rate_target
         )
@@ -696,7 +732,9 @@ def _solve_lq_problem(problem: LqProblem) -> TrajectoryScanSolution:
             - problem.clearance_target
             + float(problem.slack_caps["collision"])
         )
-        active = _merge_activity(active, _constraint_activity(problem, direction))
+        active = _merge_activity(
+            active, _constraint_activity(problem, rate_rows, direction)
+        )
 
     hessian_direction = torch.matmul(
         diagonal, direction.unsqueeze(-1)

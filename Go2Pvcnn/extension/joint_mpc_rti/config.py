@@ -31,6 +31,7 @@ class JointMpcRtiSolverCfg:
     joint_trust: float = 0.25
     active_set_refinements: int = 2
     joint_velocity_limit: float = 30.0
+    published_joint_step_limit_rad: float = 0.35
     joint_margin: float = 0.05
     root_height_min_offset: float = -0.10
     root_height_max_offset: float = 0.12
@@ -65,18 +66,40 @@ class JointMpcRtiNominalCfg:
     ik_blend_scale: float = 1.0
     swing_outward_offset_m: float = 0.015
     swing_apex_margin_m: float = 0.08
+    swing_landing_buffer_m: float = 0.012
+    # The field already includes the foot inflation radius; keep a positive
+    # extra margin without forcing preview KFE against its lower limit.
+    small_cross_apex_margin_m: float = 0.005
+    swing_ascent_fraction: float = 0.35
+    swing_descent_fraction: float = 0.68
+    small_cross_lateral_start_fraction: float = 0.20
+    small_cross_lateral_offset_cap_m: float = 0.12
+    small_cross_root_lift_m: float = 0.0
 
 
 @dataclass
 class JointMpcRtiTouchdownCfg:
     candidate_x_m: tuple[float, ...] = (-0.12, -0.03, 0.0, 0.03, 0.12)
     candidate_y_m: tuple[float, ...] = (-0.12, -0.06, 0.0, 0.06, 0.12)
+    small_cross_candidate_inner_m: float = 0.10
+    small_cross_candidate_extent_m: float = 0.225
+    continuation_outward_retarget_m: tuple[float, ...] = (
+        0.0,
+        0.0025,
+        0.005,
+        0.010,
+        0.020,
+    )
     command_prediction_scale: float = 0.5
+    landing_before_margin_m: float = 0.025
     landing_after_margin_m: float = 0.025
-    joint_margin_rad: float = 0.10
+    joint_margin_rad: float = 0.05
+    small_cross_foot_overlap_fraction: float = 0.40
     corridor_samples: int = 33
-    swing_samples: int = 65
-    preview_swing_samples: int = 65
+    small_cross_obstacle_scan_samples: int = 33
+    small_cross_obstacle_scan_extent_m: float = 0.16
+    swing_samples: int = 145
+    preview_swing_samples: int = 145
     selector_capsule_samples: int = 5
     latch_phase: int = 6
     w_command: float = 8.0
@@ -113,6 +136,7 @@ class JointMpcRtiTerrainCfg:
     roughness_max_m: float = 0.030
     edge_margin_m: float = 0.020
     roughness_radius_m: float = 0.010
+    root_support_fill_radius_m: float = 0.080
     sweep_subdivisions: int = 48
     capsule_samples: int = 17
     stance_ground_tolerance_m: float = 0.012

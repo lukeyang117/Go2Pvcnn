@@ -11,11 +11,18 @@ from extension.joint_mpc_rti.model.go2_kinematics import go2_collision_geometry,
 from extension.joint_mpc_rti.model.analytic_ik import go2_analytic_ik
 from extension.joint_mpc_rti.model.nominal import (
     _current_swing_height,
+    _new_crossing_commitment,
+    _swing_height_profile,
     build_nominal,
     build_rebased_seed,
 )
+from extension.joint_mpc_rti.model.swing_profile import (
+    crossing_root_lift_offset,
+    swing_xy_profile,
+)
 from extension.joint_mpc_rti.model.perceptive_plan import TouchdownPlan, select_touchdowns
 from extension.joint_mpc_rti.runtime.warm_start import shift_rebase_trajectory
+from extension.joint_mpc_rti.solver.trajectory_qp import JOINT_LOWER, JOINT_UPPER
 from extension.joint_mpc_rti.types import (
     JointMpcPerceptiveField,
     JointMpcRtiSolverState,
@@ -24,6 +31,102 @@ from extension.joint_mpc_rti.types import (
 
 from .helpers import make_command, make_state
 from .test_perceptive_plan import _field
+
+
+def test_swing_height_profile_reaches_apex_early_and_holds_through_crossing() -> None:
+    cfg = JointMpcRtiCfg()
+    tau = torch.tensor(
+        (
+            0.0,
+            cfg.nominal.swing_ascent_fraction,
+            0.50,
+            cfg.nominal.swing_descent_fraction,
+            1.0,
+        )
+    )
+
+    height = _swing_height_profile(
+        torch.tensor(0.02),
+        torch.tensor(0.26),
+        torch.tensor(0.02),
+        tau,
+        cfg,
+    )
+
+    torch.testing.assert_close(height[[0, -1]], torch.tensor((0.02, 0.02)))
+    torch.testing.assert_close(height[1:4], torch.full((3,), 0.26))
+
+
+def test_swing_descent_keeps_a_zero_endpoint_landing_buffer() -> None:
+    cfg = JointMpcRtiCfg()
+    tau = torch.tensor((cfg.nominal.swing_descent_fraction + 0.15, 0.99, 1.0))
+    height = _swing_height_profile(
+        torch.tensor(0.022),
+        torch.tensor(0.20),
+        torch.tensor(0.022),
+        tau,
+        cfg,
+    )
+
+    assert height[0] >= torch.tensor(0.022 + cfg.nominal.swing_landing_buffer_m)
+    assert height[1] - 0.022 <= 2.0e-3
+    torch.testing.assert_close(height[2], torch.tensor(0.022))
+
+
+def test_small_cross_swing_bump_is_continuous_and_preserves_endpoints() -> None:
+    cfg = JointMpcRtiCfg()
+    tau = torch.tensor(
+        (0.0, cfg.nominal.small_cross_lateral_start_fraction, 0.70, 1.0)
+    ).view(1, 4, 1)
+    lift = torch.tensor(((0.0, 0.16),))[:, None]
+    touchdown = torch.tensor(((1.0, -0.08),))[:, None]
+    axis = torch.tensor(((1.0, 0.0),))[:, None]
+
+    path = swing_xy_profile(
+        lift,
+        touchdown,
+        axis,
+        tau,
+        crossing=torch.ones((1, 1, 1), dtype=torch.bool),
+        outward=torch.zeros((1, 1, 2)),
+        cfg=cfg,
+    )
+
+    torch.testing.assert_close(path[:, :2], lift[:, None, 0].expand(-1, 2, -1))
+    torch.testing.assert_close(path[:, -1], touchdown[:, 0])
+    assert touchdown[0, 0, 1] < path[0, 2, 1] < lift[0, 0, 1]
+    assert lift[0, 0, 0] < path[0, 2, 0] < touchdown[0, 0, 0]
+
+
+def test_small_cross_root_lift_changes_only_world_z() -> None:
+    cfg = JointMpcRtiCfg()
+    assert cfg.nominal.small_cross_apex_margin_m == pytest.approx(0.005)
+    offset = crossing_root_lift_offset(
+        torch.tensor([[[True]]]),
+        torch.tensor([[[[0.0], [0.5], [1.0]]]]),
+        cfg,
+    )
+
+    torch.testing.assert_close(offset[..., :2], torch.zeros_like(offset[..., :2]))
+    torch.testing.assert_close(
+        offset[0, 0, 0, :, 2],
+        torch.tensor((0.0, 0.5, 1.0)) * cfg.nominal.small_cross_root_lift_m,
+    )
+
+
+def test_continued_swing_crossing_does_not_add_root_lift_twice() -> None:
+    crossing = torch.tensor([[True, False, False, True]])
+    previous_crossing = torch.tensor([[True, False, False, True]])
+    phase0 = torch.tensor([[1, 13, 13, 1]])
+
+    new_crossing = _new_crossing_commitment(
+        crossing,
+        phase0,
+        previous_crossing,
+        swing_steps=12,
+    )
+
+    assert not new_crossing.any()
 
 
 def test_current_swing_height_keeps_the_absolute_apex_phase() -> None:
@@ -418,9 +521,41 @@ def test_warm_current_swing_preserves_shifted_boundary_velocity() -> None:
     mismatch = torch.linalg.vector_norm(old_velocity - new_velocity, dim=-1)
     assert mismatch[swing].max() <= 0.05
     assert second.nominal_safe.all()
+    assert (
+        (second.state[:, 1, 6:] - second.state[:, 0, 6:]).abs()
+        <= float(cfg.solver.published_joint_step_limit_rad) + 1.0e-6
+    ).all()
 
 
-def test_warm_current_swing_blends_but_future_swing_uses_full_ik() -> None:
+def test_each_leg_current_swing_starts_from_measured_world_foot() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    phase = torch.tensor([21])
+    field = _field()
+    measured_foot = go2_collision_geometry(
+        measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
+    ).foot_center_w
+    anchor = measured_foot.clone()
+    anchor[:, 1:3, :2] += torch.tensor((0.08, -0.06))
+    previous = _seed(
+        measured,
+        phase,
+        initialized=True,
+        anchor=anchor,
+    )
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+    result = _build(measured, command, field, phase, plan, previous)
+    swing = fixed_trot_schedule(phase).swing[:, 0]
+
+    torch.testing.assert_close(
+        result.foot_reference_w[0, 0, swing[0], :2],
+        measured_foot[0, swing[0], :2],
+        atol=1.0e-5,
+        rtol=0.0,
+    )
+
+
+def test_warm_swing_blends_in_cartesian_space_before_continuous_ik() -> None:
     measured = make_state(1)
     command = make_command(1, vx=0.2)
     phase = torch.tensor([0])
@@ -434,24 +569,82 @@ def test_warm_current_swing_blends_but_future_swing_uses_full_ik() -> None:
         result.rebased_state[..., 3:6],
         result.foot_reference_w,
     )
-    rebased_joint = result.rebased_state[..., 6:].reshape(1, 31, 4, 3)
+    warm_foot = go2_fk(
+        result.rebased_state[..., :3],
+        result.rebased_state[..., 3:6],
+        result.rebased_state[..., 6:],
+    ).foot_pos_w
     actual_joint = result.state[..., 6:].reshape(1, 31, 4, 3)
 
-    def quintic(value: float) -> float:
-        return 10.0 * value**3 - 15.0 * value**4 + 6.0 * value**5
-
-    current_expected = rebased_joint[:, 1, (0, 3)] + quintic(1.0 / 12.0) * (
-        ik_joint[:, 1, (0, 3)] - rebased_joint[:, 1, (0, 3)]
+    current_gamma = 10.0 * (1.0 / 12.0) ** 3 - 15.0 * (1.0 / 12.0) ** 4 + 6.0 * (1.0 / 12.0) ** 5
+    current_foot = warm_foot[:, 1] + current_gamma * (
+        result.foot_reference_w[:, 1] - warm_foot[:, 1]
+    )
+    current_joint, _ = go2_analytic_ik(
+        result.rebased_state[:, 1, :3],
+        result.rebased_state[:, 1, 3:6],
+        current_foot,
     )
     torch.testing.assert_close(
-        actual_joint[:, 1, (0, 3)], current_expected, atol=2.0e-5, rtol=0.0
+        actual_joint[:, 1, (0, 3)], current_joint[:, (0, 3)], atol=2.0e-5, rtol=0.0
     )
     torch.testing.assert_close(
         actual_joint[:, 25, (0, 3)], ik_joint[:, 25, (0, 3)], atol=2.0e-5, rtol=0.0
     )
 
 
+def test_warm_future_crossing_swing_uses_selector_validated_exact_ik() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    phase = torch.tensor([0])
+    field = _field()
+    previous = _seed(measured, phase, initialized=True)
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+    crossing = plan.small_cross_required.clone()
+    crossing[:, 1, plan.selected_index[:, 1]] = True
+    plan = replace(plan, small_cross_required=crossing)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    ik_joint, _ = go2_analytic_ik(
+        result.rebased_state[..., :3],
+        result.rebased_state[..., 3:6],
+        result.foot_reference_w,
+    )
+    actual_joint = result.state[..., 6:].reshape(1, 31, 4, 3)
+
+    # Leg 1 lifts at node 12 and enters its future swing at node 13.
+    torch.testing.assert_close(
+        actual_joint[:, 13, 1], ik_joint[:, 13, 1], atol=2.0e-5, rtol=0.0
+    )
+
+
+def test_warm_future_liftoff_node_matches_the_persistent_foot_anchor() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    phase = torch.tensor([18])
+    field = _field()
+    previous = _seed(measured, phase, initialized=True)
+    previous.trajectory[:, -1, 6:] += 0.2
+    plan = _plan(measured, command, phase, field, previous.trajectory)
+
+    result = _build(measured, command, field, phase, plan, previous)
+    schedule = fixed_trot_schedule(phase)
+    liftoff = schedule.stance[:, :-1] & ~schedule.stance[:, 1:]
+    actual_foot = go2_fk(
+        result.state[..., :3], result.state[..., 3:6], result.state[..., 6:]
+    ).foot_pos_w
+
+    assert liftoff.any()
+    torch.testing.assert_close(
+        actual_foot[:, 1:][liftoff],
+        result.foot_reference_w[:, 1:][liftoff],
+        atol=2.0e-4,
+        rtol=0.0,
+    )
+
+
 def test_warm_future_swing_remains_hard_safe_on_flat_ground() -> None:
+    cfg = JointMpcRtiCfg()
     measured = make_state(1)
     command = make_command(1, vx=0.0)
     phase = torch.tensor([7])
@@ -463,14 +656,27 @@ def test_warm_future_swing_remains_hard_safe_on_flat_ground() -> None:
     actual_foot = go2_fk(
         result.state[..., :3], result.state[..., 3:6], result.state[..., 6:]
     ).foot_pos_w
-    future_swing = fixed_trot_schedule(phase).swing & (
-        torch.arange(31)[None, :, None] >= 17
-    )
+    joint = result.state[..., 6:]
+    lower = joint.new_tensor(JOINT_LOWER) + cfg.solver.joint_margin
+    upper = joint.new_tensor(JOINT_UPPER) - cfg.solver.joint_margin
+    maximum_step = cfg.solver.joint_velocity_limit * cfg.runtime.dt
+    event = result.perceptive_plan.event_step
+    event_foot = torch.gather(
+        actual_foot,
+        1,
+        event[..., None].expand(-1, -1, 3).unsqueeze(1),
+    ).squeeze(1)
 
+    assert torch.isfinite(result.state).all()
+    assert (joint >= lower).all()
+    assert (joint <= upper).all()
+    assert (joint[:, 1:] - joint[:, :-1]).abs().max() <= maximum_step
     torch.testing.assert_close(
-        actual_foot[future_swing], result.foot_reference_w[future_swing], atol=2.0e-4, rtol=0.0
+        event_foot,
+        result.perceptive_plan.target_w,
+        atol=cfg.solver.published_stance_tolerance,
+        rtol=0.0,
     )
-    assert actual_foot[..., 2][future_swing].min() >= 0.022
     assert result.nominal_safe.all()
 
 
@@ -753,6 +959,40 @@ def test_nominal_retry_rank_is_independent_for_each_leg() -> None:
     assert result.nominal_safe.all()
     assert result.candidate_retry_rank.shape == (1, 4)
     assert result.candidate_retry_rank.tolist() == [[1, 2, 0, 0]]
+
+
+def test_active_crossing_commitment_survives_selector_sweep_false_negative() -> None:
+    measured = make_state(1)
+    command = make_command(1, vx=0.2)
+    phase = torch.tensor([0])
+    field = _field()
+    seed = _seed(measured, phase, initialized=True)
+    plan = _plan(measured, command, phase, field, seed.trajectory)
+    selected = plan.selected_index
+    safe_mask = plan.safe_mask.clone()
+    safe_mask[:, 1] = torch.scatter(
+        safe_mask[:, 1], 1, selected[:, 1, None], False
+    )
+    crossing = plan.small_cross_required.clone()
+    crossing[:, 1] = torch.scatter(
+        crossing[:, 1], 1, selected[:, 1, None], True
+    )
+    committed_plan = replace(
+        plan,
+        safe_mask=safe_mask,
+        small_cross_required=crossing,
+    )
+    previous = replace(
+        seed,
+        touchdown_selected_index=selected.clone(),
+        touchdown_crossing=torch.tensor([[False, True, False, False]]),
+        touchdown_remaining_steps=torch.full_like(selected, 4),
+    )
+
+    result = _build(measured, command, field, phase, committed_plan, previous)
+
+    assert result.nominal_safe.all()
+    torch.testing.assert_close(result.perceptive_plan.selected_index, selected)
 
 
 @pytest.mark.parametrize("batch", (1, 40))

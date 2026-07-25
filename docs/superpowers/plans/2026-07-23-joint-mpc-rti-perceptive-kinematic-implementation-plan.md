@@ -18,6 +18,7 @@
 - Task 10 is implemented: the production path no longer calls the dense reference, B=`1/8/40` direction parity is within `2e-5`, and CUDA Graph capture/replay passes through 36D separator factors padded H30->H32 with five explicit combine levels and two active-mask refinements. Performance is not closed: a B=40 graph smoke averages `122.67 ms/refresh`, so Task 19 must optimize the factor representation/kernels before the formal `1024 x 1000 <5s` gate.
 - Task 12 planner/warm-only/CUDA Graph routing is implemented in the current worktree and passes the focused Task 1-12 regression (`128 passed`). Its commit and later Task 15 legacy deletion remain open.
 - Tasks 13-16 are implemented and GREEN. Task 16 records real same-refresh KKT metrics and closes all 19 formal flat cells; focused verification is `115 passed`, the full package is `284 passed`, and formal CUDA v13 has `gate.passed=true` with primal/dual KKT maxima `5.133e-5/9.014e-5`. Tasks 17-19 remain open; no small/large/performance acceptance is claimed yet.
+- 2026-07-24 Task 17 controlled diagnosis: small crossing now runs every flat/common metric, including current-world-map stance grounding and forbidden semantics. Selector/nominal focused regression is `84 passed`, but refresh 59 remains invalid on preview liftoff edge 25: discrete nodes are collision-free while the published joint-linear swept edge penetrates foot `13.92mm` and calf `9.92mm`. Selector validates a continuous IK curve, so Task 17 cannot close through candidate or weight tuning; the next owner-level step must unify selector and published discrete liftoff/swept geometry without weakening any gate.
 
 ---
 
@@ -1065,15 +1066,15 @@ git commit -m "test: close final flat kinematic gate"
 
 - [ ] **Step 1: Start with one controlled cuboid RED cell**
 
-Use `vx=0.2 m/s`, one environment, one phase, and one offset. Require behind candidate, valid region, safe nominal, whole-leg sweep, direction margin, touchdown after obstacle, current-map whole-body collision zero, and strict cross.
+Use `vx=0.2 m/s`, one environment, one phase, and one offset. Require behind candidate, valid region, safe nominal, whole-leg sweep, direction margin, touchdown after obstacle, current-map whole-body collision zero, and strict cross. The same trace must also run the complete flat `M_common` metric set: joint/rate limits, foot continuity, command velocity tracking, swing clearance, root direction/yaw tracking, lifecycle/numerical validity, and stance grounding. Every continuing and touchdown-onset stance foot must be on current-map normal ground, not small/large/unknown semantic cells, with the existing gap and penetration thresholds.
 
 - [ ] **Step 2: Expand in fixed order**
 
-Run all 24 entry phases and offsets for cuboid, then sphere/cylinder/capsule/cone at `0.2`, `0.6`, and `1.0 m/s`, then the remaining single-axis commands. Every small cell must also rerun and pass all `M_common` metrics.
+Run all 24 entry phases and offsets for cuboid, then sphere/cylinder/capsule/cone at `0.2`, `0.6`, and `1.0 m/s`, then the remaining single-axis commands. Every small cell must also rerun and pass all `M_common` metrics. Crossing may use the bounded `root_lateral_offset_from_nominal_m` allowance of `0.10m` only inside the active crossing event; the original flat value `0.06m` must still be reported, and all other common thresholds remain unchanged. The allowance must not affect stance ground/semantic checks, velocity tracking, foot continuity, root step jump, roll/pitch, or collision gates.
 
 - [ ] **Step 3: Add actual viewer readback evidence**
 
-Run 15 canonical shape-speed traces from before lift through touchdown plus one complete 24-frame gait. Require each trace strict-cross and per-part collision rate zero.
+Run 15 canonical shape-speed traces from before lift through touchdown plus one complete 24-frame gait. Require each trace strict-cross, every applicable `M_common` metric, normal-ground stance/touchdown, and per-part collision rate zero. The root lateral exception is evaluated only over the crossing window and must be absent after the following complete gait period.
 
 - [ ] **Step 4: Require complete small GREEN**
 
@@ -1085,6 +1086,8 @@ PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python \
 PYTHONPATH=Go2Pvcnn /mnt/mydisk/lhy/anaconda3/envs/env_isaacsim/bin/python -m pytest \
   Go2Pvcnn/tests/joint_mpc_rti/test_small_acceptance.py -q
 ```
+
+The controlled crossing test must consume the same `evaluate_trace`/`require_small_gate` path as the formal small report rather than asserting only `strict_cross_success`. Add a regression where a foot crosses the obstacle but a continuing stance foot is on the small semantic footprint; crossing must fail even when the geometric crossing predicates are true.
 
 - [ ] **Step 5: Commit**
 

@@ -23,6 +23,16 @@ from scripts import play
 from Go2Pvcnn.tests.fixtures.viewer_runtime_diagnostics import RealViewerRuntimeFixture
 
 
+def test_isaaclab_articulation_update_has_lazy_data_initialization_guard() -> None:
+    source = Path("/mnt/mydisk/lhy/IsaacLab/source/isaaclab/isaaclab/assets/articulation/articulation.py").read_text(
+        encoding="utf-8"
+    )
+    update_source = source[source.index("    def update(self, dt: float):") : source.index('    """', source.index("    def update(self, dt: float):"))]
+
+    assert 'if not hasattr(self, "_data"):' in update_source
+    assert "self._initialize_callback(None)" in update_source
+
+
 class _FakeRobot:
     def __init__(self) -> None:
         self.data = SimpleNamespace(

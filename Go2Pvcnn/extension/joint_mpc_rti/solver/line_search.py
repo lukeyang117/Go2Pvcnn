@@ -20,6 +20,7 @@ from extension.joint_mpc_rti.terrain.swept_safety import (
     evaluate_nodes,
     evaluate_swept_intervals,
 )
+from extension.joint_mpc_rti.terrain.query import query_world
 
 
 ALPHAS = (1.0, 0.5, 0.25, 0.125, 0.0)
@@ -35,6 +36,8 @@ HARD_FILTER_NAMES = (
     "swept_safety",
     "preview_safety",
     "cross_direction",
+    "cross_foot_overlap",
+    "published_joint_step",
 )
 
 
@@ -211,6 +214,10 @@ def hard_safe_line_search(
         <= float(cfg.solver.joint_velocity_limit) * float(cfg.runtime.dt)
     ).all(dim=(2, 3))
     joint_ok = joint_position & joint_velocity
+    published_joint_step_ok = (
+        (joints[:, :, 1, :] - joints[:, :, 0, :]).abs()
+        <= float(cfg.solver.published_joint_step_limit_rad) + 1.0e-6
+    ).all(dim=-1)
     root = candidates[..., :6]
     support = context.support_height[:, None]
     root_height = root[..., 2] - support
@@ -233,7 +240,10 @@ def hard_safe_line_search(
     repeated_field = _repeat_perceptive_field(field, alpha_count)
     repeated_contact = context.schedule.stance.repeat_interleave(alpha_count, dim=0)
     node_safety = evaluate_nodes(
-        packed, repeated_field, cfg, contact_state=repeated_contact
+        packed,
+        repeated_field,
+        cfg,
+        contact_state=repeated_contact,
     )
     swept_safety = evaluate_swept_intervals(
         packed, repeated_field, cfg, contact_state=repeated_contact
@@ -242,7 +252,8 @@ def hard_safe_line_search(
     swept_ok = swept_safety.safe.all(dim=1).reshape(batch, alpha_count)
     preview_ok = _preview_filter(nominal, field, cfg, alpha_count)
 
-    cross_ok = torch.ones_like(finite)
+    cross_direction_ok = torch.ones_like(finite)
+    cross_foot_overlap_ok = torch.ones_like(finite)
     plan = nominal.perceptive_plan
     if plan is not None:
         command_xy = context.command_body[:, :2]
@@ -250,10 +261,29 @@ def hard_safe_line_search(
         direction_xy = command_xy / command_norm.clamp_min(1.0e-6)
         root_progress = candidates[:, :, -1, :2] - candidates[:, :, 0, :2]
         forward = torch.einsum("bai,bi->ba", root_progress, direction_xy)
-        required = plan.small_cross_required.any(dim=(1, 2))[:, None] & (
+        selected_crossing = torch.gather(
+            plan.small_cross_required, 2, plan.selected_index[..., None]
+        ).squeeze(-1)
+        required = selected_crossing.any(dim=1)[:, None] & (
             command_norm.squeeze(-1)[:, None] > 1.0e-4
         )
-        cross_ok = (forward >= 0.0) | ~required
+        cross_direction_ok = (forward >= 0.0) | ~required
+        foot_query = query_world(
+            context.terrain, foot.reshape(batch, alpha_count * 31 * 4, 3)
+        )
+        small_distance = foot_query.small_distance_m.reshape(
+            batch, alpha_count, 31, 4
+        )
+        overlap = small_distance <= (
+            float(cfg.touchdown.small_cross_foot_overlap_fraction)
+            * float(cfg.terrain.foot_radius_m)
+        )
+        crossing_overlap = (
+            overlap
+            & context.schedule.swing[:, None]
+            & selected_crossing[:, None, None]
+        ).any(dim=(2, 3))
+        cross_foot_overlap_ok = crossing_overlap | ~required
 
     filter_ok = torch.stack(
         (
@@ -267,7 +297,9 @@ def hard_safe_line_search(
             node_ok,
             swept_ok,
             preview_ok,
-            cross_ok,
+            cross_direction_ok,
+            cross_foot_overlap_ok,
+            published_joint_step_ok,
         ),
         dim=-1,
     )

@@ -2,6 +2,18 @@
 
 ## Current State
 
+- 2026-07-25 viewer CUDA Graph OOM fallback is implemented locally. The real livestream command reached RTI playback, reproduced `CUDA error: out of memory` during graph capture, printed a manager warning, disabled graph for that manager, and continued eager instead of raising the previous traceback. Verification: RED/GREEN fallback `1 passed`, full runtime `12 passed`, pycompile/diff clean. A later `kkt=(nan,nan)` / `clearance=-inf` after phase 6 is recorded as a separate planner numerical issue, not part of the graph OOM crash fix. See [viewer CUDA Graph OOM fallback](../log/2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md).
+
+- 2026-07-24: common-metric regression is green. Small/cross includes every applicable `COMMON_METRICS` item; moving commands correctly mark only the three long-horizon zero-drift metrics N/A. Stance grounding and forbidden semantic metrics are map-backed (`P+A+M`). The controlled crossing blocker remains preview liftoff swept-geometry mismatch.
+
+- 2026-07-24 stance follow-up: the common flat metric registry is verified in the small gate. The measured center-height gap is about `6.69mm` with zero penetration and clean XY anchoring; direct `height+0.0221m` center projection is rejected because the foot-radius safety model makes the nominal unpublished. Keep this as an open geometry-contract child. See [stance grounding metric follow-up](../log/2026-07-24-joint-mpc-stance-grounding-metric-follow-up.md).
+
+- 2026-07-24 common-metric follow-up: small crossing is evaluated with the complete flat/common registry, including stance gap/penetration, semantic support, slip/anchor/stationary, joint/root/lifecycle/map/KKT/publication/validity metrics. The incomplete nominal multi-attempt path is removed and focused contract checks pass. Forced continuing-stance z reprojection is rejected because it collapses publication/validity to `2.7%`; stance z ownership remains an open behavior child rather than a threshold change. See [evidence](../log/2026-07-24-joint-mpc-cross-flat-metrics-stance-follow-up.md).
+
+- Task 17 stance-ground common metrics are locked and numerically tested: small traces require current-map normal ground, gap `<=12mm`, penetration `<=1mm`, and forbidden semantic stance/touchdown zero. Joint-linear selector components pass focused tests, but controlled cross remains red at refresh 59; do not claim Task 17 complete.
+
+- 2026-07-24 Task 17 preview liftoff contract is architecture-red. Complete flat/common metrics, including stance world-ground gap/penetration, anchor/slip, and forbidden semantics, are active inside every small-cross report. Focused selector/nominal is `84 passed`; controlled refresh 59 still stops because published joint-linear preview edge 25 penetrates foot `13.92mm` and calf `9.92mm`, although both discrete nodes and the selector continuous-IK curve are safe. The next owner must unify selector and published discrete swept geometry without weakening any gate. See [evidence](../log/2026-07-24-joint-mpc-cross-preview-liftoff-contract.md).
+
 - Final-plan Task 16 is GREEN. Acceptance now consumes real same-refresh KKT diagnostics and reports the scaled dual stationarity residual instead of treating missing KKT as zero. The focused owner union is `115 passed`, the full package is `284 passed`, and formal CUDA flat v13 passes `19/19` cells in `54.746s`; worst primal/dual KKT are `5.133e-5/9.014e-5`, minimum joint margin is `0.19032rad`, maximum joint step is `0.33438rad`, publication is `1.0`, and alpha-zero ratio is `0`. Task 17 controlled small-obstacle crossing is now the active behavior front; large/viewer/performance remain blocked behind it. See [flat closure](../log/2026-07-23-joint-mpc-rti-final-flat-gate-closure.md).
 
 - Final-plan Task 16 is still RED after the first full diagnosis. Future swing IK, preview contact/root extension, swept support interpolation, primary/preview region filtering, and CUDA SPD contiguous input are corrected. Focused nominal/safety/line-search/pipeline is `51` passing tests; scan including CUDA parity is `9 passed`; current-map B3 rolling validity for `vx=[0,0.2,0.8]` is `[24,24,24]`. The monitored formal flat matrix still fails `19/19` cells in `47.629s`, primarily on alpha-zero use, cold joint step, root/foot ordering, command tracking, and high lateral/yaw publication. See [first diagnosis](../log/2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md).
@@ -118,6 +130,16 @@
 
 ## Open Children
 
+- Controlled center-cuboid now passes every applicable flat/common metric,
+  including stance gap/penetration and forbidden semantics, with valid ratio
+  `1.0`; strict crossing alone remains red because actual swing feet never
+  intersect the obstacle footprint. Line-search signed-SDF overlap now uses the
+  current `LossContext.terrain` field. Selector continuous-IK validation and
+  nominal published joint-linear geometry remain inconsistent at the crossing
+  commitment boundary. See [stance/common and SDF follow-up](../log/2026-07-24-joint-mpc-cross-stance-common-and-sdf-follow-up.md).
+- Small crossing now inherits the complete flat `M_common` gate. Continuing/onset stance must be on current-map normal ground, never small/large/unknown semantic cells; only root lateral offset has a bounded crossing-window allowance (`0.10m` versus flat `0.06m`). The controlled crossing test must use the same metric gate as the formal small report. See [2026-07-24 cross common-metric gate](../log/2026-07-24-joint-mpc-cross-common-metric-gate.md).
+- Controlled center-cuboid now evaluates the complete common/stance gate. Strict crossing, collision, penetration, and forbidden-semantic stance/touchdown are green, but behavior remains red on `joint_step_max_rad=0.3563213`, publish/valid `0.5655172`, and stop `0.4344828`. The next fix belongs to pre-touchdown joint feasibility/continuity, not metric weakening. A separate CUDA/CPU scan parity failure remains open. See [controlled result](../log/2026-07-24-joint-mpc-cross-flat-metrics-controlled-result.md).
+
 - Final-plan Task 16: close every applicable common metric for all 19 axis-isolated flat command cells.
 - Final-plan Task 17: close all small-obstacle formal cells and 15 actual viewer crossing traces with zero world-map collision.
 - Final-plan Task 18: close large-obstacle bypass and B=1/B=1024 RL interface contracts.
@@ -148,6 +170,8 @@
 - T302v.6 performance investigation: compiled fixed-shape LQ/query/rollout is retained; single-cell EDT fusion, complementary transforms, stream chunking, brute-force reduction, and compact warp bbox experiments were evaluated. The single-cell pass was rejected and the failed CUDA experiments were removed.
 
 ## Related Logs
+
+- [Viewer CUDA Graph OOM fallback](../log/2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md)
 
 - [Final legacy path deletion](../log/2026-07-23-joint-mpc-rti-final-legacy-deletion.md)
 

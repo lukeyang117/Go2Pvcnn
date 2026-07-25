@@ -36,6 +36,24 @@ def test_hard_line_search_builds_exactly_five_packed_candidates() -> None:
     assert not result.stop.any()
 
 
+def test_hard_line_search_applies_published_x1_joint_step_limit() -> None:
+    problem, nominal, context, cfg = _problem()
+    direction = torch.zeros_like(nominal.state)
+    direction[:, 1, 6] = 0.50
+
+    result = hard_safe_line_search(
+        nominal, direction, _objective, context, problem, cfg
+    )
+
+    published_step = (
+        result.candidates[:, :, 1, 6] - result.candidates[:, :, 0, 6]
+    ).abs()
+    assert (
+        published_step[result.alpha_feasible]
+        <= float(cfg.solver.published_joint_step_limit_rad) + 1.0e-6
+    ).all()
+
+
 def test_alpha_zero_preview_filter_matches_safe_nominal_event_window() -> None:
     cfg = JointMpcRtiCfg()
     cfg.nominal.command_scale = 0.65

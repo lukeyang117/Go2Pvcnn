@@ -13,6 +13,15 @@ from extension.joint_mpc_rti.runtime.cuda_graph import JointMpcCudaGraphRunner
 from extension.joint_mpc_rti.types import JointMpcRtiSolverState, JointMpcRtiState, JointMpcRtiStepResult, JointMpcTerrainField
 
 
+def _is_recoverable_cuda_graph_error(error: RuntimeError) -> bool:
+    message = str(error).lower()
+    return (
+        "cuda error: out of memory" in message
+        or "cuda out of memory" in message
+        or "operation not permitted when stream is capturing" in message
+    )
+
+
 class _PendingReferenceBuffer:
     def __init__(self, *, num_envs: int, device) -> None:
         self.valid = torch.zeros(int(num_envs), dtype=torch.bool, device=device)
@@ -42,6 +51,7 @@ class JointMpcRtiManager:
         self._field_sync: JointMpcRayCasterFieldSync | None = None
         self._last_step_token = None
         self._graph_runner: JointMpcCudaGraphRunner | None = None
+        self._cuda_graph_disabled_after_error = False
         self._num_envs: int | None = None
 
     @classmethod
@@ -62,6 +72,7 @@ class JointMpcRtiManager:
         instance._field_sync = None
         instance._last_step_token = None
         instance._graph_runner = None
+        instance._cuda_graph_disabled_after_error = False
         instance._num_envs = int(num_envs)
         return instance
 
@@ -94,31 +105,53 @@ class JointMpcRtiManager:
             self._buffer = _PendingReferenceBuffer(num_envs=batch_size, device=measured_state.device)
         use_graph = (
             bool(self._cfg.solver.use_cuda_graph)
+            and not self._cuda_graph_disabled_after_error
             and measured_state.device.type == "cuda"
             and self._solver_state is not None
             and stage_profiler is None
         )
-        if use_graph and self._graph_runner is None:
-            self._graph_runner = JointMpcCudaGraphRunner(
-                measured_state,
-                command_body,
-                terrain_field,
-                self._solver_state,
-                self._cfg,
-            )
-            result = self._graph_runner.captured_result
-        elif use_graph and self._graph_runner is not None:
-            if not self._graph_runner.matches_field(terrain_field):
-                self._graph_runner = JointMpcCudaGraphRunner(
+        if use_graph:
+            try:
+                if self._graph_runner is None:
+                    self._graph_runner = JointMpcCudaGraphRunner(
+                        measured_state,
+                        command_body,
+                        terrain_field,
+                        self._solver_state,
+                        self._cfg,
+                    )
+                    result = self._graph_runner.captured_result
+                elif not self._graph_runner.matches_field(terrain_field):
+                    self._graph_runner = JointMpcCudaGraphRunner(
+                        measured_state,
+                        command_body,
+                        terrain_field,
+                        self._solver_state,
+                        self._cfg,
+                    )
+                    result = self._graph_runner.captured_result
+                else:
+                    result = self._graph_runner.run(measured_state, command_body, terrain_field)
+            except RuntimeError as error:
+                if not _is_recoverable_cuda_graph_error(error):
+                    raise
+                self._graph_runner = None
+                self._cuda_graph_disabled_after_error = True
+                torch.cuda.empty_cache()
+                print(
+                    "[JointMpcRTI][WARN] CUDA Graph failed during runtime; "
+                    "falling back to eager RTI for this manager. "
+                    f"error={error}",
+                    flush=True,
+                )
+                result = planner_step(
                     measured_state,
                     command_body,
                     terrain_field,
                     self._solver_state,
                     self._cfg,
+                    stage_profiler=stage_profiler,
                 )
-                result = self._graph_runner.captured_result
-            else:
-                result = self._graph_runner.run(measured_state, command_body, terrain_field)
         else:
             result = planner_step(
                 measured_state,

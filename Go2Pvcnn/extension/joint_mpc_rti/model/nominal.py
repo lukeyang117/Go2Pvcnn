@@ -16,6 +16,10 @@ from extension.joint_mpc_rti.model.go2_kinematics import (
     go2_fk,
 )
 from extension.joint_mpc_rti.model.perceptive_plan import TouchdownPlan
+from extension.joint_mpc_rti.model.swing_profile import (
+    swing_height_profile,
+    swing_xy_profile,
+)
 from extension.joint_mpc_rti.runtime.warm_start import shift_rebase_trajectory
 from extension.joint_mpc_rti.solver.trajectory_qp import JOINT_LOWER, JOINT_UPPER
 from extension.joint_mpc_rti.tensor_constants import constant_like
@@ -108,13 +112,50 @@ class _SelectedTouchdownPlan:
     preview_touchdown_step: Tensor
     valid: Tensor
     region: JointMpcTouchdownRegion
+    crossing: Tensor
+    swing_offset_w: Tensor
+    root_lift_new: Tensor
     preview_target_w: Tensor
     preview_valid: Tensor
     preview_region: JointMpcTouchdownRegion
+    preview_crossing: Tensor
+    preview_swing_offset_w: Tensor
 
 
 def _quintic(value: Tensor) -> Tensor:
     return 10.0 * value.pow(3) - 15.0 * value.pow(4) + 6.0 * value.pow(5)
+
+
+_swing_height_profile = swing_height_profile
+
+
+def _world_command_axis(command: Tensor, yaw: Tensor) -> Tensor:
+    speed = torch.linalg.vector_norm(command[:, :2], dim=-1)
+    body_axis = command[:, :2] / speed[:, None].clamp_min(1.0e-6)
+    fallback = torch.stack((torch.ones_like(speed), torch.zeros_like(speed)), dim=-1)
+    body_axis = torch.where((speed > 1.0e-6)[:, None], body_axis, fallback)
+    cosine = torch.cos(yaw)
+    sine = torch.sin(yaw)
+    return torch.stack(
+        (
+            cosine * body_axis[:, None, 0] - sine * body_axis[:, None, 1],
+            sine * body_axis[:, None, 0] + cosine * body_axis[:, None, 1],
+        ),
+        dim=-1,
+    )
+
+
+def _new_crossing_commitment(
+    crossing: Tensor,
+    phase0: Tensor,
+    previous_crossing: Tensor | None,
+    *,
+    swing_steps: int,
+) -> Tensor:
+    if previous_crossing is None:
+        return crossing
+    continued = (phase0 < int(swing_steps)) & previous_crossing
+    return crossing & ~continued
 
 
 def _current_swing_height(
@@ -125,29 +166,48 @@ def _current_swing_height(
     node: Tensor,
     *,
     swing_steps: int,
+    cfg: JointMpcRtiCfg | None = None,
 ) -> Tensor:
-    apex_phase = int(swing_steps) // 2
+    if cfg is None:
+        cfg = JointMpcRtiCfg()
     phase = phase0[:, None].to(measured_z.dtype)
-    before_apex = phase0 < apex_phase
-    nodes_to_apex = (float(apex_phase) - phase).clamp_min(1.0)
+    ascent_phase = float(swing_steps) * float(cfg.nominal.swing_ascent_fraction)
+    descent_phase = float(swing_steps) * float(cfg.nominal.swing_descent_fraction)
+    before_ascent = phase < ascent_phase
+    on_plateau = (phase >= ascent_phase) & (phase < descent_phase)
+
+    nodes_to_apex = (ascent_phase - phase).clamp_min(1.0)
     ascent_tau = (node / nodes_to_apex).clamp(0.0, 1.0)
     ascent = measured_z[:, None] + _quintic(ascent_tau) * (
         apex_z[:, None] - measured_z[:, None]
     )
-    descent_tau = (
-        (node - nodes_to_apex) / float(int(swing_steps) - apex_phase)
-    ).clamp(0.0, 1.0)
-    descent = apex_z[:, None] + _quintic(descent_tau) * (
-        touchdown_z[:, None] - apex_z[:, None]
+    absolute_tau = ((phase + node) / float(swing_steps)).clamp(0.0, 1.0)
+    full_profile = swing_height_profile(
+        measured_z[:, None],
+        apex_z[:, None],
+        touchdown_z[:, None],
+        absolute_tau,
+        cfg,
     )
-    early_swing = torch.where(node <= nodes_to_apex, ascent, descent)
+    early_swing = torch.where(node <= nodes_to_apex, ascent, full_profile)
+
+    plateau_nodes = (descent_phase - phase).clamp_min(1.0)
+    plateau_tau = (node / plateau_nodes).clamp(0.0, 1.0)
+    plateau_rise = measured_z[:, None] + _quintic(plateau_tau) * (
+        apex_z[:, None] - measured_z[:, None]
+    )
+    plateau_swing = torch.where(node <= plateau_nodes, plateau_rise, full_profile)
 
     remaining = (float(swing_steps) - phase).clamp_min(1.0)
     late_tau = (node / remaining).clamp(0.0, 1.0)
     late_swing = measured_z[:, None] + _quintic(late_tau) * (
         touchdown_z[:, None] - measured_z[:, None]
     )
-    return torch.where(before_apex[:, None], early_swing, late_swing)
+    return torch.where(
+        before_ascent,
+        early_swing,
+        torch.where(on_plateau, plateau_swing, late_swing),
+    )
 
 
 def _cold_root_trajectory(
@@ -323,6 +383,9 @@ def _swing_segment(
     lift_w: Tensor,
     touchdown_w: Tensor,
     event_yaw: Tensor,
+    command_axis: Tensor,
+    crossing: Tensor,
+    crossing_offset_w: Tensor,
     tau: Tensor,
     field: JointMpcPerceptiveField,
     cfg: JointMpcRtiCfg,
@@ -340,53 +403,55 @@ def _swing_segment(
     outward = torch.stack(
         (-torch.sin(event_yaw) * side, torch.cos(event_yaw) * side), dim=-1
     )
+    swing_offset = torch.where(
+        crossing[..., None],
+        crossing_offset_w,
+        float(cfg.nominal.swing_outward_offset_m) * outward,
+    )
 
-    sample_smooth = _quintic(sample_tau)
-    sample_bump = 64.0 * sample_tau.pow(3) * (1.0 - sample_tau).pow(3)
-    sample_xy = (
-        lift_w[:, :, None, :2]
-        + sample_smooth * (touchdown_w[:, :, None, :2] - lift_w[:, :, None, :2])
-        + sample_bump
-        * float(cfg.nominal.swing_outward_offset_m)
-        * outward[:, :, None]
+    sample_xy = swing_xy_profile(
+        lift_w[:, :, None, :2],
+        touchdown_w[:, :, None, :2],
+        command_axis[:, :, None],
+        sample_tau,
+        crossing=crossing[:, :, None, None],
+        outward=swing_offset[:, :, None],
+        cfg=cfg,
     )
     query = query_perceptive_world(field, sample_xy.reshape(batch, 4 * samples, 2))
     height = query.inflated_height_w[..., 0].reshape(batch, 4, samples)
     query_valid = query.valid.reshape(batch, 4, samples)
     height = torch.where(query_valid, height, torch.full_like(height, -torch.inf))
-    apex_z = (
-        height.amax(dim=-1)
-        + float(cfg.terrain.foot_radius_m)
-        + float(cfg.nominal.swing_apex_margin_m)
+    apex_margin = torch.where(
+        crossing,
+        height.new_full((), float(cfg.nominal.small_cross_apex_margin_m)),
+        height.new_full((), float(cfg.nominal.swing_apex_margin_m)),
     )
+    apex_z = height.amax(dim=-1) + float(cfg.terrain.foot_radius_m) + apex_margin
     apex_z = torch.maximum(
         apex_z, torch.maximum(lift_w[..., 2], touchdown_w[..., 2])
     )
     apex_xy = (
         0.5 * (lift_w[..., :2] + touchdown_w[..., :2])
-        + float(cfg.nominal.swing_outward_offset_m) * outward
+        + swing_offset
     )
 
     tau_value = tau[..., None].clamp(0.0, 1.0)
-    smooth = _quintic(tau_value)
-    bump = 64.0 * tau_value.pow(3) * (1.0 - tau_value).pow(3)
-    foot_xy = (
-        lift_w[:, None, :, :2]
-        + smooth * (touchdown_w[:, None, :, :2] - lift_w[:, None, :, :2])
-        + bump
-        * float(cfg.nominal.swing_outward_offset_m)
-        * outward[:, None]
+    foot_xy = swing_xy_profile(
+        lift_w[:, None, :, :2],
+        touchdown_w[:, None, :, :2],
+        command_axis[:, None],
+        tau_value,
+        crossing=crossing[:, None, :, None],
+        outward=swing_offset[:, None],
+        cfg=cfg,
     )
-    first_tau = (2.0 * tau_value).clamp(0.0, 1.0)
-    second_tau = (2.0 * tau_value - 1.0).clamp(0.0, 1.0)
-    foot_z = torch.where(
-        tau_value <= 0.5,
-        lift_w[:, None, :, 2:3]
-        + _quintic(first_tau)
-        * (apex_z[:, None, :, None] - lift_w[:, None, :, 2:3]),
-        apex_z[:, None, :, None]
-        + _quintic(second_tau)
-        * (touchdown_w[:, None, :, 2:3] - apex_z[:, None, :, None]),
+    foot_z = swing_height_profile(
+        lift_w[:, None, :, 2:3],
+        apex_z[:, None, :, None],
+        touchdown_w[:, None, :, 2:3],
+        tau_value,
+        cfg,
     )
     return _SwingSegment(
         foot_w=torch.cat((foot_xy, foot_z), dim=-1),
@@ -427,20 +492,33 @@ def _foot_references(
         1,
         root_index,
     ).squeeze(1)
+    first_command_axis = _world_command_axis(command, event_rpy[..., 2])
     preview_target = plan.preview_target_w
     preview_valid = plan.preview_valid
 
     measured_foot = go2_collision_geometry(
         measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
     ).foot_center_w
-    current_swing = phase0 < int(cfg.gait.swing_steps)
-    first_lift = current_anchor_w
+    current_swing = schedule.swing[:, 0]
+    first_lift = torch.where(
+        current_swing[..., None], measured_foot, current_anchor_w
+    )
     first_duration = (first_touchdown - first_liftoff).clamp_min(1).to(rebased.dtype)
-    first_tau = (node - first_liftoff[:, None].to(rebased.dtype)) / first_duration[:, None]
+    absolute_tau = (
+        node - first_liftoff[:, None].to(rebased.dtype)
+    ) / first_duration[:, None]
+    remaining_duration = first_touchdown.clamp_min(1).to(rebased.dtype)
+    current_tau = node / remaining_duration[:, None]
+    first_tau = torch.where(
+        current_swing[:, None, :], current_tau, absolute_tau
+    )
     first_segment = _swing_segment(
         first_lift,
         plan.target_w,
         event_rpy[..., 2],
+        first_command_axis,
+        plan.crossing,
+        plan.swing_offset_w,
         first_tau,
         field,
         cfg,
@@ -450,9 +528,10 @@ def _foot_references(
         measured_foot[..., 2],
         first_segment.apex_w[..., 2],
         plan.target_w[..., 2],
-        phase0,
+        schedule.phase_node[:, 0],
         node,
         swing_steps=int(cfg.gait.swing_steps),
+        cfg=cfg,
     )
     first_segment = _SwingSegment(
         foot_w=torch.cat(
@@ -472,6 +551,7 @@ def _foot_references(
     preview_yaw = event_rpy[..., 2] + command[:, None, 2] * (
         float(cfg.gait.period_steps) * float(cfg.runtime.dt)
     )
+    preview_command_axis = _world_command_axis(command, preview_yaw)
     second_tau = (
         node - second_liftoff[:, None].to(rebased.dtype)
     ) / float(cfg.gait.swing_steps)
@@ -479,6 +559,9 @@ def _foot_references(
         plan.target_w,
         preview_target,
         preview_yaw,
+        preview_command_axis,
+        plan.preview_crossing,
+        plan.preview_swing_offset_w,
         second_tau,
         field,
         cfg,
@@ -731,7 +814,10 @@ def _hard_safety(
     cfg: JointMpcRtiCfg,
 ) -> tuple[Tensor, Tensor]:
     node_safety = evaluate_nodes(
-        state, field, cfg, contact_state=schedule.stance_node
+        state,
+        field,
+        cfg,
+        contact_state=schedule.stance_node,
     )
     swept_safety = evaluate_swept_intervals(
         state, field, cfg, contact_state=schedule.stance_node
@@ -748,7 +834,6 @@ def _hard_safety(
     velocity_safe = (
         (joint[:, 1:] - joint[:, :-1]).abs() <= maximum_step
     ).all(dim=(1, 2))
-
     actual_foot = go2_fk(state[..., :3], state[..., 3:6], state[..., 6:]).foot_pos_w
     future = constant_like(
         state,
@@ -861,6 +946,26 @@ def _build_nominal_once(
     rebased = _build_rebased_state(
         measured, command, previous, phase, initialized, cache_finite, cfg
     )
+    node = constant_like(
+        rebased,
+        "nominal_crossing_root_node",
+        tuple(float(index) for index in range(int(cfg.runtime.state_nodes))),
+    ).view(1, -1, 1)
+    event = perceptive_plan.event_step[:, None].to(rebased.dtype).clamp_min(1.0)
+    rise = (node / event).clamp(0.0, 1.0)
+    descent = (
+        1.0
+        - (node - event) / float(cfg.gait.stance_steps)
+    ).clamp(0.0, 1.0)
+    crossing_profile = torch.where(node <= event, rise, descent)
+    root_lift = (
+        crossing_profile
+        * perceptive_plan.root_lift_new[:, None].to(rebased.dtype)
+    ).amax(dim=-1) * float(cfg.nominal.small_cross_root_lift_m)
+    rebased = torch.cat(
+        (rebased[..., :2], rebased[..., 2:3] + root_lift[..., None], rebased[..., 3:]),
+        dim=-1,
+    )
 
     measured_foot = go2_collision_geometry(
         measured.root_pos_w, measured.root_rpy_w, measured.joint_pos
@@ -882,9 +987,6 @@ def _build_nominal_once(
         cfg,
     )
 
-    ik_joint, reachable = go2_analytic_ik(
-        rebased[..., :3], rebased[..., 3:6], foot_reference
-    )
     node = constant_like(
         rebased,
         "nominal_ik_node_index",
@@ -909,16 +1011,33 @@ def _build_nominal_once(
         torch.ones_like(swing_gamma),
         swing_gamma,
     )
-    future_liftoff_step = torch.where(
-        current_swing,
-        perceptive_plan.event_step + int(cfg.gait.stance_steps),
+    phase0 = schedule.phase_node[:, 0]
+    first_liftoff = torch.where(
+        phase0 < int(cfg.gait.swing_steps),
+        -phase0,
         perceptive_plan.event_step - int(cfg.gait.swing_steps),
     )
+    second_liftoff = perceptive_plan.event_step + int(cfg.gait.stance_steps)
     future_swing = schedule.swing & (
-        node >= future_liftoff_step[:, None]
+        (
+            (~schedule.swing[:, 0])[:, None]
+            & (node >= first_liftoff[:, None])
+        )
+        | (node >= second_liftoff[:, None])
     )
     swing_gamma = torch.where(
         initialized[:, None, None] & future_swing,
+        torch.ones_like(swing_gamma),
+        swing_gamma,
+    )
+    selector_validated_swing = (
+        perceptive_plan.crossing[:, None]
+        & schedule.swing
+        & (node >= first_liftoff[:, None])
+        & (node <= perceptive_plan.event_step[:, None])
+    )
+    swing_gamma = torch.where(
+        initialized[:, None, None] & selector_validated_swing,
         torch.ones_like(swing_gamma),
         swing_gamma,
     )
@@ -927,13 +1046,32 @@ def _build_nominal_once(
         torch.ones_like(swing_gamma),
         swing_gamma,
     )
+    gamma = torch.where(
+        initialized[:, None, None] & (schedule.phase_node == 0),
+        torch.ones_like(gamma),
+        gamma,
+    )
     gamma = torch.where(node == 0, torch.zeros_like(gamma), gamma)
-    joint = rebased[..., 6:].reshape(batch, 31, 4, 3)
-    future_liftoff = (schedule.phase_node == 0) & (node > 0)
-    joint = torch.where(future_liftoff[..., None], ik_joint, joint)
-    joint = joint + gamma[..., None] * (ik_joint - joint)
+    warm_foot = go2_fk(
+        rebased[..., :3], rebased[..., 3:6], rebased[..., 6:]
+    ).foot_pos_w
+    blended_foot = warm_foot + gamma[..., None] * (foot_reference - warm_foot)
+    joint, reachable = go2_analytic_ik(
+        rebased[..., :3], rebased[..., 3:6], blended_foot
+    )
     state = torch.cat((rebased[..., :6], joint.reshape(batch, 31, 12)), dim=-1)
     state = torch.cat((measured.as_vector()[:, None], state[:, 1:]), dim=1)
+    published_joint_step = max(
+        float(cfg.solver.published_joint_step_limit_rad) - 1.0e-5,
+        0.0,
+    )
+    first_joint = measured.joint_pos + (
+        state[:, 1, 6:] - measured.joint_pos
+    ).clamp(-published_joint_step, published_joint_step)
+    state = torch.cat(
+        (state[:, :1], torch.cat((state[:, 1, :6], first_joint), dim=-1)[:, None], state[:, 2:]),
+        dim=1,
+    )
 
     nominal_safe, clearance = _hard_safety(
         state,
@@ -1015,6 +1153,65 @@ def _select_leg_retry(value: Tensor, index: Tensor) -> Tensor:
         gather_index = gather_index.unsqueeze(-1)
     gather_index = gather_index.expand(*index.shape, 1, *trailing)
     return torch.gather(per_leg, 2, gather_index).squeeze(2)
+
+
+def _active_committed_crossing_mask(
+    plan: TouchdownPlan,
+    previous: JointMpcRtiSolverState,
+    ranked_index: Tensor,
+    *,
+    preview: bool = False,
+) -> Tensor:
+    """Mark the prior crossing candidate that may bypass selector sweep only.
+
+    The selector's continuous-IK sweep is an early filter.  Published nominal
+    safety is checked later on the actual discrete state and swept geometry, so
+    an active crossing commitment may survive this approximate filter when its
+    other structural/map constraints are still valid.
+    """
+    batch = ranked_index.shape[0]
+    device = ranked_index.device
+    shape = (batch, 4)
+    prior_index = previous.touchdown_selected_index
+    prior_crossing = previous.touchdown_crossing
+    prior_remaining = previous.touchdown_remaining_steps
+    if not (
+        isinstance(prior_index, Tensor)
+        and prior_index.shape == shape
+        and isinstance(prior_crossing, Tensor)
+        and prior_crossing.shape == shape
+        and isinstance(prior_remaining, Tensor)
+        and prior_remaining.shape == shape
+    ):
+        return torch.zeros_like(ranked_index, dtype=torch.bool, device=device)
+
+    components = plan.preview_valid_components if preview else plan.valid_components
+    structural_names = (
+        "map",
+        "plane",
+        "region",
+    )
+    structural = torch.ones_like(ranked_index, dtype=torch.bool)
+    for name in structural_names:
+        value = components.get(name)
+        if value is None:
+            return torch.zeros_like(ranked_index, dtype=torch.bool, device=device)
+        structural = structural & value
+
+    prior_index = prior_index.to(device=device, dtype=ranked_index.dtype)
+    prior_crossing = prior_crossing.to(device=device, dtype=torch.bool)
+    prior_remaining = prior_remaining.to(device=device)
+    candidate_index = constant_like(
+        ranked_index,
+        "nominal_committed_candidate_index",
+        tuple(float(index) for index in range(int(plan.candidate_w.shape[2]))),
+    ).to(dtype=ranked_index.dtype).view(1, 1, -1)
+    same_candidate = candidate_index == prior_index[..., None]
+    active = prior_crossing & (prior_remaining > 0)
+    # The previous refresh owns the crossing event for the remaining horizon;
+    # requiring a second current-map detector hit would drop the commitment as
+    # soon as the obstacle leaves the instantaneous event query.
+    return same_candidate & active[..., None] & structural
 
 
 def _ranked_regions(
@@ -1116,6 +1313,11 @@ def _normalize_previous_cache(
         initialized=initialized,
         stance_anchor_w=anchor,
         preview_tail_state=preview,
+        touchdown_target_w=previous.touchdown_target_w,
+        touchdown_selected_index=previous.touchdown_selected_index,
+        touchdown_crossing=previous.touchdown_crossing,
+        touchdown_remaining_steps=previous.touchdown_remaining_steps,
+        touchdown_swing_offset_w=previous.touchdown_swing_offset_w,
     )
 
 
@@ -1181,8 +1383,22 @@ def build_nominal(
         & (region_margin >= -1.0e-6).all(dim=-1)
         & torch.isfinite(ranked_target).all(dim=-1)
     )
+    committed = _gather_ranked_candidates(
+        _active_committed_crossing_mask(perceptive_plan, previous, ranked_index),
+        ranked_index,
+    )
+    # A selector sweep is only an approximate continuous-IK prefilter.  Keep
+    # an active crossing candidate eligible when every structural condition is
+    # valid; _build_nominal_once still applies exact published hard safety.
+    committed_ranked_valid = ranked_valid | committed
+    committed_available = committed.any(dim=1)
     any_feasible = ranked_valid.any(dim=1)
-    first_feasible = ranked_valid.to(torch.int64).argmax(dim=1)
+    first_feasible = torch.where(
+        committed_available,
+        committed.to(torch.int64).argmax(dim=1),
+        ranked_valid.to(torch.int64).argmax(dim=1),
+    )
+    any_feasible = committed_ranked_valid.any(dim=1)
     chosen_index = _select_leg_retry(
         ranked_index.permute(0, 2, 1), first_feasible
     )
@@ -1209,7 +1425,12 @@ def build_nominal(
         ),
         first_feasible,
     )
-
+    chosen_swing_offset = _select_leg_retry(
+        _gather_ranked_candidates(
+            perceptive_plan.candidate_swing_offset_w, ranked_index
+        ),
+        first_feasible,
+    )
     preview_ranked_index = perceptive_plan.preview_ranked_index
     preview_ranked_candidate = _gather_ranked_candidates(
         perceptive_plan.preview_candidate_w, preview_ranked_index
@@ -1274,18 +1495,29 @@ def build_nominal(
         ),
         preview_first_feasible,
     )
-    effective_plan = replace(
-        perceptive_plan,
-        selected_index=chosen_index,
-        target_w=chosen_target,
-        selected_sweep_safe=chosen_sweep,
-        valid=any_feasible,
-        region=chosen_region,
-        preview_selected_index=preview_chosen_index,
-        preview_target_w=preview_chosen_target,
-        preview_selected_sweep_safe=preview_chosen_sweep,
-        preview_valid=preview_any_feasible,
-        preview_region=preview_chosen_region,
+    preview_chosen_swing_offset = _select_leg_retry(
+        _gather_ranked_candidates(
+            perceptive_plan.preview_candidate_swing_offset_w,
+            preview_ranked_index,
+        ),
+        preview_first_feasible,
+    )
+    chosen_crossing = torch.gather(
+        perceptive_plan.small_cross_required, 2, chosen_index[..., None]
+    ).squeeze(-1)
+    phase = torch.as_tensor(gait_phase, dtype=torch.long, device=chosen_crossing.device)
+    phase0 = fixed_trot_schedule(
+        phase, horizon_steps=int(cfg.runtime.horizon_steps)
+    ).phase_node[:, 0]
+    root_lift_new = _new_crossing_commitment(
+        chosen_crossing,
+        phase0,
+        previous.touchdown_crossing,
+        swing_steps=int(cfg.gait.swing_steps),
+    )
+    preview_available = preview_any_feasible
+    preview_retry_rank = torch.where(
+        preview_available, preview_first_feasible, preview_first_feasible.new_full((), -1)
     )
     selected_plan = _SelectedTouchdownPlan(
         target_w=chosen_target,
@@ -1293,9 +1525,18 @@ def build_nominal(
         preview_touchdown_step=perceptive_plan.preview_touchdown_step,
         valid=any_feasible,
         region=chosen_region,
+        crossing=chosen_crossing,
+        swing_offset_w=chosen_swing_offset,
+        root_lift_new=root_lift_new,
         preview_target_w=preview_chosen_target,
-        preview_valid=preview_any_feasible,
+        preview_valid=preview_available,
         preview_region=preview_chosen_region,
+        preview_crossing=torch.gather(
+            perceptive_plan.preview_small_cross_required,
+            2,
+            preview_chosen_index[..., None],
+        ).squeeze(-1),
+        preview_swing_offset_w=preview_chosen_swing_offset,
     )
     trial = _build_nominal_once(
         measured,
@@ -1306,13 +1547,23 @@ def build_nominal(
         previous=previous,
         cfg=cfg,
     )
+    effective_plan = replace(
+        perceptive_plan,
+        selected_index=chosen_index,
+        target_w=chosen_target,
+        selected_sweep_safe=chosen_sweep,
+        selected_swing_offset_w=chosen_swing_offset,
+        valid=any_feasible,
+        region=chosen_region,
+        preview_selected_index=preview_chosen_index,
+        preview_target_w=preview_chosen_target,
+        preview_selected_sweep_safe=preview_chosen_sweep,
+        preview_selected_swing_offset_w=preview_chosen_swing_offset,
+        preview_valid=preview_available,
+        preview_region=preview_chosen_region,
+    )
     retry_rank = torch.where(
         any_feasible, first_feasible, first_feasible.new_full((), -1)
-    )
-    preview_retry_rank = torch.where(
-        preview_any_feasible,
-        preview_first_feasible,
-        preview_first_feasible.new_full((), -1),
     )
     return replace(
         trial,

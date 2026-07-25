@@ -19,10 +19,11 @@ from extension.joint_mpc_rti.solver.sqp_rti import perceptive_sqp_rti_update
 from extension.joint_mpc_rti.solver.trajectory_qp import JOINT_LOWER, JOINT_UPPER
 from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
-from extension.joint_mpc_rti.terrain.query import query_world
+from extension.joint_mpc_rti.terrain.query import query_ground_support_height_world
 from extension.joint_mpc_rti.types import (
     JointMpcPendingReference,
     JointMpcFieldFrame,
+    JointMpcPerceptiveField,
     JointMpcRtiSolverState,
     JointMpcRtiState,
     JointMpcRtiStepDiagnostics,
@@ -39,10 +40,12 @@ def build_loss_context(
     gait_phase: Tensor,
     cfg: JointMpcRtiCfg,
     *,
-    perceptive_field=None,
+    perceptive_field: JointMpcPerceptiveField,
 ) -> LossContext:
     schedule = fixed_trot_schedule(gait_phase, horizon_steps=int(cfg.runtime.horizon_steps))
-    support_height = query_world(terrain_field, nominal.state[..., :2]).height_w
+    support_height = query_ground_support_height_world(
+        perceptive_field, nominal.state[..., :2]
+    )
     stance_anchor_w = _stance_anchors_from_state(
         nominal.state,
         nominal.touchdown_reference_w,
@@ -150,6 +153,13 @@ def step(
         warm_nodes,
         perceptive_field,
         cfg,
+        previous_target_w=previous.touchdown_target_w,
+        previous_selected_index=previous.touchdown_selected_index,
+        previous_crossing=previous.touchdown_crossing,
+        previous_remaining_steps=previous.touchdown_remaining_steps,
+        previous_swing_offset_w=previous.touchdown_swing_offset_w,
+        previous_lift_w=previous.stance_anchor_w,
+        terrain_field=terrain_field,
         stage_profiler=stage_profiler,
     )
     if stage_profiler is not None:
@@ -240,6 +250,57 @@ def step(
         target_step=1,
     )
     accepted_state = torch.where(valid[:, None, None], state, previous.trajectory)
+    effective_plan = nominal.perceptive_plan
+    assert effective_plan is not None
+    effective_crossing = torch.gather(
+        effective_plan.small_cross_required,
+        2,
+        effective_plan.selected_index[..., None],
+    ).squeeze(-1)
+    previous_target = (
+        effective_plan.target_w
+        if previous.touchdown_target_w is None
+        else previous.touchdown_target_w
+    )
+    previous_index = (
+        effective_plan.selected_index
+        if previous.touchdown_selected_index is None
+        else previous.touchdown_selected_index
+    )
+    previous_crossing = (
+        torch.zeros_like(effective_crossing)
+        if previous.touchdown_crossing is None
+        else previous.touchdown_crossing
+    )
+    previous_remaining = (
+        torch.zeros_like(effective_plan.event_step)
+        if previous.touchdown_remaining_steps is None
+        else previous.touchdown_remaining_steps
+    )
+    previous_swing_offset = (
+        effective_plan.selected_swing_offset_w
+        if previous.touchdown_swing_offset_w is None
+        else previous.touchdown_swing_offset_w
+    )
+    active_previous_crossing = previous_crossing & (previous_remaining > 0)
+    selected_remaining = (effective_plan.event_step - 1).clamp_min(0)
+    crossing_remaining = torch.where(
+        active_previous_crossing,
+        (previous_remaining - 1).clamp_min(0),
+        selected_remaining,
+    )
+    next_crossing = torch.where(
+        valid[:, None], effective_crossing, active_previous_crossing
+    )
+    next_remaining = torch.where(
+        valid[:, None] & effective_crossing,
+        crossing_remaining,
+        torch.where(
+            ~valid[:, None] & active_previous_crossing,
+            (previous_remaining - 1).clamp_min(0),
+            torch.zeros_like(previous_remaining),
+        ),
+    )
     next_solver_state = JointMpcRtiSolverState(
         trajectory=accepted_state,
         gait_phase=previous.gait_phase + 1,
@@ -261,6 +322,19 @@ def step(
                 nominal.preview_tail_state,
                 previous.preview_tail_state,
             )
+        ),
+        touchdown_target_w=torch.where(
+            valid[:, None, None], effective_plan.target_w, previous_target
+        ),
+        touchdown_selected_index=torch.where(
+            valid[:, None], effective_plan.selected_index, previous_index
+        ),
+        touchdown_crossing=next_crossing,
+        touchdown_remaining_steps=next_remaining,
+        touchdown_swing_offset_w=torch.where(
+            valid[:, None, None],
+            effective_plan.selected_swing_offset_w,
+            previous_swing_offset,
         ),
     )
     result = JointMpcRtiStepResult(

@@ -46,6 +46,27 @@ def test_field_uses_max_pool_layers_and_preserves_small_vs_large_semantics() -> 
     assert field.inflated_height_w[:, 0, 21, 16].min() >= field.height_w.new_tensor(0.35)
 
 
+def test_root_support_recovers_local_ground_only_beneath_small_obstacles() -> None:
+    from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
+
+    cfg = JointMpcRtiCfg()
+    height, semantic, valid, frame = _inputs(batch=1)
+    height.fill_(0.12)
+    height[:, 12:19, 12:19] = 0.28
+    semantic[:, 12:19, 12:19] = 1
+    height[:, 22:25, 22:25] = 0.32
+    semantic[:, 22:25, 22:25] = 2
+    valid[:, 4, 4] = False
+
+    field = build_perceptive_field(height, semantic, valid, frame, cfg)
+
+    assert field.height_w[0, 15, 15] == pytest.approx(0.28)
+    assert field.ground_support_height_w[0, 5, 5] == pytest.approx(0.12)
+    assert field.ground_support_height_w[0, 15, 15] == pytest.approx(0.12)
+    assert field.ground_support_height_w[0, 23, 23] == pytest.approx(cfg.terrain.h_wall)
+    assert field.ground_support_height_w[0, 4, 4] == pytest.approx(cfg.terrain.h_wall)
+
+
 def test_landing_safe_inflates_obstacles_unknown_and_map_boundary() -> None:
     from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
 
@@ -220,5 +241,8 @@ def test_perceptive_field_cuda_matches_cpu_channels() -> None:
     ):
         assert torch.equal(getattr(cuda, name).cpu(), getattr(cpu, name))
     torch.testing.assert_close(cuda.inflated_height_w.cpu(), cpu.inflated_height_w)
+    torch.testing.assert_close(
+        cuda.ground_support_height_w.cpu(), cpu.ground_support_height_w
+    )
     torch.testing.assert_close(cuda.slope_xy.cpu(), cpu.slope_xy, atol=1.0e-6, rtol=0.0)
     torch.testing.assert_close(cuda.roughness.cpu(), cpu.roughness, atol=1.0e-6, rtol=0.0)

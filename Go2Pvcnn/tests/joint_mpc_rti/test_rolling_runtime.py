@@ -104,6 +104,33 @@ def test_cuda_graph_runtime_flag_falls_back_cleanly_on_cpu() -> None:
     assert manager._graph_runner is None
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_cuda_graph_oom_falls_back_to_eager_for_viewer_runtime(monkeypatch) -> None:
+    from extension.joint_mpc_rti.runtime import manager as manager_module
+
+    class OomGraphRunner:
+        def __init__(self, *args, **kwargs) -> None:
+            raise RuntimeError("CUDA error: out of memory")
+
+    cfg = JointMpcRtiCfg()
+    cfg.solver.use_cuda_graph = True
+    cfg.solver.compile_kernels = False
+    cfg.solver.emit_loss_breakdown = False
+    runtime = JointMpcRtiManager.from_config(cfg, num_envs=1, device="cuda")
+    measured = make_state(1, device="cuda")
+    command = make_command(1, device="cuda")
+    field = make_flat_field(1, device="cuda")
+    runtime.plan_from_tensors(measured, command, field)
+
+    monkeypatch.setattr(manager_module, "JointMpcCudaGraphRunner", OomGraphRunner)
+
+    result = runtime.plan_from_tensors(measured, command, field)
+
+    assert torch.isfinite(result.full_trajectory.future_state).all()
+    assert runtime._graph_runner is None
+    assert runtime._cuda_graph_disabled_after_error
+
+
 def test_cuda_graph_capture_materializes_the_first_result_before_return() -> None:
     from pathlib import Path
 
@@ -160,8 +187,23 @@ def test_cuda_graph_runner_captures_and_replays_planner_step() -> None:
         "initialized",
         "stance_anchor_w",
         "preview_tail_state",
+        "touchdown_target_w",
+        "touchdown_selected_index",
+        "touchdown_crossing",
+        "touchdown_remaining_steps",
+        "touchdown_swing_offset_w",
     }
     assert runner.solver_state.initialized.all()
+    assert runner.solver_state.touchdown_target_w is not None
+    assert runner.solver_state.touchdown_selected_index is not None
+    assert runner.solver_state.touchdown_crossing is not None
+    assert runner.solver_state.touchdown_remaining_steps is not None
+    assert runner.solver_state.touchdown_swing_offset_w is not None
+    assert runner.solver_state.touchdown_target_w.shape == (1, 4, 3)
+    assert runner.solver_state.touchdown_selected_index.shape == (1, 4)
+    assert runner.solver_state.touchdown_crossing.shape == (1, 4)
+    assert runner.solver_state.touchdown_remaining_steps.shape == (1, 4)
+    assert runner.solver_state.touchdown_swing_offset_w.shape == (1, 4, 2)
     assert torch.isfinite(replayed.full_trajectory.state_nodes).all()
     assert torch.isfinite(replayed.full_trajectory.future_state).all()
     assert replayed.full_trajectory.state_nodes.shape == (1, 31, 18)

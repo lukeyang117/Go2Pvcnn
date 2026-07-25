@@ -138,6 +138,9 @@ M_small  = {strict crossing, cross clearance/denominator,
 Pass_flat  = AND_(m in M_common) Pass(flat,m)
 Pass_small = AND_(m in M_common union M_small) Pass(small,m)</code></pre>
   <p>Gate 1 没有全部通过时，不允许用 small 参数掩盖平地问题；Gate 2 必须在 small obstacle 场景重新运行并通过 <code>M_common</code> 的每一个指标，不能只看 crossing success。任一 common 指标在 small 中回归，small 整体即失败。Cross 在没有障碍的 flat 上不存在物理分母，因此不伪造“零事件通过”，而是在 <code>M_small</code> 中追加。测试可以按 gate 推进，但生产架构从第一次实现起就是本文定义的完整架构，不建立另一套临时 planner。</p>
+  <div class="decision">
+    <strong>Cross 的完整 flat 继承规则：</strong>small crossing 不是只检查足端越过和没有碰撞。每个 formal crossing trace 都必须重新计算并通过全部 <code>M_common</code>，包括 joint、足端连续性、command 速度跟踪、swing clearance、continuing stance 的贴地与世界坐标固定、touchdown grounding、语义禁踩、数值有效性和 warm-only lifecycle。每个 continuing/onset stance 足端必须位于当前同帧地图的 normal ground：语义必须是 normal，不能覆盖 small/large/unknown，且 <code>gap &lt;= 12mm</code>、<code>penetration &lt;= 1mm</code>。crossing 成功不能抵消语义物体上的 stance 失败。</div>
+  <p>Cross 只允许一个受控的 root 位置例外：crossing event window 内，<code>root_lateral_offset_from_nominal_m</code> 可以使用专属上限 <code>d_root,lateral,cross,max=0.10m</code>，同时继续报告 flat 上限 <code>0.06m</code> 的原始值。这个例外只作用于 crossing window 的 root 横向位置，不放宽 root velocity/direction tracking、root step jump、roll/pitch、yaw、stance/root-carry、foot continuity、normal-ground、semantic 禁踩或任何 collision gate；crossing 后的完整 24-frame gait period 恢复 flat 上限。</p>
 
   <h3>1.2 冻结边界与修改空间</h3>
   <table>
@@ -798,6 +801,7 @@ world_query_transform_error,
 cold_start_count, warm_start_count, unexpected_cold_restart_count,
 warm_cache_invariant_fault_count, strict_cross_success,
 touchdown_on_small, stance_on_small, airborne_touchdown,
+stance_on_forbidden_semantic,
 target_change_normal_m, target_change_due_to_command_m,
 target_change_due_to_map_m, target_change_due_to_unsafe_invalidation_m,
 latched_target_drift_m, cross_direction_margin_mps,
@@ -933,7 +937,7 @@ body_ok = all foot/knee/calf/thigh/base collision flags are false in full event 
 strict_cross^X = opportunity AND before^X AND over_xy^X AND over_z^X
                  AND direction_ok^X AND after^X AND land_ok^X AND body_ok^X
 formal_strict_cross = strict_cross^P AND strict_cross^A</code></pre>
-  <p><code>opportunity</code> 由当前帧地图映射到世界坐标的 obstacle、command corridor 和 gait event 共同定义，不能依赖 planner 是否选择跨越来消失。事件可以保存 world obstacle id/中心用于跨帧关联，但每一帧的 footprint、高程和碰撞都必须重新读取 <code>M_t</code>，不能缓存进入事件时的旧地图。<code>K_obs</code> 使用连续 swept sole，不能只检查离散 node；只在这些真正经过障碍上方的 interval 检查 foot/root 同向，因此允许起落脚附近速度接近零和固定外侧偏移。若已有 formal opportunity 但 actual root 速度不足 <code>v_min</code>，方向角本身记 N/A，strict-cross 仍因未完成实际穿越而失败，不能从 denominator 中删除。</p>
+  <p><code>opportunity</code> 由当前帧地图映射到世界坐标的 obstacle、command corridor 和 gait event 共同定义，不能依赖 planner 是否选择跨越来消失。事件可以保存 world obstacle id/中心用于跨帧关联，但每一帧的 footprint、高程和碰撞都必须重新读取 <code>M_t</code>，不能缓存进入事件时的旧地图。<code>K_obs</code> 使用连续 swept sole，不能只检查离散 node；只在这些真正经过障碍上方的 interval 检查 foot/root 同向，因此允许起落脚附近速度接近零和固定外侧偏移。若已有 formal opportunity 但 actual root 速度不足 <code>v_min</code>，方向角本身记 N/A，strict-cross 仍因未完成实际穿越而失败，不能从 denominator 中删除。Crossing window 的 root 横向偏移使用受控上限；其余 <code>M_common</code> 仍使用 flat 阈值。</p>
   <table>
     <thead><tr><th>指标</th><th>公式</th><th>门</th><th>来源</th></tr></thead>
     <tbody>
@@ -941,6 +945,7 @@ formal_strict_cross = strict_cross^P AND strict_cross^A</code></pre>
       <tr><td>canonical actual cross</td><td><code>strict_cross</code> for each of 15 shape-speed viewer traces</td><td>每条均为 <code>1</code></td><td>A+M+V</td></tr>
       <tr><td>touchdown on small</td><td><code>sum_onset 1[actual world sole intersects current O_s,t^W]</code></td><td><code>0</code></td><td>A+M</td></tr>
       <tr><td>stance on small</td><td><code>sum_C 1[actual world sole intersects current O_s,t^W]</code></td><td><code>0</code></td><td>A+M</td></tr>
+      <tr><td>stance on forbidden semantic / non-ground</td><td><code>sum_C 1[semantic != normal OR sole not on current normal H_t^W]</code></td><td><code>0</code></td><td>A+M</td></tr>
       <tr><td>cross vertical margin</td><td><code>min over_xy(sole_bottom_z^W-H_small,t^W)-m_cross</code></td><td><code>&gt;=0</code></td><td>P+A+M</td></tr>
       <tr><td>cross direction margin</td><td><code>min_(k in K_obs) v_F,xy,k^T e_B-v_forward,min</code></td><td><code>&gt;=0</code> when applicable</td><td>P+A</td></tr>
       <tr><td>cross denominator loss</td><td><code>N(expected formal opportunities)-N(classified opportunities)</code></td><td><code>0</code></td><td>A+M</td></tr>

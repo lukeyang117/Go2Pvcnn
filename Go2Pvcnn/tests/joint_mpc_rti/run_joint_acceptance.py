@@ -362,21 +362,38 @@ def strict_crossing_event(
     batch, time, legs = foot.shape[:3]
     lift_edge = contact[:, :-1] & ~contact[:, 1:]
     touchdown_edge = ~contact[:, :-1] & contact[:, 1:]
-    lift_exists = lift_edge.any(dim=1)
-    touchdown_exists = touchdown_edge.any(dim=1)
-    lift_index = lift_edge.to(torch.int64).argmax(dim=1)
-    touchdown_index = touchdown_edge.to(torch.int64).argmax(dim=1) + 1
-    event_exists = lift_exists & touchdown_exists & (touchdown_index > lift_index)
+    edge_count = time - 1
+    edge_index = torch.arange(edge_count, device=root.device)
+    touchdown_index = edge_index + 1
+    eligible_lift = lift_edge[:, None] & (
+        edge_index.view(1, 1, edge_count, 1)
+        < touchdown_index.view(1, edge_count, 1, 1)
+    )
+    lift_index = torch.where(
+        eligible_lift,
+        edge_index.view(1, 1, edge_count, 1),
+        edge_index.new_full((), -1),
+    ).amax(dim=2)
+    event_exists = touchdown_edge & (lift_index >= 0)
+    lift_index = lift_index.clamp_min(0)
 
-    leg_index = torch.arange(legs, device=root.device).view(1, legs).expand(batch, -1)
-    row_index = torch.arange(batch, device=root.device).view(batch, 1).expand(-1, legs)
-    lift_foot = foot[row_index, lift_index, leg_index]
-    touchdown_foot = foot[row_index, touchdown_index.clamp_max(time - 1), leg_index]
-    lift_root = root[row_index, lift_index]
-    touchdown_root = root[row_index, touchdown_index.clamp_max(time - 1)]
+    event_leg_index = lift_index[..., None].expand(-1, -1, -1, 3)
+    lift_foot = torch.gather(foot, 1, event_leg_index)
+    touchdown_foot = foot[:, 1:]
+    expanded_root = root[:, :, None].expand(-1, -1, legs, -1)
+    lift_root = torch.gather(
+        expanded_root, 1, lift_index[..., None].expand(-1, -1, -1, 2)
+    )
+    touchdown_root = expanded_root[:, 1:]
 
-    lift_s = ((lift_foot[..., :2] - center[:, None]) * direction[:, None]).sum(dim=-1)
-    touchdown_s = ((touchdown_foot[..., :2] - center[:, None]) * direction[:, None]).sum(dim=-1)
+    lift_s = (
+        (lift_foot[..., :2] - center[:, None, None])
+        * direction[:, None, None]
+    ).sum(dim=-1)
+    touchdown_s = (
+        (touchdown_foot[..., :2] - center[:, None, None])
+        * direction[:, None, None]
+    ).sum(dim=-1)
     before_leg = lift_s <= -float(radius_m) - float(pre_margin_m)
     after_leg = touchdown_s >= float(radius_m) + float(landing_margin_m)
 
@@ -388,16 +405,15 @@ def strict_crossing_event(
     closest = segment_start + projection[..., None] * segment_delta
     segment_distance = torch.linalg.vector_norm(closest - center[:, None, None], dim=-1)
     event_interval = (
-        torch.arange(time - 1, device=root.device).view(1, time - 1, 1)
-        >= lift_index[:, None]
+        edge_index.view(1, 1, edge_count, 1) >= lift_index[:, :, None]
     ) & (
-        torch.arange(time - 1, device=root.device).view(1, time - 1, 1)
-        < touchdown_index[:, None]
-    )
+        edge_index.view(1, 1, edge_count, 1)
+        < touchdown_index.view(1, edge_count, 1, 1)
+    ) & event_exists[:, :, None]
     obstacle_interval = (
-        segment_distance <= float(radius_m) + float(foot_radius_m)
+        segment_distance[:, None] <= float(radius_m) + float(foot_radius_m)
     ) & event_interval
-    over_xy_leg = obstacle_interval.any(dim=1)
+    over_xy_event = obstacle_interval.any(dim=2)
 
     top = torch.as_tensor(
         0.0 if obstacle_top_z is None else obstacle_top_z,
@@ -408,39 +424,49 @@ def strict_crossing_event(
         top = top.expand(batch)
     sole_bottom = torch.minimum(foot[:, :-1, :, 2], foot[:, 1:, :, 2]) - float(foot_radius_m)
     vertical_margin = sole_bottom - top[:, None, None] - float(cross_margin_m)
-    over_z_leg = (
-        torch.where(obstacle_interval, vertical_margin, torch.full_like(vertical_margin, torch.inf))
-        .amin(dim=1)
+    over_z_event = (
+        torch.where(
+            obstacle_interval,
+            vertical_margin[:, None],
+            torch.full_like(obstacle_interval, torch.inf, dtype=root.dtype),
+        )
+        .amin(dim=2)
         .ge(0.0)
-    ) & over_xy_leg
+    ) & over_xy_event
 
     root_delta = touchdown_root - lift_root
-    event_duration = (touchdown_index - lift_index).to(root.dtype) * float(dt)
+    event_duration = (
+        touchdown_index.view(1, edge_count, 1) - lift_index
+    ).to(root.dtype) * float(dt)
     root_speed = torch.linalg.vector_norm(root_delta, dim=-1) / event_duration.clamp_min(float(dt))
     root_axis = root_delta / torch.linalg.vector_norm(root_delta, dim=-1, keepdim=True).clamp_min(1.0e-8)
     command_speed = torch.linalg.vector_norm(command, dim=-1)
     direction_applicable_leg = (
-        (command_speed[:, None] >= float(v_min_mps))
+        (command_speed[:, None, None] >= float(v_min_mps))
         & (root_speed >= float(v_min_mps))
         & event_exists
     )
     foot_velocity = segment_delta / float(dt)
-    forward_speed = (foot_velocity * root_axis[:, None]).sum(dim=-1)
+    forward_speed = (foot_velocity[:, None] * root_axis[:, :, None]).sum(dim=-1)
     direction_margin = forward_speed - float(v_forward_min_mps)
-    direction_ok_leg = (
-        torch.where(obstacle_interval, direction_margin, torch.full_like(direction_margin, torch.inf))
-        .amin(dim=1)
+    direction_ok_event = (
+        torch.where(
+            obstacle_interval,
+            direction_margin,
+            torch.full_like(direction_margin, torch.inf),
+        )
+        .amin(dim=2)
         .ge(0.0)
-    ) & over_xy_leg & direction_applicable_leg
+    ) & over_xy_event & direction_applicable_leg
 
     if landing_safe is None:
-        land_ok_leg = torch.ones_like(event_exists)
+        land_ok_event = torch.ones_like(event_exists)
     else:
         safe = torch.as_tensor(landing_safe, dtype=torch.bool, device=root.device)
         if safe.ndim == 2:
             safe = safe[..., None].expand(-1, -1, legs)
-        land_ok_leg = safe[row_index, touchdown_index.clamp_max(time - 1), leg_index]
-    land_ok_leg &= touchdown_exists
+        land_ok_event = safe[:, 1:]
+    land_ok_event = land_ok_event & touchdown_edge
     body_ok = torch.ones(batch, dtype=torch.bool, device=root.device)
     if part_collision:
         body_ok &= ~torch.stack(
@@ -450,35 +476,38 @@ def strict_crossing_event(
             ),
             dim=-1,
         ).any(dim=-1)
-    opportunity_leg = event_exists & command_active[:, None]
-    strict_leg = (
-        opportunity_leg
+    opportunity_event = event_exists & command_active[:, None, None]
+    strict_event = (
+        opportunity_event
         & before_leg
-        & over_xy_leg
-        & over_z_leg
-        & direction_ok_leg
+        & over_xy_event
+        & over_z_event
+        & direction_ok_event
         & after_leg
-        & land_ok_leg
-        & body_ok[:, None]
+        & land_ok_event
+        & body_ok[:, None, None]
     )
+    event_margin = torch.where(
+        obstacle_interval, direction_margin, torch.full_like(direction_margin, torch.inf)
+    ).amin(dim=2)
     relevant_margin = torch.where(
-        obstacle_interval,
-        direction_margin,
-        torch.full_like(direction_margin, torch.inf),
-    ).amin(dim=(1, 2))
-    relevant_margin = torch.where(torch.isfinite(relevant_margin), relevant_margin, torch.zeros_like(relevant_margin))
+        torch.isfinite(event_margin), event_margin, torch.full_like(event_margin, -torch.inf)
+    ).amax(dim=(1, 2))
+    relevant_margin = torch.where(
+        torch.isfinite(relevant_margin), relevant_margin, torch.zeros_like(relevant_margin)
+    )
     return StrictCrossingResult(
-        success=strict_leg.any(dim=1),
+        success=strict_event.any(dim=(1, 2)),
         crossed_longitudinal=crossed,
-        intersected_footprint=over_xy_leg.any(dim=1),
-        opportunity=opportunity_leg.any(dim=1),
-        before=(before_leg & event_exists).any(dim=1),
-        over_xy=over_xy_leg.any(dim=1),
-        over_z=over_z_leg.any(dim=1),
-        direction_applicable=direction_applicable_leg.any(dim=1),
-        direction_ok=direction_ok_leg.any(dim=1),
-        after=(after_leg & event_exists).any(dim=1),
-        land_ok=(land_ok_leg & event_exists).any(dim=1),
+        intersected_footprint=(over_xy_event & event_exists).any(dim=(1, 2)),
+        opportunity=opportunity_event.any(dim=(1, 2)),
+        before=(before_leg & event_exists).any(dim=(1, 2)),
+        over_xy=(over_xy_event & event_exists).any(dim=(1, 2)),
+        over_z=(over_z_event & event_exists).any(dim=(1, 2)),
+        direction_applicable=direction_applicable_leg.any(dim=(1, 2)),
+        direction_ok=(direction_ok_event & event_exists).any(dim=(1, 2)),
+        after=(after_leg & event_exists).any(dim=(1, 2)),
+        land_ok=(land_ok_event & event_exists).any(dim=(1, 2)),
         body_ok=body_ok,
         direction_margin_mps=relevant_margin,
     )
@@ -595,6 +624,8 @@ def _slice_trace(trace, index: int):
         strict_cross_success=pick(trace.strict_cross_success),
         touchdown_on_small=pick(trace.touchdown_on_small),
         stance_on_small=pick(trace.stance_on_small),
+        stance_on_forbidden_semantic=pick(trace.stance_on_forbidden_semantic),
+        touchdown_on_forbidden_semantic=pick(trace.touchdown_on_forbidden_semantic),
         airborne_touchdown=pick(trace.airborne_touchdown),
         part_penetration_m=None
         if trace.part_penetration_m is None
@@ -813,6 +844,11 @@ def _small_detector_row(field, geometry, contact: torch.Tensor, previous_contact
             foot_query = query
     assert foot_query is not None
     foot_small = (foot_query.small_distance_m <= 0.0).reshape(contact.shape)
+    foot_forbidden = (
+        (foot_query.semantic_id == 1)
+        | (foot_query.semantic_id == 2)
+        | ~foot_query.valid
+    ).reshape(contact.shape)
     touchdown = contact & ~previous_contact
     surface_gap = geometry.foot_pos_w[..., 2] - foot_query.height_w.reshape(contact.shape) - 0.022
     return {
@@ -822,9 +858,27 @@ def _small_detector_row(field, geometry, contact: torch.Tensor, previous_contact
         "penetration": penetration,
         "touchdown_on_small": (touchdown & foot_small).any(dim=1),
         "stance_on_small": (contact & foot_small).any(dim=1),
+        "touchdown_on_forbidden_semantic": (touchdown & foot_forbidden).any(dim=1),
+        "stance_on_forbidden_semantic": (contact & foot_forbidden).any(dim=1),
         "airborne_touchdown": (touchdown & (surface_gap.abs() > 0.012)).any(dim=1),
         "map_valid": foot_query.valid.reshape(contact.shape).all(dim=1),
     }
+
+
+def _published_measurement(trajectory, measured_vector, previous_contact):
+    publish = trajectory.publish
+    state = torch.where(
+        publish[:, None], trajectory.state[:, 1], measured_vector
+    )
+    velocity = torch.where(
+        publish[:, None],
+        trajectory.derived_velocity[:, 0],
+        torch.zeros_like(measured_vector),
+    )
+    contact = torch.where(
+        publish[:, None], trajectory.contact_state[:, 1], previous_contact
+    )
+    return state, velocity, contact
 
 
 def simulate_small_trace(
@@ -889,6 +943,8 @@ def simulate_small_trace(
     penetration_rows = {name: [initial_detector["penetration"][name]] for name in initial_detector["penetration"]}
     touchdown_rows = [initial_detector["touchdown_on_small"]]
     stance_rows = [initial_detector["stance_on_small"]]
+    forbidden_touchdown_rows = [initial_detector["touchdown_on_forbidden_semantic"]]
+    forbidden_stance_rows = [initial_detector["stance_on_forbidden_semantic"]]
     airborne_rows = [initial_detector["airborne_touchdown"]]
     x0_errors = [torch.zeros(batch, device=device)]
     x1_errors = [torch.zeros(batch, device=device)]
@@ -900,8 +956,9 @@ def simulate_small_trace(
         measured_vector = measured.as_vector()
         result = planner_step(measured, commands, field, solver_state, cfg)
         trajectory = result.full_trajectory
-        next_state = trajectory.state[:, 1]
-        next_velocity = trajectory.derived_velocity[:, 0]
+        next_state, next_velocity, contact = _published_measurement(
+            trajectory, measured_vector, contacts[-1]
+        )
         pending = torch.cat(
             (result.pending_reference.root_pos_w, result.pending_reference.root_rpy_w, result.pending_reference.joint_angles),
             dim=-1,
@@ -916,7 +973,6 @@ def simulate_small_trace(
         )
         solver_state = result.solver_state
         geometry = go2_fk(measured.root_pos_w, measured.root_rpy_w, measured.joint_pos)
-        contact = trajectory.contact_state[:, 1]
         detector = _small_detector_row(field, geometry, contact, contacts[-1])
         states.append(next_state)
         feet.append(geometry.foot_pos_w)
@@ -933,6 +989,8 @@ def simulate_small_trace(
             penetration_rows[name].append(detector["penetration"][name])
         touchdown_rows.append(detector["touchdown_on_small"])
         stance_rows.append(detector["stance_on_small"])
+        forbidden_touchdown_rows.append(detector["touchdown_on_forbidden_semantic"])
+        forbidden_stance_rows.append(detector["stance_on_forbidden_semantic"])
         airborne_rows.append(detector["airborne_touchdown"])
         x0_errors.append((trajectory.state[:, 0] - measured_vector).abs().amax(dim=-1))
         x1_errors.append((trajectory.state[:, 1] - pending).abs().amax(dim=-1))
@@ -973,6 +1031,7 @@ def simulate_small_trace(
         name: torch.stack(rows, dim=1) for name, rows in collision_rows.items()
     }
     stacked_touchdown = torch.stack(touchdown_rows, dim=1)
+    stacked_forbidden_touchdown = torch.stack(forbidden_touchdown_rows, dim=1)
     obstacle_top = torch.stack(
         tuple(
             _grounded_native_small_height_profile(
@@ -992,7 +1051,7 @@ def simulate_small_trace(
         contact_state=contact,
         obstacle_top_z=obstacle_top,
         part_collision=stacked_collision,
-        landing_safe=~stacked_touchdown,
+        landing_safe=~stacked_forbidden_touchdown,
         dt=float(cfg.runtime.dt),
     )
     crossing = crossing_result.success.to(state.dtype)
@@ -1019,6 +1078,8 @@ def simulate_small_trace(
         cross_direction_margin=crossing_result.direction_margin_mps,
         touchdown_on_small=torch.stack(touchdown_rows, dim=1),
         stance_on_small=torch.stack(stance_rows, dim=1),
+        touchdown_on_forbidden_semantic=torch.stack(forbidden_touchdown_rows, dim=1),
+        stance_on_forbidden_semantic=torch.stack(forbidden_stance_rows, dim=1),
         airborne_touchdown=torch.stack(airborne_rows, dim=1),
         part_penetration_m={name: torch.stack(rows, dim=1) for name, rows in penetration_rows.items()},
         x0_injection_error=torch.stack(x0_errors, dim=1),

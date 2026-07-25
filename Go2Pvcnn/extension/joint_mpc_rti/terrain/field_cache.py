@@ -31,6 +31,7 @@ class JointMpcPerceptiveFieldCache:
         shape = (batch, size, size)
         self.cfg = cfg
         self.height_w = torch.zeros(shape, dtype=torch.float32, device=device)
+        self.ground_support_height_w = torch.zeros(shape, dtype=torch.float32, device=device)
         self.semantic_id = torch.zeros(shape, dtype=torch.long, device=device)
         self.valid_mask = torch.zeros(shape, dtype=torch.bool, device=device)
         self.small_mask = torch.zeros(shape, dtype=torch.bool, device=device)
@@ -65,6 +66,7 @@ class JointMpcPerceptiveFieldCache:
         built = build_perceptive_field(height_w, semantic_id, valid_mask, frame, self.cfg)
         for name in (
             "height_w",
+            "ground_support_height_w",
             "semantic_id",
             "valid_mask",
             "small_mask",
@@ -88,6 +90,7 @@ class JointMpcPerceptiveFieldCache:
     def as_field(self) -> JointMpcPerceptiveField:
         return JointMpcPerceptiveField(
             height_w=self.height_w,
+            ground_support_height_w=self.ground_support_height_w,
             semantic_id=self.semantic_id,
             valid_mask=self.valid_mask,
             small_mask=self.small_mask,

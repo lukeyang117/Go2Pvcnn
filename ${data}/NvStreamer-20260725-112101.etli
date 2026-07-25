@@ -1,0 +1,30 @@
+449,MarkQosNameValue,GPU Detail,Intel(R) UHD Graphics 770 (0x00004680) Direct3D11 vs_5_0 ps_5_0
+449,MarkQosNameValue,IsCoProc,0
+449,MarkQosNameValue,DriverBranch,NVIDIA UNIX x86_64 Kernel Module  560.35.03  Fri Aug 16 21:39:15 UTC 2024
+449,MarkQosNameValue,AdapterRefreshRate,60.0
+449,MarkQosNameValue,AdapterWidth,1280
+449,MarkQosNameValue,LtrEnabled,0
+449,MarkQosNameValue,AllTransitSelectionValuesForwarded,
+449,MarkQosNameValue,AdapterHeight,720
+449,MarkQosNameValue,TransitSelectionValueForwarded,0
+449,MarkQosNameValue,SurfaceBitDepth,8
+449,MarkQosNameValue,AllTransitSelectionValuesApplied,
+449,MarkQosNameValue,EncoderInputSurfaceFormat,invalid_format
+449,MarkQosNameValue,DriverVersion,560.35
+449,MarkQosNameValue,TransitSelectionValueApplied,0
+449,MarkQosNameValue,DataChannelMode,DcSCTP
+449,MarkQos,StreamServerBackendMode is 2
+449,MarkQos,stream 0 nvtime::sessionStartTime[us] on server: 13976737395105
+449,MarkQos,RL QOS disabled for stream: 0
+449,MarkQos,Max Fps is 60
+449,MarkQos,NvRtcClient Browser name: Chromium, Browser version: 138.0.7204.251
+449,MarkQos,ClientGenericMapping: {ProcCpuUsage, TotalCpuUsage}
+449,MarkGsBlobStats,0x1B01000000000000030003001C0100000000000000000000
+456,MarkQosServerControlChannelStatsV0,177057169,0,785,2,118
+456,MarkQosServerControlChannelStatsV0,177057169,0,797,1,5
+456,MarkQosServerControlChannelStatsV0,177057169,0,798,1,1032
+456,MarkQosServerControlChannelStatsV0,177057169,0,800,1,12
+456,MarkQosServerControlChannelStatsV0,177057169,0,801,1,12
+457,MarkQos,Number of delayed commands: 0
+457,MarkQos,Audio drift stats - Ratio: 0.000000, Total Drift: 0 ms, Packet Count: 0
+457,MarkGsBlobStats,

@@ -4,6 +4,23 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-07-25 viewer CUDA Graph OOM fallback is local: the real H30 livestream command now catches graph capture OOM, disables graph for that manager, and continues eager RTI instead of exiting at `capture_end()`. Runtime regression is `12 passed`; viewer smoke reached fallback and continued. A later phase-6 `kkt=(nan,nan)` / `clearance=-inf` is separate and remains open. See [viewer OOM fallback](log/2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md).
+
+- 2026-07-24 common-metric regression: small/cross explicitly verifies all applicable flat metrics, including map-backed stance grounding and forbidden semantics. See [common metric regression](log/2026-07-24-joint-mpc-cross-common-metric-regression.md). The preview liftoff geometry blocker remains open.
+
+- 2026-07-24 metric/stance follow-up: the small gate already consumes every flat/common metric. A forced stance-z map projection was rejected because it collapsed publication/validity to `2.7%`; retain the numeric stance-ground gate and redesign published IK/anchor z ownership before changing nominal again. See [follow-up](log/2026-07-24-joint-mpc-cross-flat-metrics-stance-follow-up.md).
+
+- 2026-07-24 Task 17 latest: controlled small passes the complete flat/common
+  gate, including world-map stance grounding and semantics, but strict crossing
+  is still `0` because no swing foot enters the obstacle footprint. The next
+  correction must unify selector and published discrete sweep geometry. See
+  [cross stance/common follow-up](log/2026-07-24-joint-mpc-cross-stance-common-and-sdf-follow-up.md).
+- 2026-07-24 follow-up: stance gap/penetration has a direct numeric regression and joint-linear selector components are present; focused selector/nominal is `84 passed`, but controlled crossing remains red at refresh 59. A preview warm-path experiment was reverted after early publication collapse. See [follow-up](log/2026-07-24-joint-mpc-cross-joint-linear-selector-follow-up.md).
+
+- 2026-07-24 Task 17 preview liftoff root cause: cross inherits the complete flat/stance-ground gate, and selector/nominal focused tests are `84 passed`, but controlled refresh 59 remains invalid because selector checks a continuous IK swing while publication checks joint-linear swept geometry. Edge 25 alone penetrates foot `13.92mm` and calf `9.92mm`; candidate/weight tuning is no longer the correct owner. See [preview liftoff contract](log/2026-07-24-joint-mpc-cross-preview-liftoff-contract.md).
+
+- 2026-07-24 Task 17 cross common gate is wired and tested: controlled cuboid strict crossing plus collision and world-map stance/touchdown semantics are green, but the complete report remains red on joint step `0.3563rad`, publish/valid `0.5655`, and stop `0.4345`. A separate CUDA/CPU scan parity failure is also open. See [controlled result](log/2026-07-24-joint-mpc-cross-flat-metrics-controlled-result.md).
+
 - 2026-07-23 final Task 16 flat closure: real same-refresh KKT is wired into acceptance, focused tests are `115 passed`, the full package is `284 passed`, and formal CUDA flat v13 passes `19/19` cells with primal/dual maxima `5.133e-5/9.014e-5`. Task 17 small-obstacle crossing is next; large/viewer/performance remain blocked. See [final flat closure](log/2026-07-23-joint-mpc-rti-final-flat-gate-closure.md).
 
 - 2026-07-23 final Task 16 first flat diagnosis: future-swing/preview/swept issues and a severe CUDA SPD stride bug are fixed and guarded. Current-map B3 rolling validity is `[24,24,24]`, but the formal 19-cell flat gate remains `19/19` red on alpha-zero fallback, cold joint step, root/foot ordering, tracking, and several publish ratios. Small/large/viewer/performance remain blocked. See [final flat gate first diagnosis](log/2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md).

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 import torch
 
 
@@ -148,6 +149,53 @@ def test_small_includes_every_flat_metric_plus_small_metrics() -> None:
     from .joint_metrics import applicable_metrics
 
     assert applicable_metrics("flat") < applicable_metrics("small")
+
+
+def test_small_cross_rejects_forbidden_semantic_stance_and_touchdown() -> None:
+    from .joint_metrics import evaluate_trace
+
+    trace = _root_carried_trace()
+    forbidden = torch.zeros(1, 4, dtype=torch.bool)
+    forbidden[:, 1] = True
+    report = evaluate_trace(
+        replace(
+            trace,
+            stance_on_forbidden_semantic=forbidden,
+            touchdown_on_forbidden_semantic=forbidden,
+        ),
+        scenario="small",
+        key=("small", "cuboid", "0.2", "phase0"),
+    )
+
+    assert report.metric("stance_on_forbidden_semantic").value > 0.0
+    assert not report.metric("stance_on_forbidden_semantic").passed
+    assert report.metric("touchdown_on_forbidden_semantic").value > 0.0
+    assert not report.metric("touchdown_on_forbidden_semantic").passed
+
+
+def test_small_cross_rejects_stance_gap_and_penetration_even_after_cross() -> None:
+    from .joint_metrics import evaluate_trace
+
+    trace = _root_carried_trace()
+    foot = trace.foot_pos_w.clone()
+    foot[:, 1:, 0, 2] = 0.042
+    foot[:, 1:, 3, 2] = 0.020
+    report = evaluate_trace(
+        replace(
+            trace,
+            foot_pos_w=foot,
+            strict_cross_success=torch.ones(1),
+        ),
+        scenario="small",
+        key=("small", "cuboid", "0.2", "phase0"),
+    )
+
+    assert report.metric("strict_cross_success").passed
+    assert report.metric("stance_ground_gap").value == pytest.approx(0.020)
+    assert report.metric("stance_ground_gap").passed is False
+    assert report.metric("stance_ground_penetration").value == pytest.approx(0.002)
+    assert report.metric("stance_ground_penetration").passed is False
+    assert not report.passed
 
 
 def test_lifecycle_metrics_require_one_cold_then_only_warm() -> None:

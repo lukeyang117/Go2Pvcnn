@@ -41,6 +41,14 @@ class JointMpcCudaGraphRunner:
         self._command = torch.as_tensor(command_body, dtype=torch.float32, device=measured_state.device).clone()
         self._field = terrain_field
         self._field_height_ptr = int(terrain_field.height_w.data_ptr())
+        if (
+            solver_state.touchdown_target_w is None
+            or solver_state.touchdown_selected_index is None
+            or solver_state.touchdown_crossing is None
+            or solver_state.touchdown_remaining_steps is None
+            or solver_state.touchdown_swing_offset_w is None
+        ):
+            raise ValueError("CUDA Graph warm state requires touchdown commitment tensors")
         self._solver_state = JointMpcRtiSolverState(
             trajectory=solver_state.trajectory.clone(),
             gait_phase=solver_state.gait_phase.clone(),
@@ -51,6 +59,11 @@ class JointMpcCudaGraphRunner:
                 if solver_state.preview_tail_state is None
                 else solver_state.preview_tail_state.clone()
             ),
+            touchdown_target_w=solver_state.touchdown_target_w.clone(),
+            touchdown_selected_index=solver_state.touchdown_selected_index.clone(),
+            touchdown_crossing=solver_state.touchdown_crossing.clone(),
+            touchdown_remaining_steps=solver_state.touchdown_remaining_steps.clone(),
+            touchdown_swing_offset_w=solver_state.touchdown_swing_offset_w.clone(),
         )
         warm = planner_step(self._state, self._command, self._field, self._solver_state, self._cfg)
         torch.cuda.synchronize(device=measured_state.device)
@@ -72,6 +85,21 @@ class JointMpcCudaGraphRunner:
                 self._solver_state.preview_tail_state.copy_(
                     self._result.solver_state.preview_tail_state
                 )
+            self._solver_state.touchdown_target_w.copy_(
+                self._result.solver_state.touchdown_target_w
+            )
+            self._solver_state.touchdown_selected_index.copy_(
+                self._result.solver_state.touchdown_selected_index
+            )
+            self._solver_state.touchdown_crossing.copy_(
+                self._result.solver_state.touchdown_crossing
+            )
+            self._solver_state.touchdown_remaining_steps.copy_(
+                self._result.solver_state.touchdown_remaining_steps
+            )
+            self._solver_state.touchdown_swing_offset_w.copy_(
+                self._result.solver_state.touchdown_swing_offset_w
+            )
         self._graph.replay()
 
     @property

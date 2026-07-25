@@ -9,6 +9,27 @@ import pytest
 import torch
 
 
+def test_unpublished_small_trace_candidate_does_not_advance_measured_state() -> None:
+    from .run_joint_acceptance import _published_measurement
+
+    measured = torch.arange(18, dtype=torch.float32).view(1, 18)
+    trajectory = SimpleNamespace(
+        state=torch.stack((measured, measured + 1.0), dim=1),
+        derived_velocity=torch.ones(1, 1, 18),
+        contact_state=torch.ones(1, 2, 4, dtype=torch.bool),
+        publish=torch.zeros(1, dtype=torch.bool),
+    )
+    previous_contact = torch.zeros(1, 4, dtype=torch.bool)
+
+    state, velocity, contact = _published_measurement(
+        trajectory, measured, previous_contact
+    )
+
+    torch.testing.assert_close(state, measured)
+    torch.testing.assert_close(velocity, torch.zeros_like(measured))
+    torch.testing.assert_close(contact, previous_contact)
+
+
 def _metric(name: str, value: float, *, passed: bool = True):
     from .joint_metrics import MetricResult
 
@@ -46,6 +67,7 @@ def _passing_small_report():
 
 
 def test_small_gate_requires_all_flat_metrics_and_small_metrics() -> None:
+    from .joint_metrics import COMMON_METRICS, applicable_metrics
     from .run_joint_acceptance import require_small_gate
 
     report = _passing_small_report()
@@ -59,6 +81,13 @@ def test_small_gate_requires_all_flat_metrics_and_small_metrics() -> None:
 
     assert not require_small_gate(failed).passed
     assert require_small_gate(report).passed
+    command_metrics = applicable_metrics("small", cell_report.cell.command)
+    not_applicable_for_motion = {
+        "root_zero_drift_one_gait_m",
+        "root_zero_drift_10_gaits_m",
+        "root_zero_drift_1000_refresh_m",
+    }
+    assert COMMON_METRICS - not_applicable_for_motion <= command_metrics
 
 
 def test_small_fixture_uses_real_scanner_resolution() -> None:
@@ -160,6 +189,63 @@ def test_strict_cross_requires_swept_sole_height_landing_and_body_safety() -> No
     )
     assert not unsafe.body_ok.item()
     assert not unsafe.success.item()
+
+
+def test_strict_cross_event_preserves_batch_axis() -> None:
+    from .run_joint_acceptance import strict_crossing_event
+
+    root, foot, contact, collision = _strict_foot_cross_inputs()
+    result = strict_crossing_event(
+        root.expand(2, -1, -1).clone(),
+        torch.tensor([[0.2, 0.0], [0.2, 0.0]]),
+        torch.zeros((2, 2)),
+        radius_m=0.06,
+        foot_pos_w=foot.expand(2, -1, -1, -1).clone(),
+        contact_state=contact.expand(2, -1, -1).clone(),
+        obstacle_top_z=torch.full((2,), 0.16),
+        part_collision={name: value.expand(2, -1).clone() for name, value in collision.items()},
+        landing_safe=torch.ones((2, 4), dtype=torch.bool),
+        dt=0.02,
+    )
+
+    assert result.success.shape == (2,)
+    assert result.success.all()
+
+
+def test_strict_cross_evaluates_later_complete_swing_events() -> None:
+    from .run_joint_acceptance import strict_crossing_event
+
+    root_x = torch.tensor((-0.40, -0.30, -0.20, -0.10, 0.00, 0.10, 0.20, 0.40))
+    root = torch.stack((root_x, torch.zeros_like(root_x)), dim=-1)[None]
+    foot = torch.zeros((1, 8, 4, 3))
+    foot[..., 2] = 0.022
+    foot[0, :, 0, 0] = torch.tensor((-0.35, -0.30, -0.25, -0.25, -0.20, -0.10, 0.10, 0.20))
+    foot[0, 5:7, 0, 2] = 0.25
+    contact = torch.ones((1, 8, 4), dtype=torch.bool)
+    contact[0, 1:3, 0] = False
+    contact[0, 5:7, 0] = False
+    collision = {
+        part: torch.zeros((1, 8), dtype=torch.bool)
+        for part in ("foot", "knee", "calf", "thigh", "base")
+    }
+
+    result = strict_crossing_event(
+        root,
+        torch.tensor([[0.2, 0.0]]),
+        torch.zeros((1, 2)),
+        radius_m=0.06,
+        foot_pos_w=foot,
+        contact_state=contact,
+        obstacle_top_z=torch.tensor([0.16]),
+        part_collision=collision,
+        landing_safe=torch.ones((1, 8), dtype=torch.bool),
+        dt=0.02,
+    )
+
+    assert result.over_xy.item()
+    assert result.over_z.item()
+    assert result.after.item()
+    assert result.success.item()
 
 
 def test_cross_opportunity_with_no_actual_root_progress_is_failure_not_na() -> None:
@@ -360,6 +446,33 @@ def test_small_trace_emits_detector_values_instead_of_flat_placeholders() -> Non
     assert trace.part_penetration_m is not None
     assert set(trace.part_collision) == {"foot", "knee", "calf", "thigh", "base"}
     assert not torch.all(trace.foot_small_distance_m == 1.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="controlled RTI gate requires CUDA")
+def test_controlled_center_cuboid_strict_crosses_without_collision_or_stop() -> None:
+    from .joint_metrics import evaluate_trace
+    from .run_joint_acceptance import AcceptanceCell, simulate_small_trace
+
+    cell = AcceptanceCell(
+        scenario="small",
+        command=(0.2, 0.0, 0.0),
+        phase=0,
+        shape="cuboid",
+        offset=0.0,
+    )
+    trace = simulate_small_trace((cell,), steps=144, device="cuda")
+    report = evaluate_trace(trace, scenario="small", key=cell.key)
+
+    assert trace.strict_cross_success is not None
+    assert trace.strict_cross_success.item() == 1.0
+    assert report.passed, {
+        name: metric.value
+        for name, metric in report.metrics.items()
+        if metric.applicable and metric.passed is not True
+    }
+    assert (trace.line_alpha >= 0.0).all()
+    for collision in trace.part_collision.values():
+        assert not collision.any()
 
 
 def test_nonzero_phase_small_trace_enters_formal_window_warm_only() -> None:

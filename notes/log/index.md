@@ -4,6 +4,22 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-07-25 | Joint MPC viewer CUDA Graph OOM fallback | runtime manager / viewer refresh | pass for crash fallback; later planner NaN remains separate | new CUDA Graph OOM fallback; RED/GREEN `1 passed`; runtime `12 passed`; viewer smoke caught OOM and continued eager | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md](2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md) |
+
+| 2026-07-24 | Joint MPC cross common-metric regression | Task 17 common gate | pass; preview crossing blocker remains | `22 passed`; all applicable `COMMON_METRICS` included; stance/semantic sources map-backed | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [common metric regression](2026-07-24-joint-mpc-cross-common-metric-regression.md) |
+
+| 2026-07-24 | Joint MPC stance grounding metric follow-up | Task 17 | metric gate pass; grounding behavior open | small inherits flat/common metrics; controlled short gap `6.69mm`, penetration `0`; direct center projection rejected because it stops publication | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [stance grounding follow-up](2026-07-24-joint-mpc-stance-grounding-metric-follow-up.md) |
+
+| 2026-07-24 | Joint MPC cross nominal swing and published-step follow-up | Task 17 | partial; controlled cross red | Cartesian warm-to-IK and landing buffer preserve hard collision-free trace; published joint-step gate reduces max to `0.3303rad`; controlled stop remains at refresh 71 because selector/preview candidate intersection is empty | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-24-joint-mpc-cross-nominal-published-step-follow-up.md](2026-07-24-joint-mpc-cross-nominal-published-step-follow-up.md) |
+
+| 2026-07-24 | Joint-linear selector and stance common gate follow-up | Task 17 | focused pass; controlled cross red | stance gap/penetration numeric regression passes; selector/nominal `84 passed`; controlled first invalid remains refresh 59 after preview experiment was reverted | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [follow-up](2026-07-24-joint-mpc-cross-joint-linear-selector-follow-up.md) |
+
+| 2026-07-24 | Joint MPC cross preview liftoff contract | Task 17 selector/nominal/published sweep | architecture red | focused `84 passed`; refresh 59 edge 25 foot `-13.92mm`, calf `-9.92mm`; continuous-IK selector differs from joint-linear publication | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-24-joint-mpc-cross-preview-liftoff-contract.md](2026-07-24-joint-mpc-cross-preview-liftoff-contract.md) |
+
+| 2026-07-24 | Joint MPC cross flat metrics controlled result | Task 17 complete common/stance gate | metric wiring pass; behavior red | `117 passed`, `2 failed`; strict cross/collision/semantic stance green, but joint step `0.3563`, publish `0.5655`, stop `0.4345`; separate CUDA/CPU scan parity red | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-24-joint-mpc-cross-flat-metrics-controlled-result.md](2026-07-24-joint-mpc-cross-flat-metrics-controlled-result.md) |
+
+| 2026-07-24 | Joint MPC cross common-metric gate | small crossing design / Task 17 plan | design and plan amended; production code unchanged | small crossing inherits all flat common metrics; stance must be current-map normal ground; root lateral crossing allowance bounded at `0.10m` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-24-joint-mpc-cross-common-metric-gate.md](2026-07-24-joint-mpc-cross-common-metric-gate.md) |
+
 | 2026-07-23 | Final flat gate first diagnosis | Task 16 nominal/preview/swept/CUDA scan and formal flat | solver fixed; behavior red | focused `51 passed`; CUDA scan `9 passed`; current-map B3 `[24,24,24]`; formal flat `19/19` failed in `47.629s` | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md](2026-07-23-joint-mpc-rti-final-flat-gate-first-diagnosis.md) |
 
 | 2026-07-23 | Final legacy path deletion | Task 15 import graph, obsolete solver/loss/map/probe deletion | pass | focused `28 passed`; full package `247 passed`; final path only | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-23-joint-mpc-rti-final-legacy-deletion.md](2026-07-23-joint-mpc-rti-final-legacy-deletion.md) |
@@ -605,4 +621,7 @@ This page indexes verification evidence. Keep it short enough to scan.
 ```
 # Recent Joint MPC RTI Evidence
 
+- [2026-07-24 cross flat metrics and stance follow-up](2026-07-24-joint-mpc-cross-flat-metrics-stance-follow-up.md): small crossing consumes all flat/common metrics; undefined nominal retry path was removed; forced stance-z reprojection was rejected after publication collapsed to `2.7%`, leaving stance ownership as an open blocker.
+
+- [2026-07-24 cross stance/common and SDF follow-up](2026-07-24-joint-mpc-cross-stance-common-and-sdf-follow-up.md): controlled small passes every flat/common metric, including stance grounding/semantics; line-search current-map SDF query is fixed, but strict cross remains red because no swing foot intersects the footprint.
 - [2026-07-21 flat axis-19 and viewer gate](2026-07-21-joint-mpc-rti-flat-axis19-viewer-gate.md): formal `19/19` flat cells and real eight-case viewer smoke pass; CUDA Graph capture remains Stage B work.
