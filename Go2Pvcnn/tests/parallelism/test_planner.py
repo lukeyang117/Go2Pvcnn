@@ -69,6 +69,24 @@ def test_invalid_map_makes_trajectory_invalid_single_pass():
     assert not traj.diagnostics.candidate_valid.any()
 
 
+def test_invalid_plan_holds_current_state():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.kinematics import fk_go2
+    from extension.parallelism.planner import plan_trajectory
+
+    state = _state()
+    current_foot = fk_go2(state.root_pos_w, state.root_rpy_w, state.joint_pos).foot_pos_w
+    traj = plan_trajectory(state, torch.tensor([[0.7, 0.2, 0.3]]), _terrain(invalid=True), ParallelismCfg())
+
+    assert not bool(traj.valid[0])
+    assert torch.allclose(traj.root_pos_w, state.root_pos_w[:, None].expand(-1, 24, -1))
+    assert torch.allclose(traj.root_rpy_w, state.root_rpy_w[:, None].expand(-1, 24, -1))
+    assert torch.allclose(traj.joint_pos, state.joint_pos[:, None].expand(-1, 24, -1))
+    assert torch.allclose(traj.foot_pos_w, current_foot[:, None].expand(-1, 24, -1, -1), atol=1e-6)
+    assert torch.equal(traj.selected_foothold_w, current_foot)
+    assert traj.contact_state.all()
+
+
 def test_obstacle_semantic_touchdowns_are_hard_rejected():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory

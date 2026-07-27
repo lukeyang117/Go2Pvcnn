@@ -42,11 +42,7 @@ def _selected_score_take(values: Tensor, selected_index: Tensor) -> Tensor:
 def _candidate_targets(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor, candidate_w: Tensor) -> Tensor:
     batch, leg_count, candidate_count, _ = candidate_w.shape
     joint = torch.as_tensor(state.joint_pos, dtype=root_pos.dtype, device=root_pos.device)
-    foot0 = (
-        torch.as_tensor(state.foot_pos_w, dtype=root_pos.dtype, device=root_pos.device)
-        if state.foot_pos_w is not None
-        else fk_go2(root_pos[:, 0], root_rpy[:, 0], joint).foot_pos_w
-    )
+    foot0 = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
     base = foot0[:, None, None, :, :].expand(batch, leg_count, candidate_count, leg_count, 3)
     active_leg = torch.eye(leg_count, dtype=torch.bool, device=root_pos.device).view(1, leg_count, 1, leg_count, 1)
     return torch.where(active_leg, candidate_w[..., None, :], base)
@@ -116,6 +112,15 @@ def _tracking_score(candidates, command: Tensor, cfg: ParallelismCfg) -> Tensor:
     return displacement_error.square().sum(dim=-1)
 
 
+def _current_foot_pos(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor) -> Tensor:
+    root = torch.as_tensor(root_pos)
+    if state.foot_pos_w is not None:
+        return torch.as_tensor(state.foot_pos_w, dtype=root.dtype, device=root.device)
+    joint = torch.as_tensor(state.joint_pos, dtype=root.dtype, device=root.device)
+    rpy = torch.as_tensor(root_rpy, dtype=root.dtype, device=root.device)
+    return fk_go2(root, rpy, joint).foot_pos_w
+
+
 def _semantic_ok(semantic: Tensor, cfg: ParallelismCfg) -> Tensor:
     obstacle_ids = torch.tensor(
         tuple(cfg.obstacle_semantic_ids),
@@ -127,12 +132,7 @@ def _semantic_ok(semantic: Tensor, cfg: ParallelismCfg) -> Tensor:
 
 def _assemble_foot_targets(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor, selected_foothold_w: Tensor, cfg: ParallelismCfg) -> Tensor:
     batch = root_pos.shape[0]
-    joint = torch.as_tensor(state.joint_pos, dtype=root_pos.dtype, device=root_pos.device)
-    foot0 = (
-        torch.as_tensor(state.foot_pos_w, dtype=root_pos.dtype, device=root_pos.device)
-        if state.foot_pos_w is not None
-        else fk_go2(root_pos[:, 0], root_rpy[:, 0], joint).foot_pos_w
-    )
+    foot0 = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
     first = foot0[:, None].expand(-1, int(cfg.half_cycle), -1, -1).clone()
     second = first.clone()
     first_swing = swing_curve(foot0[:, (0, 3)], selected_foothold_w[:, (0, 3)], frames=int(cfg.half_cycle), height_m=cfg.swing_height_m)
@@ -220,7 +220,8 @@ def plan_trajectory(
     selected_index = score.argmin(dim=-1)
     selected_score = _selected_score_take(score, selected_index)
     selected_foothold = _selected_take(candidates.candidate_w, selected_index)
-    selected_valid = torch.isfinite(selected_score).all(dim=-1)
+    per_leg_has_valid = candidate_valid.any(dim=-1)
+    selected_valid = per_leg_has_valid.all(dim=-1)
 
     foot_targets = _assemble_foot_targets(state, root.root_pos_w, root.root_rpy_w, selected_foothold, cfg)
     joint_traj, _reachable = ik_go2(root.root_pos_w, root.root_rpy_w, foot_targets)
@@ -231,16 +232,45 @@ def plan_trajectory(
         joint_pos.reshape(batch * int(cfg.horizon), 12),
     )
     foot_pos = fk.foot_pos_w.reshape(batch, int(cfg.horizon), 4, 3)
+    current_root_pos = torch.as_tensor(state.root_pos_w, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
+    current_root_rpy = torch.as_tensor(state.root_rpy_w, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
+    current_joint = torch.as_tensor(state.joint_pos, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
+    current_foot = _current_foot_pos(state, current_root_pos, current_root_rpy)
+    env_mask_3 = selected_valid[:, None, None]
+    root_pos_out = torch.where(env_mask_3, root.root_pos_w, current_root_pos[:, None].expand(-1, int(cfg.horizon), -1))
+    root_rpy_out = torch.where(env_mask_3, root.root_rpy_w, current_root_rpy[:, None].expand(-1, int(cfg.horizon), -1))
+    joint_pos_out = torch.where(env_mask_3, joint_pos, current_joint[:, None].expand(-1, int(cfg.horizon), -1))
+    foot_pos_out = torch.where(
+        selected_valid[:, None, None, None],
+        foot_pos,
+        current_foot[:, None].expand(-1, int(cfg.horizon), -1, -1),
+    )
+    contact_state = _contact_state(root.root_pos_w, cfg)
+    contact_state_out = torch.where(
+        selected_valid[:, None, None],
+        contact_state,
+        torch.ones_like(contact_state),
+    )
+    selected_foothold_out = torch.where(
+        selected_valid[:, None, None],
+        selected_foothold,
+        current_foot,
+    )
+    selected_score_out = torch.where(
+        selected_valid[:, None],
+        selected_score,
+        torch.full_like(selected_score, torch.inf),
+    )
 
     return ParallelismTrajectory(
-        root_pos_w=root.root_pos_w,
-        root_rpy_w=root.root_rpy_w,
-        joint_pos=joint_pos,
-        foot_pos_w=foot_pos,
-        contact_state=_contact_state(root.root_pos_w, cfg),
+        root_pos_w=root_pos_out,
+        root_rpy_w=root_rpy_out,
+        joint_pos=joint_pos_out,
+        foot_pos_w=foot_pos_out,
+        contact_state=contact_state_out,
         valid=selected_valid,
-        selected_foothold_w=selected_foothold,
-        selected_score=selected_score,
+        selected_foothold_w=selected_foothold_out,
+        selected_score=selected_score_out,
         diagnostics=ParallelismDiagnostics(
             candidate_w=candidates.candidate_w,
             candidate_score=score,
