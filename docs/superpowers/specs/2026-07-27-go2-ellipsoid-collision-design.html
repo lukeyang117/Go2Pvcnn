@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Go2 椭圆体碰撞体设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8f5;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #5c6773;
+      --line: #d8ddd2;
+      --accent: #0b766d;
+      --accent-soft: #e1f3ef;
+      --warn: #9a5b00;
+      --code: #15202b;
+      --code-bg: #eef1ea;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    main {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 42px);
+      letter-spacing: 0;
+      line-height: 1.15;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      font-size: 24px;
+      line-height: 1.25;
+      border-left: 4px solid var(--accent);
+      padding-left: 12px;
+    }
+    h3 {
+      margin: 24px 0 8px;
+      font-size: 18px;
+    }
+    p { margin: 10px 0; }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .summary {
+      background: var(--accent-soft);
+      border: 1px solid #b9ddd6;
+      padding: 16px 18px;
+      margin: 20px 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin: 14px 0;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    code {
+      color: var(--code);
+      background: var(--code-bg);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.94em;
+    }
+    pre {
+      overflow: auto;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px;
+      margin: 12px 0;
+      color: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: var(--panel);
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef3ed; }
+    ul { padding-left: 22px; }
+    .note {
+      border-left: 4px solid var(--warn);
+      background: #fff7e6;
+      padding: 12px 14px;
+      margin: 16px 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Go2 椭圆体碰撞体设计</h1>
+      <div class="meta">日期：2026-07-27 · 分支：Parallelism · 范围：仅 parallelism foot planner 的 collision boundary</div>
+    </header>
+
+    <section class="summary">
+      <strong>核心设计：</strong>Go2 腿部碰撞边界不再使用 <code>knee -> foot</code> 直线胶囊，也不使用线性椭圆截面。新的边界由一组固定椭圆体拟合 visual mesh：每个椭圆体挂在对应刚体的 local frame 下，参数只有中心位置、三个半径、heightmap 查询偏差。碰撞检查为“高程图表面点是否进入椭圆体内部”，并保持 torch/GPU 并行。
+    </section>
+
+    <h2>1. 范围</h2>
+    <p>本设计只修改 <code>extension/parallelism</code> 的碰撞边界和诊断，不修改 root rollout、score、semantic filter、landing filter、IK、gait timing，也不修改任何 <code>joint_mpc_rti</code> 代码。</p>
+    <p>目标是在平地和后续语义高程图中，用更贴近 Go2 visual mesh 的腿部几何描述，避免当前 calf 被粗糙直线胶囊误判为大量碰撞，同时仍然适合每轮 200 个 foothold candidates 的 GPU 暴力并行搜索。</p>
+
+    <h2>2. Go2 mesh 参考</h2>
+    <p>Go2 资产路径：</p>
+    <pre>{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/Go2/go2.usd</pre>
+    <p>USD collision primitive 可作为尺度参考，但本设计优先参考 visual mesh 外形定默认椭圆体。FL 腿 collision primitive 的粗略结构是：</p>
+    <pre>/go2_description/FL_thigh/collisions/mesh_0 : Cube
+/go2_description/FL_calf/collisions/mesh_0  : Cylinder
+/go2_description/FL_calf/collisions/mesh_1  : Cylinder
+/go2_description/FL_calf/collisions/mesh_2  : Cylinder
+/go2_description/FL_foot/collisions/mesh_0  : Sphere</pre>
+    <p>foot 是独立 rigid body，通过 fixed joint 接到 calf 末端：</p>
+    <pre>/go2_description/FL_calf/FL_foot_joint
+physics:localPos0 = (0, 0, -0.213)</pre>
+    <p>因此 calf 不能建模成一根直接到 foot contact 点的直线；thigh、calf、foot 必须使用各自对应的刚体坐标系。</p>
+
+    <h2>3. 碰撞体结构</h2>
+    <p>每条腿分成三个类，每个类下面直接放若干个固定椭圆体：</p>
+    <pre>ThighCollision:
+  thigh_body_inner
+  thigh_body_mid
+  thigh_body_outer
+  thigh_outer_cap
+
+CalfCollision:
+  calf_knee_cap
+  calf_upper_bar
+  calf_mid_bar
+  calf_lower_bar
+  calf_ankle_cap
+
+FootCollision:
+  foot_pad</pre>
+    <p>一条腿一共 10 个椭圆体，四条腿一共 40 个椭圆体。椭圆体不是运行时采样点，而是一开始就在 config 中建好的 collision primitive。</p>
+
+    <h2>4. Ellipsoid 参数</h2>
+    <p>每个椭圆体参数全部进入 config：</p>
+    <pre>name
+link_type
+center_l
+radii_l
+probe_offset_l</pre>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>诊断名，必须稳定输出到 viewer diagnostics。</td></tr>
+        <tr><td><code>link_type</code></td><td><code>thigh</code>、<code>calf</code> 或 <code>foot</code>，决定该椭圆体使用哪个刚体 frame。</td></tr>
+        <tr><td><code>center_l</code></td><td>椭圆体中心，定义在对应 link local frame 下，单位米。</td></tr>
+        <tr><td><code>radii_l</code></td><td>椭圆体在 link local frame 三个轴向上的半径 <code>(rx, ry, rz)</code>，单位米。</td></tr>
+        <tr><td><code>probe_offset_l</code></td><td>heightmap 查询偏差 <code>(ox, oy)</code>，定义在 link local frame 的局部 xy 平面内，单位米。</td></tr>
+      </tbody>
+    </table>
+    <p>第一版不加椭圆体自身旋转，椭圆体轴向跟随对应 link frame。后续如果 visual mesh 的局部斜向形状必须更精确，可以新增 <code>rot_l</code>，但不进入第一版。</p>
+
+    <h2>5. 默认椭圆体参数</h2>
+    <p>以下参数是按 visual mesh 外形的第一版近似，单位都是米。左右腿需要按 leg side 镜像外侧方向；实现时 config 可以存一份模板，再根据 FL/FR/RL/RR 的 side sign 转换。</p>
+
+    <h3>5.1 ThighCollision</h3>
+    <p>thigh 近似为横向粗长结构，靠 hip/abad 和外侧末端略有鼓包。</p>
+    <pre>thigh_body_inner:
+  center_l = (0.000, 0.035, -0.005)
+  radii_l = (0.055, 0.050, 0.035)
+  probe_offset_l = (0.045, 0.045)
+
+thigh_body_mid:
+  center_l = (0.000, 0.085, -0.005)
+  radii_l = (0.060, 0.055, 0.032)
+  probe_offset_l = (0.050, 0.050)
+
+thigh_body_outer:
+  center_l = (0.000, 0.135, -0.006)
+  radii_l = (0.060, 0.050, 0.032)
+  probe_offset_l = (0.050, 0.045)
+
+thigh_outer_cap:
+  center_l = (0.000, 0.180, -0.010)
+  radii_l = (0.050, 0.040, 0.038)
+  probe_offset_l = (0.040, 0.035)</pre>
+
+    <h3>5.2 CalfCollision</h3>
+    <p>calf 不再使用 knee 到 foot 的直线胶囊，而是沿 visual mesh 的细长杆体和末端形状放置 5 个较小椭圆体。中心可以在局部 x 方向有偏置，用于贴合小腿杆体不完全居中的外形。</p>
+    <pre>calf_knee_cap:
+  center_l = (0.006, 0.000, -0.025)
+  radii_l = (0.030, 0.020, 0.032)
+  probe_offset_l = (0.024, 0.018)
+
+calf_upper_bar:
+  center_l = (0.010, 0.000, -0.070)
+  radii_l = (0.026, 0.016, 0.045)
+  probe_offset_l = (0.022, 0.014)
+
+calf_mid_bar:
+  center_l = (0.016, 0.000, -0.115)
+  radii_l = (0.024, 0.015, 0.045)
+  probe_offset_l = (0.020, 0.013)
+
+calf_lower_bar:
+  center_l = (0.018, 0.000, -0.158)
+  radii_l = (0.023, 0.014, 0.038)
+  probe_offset_l = (0.019, 0.012)
+
+calf_ankle_cap:
+  center_l = (0.008, 0.000, -0.195)
+  radii_l = (0.028, 0.018, 0.026)
+  probe_offset_l = (0.022, 0.015)</pre>
+
+    <h3>5.3 FootCollision</h3>
+    <p>foot 第一版只使用一个椭圆体，覆盖足端接触球/脚垫。foot collision 用于避免脚进入凸起障碍物；正常落地接触仍由 landing filter 控制。</p>
+    <pre>foot_pad:
+  center_l = (-0.002, 0.000, 0.000)
+  radii_l = (0.026, 0.024, 0.022)
+  probe_offset_l = (0.020, 0.018)</pre>
+
+    <h2>6. 碰撞检测逻辑</h2>
+    <p>碰撞检查必须使用椭圆体对应刚体的坐标系。不能在 world frame 里直接按固定长短轴判断，因为椭圆体会跟随 thigh、calf、foot 刚体运动和旋转。</p>
+
+    <h3>6.1 单个椭圆体检查</h3>
+    <p>对某个 candidate、某条腿、某个椭圆体：</p>
+    <pre>ellipsoid:
+  center_l = (cx, cy, cz)
+  radii_l = (rx, ry, rz)
+  probe_offset_l = (ox, oy)
+
+link pose:
+  link_pos_w
+  link_rot_w</pre>
+    <p>先在 link local frame 下构造 5 个 heightmap 查询 anchor：</p>
+    <pre>probe_l = [
+  center_l + (0,   0,   0),
+  center_l + ( ox, 0,   0),
+  center_l + (-ox, 0,   0),
+  center_l + (0,   oy,  0),
+  center_l + (0,  -oy,  0),
+]</pre>
+    <p>再把这 5 个 anchor 变换到 world frame，用它们的 xy 查询高程图：</p>
+    <pre>probe_w = link_pos_w + link_rot_w @ probe_l
+terrain_h = height_map(probe_w.x, probe_w.y)
+terrain_p_w = (probe_w.x, probe_w.y, terrain_h)</pre>
+    <p>然后把高程图表面点变回同一个 link local frame：</p>
+    <pre>terrain_p_l = link_rot_w^T @ (terrain_p_w - link_pos_w)</pre>
+    <p>最后在 link local frame 下代入椭圆体隐式方程：</p>
+    <pre>d_l = terrain_p_l - center_l
+effective_radii_l = radii_l + collision_margin_m
+
+inside =
+  (d_l.x / effective_radii_l.x)^2 +
+  (d_l.y / effective_radii_l.y)^2 +
+  (d_l.z / effective_radii_l.z)^2 <= 1.0</pre>
+    <p>只要 5 个 probe 对应的高程图表面点有任意一个进入椭圆体，就判该椭圆体碰撞：</p>
+    <pre>ellipsoid_collision = any(inside over 5 probes)</pre>
+
+    <h3>6.2 Candidate 聚合</h3>
+    <p>每个 candidate 需要检查四条腿的所有椭圆体。每个椭圆体的碰撞结果先按名字保留，用于诊断；最终 hard filter 使用任意碰撞即 invalid：</p>
+    <pre>candidate_collision = any(
+  ellipsoid_collision
+  over checked legs and ellipsoids
+)
+
+collision_ok = ~candidate_collision</pre>
+    <p>这里的 checked legs 是 FK 后完整姿态中的四条腿，不只检查正在 swing 的落脚腿。这样可以排除候选点导致 IK/FK 后任意腿部连杆撞到高程图的情况。</p>
+
+    <h3>6.3 与 landing / semantic filter 的边界</h3>
+    <p>collision filter 只负责“高程图表面点进入腿部椭圆体”。以下逻辑不放进 collision：</p>
+    <pre>candidate 落点是否在 valid map 内
+candidate touchdown 是否落到 semantic obstacle
+FK touchdown 是否落到 semantic obstacle
+FK touchdown 是否贴地
+IK 后关节角是否超限
+速度跟踪 score</pre>
+    <p>这些仍由已有 valid map、semantic、landing、joint limit、score 各自负责，避免 filter 和 score 混乱。</p>
+
+    <h2>7. GPU 并行数据流</h2>
+    <p>运行时将所有椭圆体参数打平成 tensor：</p>
+    <pre>ellipsoid_center_l: [E, 3]
+ellipsoid_radii_l: [E, 3]
+ellipsoid_probe_offset_l: [E, 2]
+ellipsoid_link_type: [E]
+ellipsoid_name: [E]</pre>
+    <p>其中 <code>E = 10</code>，分别为 4 个 thigh、5 个 calf、1 个 foot 椭圆体。每条腿复用这一套模板，并按 leg side 对需要镜像的局部 y 参数做符号转换。</p>
+    <p>并行展开维度：</p>
+    <pre>B = num_envs
+L = 4 legs
+C = 50 candidates per leg
+E = 10 ellipsoids per leg
+P = 5 probes per ellipsoid
+
+link_pos_w:       [B, L, C, E, 3]
+link_rot_w:       [B, L, C, E, 3, 3]
+probe_l:          [E, P, 3]
+probe_w:          [B, L, C, E, P, 3]
+terrain_p_w:      [B, L, C, E, P, 3]
+terrain_p_l:      [B, L, C, E, P, 3]
+inside:           [B, L, C, E, P]
+ellipsoid_hit:    [B, L, C, E]
+candidate_hit:    [B, L, C]</pre>
+    <p>所有判断使用 torch 条件判断，不用 Python 逐 candidate 或逐高程点循环。</p>
+
+    <h2>8. Config 可调性</h2>
+    <p>所有椭圆体参数必须放入 <code>ParallelismCfg</code> 或其嵌套 dataclass。planner 内不应保留隐藏的 hard-coded collision boundary。</p>
+    <div class="grid">
+      <div class="card">
+        <h3>移动碰撞体</h3>
+        <p>修改 <code>center_l</code>。如果某个诊断名持续误杀，优先检查该椭圆体中心是否偏到 visual mesh 外。</p>
+      </div>
+      <div class="card">
+        <h3>调整包络大小</h3>
+        <p>修改 <code>radii_l</code>。三个半径分别控制 link local frame 下 x、y、z 方向的包络。</p>
+      </div>
+      <div class="card">
+        <h3>调整地形查询范围</h3>
+        <p>修改 <code>probe_offset_l</code>。它只控制 heightmap 查询点位置，不改变椭圆体本身大小。</p>
+      </div>
+      <div class="card">
+        <h3>增加拟合细节</h3>
+        <p>新增一个具名椭圆体。新增后 diagnostics 会按名字暴露该椭圆体的碰撞计数。</p>
+      </div>
+    </div>
+
+    <h2>9. 诊断输出</h2>
+    <p>viewer 和 planner diagnostics 应输出每个椭圆体的碰撞计数：</p>
+    <pre>collision_detail(
+  thigh_body_inner=...
+  thigh_body_mid=...
+  thigh_body_outer=...
+  thigh_outer_cap=...
+  calf_knee_cap=...
+  calf_upper_bar=...
+  calf_mid_bar=...
+  calf_lower_bar=...
+  calf_ankle_cap=...
+  foot_pad=...
+)</pre>
+    <p>同时输出椭圆体参数摘要，便于确认调参是否生效：</p>
+    <pre>collision_ellipsoids(
+  count=10
+  probes=5
+  margin=0.003
+)</pre>
+
+    <h2>10. IsaacLab 验收测试</h2>
+    <p>真实 IsaacLab 测试必须使用 parallelism backend 并给非零速度，例如：</p>
+    <pre>--planner-backend parallelism
+--scripted-command "0.5 0.0 0.0"
+--scripted-command-cycles 3</pre>
+    <p>如果 IsaacLab 初始状态让机器人漂在空中，测试必须先使用 viewer 的 R 键 grounded reset 等价逻辑，把机器人贴到地面，然后 refresh scanner/height map，再发送速度。</p>
+    <p>验收流程：</p>
+    <pre>1. 启动 parallelism viewer/backend。
+2. 如果机器人初始漂浮，执行 grounded reset。
+3. refresh scanner/height map。
+4. 发送非零速度。
+5. 验证 flat terrain 下 planner 不再 standstill。
+6. 验证 replay horizon 内 root displacement 非零。
+7. 验证 collision diagnostics 是 ellipsoid-based，而不是 legacy calf-only。</pre>
+    <p>成功标准：</p>
+    <pre>valid candidate count > 0
+standstill=False
+root delta != 0
+collision_detail 不再被误导为 calf 整体碰撞</pre>
+
+    <h2>11. 非目标</h2>
+    <ul>
+      <li>不引入 root search。</li>
+      <li>不改 score。</li>
+      <li>不改 semantic filter 语义。</li>
+      <li>不改 landing filter。</li>
+      <li>不接入梯度 terrain query。</li>
+      <li>不做 triangle mesh collision 或 SDF collision。</li>
+      <li>不修改 <code>joint_mpc_rti</code>。</li>
+    </ul>
+
+    <div class="note">
+      <strong>实现提醒：</strong>当前分支上已有未提交的实验性 calf clearance 调参改动。正式实现本设计时，应以本 spec 为准重写 collision boundary，而不是继续沿用旧的 <code>calf_radius_m</code> 调参方案。
+    </div>
+  </main>
+</body>
+</html>
