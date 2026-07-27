@@ -4,6 +4,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-07-27 Parallelism branch checkpoint: `extension/parallelism` now has a self-contained flat Go2 foot planner with 24-frame trot rollout, 50 candidates per foot, torch single-pass filters/scores, RL reference adapter, and `go2_foostep_planner.py --planner-backend parallelism` wiring. Focused verification is `14 passed`; real Isaac viewer smoke remains the next check. See [Parallelism planner implementation](log/2026-07-27-parallelism-flat-foot-planner-implementation.md).
+
 - 2026-07-25 viewer CUDA Graph OOM fallback is local: the real H30 livestream command now catches graph capture OOM, disables graph for that manager, and continues eager RTI instead of exiting at `capture_end()`. Runtime regression is `12 passed`; viewer smoke reached fallback and continued. A later phase-6 `kkt=(nan,nan)` / `clearance=-inf` is separate and remains open. See [viewer OOM fallback](log/2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md).
 
 - 2026-07-24 common-metric regression: small/cross explicitly verifies all applicable flat metrics, including map-backed stance grounding and forbidden semantics. See [common metric regression](log/2026-07-24-joint-mpc-cross-common-metric-regression.md). The preview liftoff geometry blocker remains open.
@@ -192,6 +194,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
+- [T303 Parallelism flat foot planner](todo/T303-parallelism-flat-foot-planner.md): verify state. Self-contained flat/highmap batched planner, RL adapter, and viewer backend route are implemented on branch `Parallelism`; real Isaac viewer smoke is the next follow-up.
+
 - [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): final Task 16 flat is closed (`19/19`, real KKT, full package `284 passed`). Task 17 small-obstacle crossing is the active behavior gate; Tasks 18-19 large/viewer/RL-batch/performance remain blocked behind it.
 
 | Front | State | Why It Matters Now | Next Step |
@@ -210,6 +214,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
+| T303 | verify | Parallelism flat foot planner | `Parallelism` | Self-contained 24-frame trot foot planner, 50 candidates per foot, torch single-pass filter/score, RL adapter, and viewer backend route; real viewer smoke remains open. | design [2026-07-27](../docs/superpowers/specs/2026-07-27-parallelism-flat-foot-planner-design.html); latest log [2026-07-27](log/2026-07-27-parallelism-flat-foot-planner-implementation.md) |
 | T302q | active | flat small-obstacle avoidance RL reward | [T302q](todo/T302q-flat-small-avoidance-reward-plan.md) | Local implementation complete; focused regression, pycompile, fresh IsaacLab train smoke, and old-checkpoint resume smoke pass; small-collision eval smoke remains open. | design [2026-06-10](../docs/superpowers/specs/2026-06-10-flat-small-obstacle-avoidance-reward-design.html); latest log [2026-06-10 20:35](log/2026-06-10-2035-t302q-flat-small-local-implementation-and-smoke.md) |
 | T302r | active | Go2 geometry clearance reward | [T302r](todo/T302r-go2-geometry-clearance-reward-plan.md) | Local implementation, smoke, and radius/margin probe pass; signal-first params can produce nonzero reward, but TensorBoard sanity is still open. | design [2026-06-11](../docs/superpowers/specs/2026-06-11-go2-body-geometry-clearance-reward-design.html); latest log [2026-06-11 18:10](log/2026-06-11-1810-t302r-clearance-radius-margin-probe.md) |
 | T302p | active | MPC command-frame alignment | [T302p](todo/T302p-mpc-command-frame-alignment-plan.md) | Implementation local; command-source equality verified; low-small hard gates pass; flat-left root direction fixed (`root lateral 0.0200`), but strict per-leg whole-cache endpoint metric remains open. | design [2026-06-06](../docs/superpowers/specs/2026-06-06-mpc-command-frame-alignment-design.html); latest log [2026-06-07 12:11](log/2026-06-07-1211-t302p-direction-loss-wiring-and-metric-boundary.md) |
