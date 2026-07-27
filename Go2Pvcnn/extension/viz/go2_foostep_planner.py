@@ -1730,7 +1730,14 @@ def _format_parallelism_reject_diagnostics(result) -> str:
     collision_text = ""
     if collision_bits is not None:
         collision_t = torch.as_tensor(collision_bits, dtype=torch.bool)
-        if collision_t.ndim == 4 and collision_t.shape[-1] == 4:
+        collision_names = tuple(getattr(diagnostics, "collision_ellipsoid_names", ()))
+        if collision_t.ndim == 4 and collision_names and collision_t.shape[-1] == len(collision_names):
+            collision_counts = collision_t.reshape(-1, collision_t.shape[-1]).sum(dim=0).to(torch.long).tolist()
+            collision_detail = " ".join(
+                f"{name}={int(count)}" for name, count in zip(collision_names, collision_counts)
+            )
+            collision_text = f" collision_detail({collision_detail})"
+        elif collision_t.ndim == 4 and collision_t.shape[-1] == 4:
             collision_names = ("foot", "knee", "calf", "thigh")
             collision_counts = collision_t.reshape(-1, collision_t.shape[-1]).sum(dim=0).to(torch.long).tolist()
             collision_detail = " ".join(

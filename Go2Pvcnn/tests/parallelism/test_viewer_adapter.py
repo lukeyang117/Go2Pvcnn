@@ -72,3 +72,20 @@ def test_viewer_adapter_exposes_overlay_optional_fields():
     assert result.joint_mpc_diagnostics is None
     assert result.nominal_state is None
     assert result.alpha_candidate_state is None
+
+
+def test_viewer_parallelism_reject_uses_ellipsoid_names():
+    from types import SimpleNamespace
+    from extension.viz.go2_foostep_planner import _format_parallelism_reject_diagnostics
+
+    diagnostics = SimpleNamespace(
+        candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
+        candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
+        candidate_collision_bits=torch.zeros(1, 4, 50, 2, dtype=torch.bool),
+        collision_ellipsoid_names=("calf_mid_bar", "foot_pad"),
+    )
+    diagnostics.candidate_collision_bits[..., 0] = True
+
+    text = _format_parallelism_reject_diagnostics(SimpleNamespace(parallelism_diagnostics=diagnostics))
+
+    assert "collision_detail(calf_mid_bar=200 foot_pad=0)" in text
