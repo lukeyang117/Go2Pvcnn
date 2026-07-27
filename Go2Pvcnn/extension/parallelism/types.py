@@ -32,6 +32,7 @@ class TerrainQueryResult:
 
 @dataclass(frozen=True)
 class ParallelismDiagnostics:
+    candidate_center_w: Tensor
     candidate_w: Tensor
     candidate_score: Tensor
     candidate_valid: Tensor

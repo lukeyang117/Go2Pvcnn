@@ -31,6 +31,8 @@ def parallelism_trajectory_to_viewer_result(trajectory: ParallelismTrajectory):
         foot_pos_root=trajectory.foot_pos_w - trajectory.root_pos_w.unsqueeze(2),
         contact_state=trajectory.contact_state,
         planned_touchdown_w=trajectory.selected_foothold_w,
+        parallelism_candidate_center_w=trajectory.diagnostics.candidate_center_w,
+        parallelism_candidate_radius_m=0.24,
         feasible=trajectory.valid,
         status=(~trajectory.valid).to(torch.long),
         safe_fallback=torch.zeros_like(trajectory.valid),

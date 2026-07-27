@@ -27,3 +27,10 @@ def test_viewer_exposes_parallelism_backend():
 
     assert '"parallelism"' in source
     assert "parallelism_trajectory_to_viewer_result" in source
+
+
+def test_parallelism_viewer_draws_candidate_circle_markers():
+    source = VIEWER_FILE.read_text(encoding="utf-8")
+
+    assert "parallelism_candidate_circle" in source
+    assert "/Visuals/Parallelism/candidate_circle_" in source

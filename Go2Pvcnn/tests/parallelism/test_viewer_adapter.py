@@ -17,6 +17,7 @@ def test_viewer_adapter_contract():
         selected_foothold_w=torch.zeros(1, 4, 3),
         selected_score=torch.zeros(1, 4),
         diagnostics=ParallelismDiagnostics(
+            candidate_center_w=torch.zeros(1, 4, 3),
             candidate_w=torch.zeros(1, 4, 50, 3),
             candidate_score=torch.zeros(1, 4, 50),
             candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
@@ -32,6 +33,8 @@ def test_viewer_adapter_contract():
     assert result.root_pos_w.shape == (1, 24, 3)
     assert result.foot_pos_w.shape == (1, 24, 4, 3)
     assert result.planned_touchdown_w.shape == (1, 4, 3)
+    assert result.parallelism_candidate_center_w.shape == (1, 4, 3)
+    assert result.parallelism_candidate_radius_m == 0.24
 
 
 def test_viewer_adapter_exposes_overlay_optional_fields():
@@ -48,6 +51,7 @@ def test_viewer_adapter_exposes_overlay_optional_fields():
         selected_foothold_w=torch.zeros(1, 4, 3),
         selected_score=torch.zeros(1, 4),
         diagnostics=ParallelismDiagnostics(
+            candidate_center_w=torch.zeros(1, 4, 3),
             candidate_w=torch.zeros(1, 4, 50, 3),
             candidate_score=torch.zeros(1, 4, 50),
             candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),

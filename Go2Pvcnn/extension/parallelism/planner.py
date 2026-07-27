@@ -272,6 +272,7 @@ def plan_trajectory(
         selected_foothold_w=selected_foothold_out,
         selected_score=selected_score_out,
         diagnostics=ParallelismDiagnostics(
+            candidate_center_w=candidates.candidate_center_w,
             candidate_w=candidates.candidate_w,
             candidate_score=score,
             candidate_valid=candidate_valid,

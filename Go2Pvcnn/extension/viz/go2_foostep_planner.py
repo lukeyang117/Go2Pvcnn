@@ -87,6 +87,8 @@ class ViewerTrajectoryResult:
     publish: torch.Tensor | None = None
     stop: torch.Tensor | None = None
     stage_timings_ms: dict[str, float] | None = None
+    parallelism_candidate_center_w: torch.Tensor | None = None
+    parallelism_candidate_radius_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1079,12 +1081,22 @@ class PlannerVisualizer:
         ]
         self.foot_traj = []
         self.touchdowns = []
+        self.parallelism_candidate_circle = []
         for leg_idx, color in enumerate(LEG_COLORS):
             self.foot_traj.append(
                 VisualizationMarkers(
                     _make_marker_cfg(
                         f"/Visuals/BatchedPlanner/foot_traj_{leg_idx}",
                         radius=0.02,
+                        color=color,
+                    )
+                )
+            )
+            self.parallelism_candidate_circle.append(
+                VisualizationMarkers(
+                    _make_marker_cfg(
+                        f"/Visuals/Parallelism/candidate_circle_{leg_idx}",
+                        radius=0.008,
                         color=color,
                     )
                 )
@@ -1124,6 +1136,27 @@ class PlannerVisualizer:
             return touchdowns[:, 0]
         return touchdowns
 
+    @staticmethod
+    def _parallelism_candidate_circle_points(result, leg_idx: int, *, segments: int = 64) -> torch.Tensor | None:
+        centers = getattr(result, "parallelism_candidate_center_w", None)
+        radius = getattr(result, "parallelism_candidate_radius_m", None)
+        if centers is None or radius is None:
+            return None
+        centers = torch.as_tensor(centers).detach()
+        if centers.ndim != 3 or centers.shape[0] < 1 or centers.shape[1] <= leg_idx or centers.shape[2] != 3:
+            return None
+        radius = float(radius)
+        if radius <= 0.0:
+            return None
+
+        center = centers[0, leg_idx]
+        theta = torch.arange(segments, dtype=center.dtype, device=center.device) * (2.0 * math.pi / float(segments))
+        points = center.unsqueeze(0).expand(segments, -1).clone()
+        points[:, 0] = points[:, 0] + radius * torch.cos(theta)
+        points[:, 1] = points[:, 1] + radius * torch.sin(theta)
+        points[:, 2] = points[:, 2] + 0.015
+        return points
+
     def update(
         self,
         *,
@@ -1140,6 +1173,12 @@ class PlannerVisualizer:
         for leg_idx in range(4):
             self.foot_traj[leg_idx].visualize(translations=foot_pos_w[0, :, leg_idx].to(torch.float32))
             self.touchdowns[leg_idx].visualize(translations=touchdown_w[0, leg_idx : leg_idx + 1].to(torch.float32))
+            circle_points = self._parallelism_candidate_circle_points(result, leg_idx)
+            if circle_points is None:
+                self.parallelism_candidate_circle[leg_idx].set_visibility(False)
+            else:
+                self.parallelism_candidate_circle[leg_idx].set_visibility(True)
+                self.parallelism_candidate_circle[leg_idx].visualize(translations=circle_points.to(torch.float32))
 
         for semantic_id, markers in self.heightmap.items():
             points = height_points_by_class.get(semantic_id)
