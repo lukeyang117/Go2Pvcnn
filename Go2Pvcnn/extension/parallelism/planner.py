@@ -131,14 +131,14 @@ def plan_trajectory(
         root_eval_pos.reshape(batch * leg_count * candidate_count, 3),
         root_eval_rpy.reshape(batch * leg_count * candidate_count, 3),
         joint_candidate.reshape(batch * leg_count * candidate_count, 12),
-        capsule_samples=int(cfg.capsule_samples),
     )
+    sample_count = int(geometry.calf_samples_w.shape[-2])
     geometry = type(geometry)(
         hip_pos_w=geometry.hip_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
         foot_pos_w=geometry.foot_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
         knee_pos_w=geometry.knee_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
-        calf_samples_w=geometry.calf_samples_w.reshape(batch, leg_count, candidate_count, 4, int(cfg.capsule_samples), 3),
-        thigh_samples_w=geometry.thigh_samples_w.reshape(batch, leg_count, candidate_count, 4, int(cfg.capsule_samples), 3),
+        calf_samples_w=geometry.calf_samples_w.reshape(batch, leg_count, candidate_count, 4, sample_count, 3),
+        thigh_samples_w=geometry.thigh_samples_w.reshape(batch, leg_count, candidate_count, 4, sample_count, 3),
         thigh_pos_w=geometry.thigh_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
         thigh_rot_w=geometry.thigh_rot_w.reshape(batch, leg_count, candidate_count, 4, 3, 3),
         calf_pos_w=geometry.calf_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
