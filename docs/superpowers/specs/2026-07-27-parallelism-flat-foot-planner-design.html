@@ -106,7 +106,7 @@
         <li>不做四足组合搜索；没有 <code>50^4</code> 组合优化。</li>
         <li>不使用 terrain gradient、SDF、occupancy、distance field 或可导 terrain loss。</li>
         <li>不使用 body/base 碰撞过滤；body/base 留给后续 root 规划。</li>
-        <li>语义图第一版只进入 diagnostics，不参与过滤或评分。</li>
+        <li>语义图进入 hard filter：候选 touchdown 和 FK 后真实 touchdown 都不能落在障碍物语义上。</li>
         <li>不保留 smooth、hip-distance、warm-distance、Raibert 等额外 score 项。</li>
         <li>不接受只支持 <code>B=1</code> viewer 的实现作为生产 planner。</li>
       </ul>
@@ -167,7 +167,7 @@
     <li>candidate touchdown z 从 <code>height_w</code> 查询。</li>
     <li>候选点、FK foot/knee/calf/thigh 碰撞采样点都通过同一 world-to-grid 查询高程。</li>
     <li><code>valid_mask</code> 为 false 的 candidate touchdown 直接 invalid。</li>
-    <li><code>semantic_id</code> 第一版只记录 diagnostics，后续语义避障不需要改主入口。</li>
+    <li><code>semantic_id</code> 用于落脚点 hard filter 和 diagnostics。语义 <code>1</code> 与 <code>2</code> 代表禁止落脚的障碍物 cell。</li>
     <li>不需要也不传入 gradient、SDF、semantic distance、occupancy 或 propagated height。</li>
     <li>查询函数必须支持 batched packed points，例如 <code>[B,N,2]</code> world XY 一次返回 <code>[B,N]</code> height、semantic 和 valid。</li>
   </ul>
@@ -219,7 +219,7 @@ tau       = linspace(0, 1, 12)</code></pre>
 
   <h2 id="filter">7. 硬过滤</h2>
   <div class="decision">
-    <strong>过滤原则：</strong>第一版只保留用户确认的四类硬过滤。过滤是安全与可执行性合同，不做额外 soft filter，也不把 body/base 放进第一版。
+    <strong>过滤原则：</strong>第一版只保留用户确认的硬过滤。过滤是安全与可执行性合同，不做额外 soft filter，也不把 body/base 放进第一版。
   </div>
   <table>
     <thead><tr><th>Filter</th><th>判定</th></tr></thead>
@@ -228,6 +228,8 @@ tau       = linspace(0, 1, 12)</code></pre>
       <tr><td><code>joint_limit</code></td><td>IK 后 12 个关节角在 Go2 joint limit 内。</td></tr>
       <tr><td><code>landing_grounded</code></td><td>FK touchdown 足端 z 与高程图地面高度误差小于阈值。</td></tr>
       <tr><td><code>leg_height_collision_free</code></td><td>FK 后 foot、knee、calf、thigh 的近似几何体相对高程图不碰撞。</td></tr>
+      <tr><td><code>candidate_touchdown_semantic</code></td><td>圆内采样得到的 candidate touchdown 所在语义 cell 不能是障碍物 <code>1</code> 或 <code>2</code>。</td></tr>
+      <tr><td><code>fk_touchdown_semantic</code></td><td>IK 后再 FK 得到的真实 touchdown 足端所在语义 cell 不能是障碍物 <code>1</code> 或 <code>2</code>。</td></tr>
     </tbody>
   </table>
   <p>腿部碰撞第一版使用近似几何体和高程图：</p>
@@ -238,19 +240,36 @@ tau       = linspace(0, 1, 12)</code></pre>
     <li>thigh capsule samples</li>
   </ul>
   <p>每个采样点查询同帧高程图，若 <code>sample_z - radius - margin &lt; terrain_height</code>，该 candidate invalid。body/base 不参与第一版 filter；后续 root 规划再加入。</p>
+  <p>语义过滤分两层执行：第一层在圆内 candidate touchdown 查询高程/语义时立即过滤障碍物 cell；第二层在 IK/FK 后，对真实 FK touchdown 足端 XY 再查询一次语义并过滤障碍物 cell。两层都必须使用 torch 张量条件，不允许用 score 软惩罚替代。</p>
   <h3>7.1 Torch 条件组合合同</h3>
-  <p>四类过滤必须全部用 torch 张量条件判断实现。每个 filter 生成一个 <code>[B,4,50]</code> bool tensor，不允许在 Python 层按环境、腿、候选、采样点写 <code>if</code> 分支或列表累积判断。</p>
+  <p>所有过滤必须全部用 torch 张量条件判断实现。每个 filter 生成一个 <code>[B,4,50]</code> bool tensor，不允许在 Python 层按环境、腿、候选、采样点写 <code>if</code> 分支或列表累积判断。</p>
   <pre><code>valid_map_ok = candidate_valid_mask                         # [B,4,50]
 joint_ok = (joint &gt;= joint_lower).all(dim=(-1, -2)) \
          &amp; (joint &lt;= joint_upper).all(dim=(-1, -2))       # [B,4,50]
 landing_ok = (fk_touchdown_z - terrain_touchdown_z).abs() &lt;= landing_tol
 collision_ok = (sample_z - sample_radius - margin &gt;= sample_height).all(dim=-1)
+candidate_semantic_ok = ~torch.isin(candidate_semantic, obstacle_ids)
+fk_touchdown_semantic_ok = ~torch.isin(fk_touchdown_semantic, obstacle_ids)
 
-candidate_valid = valid_map_ok &amp; joint_ok &amp; landing_ok &amp; collision_ok
+candidate_valid = (
+    valid_map_ok
+    &amp; joint_ok
+    &amp; landing_ok
+    &amp; collision_ok
+    &amp; candidate_semantic_ok
+    &amp; fk_touchdown_semantic_ok
+)
 reject_bits = torch.stack(
-    (~valid_map_ok, ~joint_ok, ~landing_ok, ~collision_ok),
+    (
+        ~valid_map_ok,
+        ~joint_ok,
+        ~landing_ok,
+        ~collision_ok,
+        ~candidate_semantic_ok,
+        ~fk_touchdown_semantic_ok,
+    ),
     dim=-1,
-)                                                        # [B,4,50,4]</code></pre>
+)                                                        # [B,4,50,6]</code></pre>
   <p>若需要处理 nonfinite 值，也必须用 torch 条件合入候选有效性，例如 <code>candidate_valid = candidate_valid &amp; torch.isfinite(score_raw)</code> 或在 score mask 阶段置为 <code>inf</code>；不得用 Python 异常或逐候选分支作为正常过滤路径。</p>
 
   <h2 id="score">8. 速度跟踪评分</h2>
@@ -303,8 +322,9 @@ selected_valid = torch.isfinite(selected_score).all(dim=-1)</code></pre>
   <pre><code>candidate_w          [B,4,50,3]
 candidate_score      [B,4,50]
 candidate_valid      [B,4,50]
-candidate_reject_bits[B,4,50,4]
+candidate_reject_bits[B,4,50,6]
 candidate_semantic   [B,4,50]
+fk_touchdown_semantic[B,4,50]
 selected_index       [B,4]</code></pre>
   <p><code>viewer_adapter.py</code> 负责把这些字段转换成 <code>go2_foostep_planner.py</code> 可画的 root、foot、joint、contact、candidate 点云和 selected foothold。后续 CLI 增加 <code>--planner-backend parallelism</code> 后，viewer 可以在同一个入口切换当前 RTI backend 和 parallelism backend。</p>
   <p><code>rl_adapter.py</code> 后续负责把同一个 <code>ParallelismTrajectory</code> 转成强化学习环境可消费的 batched teacher/reference。该层不能重新规划或重新选择落脚点，只做字段裁剪、缓存和帧索引推进。第一版可以先定义 shape 合同，避免 viewer 适配成为唯一输出路径。</p>
@@ -343,7 +363,8 @@ Go2Pvcnn/extension/viz/go2_foostep_planner.py \
       <tr><td><code>test_root_rollout_body_command</code></td><td>command clamp 正确；body-frame <code>vx/vy/vyaw</code> 积分正确；smoothstep 半周期总位移等于 <code>command * 12 * dt</code>。</td></tr>
       <tr><td><code>test_candidate_shape_and_reference_hips</code></td><td>候选 shape 为 <code>[B,4,50,3]</code>；<code>FL/RR</code> 用 frame 0 hip；<code>FR/RL</code> 用 frame 12 hip；半径不超过 <code>0.24m</code>。</td></tr>
       <tr><td><code>test_score_twist_tracking</code></td><td><code>vx/vy/vyaw</code> 都进入 <code>target_step_body</code>；<code>vyaw</code> 使用 <code>R(vyaw*T)*hip_offset - hip_offset</code>；score 只有 tracking error。</td></tr>
-      <tr><td><code>test_filter_contract</code></td><td>invalid map、joint limit、touchdown 未落地、foot/knee/calf/thigh 高程碰撞均能排除 candidate；body/base 不参与第一版 filter。</td></tr>
+      <tr><td><code>test_filter_contract</code></td><td>invalid map、joint limit、touchdown 未落地、foot/knee/calf/thigh 高程碰撞、candidate touchdown 障碍语义、FK touchdown 障碍语义均能排除 candidate；body/base 不参与第一版 filter。</td></tr>
+      <tr><td><code>test_semantic_touchdown_filter_contract</code></td><td>语义 <code>1</code> 和 <code>2</code> 都是禁止落脚障碍物；candidate touchdown 与 FK 后真实 touchdown 两层语义过滤分别有 reject bit 和 diagnostics。</td></tr>
       <tr><td><code>test_filter_score_torch_condition_contract</code></td><td>filter 由 torch bool mask、<code>torch.stack</code> reject bits、<code>&amp;</code>/<code>|</code>/<code>torch.where</code> 组合完成；score 用 torch mask 置 <code>inf</code> 后 <code>argmin</code>，不使用 CPU/Python 候选循环。</td></tr>
       <tr><td><code>test_single_pass_selection_contract</code></td><td>一次 planner 调用只执行一轮候选生成、过滤、评分和选择；无 retry、ranked fallback、多轮候选扩张或重打分。</td></tr>
       <tr><td><code>test_full_flat_trajectory_contract</code></td><td>输出 shape 正确；平地可选出四个落脚点；FK touchdown 与 selected foothold 一致；contact mask 符合 fixed trot。</td></tr>
@@ -355,7 +376,7 @@ Go2Pvcnn/extension/viz/go2_foostep_planner.py \
     </tbody>
   </table>
   <div class="warn">
-    <strong>完成定义：</strong>本设计完成后，只能声称 flat/highmap foot-planner 主链通过。第一版必须具备 batch/GPU 并行和 RL 输出边界，但不声称 RL 训练效果、语义避障、body/base 碰撞、root 搜索或最终 RL 性能通过。
+    <strong>完成定义：</strong>本设计完成后，只能声称 flat/highmap foot-planner 主链通过，并且 touchdown 不规划到语义 <code>1/2</code> 障碍物 cell 上。第一版必须具备 batch/GPU 并行和 RL 输出边界，但不声称 RL 训练效果、body/base 碰撞、root 搜索或最终 RL 性能通过。
   </div>
 </main>
 </body>
