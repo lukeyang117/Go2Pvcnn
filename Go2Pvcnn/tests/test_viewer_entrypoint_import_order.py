@@ -13,3 +13,17 @@ def test_viewer_adds_go2pvcnn_root_before_extension_imports():
     assert path_insert in source
     assert extension_import in source
     assert source.index(path_insert) < source.index(extension_import)
+
+
+def test_joint_mpc_viewer_exposes_nominal_only_mode():
+    source = VIEWER_FILE.read_text(encoding="utf-8")
+
+    assert '"--joint-mpc-nominal-only"' in source
+    assert "runtime.nominal_only" in source
+
+
+def test_viewer_exposes_parallelism_backend():
+    source = VIEWER_FILE.read_text(encoding="utf-8")
+
+    assert '"parallelism"' in source
+    assert "parallelism_trajectory_to_viewer_result" in source

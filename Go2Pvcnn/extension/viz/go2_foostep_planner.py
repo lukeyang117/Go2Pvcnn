@@ -127,7 +127,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--planner-backend",
         type=str,
         default="mpc",
-        choices=["mpc", "joint_mpc_rti"],
+        choices=["mpc", "joint_mpc_rti", "parallelism"],
         help="Trajectory manager backend used by the task attachment path.",
     )
     parser.add_argument(
@@ -146,6 +146,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Record the eight joint MPC refresh stages for the viewer diagnostics.",
+    )
+    parser.add_argument(
+        "--joint-mpc-nominal-only",
+        action="store_true",
+        default=False,
+        help="Play the hard-checked nominal trajectory with alpha fixed to zero.",
     )
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
@@ -752,6 +758,8 @@ def _launch_app(args_cli: argparse.Namespace):
 
 
 def _attach_reference_manager_if_enabled(env, env_cfg):
+    if str(getattr(env_cfg, "planner_backend", "mpc")).lower() == "parallelism":
+        return None
     from extension.trajectory_manager_factory import attach_trajectory_manager_if_enabled
 
     manager_device = getattr(env, "device", env_cfg.sim.device)
@@ -1227,7 +1235,10 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     if env_cfg.planner_backend == "joint_mpc_rti":
         env_cfg.joint_mpc_rti_cfg.runtime.horizon_steps = int(args_cli.n_frames)
         env_cfg.joint_mpc_rti_cfg.runtime.dt = float(args_cli.plan_dt)
-    else:
+        env_cfg.joint_mpc_rti_cfg.runtime.nominal_only = bool(
+            args_cli.joint_mpc_nominal_only
+        )
+    elif env_cfg.planner_backend == "mpc":
         env_cfg.mpc_planner_cfg.runtime.horizon_steps = int(args_cli.n_frames)
         env_cfg.mpc_planner_cfg.runtime.replan_interval_steps = int(args_cli.n_frames)
         env_cfg.mpc_planner_cfg.runtime.dt = float(args_cli.plan_dt)
@@ -1452,6 +1463,38 @@ def _compute_mpc_local_terrain(scanner, *, env_id: int = 0):
         sensor_yaw=extract_yaw_batch(sensor_quat),
     )
     return terrain, ray_hits
+
+
+def _compute_parallelism_terrain(scanner, *, env_id: int = 0):
+    from extension.parallelism import ParallelismTerrain
+
+    ray_hits = torch.as_tensor(scanner.data.ray_hits_w[env_id], dtype=torch.float32)
+    grid, side = _reshape_scanner_grid(ray_hits)
+    finite = torch.isfinite(grid).all(dim=-1)
+    height = torch.where(finite, grid[..., 2], torch.zeros_like(grid[..., 2])).unsqueeze(0)
+    semantic_map = _scanner_semantic_map(scanner, env_id=env_id)
+    if semantic_map is None:
+        semantic = torch.zeros((1, side, side), dtype=torch.long, device=height.device)
+    else:
+        semantic = torch.as_tensor(semantic_map, dtype=torch.long, device=height.device).reshape(1, side, side)
+    if side > 1 and torch.isfinite(grid[0, 1, :2]).all() and torch.isfinite(grid[0, 0, :2]).all():
+        col_step = grid[0, 1, :2] - grid[0, 0, :2]
+        resolution = float(torch.linalg.vector_norm(col_step).clamp_min(1.0e-4).item())
+        yaw = torch.atan2(col_step[1], col_step[0]).reshape(1)
+        origin_xy = grid[0, 0, :2]
+    else:
+        resolution = 0.05
+        yaw = torch.zeros(1, dtype=height.dtype, device=height.device)
+        origin_xy = torch.zeros(2, dtype=height.dtype, device=height.device)
+    origin = torch.cat((origin_xy.to(dtype=height.dtype, device=height.device), torch.zeros(1, dtype=height.dtype, device=height.device))).reshape(1, 3)
+    return ParallelismTerrain(
+        height_w=height,
+        semantic_id=semantic,
+        valid_mask=finite.unsqueeze(0),
+        origin_w=origin,
+        yaw_w=yaw.to(dtype=height.dtype, device=height.device),
+        resolution=resolution,
+    ), ray_hits
 
 
 def _reshape_scanner_grid(ray_hits: torch.Tensor) -> tuple[torch.Tensor, int]:
@@ -1905,6 +1948,48 @@ def _plan_viewer_trajectory(
     )
 
 
+def _parallelism_state_from_env(base_env, foot_ids):
+    from extension.parallelism import ParallelismState
+
+    actual = _read_actual_base_state(base_env)
+    kinematic = _read_actual_kinematic_state(base_env, foot_ids)
+    device = torch.device(getattr(base_env, "device", actual["root_pos_w"].device))
+    root_pos = actual["root_pos_w"].to(device=device, dtype=torch.float32)
+    root_rpy = actual["rpy_if_wxyz"].to(device=device, dtype=torch.float32)
+    joint_pos = kinematic["joint_pos_planner"].to(device=device, dtype=torch.float32)
+    foot_pos = kinematic["foot_pos_w"].to(device=device, dtype=torch.float32)
+    return ParallelismState(
+        root_pos_w=root_pos,
+        root_rpy_w=root_rpy,
+        joint_pos=joint_pos,
+        foot_pos_w=foot_pos,
+    )
+
+
+def _plan_parallelism_viewer_trajectory(
+    *,
+    base_env,
+    scanner,
+    foot_ids,
+    command: torch.Tensor,
+    args_cli: argparse.Namespace,
+):
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.planner import plan_trajectory
+    from extension.parallelism.viewer_adapter import parallelism_trajectory_to_viewer_result
+
+    terrain, ray_hits = _compute_parallelism_terrain(scanner)
+    state = _parallelism_state_from_env(base_env, foot_ids)
+    cfg = ParallelismCfg(dt=float(args_cli.plan_dt))
+    trajectory = plan_trajectory(
+        state,
+        torch.as_tensor(command, dtype=state.root_pos_w.dtype, device=state.root_pos_w.device),
+        terrain,
+        cfg,
+    )
+    return parallelism_trajectory_to_viewer_result(trajectory), ray_hits
+
+
 def _print_help() -> None:
     print("\nTerminal teleop (hold keys with repeat):", flush=True)
     print("  W/S : forward/backward", flush=True)
@@ -1929,7 +2014,8 @@ def main() -> int:
 
     env_cfg = _build_env_cfg(args_cli)
     joint_backend = str(args_cli.planner_backend).lower() == "joint_mpc_rti"
-    mpc_planner_cfg = None if joint_backend else _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
+    parallel_backend = str(args_cli.planner_backend).lower() == "parallelism"
+    mpc_planner_cfg = None if (joint_backend or parallel_backend) else _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
 
     env = gym.make(
         "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
@@ -2094,6 +2180,14 @@ def main() -> int:
                             profile=bool(args_cli.joint_mpc_profile),
                         )
                         ray_hits = torch.as_tensor(scanner.data.ray_hits_w[0], dtype=torch.float32)
+                    elif parallel_backend:
+                        result, ray_hits = _plan_parallelism_viewer_trajectory(
+                            base_env=base_env,
+                            scanner=scanner,
+                            foot_ids=foot_ids,
+                            command=active_cmd.values,
+                            args_cli=args_cli,
+                        )
                     else:
                         state = _mpc_state_from_env(base_env, foot_ids)
                         terrain, ray_hits = _compute_mpc_local_terrain(scanner)
