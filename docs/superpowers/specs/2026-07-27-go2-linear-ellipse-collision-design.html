@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Go2 线性椭圆碰撞体设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8f5;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #5c6773;
+      --line: #d8ddd2;
+      --accent: #0b766d;
+      --accent-soft: #e1f3ef;
+      --warn: #9a5b00;
+      --code: #15202b;
+      --code-bg: #eef1ea;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    main {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 42px);
+      letter-spacing: 0;
+      line-height: 1.15;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      font-size: 24px;
+      line-height: 1.25;
+      border-left: 4px solid var(--accent);
+      padding-left: 12px;
+    }
+    h3 {
+      margin: 24px 0 8px;
+      font-size: 18px;
+    }
+    p {
+      margin: 10px 0;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .summary {
+      background: var(--accent-soft);
+      border: 1px solid #b9ddd6;
+      padding: 16px 18px;
+      margin: 20px 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin: 14px 0;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    code {
+      color: var(--code);
+      background: var(--code-bg);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.94em;
+    }
+    pre {
+      overflow: auto;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px;
+      margin: 12px 0;
+      color: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: var(--panel);
+      margin: 12px 0 20px;
+      font-size: 14px;
+    }
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #eef3ed;
+    }
+    ul {
+      padding-left: 22px;
+    }
+    .note {
+      border-left: 4px solid var(--warn);
+      background: #fff7e6;
+      padding: 12px 14px;
+      margin: 16px 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Go2 线性椭圆碰撞体设计</h1>
+      <div class="meta">日期：2026-07-27 · 分支：Parallelism · 范围：仅 parallelism foot planner 的 collision boundary</div>
+    </header>
+
+    <section class="summary">
+      <strong>核心设计：</strong>Go2 腿部碰撞体不再使用当前粗糙的 <code>knee -> foot</code> 直线 calf。新的碰撞边界用可配置的线性变截面椭圆体表示：每个 section 沿线性区间放置若干椭圆中心点，每个中心点用该处椭圆边界到高程图的距离判断是否碰撞。所有参数进入 <code>ParallelismCfg</code>，所有检查保持 torch/GPU 并行。
+    </section>
+
+    <h2>1. 范围</h2>
+    <p>本设计只修改 <code>extension/parallelism</code> 的碰撞边界和诊断，不修改 root rollout、score、semantic filter、landing filter、IK、gait timing，也不修改任何 <code>joint_mpc_rti</code> 代码。</p>
+    <p>目标是在平地和后续语义高程图中，用更贴近 Go2 USD 的腿部几何描述，避免当前 calf 误杀所有候选点，同时仍然适合每轮 200 个 foothold candidates 的 GPU 暴力并行搜索。</p>
+
+    <h2>2. Go2 USD 参考</h2>
+    <p>Go2 资产路径：</p>
+    <pre>{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/Go2/go2.usd</pre>
+    <p>USD collision 结构里，FL 腿对应的关键 primitive 是：</p>
+    <pre>/go2_description/FL_thigh/collisions/mesh_0 : Cube
+/go2_description/FL_calf/collisions/mesh_0  : Cylinder
+/go2_description/FL_calf/collisions/mesh_1  : Cylinder
+/go2_description/FL_calf/collisions/mesh_2  : Cylinder
+/go2_description/FL_foot/collisions/mesh_0  : Sphere</pre>
+    <p>foot 是独立 rigid body，通过 fixed joint 接到 calf 末端：</p>
+    <pre>/go2_description/FL_calf/FL_foot_joint
+physics:localPos0 = (0, 0, -0.213)</pre>
+    <p>因此 calf 不能再建模成一根直接到 foot contact 点的直线；foot 必须从 calf collision 中分离。</p>
+
+    <h2>3. 碰撞体总结构</h2>
+    <p>每条腿分成三个类：</p>
+    <pre>ThighCollision
+CalfCollision
+FootCollision</pre>
+    <p>每个类下面由若干个 <code>LinearEllipseSection</code> 表示：</p>
+    <pre>ThighCollision:
+  thigh_main
+
+CalfCollision:
+  calf_upper
+  calf_lower
+  calf_end
+
+FootCollision:
+  foot_pad</pre>
+    <p>一条腿一共 5 个 section。每个 section 是一段线性变化的椭圆截面序列。</p>
+
+    <h2>4. LinearEllipseSection 参数</h2>
+    <p>每个 section 的参数全部进入 config：</p>
+    <pre>radius_a
+radius_b
+start_pos_l
+delta_pos_l
+center_count
+radius_scale_k
+radius_scale_b</pre>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>radius_a</code></td><td>椭圆长轴基础半径</td></tr>
+        <tr><td><code>radius_b</code></td><td>椭圆短轴基础半径</td></tr>
+        <tr><td><code>start_pos_l</code></td><td>section 起始位置，定义在对应 link local frame 下</td></tr>
+        <tr><td><code>delta_pos_l</code></td><td>线性变化区间，<code>end = start + delta</code></td></tr>
+        <tr><td><code>center_count</code></td><td>该 section 上椭圆中心点数量</td></tr>
+        <tr><td><code>radius_scale_k</code></td><td>截面边界线性变化斜率</td></tr>
+        <tr><td><code>radius_scale_b</code></td><td>截面边界线性变化截距</td></tr>
+      </tbody>
+    </table>
+    <p>第 <code>i</code> 个椭圆中心：</p>
+    <pre>t = i / (center_count - 1)
+center_l(t) = start_pos_l + t * delta_pos_l
+scale(t) = radius_scale_k * t + radius_scale_b
+radius_a(t) = radius_a * scale(t)
+radius_b(t) = radius_b * scale(t)</pre>
+    <p>当 <code>center_count == 1</code> 时，<code>t = 0</code>。</p>
+    <p>如果 <code>radius_scale_k = 0</code> 且 <code>radius_scale_b = 1</code>，该 section 的截面大小不变化。如果 <code>radius_scale_k &gt; 0</code>，沿区间方向变粗；如果 <code>radius_scale_k &lt; 0</code>，沿区间方向变细。</p>
+
+    <h2>5. 碰撞检测语义</h2>
+    <p>每个椭圆中心都检查。对每个 candidate、leg、section、center：</p>
+    <pre>center_w = link_frame_w @ center_l
+terrain_p = (center_w.x, center_w.y, height_map(center_w.x, center_w.y))
+clearance = center_w.z - terrain_p.z</pre>
+    <p>该中心处的椭圆边界半径取竖直方向上的边界距离：</p>
+    <pre>r = ellipse_vertical_radius(radius_a(t), radius_b(t), section_orientation_w)</pre>
+    <p>碰撞-free 条件：</p>
+    <pre>ok = clearance >= r + collision_margin_m</pre>
+    <p>也就是用户定义的距离语义：</p>
+    <pre>||center_w - terrain_p|| >= ellipse_boundary_radius(center_w -> terrain_p) + collision_margin_m</pre>
+    <p>由于 terrain point 和 center 的 <code>x, y</code> 相同，实际实现不用三维 <code>sqrt</code>，直接用 <code>center_z - terrain_h</code> 做标量比较，等价且更快。</p>
+    <p>section 内所有中心点都必须通过：</p>
+    <pre>section_ok = all(center_ok)</pre>
+    <p>非 foot 腿部碰撞聚合：</p>
+    <pre>leg_collision_ok = thigh_main_ok &amp; calf_upper_ok &amp; calf_lower_ok &amp; calf_end_ok</pre>
+    <p>foot 独立处理，不混进 calf collision。正常 touchdown 由 <code>landing_ok</code> 控制，是否踩到语义障碍物由 semantic filter 控制。</p>
+
+    <h2>6. 初始参数</h2>
+    <h3>6.1 ThighCollision</h3>
+    <p>USD 参考：</p>
+    <pre>type = Cube
+scale = (0.213, 0.0245, 0.034)
+translate = (0, 0, -0.1065)</pre>
+    <p>配置：</p>
+    <pre>thigh_main.radius_a = 0.017
+thigh_main.radius_b = 0.01225
+thigh_main.start_pos_l = (0.0, 0.0, 0.0)
+thigh_main.delta_pos_l = (0.0, 0.0, -0.213)
+thigh_main.center_count = 3
+thigh_main.radius_scale_k = 0.0
+thigh_main.radius_scale_b = 1.0</pre>
+
+    <h3>6.2 CalfCollision</h3>
+    <p><code>calf_upper</code> USD 参考：</p>
+    <pre>height = 0.120
+radius = 0.012
+translate = (0.008, 0, -0.060)
+orient ~= -12deg around Y</pre>
+    <p>配置：</p>
+    <pre>calf_upper.radius_a = 0.012
+calf_upper.radius_b = 0.011
+calf_upper.start_pos_l = (-0.0045, 0.0, -0.0013)
+calf_upper.delta_pos_l = (0.0250, 0.0, -0.1174)
+calf_upper.center_count = 3
+calf_upper.radius_scale_k = 0.0
+calf_upper.radius_scale_b = 1.0</pre>
+
+    <p><code>calf_lower</code> USD 参考：</p>
+    <pre>height = 0.065
+radius = 0.011
+translate = (0.020, 0, -0.148)
+orient ~= +2.9deg around Y</pre>
+    <p>配置：</p>
+    <pre>calf_lower.radius_a = 0.011
+calf_lower.radius_b = 0.010
+calf_lower.start_pos_l = (0.0216, 0.0, -0.1155)
+calf_lower.delta_pos_l = (-0.0032, 0.0, -0.0649)
+calf_lower.center_count = 3
+calf_lower.radius_scale_k = 0.10
+calf_lower.radius_scale_b = 0.95</pre>
+
+    <p><code>calf_end</code> USD 参考：</p>
+    <pre>height = 0.030
+radius = 0.0155
+translate = (0.008, 0, -0.18745)
+orient ~= +30deg around Y</pre>
+    <p>配置：</p>
+    <pre>calf_end.radius_a = 0.0155
+calf_end.radius_b = 0.013
+calf_end.start_pos_l = (0.0156, 0.0, -0.1745)
+calf_end.delta_pos_l = (-0.0152, 0.0, -0.0259)
+calf_end.center_count = 2
+calf_end.radius_scale_k = 0.20
+calf_end.radius_scale_b = 0.90</pre>
+
+    <h3>6.3 FootCollision</h3>
+    <p>USD 参考：</p>
+    <pre>type = Sphere
+radius = 0.022
+translate = (-0.002, 0, 0)</pre>
+    <p>配置：</p>
+    <pre>foot_pad.radius_a = 0.022
+foot_pad.radius_b = 0.022
+foot_pad.start_pos_l = (-0.002, 0.0, 0.0)
+foot_pad.delta_pos_l = (0.0, 0.0, 0.0)
+foot_pad.center_count = 1
+foot_pad.radius_scale_k = 0.0
+foot_pad.radius_scale_b = 1.0</pre>
+
+    <h2>7. Config 可调性</h2>
+    <p>所有 section 参数必须放入 <code>ParallelismCfg</code> 或其嵌套 dataclass。未来调参方式：</p>
+    <div class="grid">
+      <div class="card">
+        <h3>增加检查点</h3>
+        <p>调大 <code>*_center_count</code>。代码会自动在对应 section 的 <code>start_pos_l -> start_pos_l + delta_pos_l</code> 区间内增加椭圆中心。</p>
+      </div>
+      <div class="card">
+        <h3>调整粗细</h3>
+        <p>修改 <code>*_radius_a</code> 和 <code>*_radius_b</code>。</p>
+      </div>
+      <div class="card">
+        <h3>调整变粗/变细趋势</h3>
+        <p>修改 <code>*_radius_scale_k</code> 和 <code>*_radius_scale_b</code>。</p>
+      </div>
+      <div class="card">
+        <h3>调整位置和方向</h3>
+        <p>修改 <code>*_start_pos_l</code> 和 <code>*_delta_pos_l</code>。</p>
+      </div>
+    </div>
+    <p>planner 内不应保留隐藏的 hard-coded collision boundary。</p>
+
+    <h2>8. GPU 并行数据流</h2>
+    <p>运行时将所有 section 参数打平成 tensor：</p>
+    <pre>section_radius_a: [S]
+section_radius_b: [S]
+section_start_pos_l: [S, 3]
+section_delta_pos_l: [S, 3]
+section_center_count: [S]
+section_radius_scale_k: [S]
+section_radius_scale_b: [S]
+section_class_id: [S]</pre>
+    <p>其中 <code>S = 5</code>，分别为 <code>thigh_main</code>、<code>calf_upper</code>、<code>calf_lower</code>、<code>calf_end</code>、<code>foot_pad</code>。</p>
+    <p>并行展开维度：</p>
+    <pre>[batch, leg, candidate, section, center]</pre>
+    <p>所有中心点一次性 query height map，并用 torch 条件判断生成 collision mask。</p>
+
+    <h2>9. 诊断输出</h2>
+    <p>viewer 和 planner diagnostics 应输出每个 section 的碰撞计数：</p>
+    <pre>collision_detail(
+  thigh_main=...
+  calf_upper=...
+  calf_lower=...
+  calf_end=...
+  foot_pad=...
+)</pre>
+    <p>输出每个 section 的中心点数量：</p>
+    <pre>collision_centers(
+  thigh_main=3
+  calf_upper=3
+  calf_lower=3
+  calf_end=2
+  foot_pad=1
+)</pre>
+    <p>可选输出 scale 范围：</p>
+    <pre>collision_scale(
+  calf_lower=0.95->1.05
+  calf_end=0.90->1.10
+)</pre>
+
+    <h2>10. IsaacLab 验收测试</h2>
+    <p>真实 IsaacLab 测试必须使用 parallelism backend 并给非零速度，例如：</p>
+    <pre>--planner-backend parallelism
+--scripted-command "0.5 0.0 0.0"
+--scripted-command-cycles 3</pre>
+    <p>如果 IsaacLab 初始状态让机器人漂在空中，测试必须先使用 viewer 的 R 键 grounded reset 等价逻辑，把机器人贴到地面，然后 refresh scanner/height map，再发送速度。</p>
+    <p>验收流程：</p>
+    <pre>1. 启动 parallelism viewer/backend。
+2. 如果机器人初始漂浮，执行 grounded reset。
+3. refresh scanner/height map。
+4. 发送非零速度。
+5. 验证 flat terrain 下 planner 不再 standstill。
+6. 验证 replay horizon 内 root displacement 非零。
+7. 验证 collision diagnostics 是 section-based，而不是 legacy calf-only。</pre>
+    <p>成功标准：</p>
+    <pre>valid candidate count > 0
+standstill=False
+root delta != 0
+collision_detail 不再被误导为 calf 整体碰撞</pre>
+
+    <h2>11. 非目标</h2>
+    <ul>
+      <li>不引入 root search。</li>
+      <li>不改 score。</li>
+      <li>不改 semantic filter 语义。</li>
+      <li>不改 landing filter。</li>
+      <li>不接入梯度 terrain query。</li>
+      <li>不做 triangle mesh collision 或 SDF collision。</li>
+      <li>不修改 <code>joint_mpc_rti</code>。</li>
+    </ul>
+
+    <div class="note">
+      <strong>实现提醒：</strong>当前分支上已有未提交的实验性 calf clearance 调参改动。正式实现本设计时，应以本 spec 为准重写 collision boundary，而不是继续沿用旧的 <code>calf_radius_m</code> 调参方案。
+    </div>
+  </main>
+</body>
+</html>
