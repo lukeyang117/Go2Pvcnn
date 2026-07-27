@@ -35,4 +35,11 @@ def parallelism_trajectory_to_viewer_result(trajectory: ParallelismTrajectory):
         status=(~trajectory.valid).to(torch.long),
         safe_fallback=torch.zeros_like(trajectory.valid),
         parallelism_diagnostics=trajectory.diagnostics,
+        joint_mpc_diagnostics=None,
+        nominal_state=None,
+        alpha_candidate_state=None,
+        gait_phase=None,
+        publish=None,
+        stop=None,
+        loss_breakdown=None,
     )
