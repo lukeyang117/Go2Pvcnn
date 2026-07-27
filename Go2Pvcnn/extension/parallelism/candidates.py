@@ -100,7 +100,7 @@ def build_candidates(
     rot_x = c * hip_offset[None, :, 0] - s * hip_offset[None, :, 1]
     rot_y = s * hip_offset[None, :, 0] + c * hip_offset[None, :, 1]
     yaw_disp = torch.stack((rot_x, rot_y), dim=-1) - hip_offset[None]
-    target_body = command[:, None, :2] * period + yaw_disp
+    target_body = command[:, None, :2] * period * float(cfg.foothold_step_gain) + yaw_disp
     return CandidateSet(
         candidate_w=candidate,
         offset_body=offsets,

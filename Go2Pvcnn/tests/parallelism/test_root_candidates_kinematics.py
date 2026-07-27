@@ -78,6 +78,22 @@ def test_candidate_centers_are_laterally_biased_outward():
     )
 
 
+def test_score_target_scales_command_displacement():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.candidates import build_candidates
+    from extension.parallelism.root import rollout_root
+
+    cfg = ParallelismCfg(foothold_step_gain=1.5)
+    state = _state()
+    terrain = _terrain()
+    command = torch.tensor([[0.2, 0.1, 0.0]], dtype=torch.float32)
+    root = rollout_root(state, command, terrain, cfg)
+    candidates = build_candidates(root, state, command, terrain, cfg)
+    expected = command[:, None, :2] * (cfg.half_cycle * cfg.dt) * cfg.foothold_step_gain
+
+    assert torch.allclose(candidates.score_target_body, expected.expand(-1, 4, -1), atol=1e-6)
+
+
 def test_ik_fk_round_trip_default_pose():
     from extension.parallelism.kinematics import fk_go2
     from extension.parallelism.ik import ik_go2
