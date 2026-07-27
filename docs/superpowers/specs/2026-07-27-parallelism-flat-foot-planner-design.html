@@ -63,6 +63,12 @@
   <div class="ok">
     <strong>目标：</strong>实现一个 flat-first、GPU 并行、暴力检索落脚点的 Go2 纯运动学 foot planner。第一版不搜索 root、不做动力学、不接 terrain gradient/SDF，只消费 Isaac Lab 返回的高程图、语义图和 valid mask；输出完整 24 帧 root、joint、foot、contact 轨迹，并能接入 <code>extension/viz/go2_foostep_planner.py</code>。
   </div>
+  <div class="danger">
+    <strong>自包含实现边界：</strong><code>extension/parallelism</code> 除了接入 <code>extension/viz/go2_foostep_planner.py</code> 外，不复用其它 <code>extension</code> 包代码。Go2 几何常量、FK、IK、腿部碰撞采样、高程查询、root rollout、candidate、filter 和 scoring 都在 <code>parallelism</code> 包内独立实现。
+  </div>
+  <div class="decision">
+    <strong>并行与 RL 边界：</strong>第一版所有核心路径都按 <code>[B,...]</code> batch tensor 设计，默认支持 GPU 上多环境并行。实现不得写只服务单环境 viewer 的 Python 逐环境主循环；viewer 是调试入口，最终消费者还包括后续强化学习环境的 batched reference/teacher 接口。
+  </div>
 
   <h2>目录</h2>
   <ol class="toc">
@@ -89,6 +95,8 @@
         <li>每个候选从高程图查询 touchdown z，再生成 swing，IK 出关节角，FK 回算真实足端与腿部几何。</li>
         <li>硬过滤后，只按速度跟踪位移评分；每条腿独立选一个最佳点。</li>
         <li>输出完整 24 帧 root、joint、foot、contact 轨迹和候选 diagnostics。</li>
+        <li>所有 root、terrain query、candidate、swing、IK、FK、filter、score、argmin 和输出组装都保持 batch/GPU 并行。</li>
+        <li>保留后续接入强化学习环境的 batched 输出边界。</li>
       </ul>
     </div>
     <div class="card">
@@ -100,6 +108,7 @@
         <li>不使用 body/base 碰撞过滤；body/base 留给后续 root 规划。</li>
         <li>语义图第一版只进入 diagnostics，不参与过滤或评分。</li>
         <li>不保留 smooth、hip-distance、warm-distance、Raibert 等额外 score 项。</li>
+        <li>不接受只支持 <code>B=1</code> viewer 的实现作为生产 planner。</li>
       </ul>
     </div>
   </div>
@@ -113,7 +122,10 @@
   root.py
   candidates.py
   swing.py
+  kinematics.py
+  ik.py
   planner.py
+  rl_adapter.py
   viewer_adapter.py</code></pre>
   <table>
     <thead><tr><th>模块</th><th>职责</th></tr></thead>
@@ -124,7 +136,10 @@
       <tr><td><code>root.py</code></td><td>body-frame command 到 world root 24 帧 rollout；计算 root z。</td></tr>
       <tr><td><code>candidates.py</code></td><td>固定 50 个黄金角圆盘 offsets，并广播到四腿 hip。</td></tr>
       <tr><td><code>swing.py</code></td><td>当前足端到候选 touchdown 的 12 帧 swing 轨迹。</td></tr>
+      <tr><td><code>kinematics.py</code></td><td>Parallelism 自己维护 Go2 几何常量、FK、hip/foot/knee/calf/thigh 采样和碰撞近似几何。</td></tr>
+      <tr><td><code>ik.py</code></td><td>Parallelism 自己维护 batched analytic IK 与 reachability 判定。</td></tr>
       <tr><td><code>planner.py</code></td><td>主入口：候选、IK、FK、过滤、评分、选择、组装轨迹。</td></tr>
+      <tr><td><code>rl_adapter.py</code></td><td>后续强化学习环境消费的 batched reference/teacher 输出适配层；第一版定义合同，可先由测试覆盖 shape。</td></tr>
       <tr><td><code>viewer_adapter.py</code></td><td>适配 <code>extension/viz/go2_foostep_planner.py</code> 的 root/foot/joint/contact/candidate 显示数据。</td></tr>
     </tbody>
   </table>
@@ -134,6 +149,7 @@
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg,
 ) -&gt; ParallelismTrajectory</code></pre>
+  <p>该接口的 <code>B</code> 是环境 batch 维。所有内部张量都必须保留 batch 维：terrain query 可以把点打包成 <code>[B,N,2]</code>，candidate 主张量为 <code>[B,4,50,3]</code>，候选 swing/IK/FK 可以使用固定 reshape 合并 batch、leg、candidate、frame 维，但不得在 Python 层按环境或候选循环调度。</p>
   <div class="decision">
     <strong>Viewer 后续接入：</strong><code>extension/viz/go2_foostep_planner.py</code> 后续增加 <code>--planner-backend parallelism</code>。第一步先完成 adapter 和单元 smoke；CLI wiring 可以作为实现计划中的独立任务。
   </div>
@@ -153,6 +169,7 @@
     <li><code>valid_mask</code> 为 false 的 candidate touchdown 直接 invalid。</li>
     <li><code>semantic_id</code> 第一版只记录 diagnostics，后续语义避障不需要改主入口。</li>
     <li>不需要也不传入 gradient、SDF、semantic distance、occupancy 或 propagated height。</li>
+    <li>查询函数必须支持 batched packed points，例如 <code>[B,N,2]</code> world XY 一次返回 <code>[B,N]</code> height、semantic 和 valid。</li>
   </ul>
 
   <h2 id="root">4. Root 预测与 24 帧 Trot</h2>
@@ -195,7 +212,10 @@ root_xy = cumsum(delta_xy_world)</code></pre>
 p_z(tau)  = (1 - tau) * z_start + tau * z_touchdown + h_swing * 4 * tau * (1 - tau)
 tau       = linspace(0, 1, 12)</code></pre>
   <p>候选 foot target 与 root trajectory 一起送入 batched analytic IK。IK 得到的关节角再送入 FK，后续 landing 和碰撞全部使用 FK 后的真实几何，不直接相信 swing target。</p>
-  <p>第一版应尽量复用现有 <code>extension.joint_mpc_rti.model.go2_kinematics.go2_fk</code> 和 <code>extension.joint_mpc_rti.model.analytic_ik.go2_analytic_ik</code>，避免复制 Go2 几何常量。</p>
+  <p>第一版不得导入或复用 <code>extension.joint_mpc_rti</code>、<code>extension.batch_mpc_planner</code> 或其它非 viz 的 <code>extension</code> 模块。Go2 FK、IK、hip offsets、joint limits、foot/knee/calf/thigh 采样和碰撞半径在 <code>extension/parallelism</code> 内独立实现。可以参考现有实现的几何语义做人工迁移，但运行时依赖必须保持自包含。</p>
+  <div class="decision">
+    <strong>并行实现要求：</strong>IK/FK 不允许按环境、腿、候选或帧逐个 Python 调用。允许将 <code>[B,4,50,12,...]</code> reshape 成大 batch 后一次性进入 analytic IK/FK，再 reshape 回固定合同形状。
+  </div>
 
   <h2 id="filter">7. 硬过滤</h2>
   <div class="decision">
@@ -261,6 +281,7 @@ candidate_reject_bits[B,4,50,4]
 candidate_semantic   [B,4,50]
 selected_index       [B,4]</code></pre>
   <p><code>viewer_adapter.py</code> 负责把这些字段转换成 <code>go2_foostep_planner.py</code> 可画的 root、foot、joint、contact、candidate 点云和 selected foothold。后续 CLI 增加 <code>--planner-backend parallelism</code> 后，viewer 可以在同一个入口切换当前 RTI backend 和 parallelism backend。</p>
+  <p><code>rl_adapter.py</code> 后续负责把同一个 <code>ParallelismTrajectory</code> 转成强化学习环境可消费的 batched teacher/reference。该层不能重新规划或重新选择落脚点，只做字段裁剪、缓存和帧索引推进。第一版可以先定义 shape 合同，避免 viewer 适配成为唯一输出路径。</p>
   <h3>9.1 目标 Viewer 命令</h3>
   <p>当前可视化运行方式沿用现有 <code>go2_foostep_planner.py</code> 命令，只把 backend 从 <code>joint_mpc_rti</code> 切换为 <code>parallelism</code>。实现阶段需要保证该命令能够启动、接收键盘 root/body-frame 速度，并显示 parallelism 的 24 帧轨迹和四腿候选点。</p>
   <pre><code>cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn
@@ -298,12 +319,15 @@ Go2Pvcnn/extension/viz/go2_foostep_planner.py \
       <tr><td><code>test_score_twist_tracking</code></td><td><code>vx/vy/vyaw</code> 都进入 <code>target_step_body</code>；<code>vyaw</code> 使用 <code>R(vyaw*T)*hip_offset - hip_offset</code>；score 只有 tracking error。</td></tr>
       <tr><td><code>test_filter_contract</code></td><td>invalid map、joint limit、touchdown 未落地、foot/knee/calf/thigh 高程碰撞均能排除 candidate；body/base 不参与第一版 filter。</td></tr>
       <tr><td><code>test_full_flat_trajectory_contract</code></td><td>输出 shape 正确；平地可选出四个落脚点；FK touchdown 与 selected foothold 一致；contact mask 符合 fixed trot。</td></tr>
+      <tr><td><code>test_parallelism_import_isolation</code></td><td><code>extension.parallelism</code> 运行时不导入 <code>extension.joint_mpc_rti</code>、<code>extension.batch_mpc_planner</code> 或其它非 viz 的 <code>extension</code> planner 模块。</td></tr>
+      <tr><td><code>test_parallel_batch_contract</code></td><td><code>B=1/8/128</code> 的 root、candidate、terrain query、IK/FK、filter、score 和输出 shape 一致，无按环境 Python 主循环依赖。</td></tr>
+      <tr><td><code>test_rl_adapter_shape_contract</code></td><td><code>rl_adapter</code> 能从 <code>ParallelismTrajectory</code> 生成 batched RL reference 字段；只做适配，不重新规划。</td></tr>
       <tr><td><code>test_viewer_adapter_contract</code></td><td>adapter 输出 viewer 所需 root、foot、joint、contact、candidate、selected 字段。</td></tr>
       <tr><td><code>test_viewer_backend_option_contract</code></td><td><code>go2_foostep_planner.py --planner-backend parallelism --n-frames 24</code> 能路由到 parallelism adapter；键盘速度仍按 root/body frame command 解释。</td></tr>
     </tbody>
   </table>
   <div class="warn">
-    <strong>完成定义：</strong>本设计完成后，只能声称 flat/highmap foot-planner 主链通过。语义避障、body/base 碰撞、root 搜索、RL batch 性能和最终 viewer CLI backend 属于后续计划，不属于第一版行为通过声明。
+    <strong>完成定义：</strong>本设计完成后，只能声称 flat/highmap foot-planner 主链通过。第一版必须具备 batch/GPU 并行和 RL 输出边界，但不声称 RL 训练效果、语义避障、body/base 碰撞、root 搜索或最终 RL 性能通过。
   </div>
 </main>
 </body>
