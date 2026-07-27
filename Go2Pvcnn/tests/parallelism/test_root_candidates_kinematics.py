@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import torch
+
+
+def _terrain(batch: int = 1):
+    from extension.parallelism import ParallelismTerrain
+
+    return ParallelismTerrain(
+        height_w=torch.zeros(batch, 41, 41),
+        semantic_id=torch.zeros(batch, 41, 41, dtype=torch.long),
+        valid_mask=torch.ones(batch, 41, 41, dtype=torch.bool),
+        origin_w=torch.tensor([[-2.0, -2.0, 0.0]], dtype=torch.float32).repeat(batch, 1),
+        yaw_w=torch.zeros(batch),
+        resolution=0.1,
+    )
+
+
+def _state(batch: int = 1):
+    from extension.parallelism import ParallelismState
+
+    return ParallelismState(
+        root_pos_w=torch.tensor([[0.0, 0.0, 0.30]], dtype=torch.float32).repeat(batch, 1),
+        root_rpy_w=torch.zeros(batch, 3),
+        joint_pos=torch.tensor([[0.0, 0.8, -1.5] * 4], dtype=torch.float32).repeat(batch, 1),
+    )
+
+
+def test_root_rollout_body_command_half_cycle_displacement():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import rollout_root
+
+    cfg = ParallelismCfg()
+    result = rollout_root(_state(), torch.tensor([[1.0, 0.0, 0.0]]), _terrain(), cfg)
+    first_half = result.root_pos_w[0, 11, 0] - result.root_pos_w[0, 0, 0]
+    full = result.root_pos_w[0, 23, 0] - result.root_pos_w[0, 0, 0]
+
+    assert result.root_pos_w.shape == (1, 24, 3)
+    assert torch.isclose(first_half, torch.tensor(12 * cfg.dt), atol=1e-5)
+    assert torch.isclose(full, torch.tensor(24 * cfg.dt), atol=1e-5)
+    assert torch.allclose(result.root_pos_w[..., 2], torch.full((1, 24), 0.30), atol=1e-6)
+
+
+def test_candidate_shape_and_reference_hips():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.candidates import build_candidates
+    from extension.parallelism.root import rollout_root
+
+    cfg = ParallelismCfg()
+    state = _state()
+    terrain = _terrain()
+    root = rollout_root(state, torch.zeros(1, 3), terrain, cfg)
+    candidates = build_candidates(root, state, torch.zeros(1, 3), terrain, cfg)
+    radius = torch.linalg.vector_norm(candidates.offset_body, dim=-1)
+
+    assert candidates.candidate_w.shape == (1, 4, 50, 3)
+    assert candidates.score_target_body.shape == (1, 4, 2)
+    assert torch.all(radius <= cfg.candidate_radius_m + 1e-6)
+    assert candidates.hip_ref_w.shape == (1, 4, 3)
+
+
+def test_ik_fk_round_trip_default_pose():
+    from extension.parallelism.kinematics import fk_go2
+    from extension.parallelism.ik import ik_go2
+
+    state = _state()
+    geometry = fk_go2(state.root_pos_w, state.root_rpy_w, state.joint_pos)
+    joint, reachable = ik_go2(state.root_pos_w, state.root_rpy_w, geometry.foot_pos_w)
+    round_trip = fk_go2(state.root_pos_w, state.root_rpy_w, joint.reshape(1, 12))
+
+    assert reachable.all()
+    assert torch.allclose(round_trip.foot_pos_w, geometry.foot_pos_w, atol=1e-5)
