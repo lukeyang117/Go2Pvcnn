@@ -41,4 +41,5 @@ def test_parallelism_viewer_prints_reject_diagnostics():
 
     assert "_format_parallelism_reject_diagnostics" in source
     assert "parallelism_reject(" in source
+    assert "collision_detail(" in source
     assert "print(\n                        _format_viewer_plan_line(" in source

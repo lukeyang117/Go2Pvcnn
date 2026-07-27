@@ -1706,6 +1706,7 @@ def _format_parallelism_reject_diagnostics(result) -> str:
         return ""
     reject_bits = getattr(diagnostics, "candidate_reject_bits", None)
     candidate_valid = getattr(diagnostics, "candidate_valid", None)
+    collision_bits = getattr(diagnostics, "candidate_collision_bits", None)
     if reject_bits is None or candidate_valid is None:
         return ""
 
@@ -1726,11 +1727,22 @@ def _format_parallelism_reject_diagnostics(result) -> str:
     per_leg_valid = valid_t.reshape(-1, valid_t.shape[-2], valid_t.shape[-1])[0].sum(dim=-1).to(torch.long).tolist()
     count_text = " ".join(f"{name}={int(count)}" for name, count in zip(names, counts))
     per_leg_text = ",".join(str(int(count)) for count in per_leg_valid)
+    collision_text = ""
+    if collision_bits is not None:
+        collision_t = torch.as_tensor(collision_bits, dtype=torch.bool)
+        if collision_t.ndim == 4 and collision_t.shape[-1] == 4:
+            collision_names = ("foot", "knee", "calf", "thigh")
+            collision_counts = collision_t.reshape(-1, collision_t.shape[-1]).sum(dim=0).to(torch.long).tolist()
+            collision_detail = " ".join(
+                f"{name}={int(count)}" for name, count in zip(collision_names, collision_counts)
+            )
+            collision_text = f" collision_detail({collision_detail})"
     return (
         "parallelism_reject("
         f"valid={int(valid_t.sum().item())}/{int(valid_t.numel())} "
         f"per_leg_valid=[{per_leg_text}] "
         f"{count_text}"
+        f"{collision_text}"
         ")"
     )
 

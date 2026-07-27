@@ -56,6 +56,7 @@ def test_full_flat_trajectory_contract():
     assert traj.valid.shape == (1,)
     assert traj.diagnostics.candidate_w.shape == (1, 4, 50, 3)
     assert traj.diagnostics.candidate_reject_bits.shape == (1, 4, 50, 6)
+    assert traj.diagnostics.candidate_collision_bits.shape == (1, 4, 50, 4)
     assert traj.diagnostics.fk_touchdown_semantic.shape == (1, 4, 50)
 
 

@@ -62,7 +62,7 @@ def _collision_mask(
     terrain: ParallelismTerrain,
     geometry,
     cfg: ParallelismCfg,
-) -> Tensor:
+) -> tuple[Tensor, Tensor]:
     batch, leg_count, candidate_count = geometry.foot_pos_w.shape[:3]
     leg_index = torch.arange(leg_count, device=geometry.foot_pos_w.device)
     point_index = leg_index.view(1, leg_count, 1, 1, 1).expand(batch, leg_count, candidate_count, 1, 3)
@@ -104,7 +104,9 @@ def _collision_mask(
     knee_ok = knee[..., 2] >= knee_h + float(cfg.knee_radius_m) + margin
     calf_ok = (calf[..., 2] >= calf_h + float(cfg.calf_radius_m) + margin).all(dim=-1)
     thigh_ok = (thigh[..., 2] >= thigh_h + float(cfg.thigh_radius_m) + margin).all(dim=-1)
-    return foot_ok & knee_ok & calf_ok & thigh_ok
+    collision_ok = foot_ok & knee_ok & calf_ok & thigh_ok
+    collision_bits = torch.stack((~foot_ok, ~knee_ok, ~calf_ok, ~thigh_ok), dim=-1)
+    return collision_ok, collision_bits
 
 
 def _tracking_score(candidates, command: Tensor, cfg: ParallelismCfg) -> Tensor:
@@ -192,7 +194,7 @@ def plan_trajectory(
     landing_ok = landing_query.valid.reshape(batch, leg_count, candidate_count) & (
         (fk_touchdown[..., 2] - landing_height).abs() <= float(cfg.landing_tolerance_m)
     )
-    collision_ok = _collision_mask(terrain, geometry, cfg)
+    collision_ok, collision_bits = _collision_mask(terrain, geometry, cfg)
     candidate_semantic_ok = _semantic_ok(candidates.candidate_semantic, cfg)
     fk_touchdown_semantic = landing_query.semantic.reshape(batch, leg_count, candidate_count)
     fk_touchdown_semantic_ok = _semantic_ok(fk_touchdown_semantic, cfg)
@@ -277,6 +279,7 @@ def plan_trajectory(
             candidate_score=score,
             candidate_valid=candidate_valid,
             candidate_reject_bits=reject_bits,
+            candidate_collision_bits=collision_bits,
             candidate_semantic=candidates.candidate_semantic,
             fk_touchdown_semantic=fk_touchdown_semantic,
             selected_index=selected_index,
