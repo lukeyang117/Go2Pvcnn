@@ -299,8 +299,20 @@ score = torch.where(
 )                                                        # [B,4,50]
 selected_index = score.argmin(dim=-1)                    # [B,4]
 selected_score = torch.gather(score, -1, selected_index[..., None]).squeeze(-1)
-selected_valid = torch.isfinite(selected_score).all(dim=-1)</code></pre>
-  <p>一次 planner 调用只允许这一轮候选生成、过滤、评分和选择。不得做 retry、ranked fallback、多轮候选扩张、多轮重打分或根据第一次结果再次搜索。<code>selected_valid</code> 为 false 的环境不能发布有效轨迹；viewer/RL adapter 可以显示候选和 reject bits，但不能把无有效候选的结果伪装为可执行轨迹。</p>
+per_leg_has_valid = candidate_valid.any(dim=-1)           # [B,4]
+selected_valid = per_leg_has_valid.all(dim=-1)            # [B]</code></pre>
+  <p>一次 planner 调用只允许这一轮候选生成、过滤、评分和选择。不得做 retry、ranked fallback、多轮候选扩张、多轮重打分或根据第一次结果再次搜索。<code>selected_valid</code> 为 false 的环境不能发布移动轨迹；viewer/RL adapter 可以显示候选和 reject bits，但不能把无有效候选的结果伪装为可执行轨迹。</p>
+  <h3>8.2 无有效候选时的 hold-still 合同</h3>
+  <p>若任一腿的 50 个候选全部 invalid，则该环境整段输出必须拒绝移动，而不是展示或执行 <code>argmin(+inf)</code> 得到的假 selected touchdown。</p>
+  <pre><code>if not selected_valid[b]:
+  root_pos_w[b, :, :] = state.root_pos_w[b]
+  root_rpy_w[b, :, :] = state.root_rpy_w[b]
+  joint_pos[b, :, :] = state.joint_pos[b]
+  foot_pos_w[b, :, :, :] = current_foot_pos_w[b]
+  contact_state[b, :, :] = True
+  selected_foothold_w[b, :, :] = current_foot_pos_w[b]
+  selected_score[b, :] = +inf</code></pre>
+  <p>该 hold-still 处理属于输出组装层，不是 retry 或 fallback search。diagnostics 仍保留原始 candidates、scores、reject bits、semantic 和 <code>selected_index</code>，用于解释为什么无有效候选。</p>
 
   <h2 id="output">9. 输出与 Viewer 接入</h2>
   <pre><code>ParallelismTrajectory
@@ -367,6 +379,7 @@ Go2Pvcnn/extension/viz/go2_foostep_planner.py \
       <tr><td><code>test_semantic_touchdown_filter_contract</code></td><td>语义 <code>1</code> 和 <code>2</code> 都是禁止落脚障碍物；candidate touchdown 与 FK 后真实 touchdown 两层语义过滤分别有 reject bit 和 diagnostics。</td></tr>
       <tr><td><code>test_filter_score_torch_condition_contract</code></td><td>filter 由 torch bool mask、<code>torch.stack</code> reject bits、<code>&amp;</code>/<code>|</code>/<code>torch.where</code> 组合完成；score 用 torch mask 置 <code>inf</code> 后 <code>argmin</code>，不使用 CPU/Python 候选循环。</td></tr>
       <tr><td><code>test_single_pass_selection_contract</code></td><td>一次 planner 调用只执行一轮候选生成、过滤、评分和选择；无 retry、ranked fallback、多轮候选扩张或重打分。</td></tr>
+      <tr><td><code>test_invalid_plan_holds_current_state</code></td><td>任一腿 50 个候选全 invalid 时，输出 <code>valid=False</code>，root、joint、foot 和 selected foothold 全部保持当前状态，contact 全 stance。</td></tr>
       <tr><td><code>test_full_flat_trajectory_contract</code></td><td>输出 shape 正确；平地可选出四个落脚点；FK touchdown 与 selected foothold 一致；contact mask 符合 fixed trot。</td></tr>
       <tr><td><code>test_parallelism_import_isolation</code></td><td><code>extension.parallelism</code> 运行时不导入 <code>extension.joint_mpc_rti</code>、<code>extension.batch_mpc_planner</code> 或其它非 viz 的 <code>extension</code> planner 模块。</td></tr>
       <tr><td><code>test_parallel_batch_contract</code></td><td><code>B=1/8/128</code> 的 root、candidate、terrain query、IK/FK、filter、score 和输出 shape 一致，无按环境 Python 主循环依赖。</td></tr>
