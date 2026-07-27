@@ -10,6 +10,7 @@ class ParallelismCfg:
     half_cycle: int = 12
     candidate_radius_m: float = 0.24
     candidates_per_leg: int = 50
+    hip_lateral_bias_m: float = 0.0955
     root_clearance_m: float = 0.30
     swing_height_m: float = 0.08
     landing_tolerance_m: float = 0.025

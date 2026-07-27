@@ -7,7 +7,7 @@ import torch
 from torch import Tensor
 
 from extension.parallelism.config import ParallelismCfg
-from extension.parallelism.kinematics import HIP_OFFSETS, fk_go2, rpy_to_rotation_matrix
+from extension.parallelism.kinematics import HIP_OFFSETS, LEG_SIDE_SIGNS, fk_go2
 from extension.parallelism.root import RootRollout, clamp_command
 from extension.parallelism.terrain import query_height_semantic_valid
 from extension.parallelism.types import ParallelismState, ParallelismTerrain
@@ -18,6 +18,7 @@ class CandidateSet:
     candidate_w: Tensor
     offset_body: Tensor
     hip_ref_w: Tensor
+    candidate_center_w: Tensor
     yaw_ref: Tensor
     score_target_body: Tensor
     candidate_valid_map: Tensor
@@ -65,9 +66,25 @@ def build_candidates(
     )
     hip_ref = hip[:, frame_ref, leg_index]
     yaw_ref = root_rpy[:, frame_ref, 2]
+    side = torch.tensor(LEG_SIDE_SIGNS, dtype=root_pos.dtype, device=root_pos.device)
+    lateral_bias_body = torch.stack(
+        (
+            torch.zeros_like(side),
+            side * float(cfg.hip_lateral_bias_m),
+        ),
+        dim=-1,
+    )
+    lateral_bias_w = _yaw_rotate(lateral_bias_body.view(1, 4, 2), yaw_ref)
+    candidate_center = torch.cat(
+        (
+            hip_ref[..., :2] + lateral_bias_w,
+            hip_ref[..., 2:3],
+        ),
+        dim=-1,
+    )
     offsets = _disk_offsets(cfg, dtype=root_pos.dtype, device=root_pos.device)
     offset_w = _yaw_rotate(offsets.view(1, 1, int(cfg.candidates_per_leg), 2), yaw_ref[:, :, None])
-    candidate_xy = hip_ref[:, :, None, :2] + offset_w
+    candidate_xy = candidate_center[:, :, None, :2] + offset_w
     flat_xy = candidate_xy.reshape(batch, 4 * int(cfg.candidates_per_leg), 2)
     query = query_height_semantic_valid(terrain, flat_xy)
     height = query.height.reshape(batch, 4, int(cfg.candidates_per_leg))
@@ -88,6 +105,7 @@ def build_candidates(
         candidate_w=candidate,
         offset_body=offsets,
         hip_ref_w=hip_ref,
+        candidate_center_w=candidate_center,
         yaw_ref=yaw_ref,
         score_target_body=target_body,
         candidate_valid_map=valid,

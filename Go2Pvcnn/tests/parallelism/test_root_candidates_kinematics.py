@@ -59,6 +59,25 @@ def test_candidate_shape_and_reference_hips():
     assert candidates.hip_ref_w.shape == (1, 4, 3)
 
 
+def test_candidate_centers_are_laterally_biased_outward():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.candidates import build_candidates
+    from extension.parallelism.root import rollout_root
+
+    cfg = ParallelismCfg(hip_lateral_bias_m=0.0955)
+    state = _state()
+    terrain = _terrain()
+    root = rollout_root(state, torch.zeros(1, 3), terrain, cfg)
+    candidates = build_candidates(root, state, torch.zeros(1, 3), terrain, cfg)
+    lateral_delta = candidates.candidate_center_w[0, :, 1] - candidates.hip_ref_w[0, :, 1]
+
+    assert torch.allclose(
+        lateral_delta,
+        torch.tensor([0.0955, -0.0955, 0.0955, -0.0955]),
+        atol=1e-6,
+    )
+
+
 def test_ik_fk_round_trip_default_pose():
     from extension.parallelism.kinematics import fk_go2
     from extension.parallelism.ik import ik_go2
