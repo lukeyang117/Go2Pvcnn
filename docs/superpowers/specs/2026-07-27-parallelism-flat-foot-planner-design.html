@@ -238,6 +238,20 @@ tau       = linspace(0, 1, 12)</code></pre>
     <li>thigh capsule samples</li>
   </ul>
   <p>每个采样点查询同帧高程图，若 <code>sample_z - radius - margin &lt; terrain_height</code>，该 candidate invalid。body/base 不参与第一版 filter；后续 root 规划再加入。</p>
+  <h3>7.1 Torch 条件组合合同</h3>
+  <p>四类过滤必须全部用 torch 张量条件判断实现。每个 filter 生成一个 <code>[B,4,50]</code> bool tensor，不允许在 Python 层按环境、腿、候选、采样点写 <code>if</code> 分支或列表累积判断。</p>
+  <pre><code>valid_map_ok = candidate_valid_mask                         # [B,4,50]
+joint_ok = (joint &gt;= joint_lower).all(dim=(-1, -2)) \
+         &amp; (joint &lt;= joint_upper).all(dim=(-1, -2))       # [B,4,50]
+landing_ok = (fk_touchdown_z - terrain_touchdown_z).abs() &lt;= landing_tol
+collision_ok = (sample_z - sample_radius - margin &gt;= sample_height).all(dim=-1)
+
+candidate_valid = valid_map_ok &amp; joint_ok &amp; landing_ok &amp; collision_ok
+reject_bits = torch.stack(
+    (~valid_map_ok, ~joint_ok, ~landing_ok, ~collision_ok),
+    dim=-1,
+)                                                        # [B,4,50,4]</code></pre>
+  <p>若需要处理 nonfinite 值，也必须用 torch 条件合入候选有效性，例如 <code>candidate_valid = candidate_valid &amp; torch.isfinite(score_raw)</code> 或在 score mask 阶段置为 <code>inf</code>；不得用 Python 异常或逐候选分支作为正常过滤路径。</p>
 
   <h2 id="score">8. 速度跟踪评分</h2>
   <p>score 只有速度跟踪一项。所有 invalid candidate 的 score 设为 <code>+inf</code>。</p>
@@ -256,6 +270,18 @@ target_step_body = [vx, vy] * T + rot_yaw_displacement
 candidate_rel_body = Rz(yaw_ref)^T * (candidate_xy_w - hip_ref_xy_w)
 score = ||candidate_rel_body - target_step_body||^2</code></pre>
   <p><code>vyaw</code> 通过每条腿 hip offset 产生切向期望位移，进入同一个相对 hip 位移 score；不额外增加 yaw score。</p>
+  <h3>8.1 Torch score 与一次选择合同</h3>
+  <p>score masking 和最佳候选选择也必须是 torch 张量操作。invalid candidate 的 score 用 <code>torch.where</code> 或 <code>masked_fill</code> 置为 <code>+inf</code>，然后每条腿独立 <code>argmin(dim=-1)</code>。不得把候选搬到 CPU、不得用 Python 排序、不得按腿或候选循环找最小值。</p>
+  <pre><code>score_raw = ((candidate_rel_body - target_step_body[:, :, None, :]) ** 2).sum(dim=-1)
+score = torch.where(
+    candidate_valid,
+    score_raw,
+    torch.full_like(score_raw, torch.inf),
+)                                                        # [B,4,50]
+selected_index = score.argmin(dim=-1)                    # [B,4]
+selected_score = torch.gather(score, -1, selected_index[..., None]).squeeze(-1)
+selected_valid = torch.isfinite(selected_score).all(dim=-1)</code></pre>
+  <p>一次 planner 调用只允许这一轮候选生成、过滤、评分和选择。不得做 retry、ranked fallback、多轮候选扩张、多轮重打分或根据第一次结果再次搜索。<code>selected_valid</code> 为 false 的环境不能发布有效轨迹；viewer/RL adapter 可以显示候选和 reject bits，但不能把无有效候选的结果伪装为可执行轨迹。</p>
 
   <h2 id="output">9. 输出与 Viewer 接入</h2>
   <pre><code>ParallelismTrajectory
@@ -318,6 +344,8 @@ Go2Pvcnn/extension/viz/go2_foostep_planner.py \
       <tr><td><code>test_candidate_shape_and_reference_hips</code></td><td>候选 shape 为 <code>[B,4,50,3]</code>；<code>FL/RR</code> 用 frame 0 hip；<code>FR/RL</code> 用 frame 12 hip；半径不超过 <code>0.24m</code>。</td></tr>
       <tr><td><code>test_score_twist_tracking</code></td><td><code>vx/vy/vyaw</code> 都进入 <code>target_step_body</code>；<code>vyaw</code> 使用 <code>R(vyaw*T)*hip_offset - hip_offset</code>；score 只有 tracking error。</td></tr>
       <tr><td><code>test_filter_contract</code></td><td>invalid map、joint limit、touchdown 未落地、foot/knee/calf/thigh 高程碰撞均能排除 candidate；body/base 不参与第一版 filter。</td></tr>
+      <tr><td><code>test_filter_score_torch_condition_contract</code></td><td>filter 由 torch bool mask、<code>torch.stack</code> reject bits、<code>&amp;</code>/<code>|</code>/<code>torch.where</code> 组合完成；score 用 torch mask 置 <code>inf</code> 后 <code>argmin</code>，不使用 CPU/Python 候选循环。</td></tr>
+      <tr><td><code>test_single_pass_selection_contract</code></td><td>一次 planner 调用只执行一轮候选生成、过滤、评分和选择；无 retry、ranked fallback、多轮候选扩张或重打分。</td></tr>
       <tr><td><code>test_full_flat_trajectory_contract</code></td><td>输出 shape 正确；平地可选出四个落脚点；FK touchdown 与 selected foothold 一致；contact mask 符合 fixed trot。</td></tr>
       <tr><td><code>test_parallelism_import_isolation</code></td><td><code>extension.parallelism</code> 运行时不导入 <code>extension.joint_mpc_rti</code>、<code>extension.batch_mpc_planner</code> 或其它非 viz 的 <code>extension</code> planner 模块。</td></tr>
       <tr><td><code>test_parallel_batch_contract</code></td><td><code>B=1/8/128</code> 的 root、candidate、terrain query、IK/FK、filter、score 和输出 shape 一致，无按环境 Python 主循环依赖。</td></tr>
