@@ -103,3 +103,36 @@ def test_ellipsoid_collision_uses_link_local_height_points():
     assert bits.shape == (1, 1, 1, 1)
     assert not bool(ok[0, 0, 0])
     assert bool(bits[0, 0, 0, 0])
+
+
+def test_swing_collision_mask_preserves_candidate_shape():
+    import torch
+    from types import SimpleNamespace
+    from extension.parallelism.config import ParallelismCfg
+    from extension.parallelism.planner import _swing_collision_mask
+    from extension.parallelism.root import rollout_root
+    from extension.parallelism.types import ParallelismState, ParallelismTerrain
+
+    terrain = ParallelismTerrain(
+        height_w=torch.zeros(1, 61, 61),
+        semantic_id=torch.zeros(1, 61, 61, dtype=torch.long),
+        valid_mask=torch.ones(1, 61, 61, dtype=torch.bool),
+        origin_w=torch.tensor([[-3.0, -3.0, 0.0]]),
+        yaw_w=torch.zeros(1),
+        resolution=0.1,
+    )
+    state = ParallelismState(
+        root_pos_w=torch.tensor([[0.0, 0.0, 0.30]], dtype=torch.float32),
+        root_rpy_w=torch.zeros(1, 3),
+        joint_pos=torch.tensor([[0.0, 0.8, -1.5] * 4], dtype=torch.float32),
+    )
+    cfg = ParallelismCfg(candidates_per_leg=2)
+    root = rollout_root(state, torch.zeros(1, 3), terrain, cfg)
+    candidate_w = torch.zeros(1, 4, 2, 3)
+    candidate_w[..., 2] = 0.0
+    candidates = SimpleNamespace(candidate_w=candidate_w)
+
+    ok, bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg)
+
+    assert ok.shape == (1, 4, 2)
+    assert bits.shape == (1, 4, 2, len(cfg.collision_ellipsoids))

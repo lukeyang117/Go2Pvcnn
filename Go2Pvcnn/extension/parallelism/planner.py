@@ -67,6 +67,89 @@ def _collision_mask(
     return ellipsoid_collision_mask(terrain, geometry, cfg)
 
 
+def _swing_collision_mask(
+    state: ParallelismState,
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    candidates,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+) -> tuple[Tensor, Tensor]:
+    batch, leg_count, candidate_count, _ = candidates.candidate_w.shape
+    half_cycle = int(cfg.half_cycle)
+    current_foot = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
+    swing_ok = torch.ones(batch, leg_count, candidate_count, dtype=torch.bool, device=root_pos.device)
+    swing_bits = torch.zeros(
+        batch,
+        leg_count,
+        candidate_count,
+        len(tuple(cfg.collision_ellipsoids)),
+        dtype=torch.bool,
+        device=root_pos.device,
+    )
+
+    for leg_idx in range(leg_count):
+        phase_start = 0 if leg_idx in (0, 3) else half_cycle
+        phase_stop = phase_start + half_cycle
+        root_phase_pos = root_pos[:, phase_start:phase_stop]
+        root_phase_rpy = root_rpy[:, phase_start:phase_stop]
+        swing = swing_curve(
+            current_foot[:, None, leg_idx].expand(batch, candidate_count, 3),
+            candidates.candidate_w[:, leg_idx],
+            frames=half_cycle,
+            height_m=cfg.swing_height_m,
+        )
+        foot_targets = current_foot[:, None, None, :, :].expand(batch, candidate_count, half_cycle, 4, 3).clone()
+        foot_targets[..., leg_idx, :] = swing
+        root_eval_pos = root_phase_pos[:, None].expand(batch, candidate_count, half_cycle, 3)
+        root_eval_rpy = root_phase_rpy[:, None].expand(batch, candidate_count, half_cycle, 3)
+        joint_candidate, reachable = ik_go2(root_eval_pos, root_eval_rpy, foot_targets)
+        flat_count = batch * candidate_count * half_cycle
+        geometry = fk_go2(
+            root_eval_pos.reshape(flat_count, 3),
+            root_eval_rpy.reshape(flat_count, 3),
+            joint_candidate.reshape(flat_count, 12),
+        )
+        sample_count = int(geometry.calf_samples_w.shape[-2])
+
+        def _expand_candidate_leg(value: Tensor, *tail: int) -> Tensor:
+            return value.reshape(batch, candidate_count * half_cycle, 4, *tail).unsqueeze(1).expand(
+                batch,
+                leg_count,
+                candidate_count * half_cycle,
+                4,
+                *tail,
+            )
+
+        geometry = type(geometry)(
+            hip_pos_w=_expand_candidate_leg(geometry.hip_pos_w, 3),
+            foot_pos_w=_expand_candidate_leg(geometry.foot_pos_w, 3),
+            knee_pos_w=_expand_candidate_leg(geometry.knee_pos_w, 3),
+            calf_samples_w=geometry.calf_samples_w.reshape(batch, candidate_count * half_cycle, 4, sample_count, 3)
+            .unsqueeze(1)
+            .expand(batch, leg_count, candidate_count * half_cycle, 4, sample_count, 3),
+            thigh_samples_w=geometry.thigh_samples_w.reshape(batch, candidate_count * half_cycle, 4, sample_count, 3)
+            .unsqueeze(1)
+            .expand(batch, leg_count, candidate_count * half_cycle, 4, sample_count, 3),
+            thigh_pos_w=_expand_candidate_leg(geometry.thigh_pos_w, 3),
+            thigh_rot_w=_expand_candidate_leg(geometry.thigh_rot_w, 3, 3),
+            calf_pos_w=_expand_candidate_leg(geometry.calf_pos_w, 3),
+            calf_rot_w=_expand_candidate_leg(geometry.calf_rot_w, 3, 3),
+            foot_rot_w=_expand_candidate_leg(geometry.foot_rot_w, 3, 3),
+        )
+        collision_ok, collision_bits = _collision_mask(terrain, geometry, cfg)
+        active_reachable = reachable[..., leg_idx].reshape(batch, candidate_count, half_cycle)
+        active_collision_ok = collision_ok[:, leg_idx].reshape(batch, candidate_count, half_cycle)
+        swing_ok[:, leg_idx] = active_reachable.all(dim=-1) & active_collision_ok.all(dim=-1)
+        swing_bits[:, leg_idx] = collision_bits[:, leg_idx].reshape(
+            batch,
+            candidate_count,
+            half_cycle,
+            -1,
+        ).any(dim=2)
+    return swing_ok, swing_bits
+
+
 def _tracking_score(candidates, command: Tensor, cfg: ParallelismCfg) -> Tensor:
     displacement_error = candidates.offset_body.view(1, 1, int(cfg.candidates_per_leg), 2) - candidates.score_target_body[:, :, None, :]
     return displacement_error.square().sum(dim=-1)
@@ -157,7 +240,10 @@ def plan_trajectory(
     landing_ok = landing_query.valid.reshape(batch, leg_count, candidate_count) & (
         (fk_touchdown[..., 2] - landing_height).abs() <= float(cfg.landing_tolerance_m)
     )
-    collision_ok, collision_bits = _collision_mask(terrain, geometry, cfg)
+    touchdown_collision_ok, touchdown_collision_bits = _collision_mask(terrain, geometry, cfg)
+    swing_collision_ok, swing_collision_bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg)
+    collision_ok = touchdown_collision_ok & swing_collision_ok
+    collision_bits = touchdown_collision_bits | swing_collision_bits
     candidate_semantic_ok = _semantic_ok(candidates.candidate_semantic, cfg)
     fk_touchdown_semantic = landing_query.semantic.reshape(batch, leg_count, candidate_count)
     fk_touchdown_semantic_ok = _semantic_ok(fk_touchdown_semantic, cfg)
