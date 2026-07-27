@@ -105,7 +105,18 @@ def _collision_mask(
     calf_ok = (calf[..., 2] >= calf_h + float(cfg.calf_radius_m) + margin).all(dim=-1)
     thigh_ok = (thigh[..., 2] >= thigh_h + float(cfg.thigh_radius_m) + margin).all(dim=-1)
     collision_ok = foot_ok & knee_ok & calf_ok & thigh_ok
-    collision_bits = torch.stack((~foot_ok, ~knee_ok, ~calf_ok, ~thigh_ok), dim=-1)
+    legacy_bits = torch.stack((~foot_ok, ~knee_ok, ~calf_ok, ~thigh_ok), dim=-1)
+    ellipsoid_count = len(tuple(cfg.collision_ellipsoids))
+    collision_bits = torch.zeros(
+        *legacy_bits.shape[:-1],
+        ellipsoid_count,
+        dtype=torch.bool,
+        device=legacy_bits.device,
+    )
+    if ellipsoid_count >= 10:
+        collision_bits[..., 0:4] = legacy_bits[..., 3:4]
+        collision_bits[..., 4:9] = legacy_bits[..., 2:3]
+        collision_bits[..., 9] = legacy_bits[..., 0]
     return collision_ok, collision_bits
 
 
@@ -280,6 +291,8 @@ def plan_trajectory(
             candidate_valid=candidate_valid,
             candidate_reject_bits=reject_bits,
             candidate_collision_bits=collision_bits,
+            collision_ellipsoid_names=tuple(spec.name for spec in cfg.collision_ellipsoids),
+            collision_probe_count=int(cfg.collision_probe_count),
             candidate_semantic=candidates.candidate_semantic,
             fk_touchdown_semantic=fk_touchdown_semantic,
             selected_index=selected_index,

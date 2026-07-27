@@ -47,7 +47,8 @@ def test_full_flat_trajectory_contract():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory
 
-    traj = plan_trajectory(_state(), torch.tensor([[0.2, 0.0, 0.0]]), _terrain(), ParallelismCfg())
+    cfg = ParallelismCfg()
+    traj = plan_trajectory(_state(), torch.tensor([[0.2, 0.0, 0.0]]), _terrain(), cfg)
 
     assert traj.root_pos_w.shape == (1, 24, 3)
     assert traj.joint_pos.shape == (1, 24, 12)
@@ -56,7 +57,9 @@ def test_full_flat_trajectory_contract():
     assert traj.valid.shape == (1,)
     assert traj.diagnostics.candidate_w.shape == (1, 4, 50, 3)
     assert traj.diagnostics.candidate_reject_bits.shape == (1, 4, 50, 6)
-    assert traj.diagnostics.candidate_collision_bits.shape == (1, 4, 50, 4)
+    assert traj.diagnostics.candidate_collision_bits.shape == (1, 4, 50, 10)
+    assert traj.diagnostics.collision_ellipsoid_names == tuple(spec.name for spec in cfg.collision_ellipsoids)
+    assert traj.diagnostics.collision_probe_count == 5
     assert traj.diagnostics.fk_touchdown_semantic.shape == (1, 4, 50)
 
 
