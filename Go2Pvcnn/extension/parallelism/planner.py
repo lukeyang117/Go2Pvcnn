@@ -4,6 +4,7 @@ import torch
 from torch import Tensor
 
 from extension.parallelism.candidates import build_candidates
+from extension.parallelism.collision import ellipsoid_collision_mask
 from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.ik import ik_go2
 from extension.parallelism.kinematics import JOINT_LOWER, JOINT_UPPER, fk_go2
@@ -63,61 +64,7 @@ def _collision_mask(
     geometry,
     cfg: ParallelismCfg,
 ) -> tuple[Tensor, Tensor]:
-    batch, leg_count, candidate_count = geometry.foot_pos_w.shape[:3]
-    leg_index = torch.arange(leg_count, device=geometry.foot_pos_w.device)
-    point_index = leg_index.view(1, leg_count, 1, 1, 1).expand(batch, leg_count, candidate_count, 1, 3)
-    sample_index = leg_index.view(1, leg_count, 1, 1, 1, 1).expand(
-        batch,
-        leg_count,
-        candidate_count,
-        1,
-        int(cfg.capsule_samples),
-        3,
-    )
-    foot = geometry.foot_pos_w.gather(3, point_index).squeeze(3)
-    knee = geometry.knee_pos_w.gather(3, point_index).squeeze(3)
-    calf = geometry.calf_samples_w.gather(3, sample_index).squeeze(3)
-    thigh = geometry.thigh_samples_w.gather(3, sample_index).squeeze(3)
-
-    flat_points = torch.cat(
-        (
-            foot.reshape(foot.shape[0], -1, 3),
-            knee.reshape(knee.shape[0], -1, 3),
-            calf.reshape(calf.shape[0], -1, 3),
-            thigh.reshape(thigh.shape[0], -1, 3),
-        ),
-        dim=1,
-    )
-    query = query_height_semantic_valid(terrain, flat_points[..., :2])
-    cursor = 0
-    foot_h = query.height[:, cursor : cursor + leg_count * candidate_count].reshape(batch, leg_count, candidate_count)
-    cursor += leg_count * candidate_count
-    knee_h = query.height[:, cursor : cursor + leg_count * candidate_count].reshape(batch, leg_count, candidate_count)
-    cursor += leg_count * candidate_count
-    sample_count = leg_count * candidate_count * int(cfg.capsule_samples)
-    calf_h = query.height[:, cursor : cursor + sample_count].reshape(batch, leg_count, candidate_count, int(cfg.capsule_samples))
-    cursor += sample_count
-    thigh_h = query.height[:, cursor : cursor + sample_count].reshape(batch, leg_count, candidate_count, int(cfg.capsule_samples))
-
-    margin = float(cfg.collision_margin_m)
-    foot_ok = foot[..., 2] >= foot_h - float(cfg.landing_tolerance_m)
-    knee_ok = knee[..., 2] >= knee_h + float(cfg.knee_radius_m) + margin
-    calf_ok = (calf[..., 2] >= calf_h + float(cfg.calf_radius_m) + margin).all(dim=-1)
-    thigh_ok = (thigh[..., 2] >= thigh_h + float(cfg.thigh_radius_m) + margin).all(dim=-1)
-    collision_ok = foot_ok & knee_ok & calf_ok & thigh_ok
-    legacy_bits = torch.stack((~foot_ok, ~knee_ok, ~calf_ok, ~thigh_ok), dim=-1)
-    ellipsoid_count = len(tuple(cfg.collision_ellipsoids))
-    collision_bits = torch.zeros(
-        *legacy_bits.shape[:-1],
-        ellipsoid_count,
-        dtype=torch.bool,
-        device=legacy_bits.device,
-    )
-    if ellipsoid_count >= 10:
-        collision_bits[..., 0:4] = legacy_bits[..., 3:4]
-        collision_bits[..., 4:9] = legacy_bits[..., 2:3]
-        collision_bits[..., 9] = legacy_bits[..., 0]
-    return collision_ok, collision_bits
+    return ellipsoid_collision_mask(terrain, geometry, cfg)
 
 
 def _tracking_score(candidates, command: Tensor, cfg: ParallelismCfg) -> Tensor:
