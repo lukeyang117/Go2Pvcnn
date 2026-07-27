@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -24,3 +25,4 @@ class ParallelismCfg:
     calf_radius_m: float = 0.015
     thigh_radius_m: float = 0.035
     capsule_samples: int = 5
+    obstacle_semantic_ids: ClassVar[tuple[int, ...]] = (1, 2)

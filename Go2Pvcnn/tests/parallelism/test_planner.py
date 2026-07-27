@@ -21,6 +21,18 @@ def _terrain(batch: int = 1, *, invalid: bool = False):
     )
 
 
+def _semantic_terrain(batch: int = 1, *, semantic_id: int):
+    terrain = _terrain(batch)
+    return type(terrain)(
+        height_w=terrain.height_w,
+        semantic_id=torch.full_like(terrain.semantic_id, int(semantic_id)),
+        valid_mask=terrain.valid_mask,
+        origin_w=terrain.origin_w,
+        yaw_w=terrain.yaw_w,
+        resolution=terrain.resolution,
+    )
+
+
 def _state(batch: int = 1):
     from extension.parallelism import ParallelismState
 
@@ -43,7 +55,8 @@ def test_full_flat_trajectory_contract():
     assert traj.contact_state.shape == (1, 24, 4)
     assert traj.valid.shape == (1,)
     assert traj.diagnostics.candidate_w.shape == (1, 4, 50, 3)
-    assert traj.diagnostics.candidate_reject_bits.shape == (1, 4, 50, 4)
+    assert traj.diagnostics.candidate_reject_bits.shape == (1, 4, 50, 6)
+    assert traj.diagnostics.fk_touchdown_semantic.shape == (1, 4, 50)
 
 
 def test_invalid_map_makes_trajectory_invalid_single_pass():
@@ -54,6 +67,23 @@ def test_invalid_map_makes_trajectory_invalid_single_pass():
 
     assert not bool(traj.valid[0])
     assert not traj.diagnostics.candidate_valid.any()
+
+
+def test_obstacle_semantic_touchdowns_are_hard_rejected():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.planner import plan_trajectory
+
+    for semantic_id in (1, 2):
+        traj = plan_trajectory(_state(), torch.zeros(1, 3), _semantic_terrain(semantic_id=semantic_id), ParallelismCfg())
+
+        assert not bool(traj.valid[0])
+        assert not traj.diagnostics.candidate_valid.any()
+        assert traj.diagnostics.candidate_reject_bits[..., 4].all()
+        assert traj.diagnostics.candidate_reject_bits[..., 5].all()
+        assert torch.equal(
+            traj.diagnostics.fk_touchdown_semantic,
+            torch.full((1, 4, 50), semantic_id, dtype=torch.long),
+        )
 
 
 def test_filter_score_source_uses_torch_conditions():

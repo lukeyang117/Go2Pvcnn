@@ -20,8 +20,9 @@ def test_viewer_adapter_contract():
             candidate_w=torch.zeros(1, 4, 50, 3),
             candidate_score=torch.zeros(1, 4, 50),
             candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
-            candidate_reject_bits=torch.zeros(1, 4, 50, 4, dtype=torch.bool),
+            candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
             candidate_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
+            fk_touchdown_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             selected_index=torch.zeros(1, 4, dtype=torch.long),
         ),
     )
@@ -50,8 +51,9 @@ def test_viewer_adapter_exposes_overlay_optional_fields():
             candidate_w=torch.zeros(1, 4, 50, 3),
             candidate_score=torch.zeros(1, 4, 50),
             candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
-            candidate_reject_bits=torch.zeros(1, 4, 50, 4, dtype=torch.bool),
+            candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
             candidate_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
+            fk_touchdown_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             selected_index=torch.zeros(1, 4, dtype=torch.long),
         ),
     )

@@ -116,6 +116,15 @@ def _tracking_score(candidates, command: Tensor, cfg: ParallelismCfg) -> Tensor:
     return displacement_error.square().sum(dim=-1)
 
 
+def _semantic_ok(semantic: Tensor, cfg: ParallelismCfg) -> Tensor:
+    obstacle_ids = torch.tensor(
+        tuple(cfg.obstacle_semantic_ids),
+        dtype=semantic.dtype,
+        device=semantic.device,
+    )
+    return ~(semantic[..., None] == obstacle_ids).any(dim=-1)
+
+
 def _assemble_foot_targets(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor, selected_foothold_w: Tensor, cfg: ParallelismCfg) -> Tensor:
     batch = root_pos.shape[0]
     joint = torch.as_tensor(state.joint_pos, dtype=root_pos.dtype, device=root_pos.device)
@@ -174,17 +183,38 @@ def plan_trajectory(
     leg_select = torch.arange(leg_count, device=root.root_pos_w.device).view(1, leg_count, 1, 1, 1).expand(batch, leg_count, candidate_count, 1, 3)
     active_reachable = reachable.gather(3, leg_select[..., 0]).squeeze(3)
     active_joint = joint_candidate.gather(3, leg_select.expand(batch, leg_count, candidate_count, 1, 3)).squeeze(3)
+    fk_touchdown = geometry.foot_pos_w.gather(3, leg_select).squeeze(3)
 
     valid_map_ok = candidates.candidate_valid_map
     joint_ok = active_reachable & _joint_limit_mask(active_joint)
-    landing_query = query_height_semantic_valid(terrain, candidates.candidate_w[..., :2].reshape(batch, leg_count * candidate_count, 2))
+    landing_query = query_height_semantic_valid(terrain, fk_touchdown[..., :2].reshape(batch, leg_count * candidate_count, 2))
     landing_height = landing_query.height.reshape(batch, leg_count, candidate_count)
     landing_ok = landing_query.valid.reshape(batch, leg_count, candidate_count) & (
-        (candidates.candidate_w[..., 2] - landing_height).abs() <= float(cfg.landing_tolerance_m)
+        (fk_touchdown[..., 2] - landing_height).abs() <= float(cfg.landing_tolerance_m)
     )
     collision_ok = _collision_mask(terrain, geometry, cfg)
-    candidate_valid = valid_map_ok & joint_ok & landing_ok & collision_ok
-    reject_bits = torch.stack((~valid_map_ok, ~joint_ok, ~landing_ok, ~collision_ok), dim=-1)
+    candidate_semantic_ok = _semantic_ok(candidates.candidate_semantic, cfg)
+    fk_touchdown_semantic = landing_query.semantic.reshape(batch, leg_count, candidate_count)
+    fk_touchdown_semantic_ok = _semantic_ok(fk_touchdown_semantic, cfg)
+    candidate_valid = (
+        valid_map_ok
+        & joint_ok
+        & landing_ok
+        & collision_ok
+        & candidate_semantic_ok
+        & fk_touchdown_semantic_ok
+    )
+    reject_bits = torch.stack(
+        (
+            ~valid_map_ok,
+            ~joint_ok,
+            ~landing_ok,
+            ~collision_ok,
+            ~candidate_semantic_ok,
+            ~fk_touchdown_semantic_ok,
+        ),
+        dim=-1,
+    )
     score_raw = _tracking_score(candidates, command, cfg)
     score = torch.where(candidate_valid, score_raw, torch.full_like(score_raw, torch.inf))
     selected_index = score.argmin(dim=-1)
@@ -217,6 +247,7 @@ def plan_trajectory(
             candidate_valid=candidate_valid,
             candidate_reject_bits=reject_bits,
             candidate_semantic=candidates.candidate_semantic,
+            fk_touchdown_semantic=fk_touchdown_semantic,
             selected_index=selected_index,
         ),
     )

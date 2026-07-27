@@ -37,6 +37,7 @@ class ParallelismDiagnostics:
     candidate_valid: Tensor
     candidate_reject_bits: Tensor
     candidate_semantic: Tensor
+    fk_touchdown_semantic: Tensor
     selected_index: Tensor
 
 
