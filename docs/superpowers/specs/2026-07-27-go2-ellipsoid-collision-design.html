@@ -275,9 +275,10 @@ calf_ankle_cap:
     <h3>5.3 FootCollision</h3>
     <p>foot 第一版只使用一个椭圆体，覆盖足端接触球/脚垫。foot collision 用于避免脚进入凸起障碍物；正常落地接触仍由 landing filter 控制。</p>
     <pre>foot_pad:
-  center_l = (-0.002, 0.000, 0.000)
+  center_l = (-0.002, 0.000, 0.030)
   radii_l = (0.026, 0.024, 0.022)
   probe_offset_l = (0.020, 0.018)</pre>
+    <p>注意：parallelism 里的 <code>foot_pos_w</code> 语义是足底接触点，不是 USD foot sphere 的球心。因此 <code>foot_pad.center_l.z</code> 默认抬高到足底上方，避免平地正常接触被误判为 foot collision。</p>
 
     <h2>6. 碰撞检测逻辑</h2>
     <p>碰撞检查必须使用椭圆体对应刚体的坐标系。不能在 world frame 里直接按固定长短轴判断，因为椭圆体会跟随 thigh、calf、foot 刚体运动和旋转。</p>

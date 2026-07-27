@@ -61,6 +61,7 @@ def test_full_flat_trajectory_contract():
     assert traj.diagnostics.collision_ellipsoid_names == tuple(spec.name for spec in cfg.collision_ellipsoids)
     assert traj.diagnostics.collision_probe_count == 5
     assert traj.diagnostics.fk_touchdown_semantic.shape == (1, 4, 50)
+    assert traj.diagnostics.candidate_valid.any()
 
 
 def test_invalid_map_makes_trajectory_invalid_single_pass():

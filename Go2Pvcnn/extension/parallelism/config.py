@@ -35,6 +35,7 @@ class ParallelismCfg:
     thigh_radius_m: float = 0.035
     capsule_samples: int = 5
     collision_probe_count: int = 5
+    contact_tolerant_collision_names: tuple[str, ...] = ("calf_ankle_cap", "foot_pad")
     collision_ellipsoids: tuple[EllipsoidSpec, ...] = (
         EllipsoidSpec("thigh_body_inner", "thigh", (0.000, 0.035, -0.005), (0.055, 0.050, 0.035), (0.045, 0.045)),
         EllipsoidSpec("thigh_body_mid", "thigh", (0.000, 0.085, -0.005), (0.060, 0.055, 0.032), (0.050, 0.050)),
@@ -45,6 +46,6 @@ class ParallelismCfg:
         EllipsoidSpec("calf_mid_bar", "calf", (0.016, 0.000, -0.115), (0.024, 0.015, 0.045), (0.020, 0.013)),
         EllipsoidSpec("calf_lower_bar", "calf", (0.018, 0.000, -0.158), (0.023, 0.014, 0.038), (0.019, 0.012)),
         EllipsoidSpec("calf_ankle_cap", "calf", (0.008, 0.000, -0.195), (0.028, 0.018, 0.026), (0.022, 0.015)),
-        EllipsoidSpec("foot_pad", "foot", (-0.002, 0.000, 0.000), (0.026, 0.024, 0.022), (0.020, 0.018)),
+        EllipsoidSpec("foot_pad", "foot", (-0.002, 0.000, 0.030), (0.026, 0.024, 0.022), (0.020, 0.018)),
     )
     obstacle_semantic_ids: ClassVar[tuple[int, ...]] = (1, 2)

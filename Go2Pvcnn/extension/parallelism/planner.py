@@ -67,6 +67,21 @@ def _collision_mask(
     return ellipsoid_collision_mask(terrain, geometry, cfg)
 
 
+def _contact_tolerant_indices(cfg: ParallelismCfg, *, device: torch.device) -> Tensor:
+    names = tuple(spec.name for spec in cfg.collision_ellipsoids)
+    indices = [idx for idx, name in enumerate(names) if name in set(cfg.contact_tolerant_collision_names)]
+    return torch.tensor(indices, dtype=torch.long, device=device)
+
+
+def _suppress_contact_tolerant(bits: Tensor, cfg: ParallelismCfg) -> Tensor:
+    indices = _contact_tolerant_indices(cfg, device=bits.device)
+    if int(indices.numel()) == 0:
+        return bits
+    suppressed = bits.clone()
+    suppressed.index_fill_(dim=-1, index=indices, value=False)
+    return suppressed
+
+
 def _swing_collision_mask(
     state: ParallelismState,
     root_pos: Tensor,
@@ -138,15 +153,19 @@ def _swing_collision_mask(
             foot_rot_w=_expand_candidate_leg(geometry.foot_rot_w, 3, 3),
         )
         collision_ok, collision_bits = _collision_mask(terrain, geometry, cfg)
-        active_reachable = reachable[..., leg_idx].reshape(batch, candidate_count, half_cycle)
-        active_collision_ok = collision_ok[:, leg_idx].reshape(batch, candidate_count, half_cycle)
-        swing_ok[:, leg_idx] = active_reachable.all(dim=-1) & active_collision_ok.all(dim=-1)
-        swing_bits[:, leg_idx] = collision_bits[:, leg_idx].reshape(
+        active_collision_bits = collision_bits[:, leg_idx].reshape(
             batch,
             candidate_count,
             half_cycle,
             -1,
-        ).any(dim=2)
+        ).clone()
+        contact_indices = _contact_tolerant_indices(cfg, device=active_collision_bits.device)
+        if int(contact_indices.numel()) > 0:
+            active_collision_bits[:, :, 0].index_fill_(dim=-1, index=contact_indices, value=False)
+            active_collision_bits[:, :, -1].index_fill_(dim=-1, index=contact_indices, value=False)
+        active_collision_ok = ~active_collision_bits.any(dim=-1)
+        swing_ok[:, leg_idx] = active_collision_ok.all(dim=-1)
+        swing_bits[:, leg_idx] = active_collision_bits.any(dim=2)
     return swing_ok, swing_bits
 
 
@@ -240,7 +259,9 @@ def plan_trajectory(
     landing_ok = landing_query.valid.reshape(batch, leg_count, candidate_count) & (
         (fk_touchdown[..., 2] - landing_height).abs() <= float(cfg.landing_tolerance_m)
     )
-    touchdown_collision_ok, touchdown_collision_bits = _collision_mask(terrain, geometry, cfg)
+    _touchdown_collision_ok, touchdown_collision_bits = _collision_mask(terrain, geometry, cfg)
+    touchdown_collision_bits = _suppress_contact_tolerant(touchdown_collision_bits, cfg)
+    touchdown_collision_ok = ~touchdown_collision_bits.any(dim=-1)
     swing_collision_ok, swing_collision_bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg)
     collision_ok = touchdown_collision_ok & swing_collision_ok
     collision_bits = touchdown_collision_bits | swing_collision_bits
