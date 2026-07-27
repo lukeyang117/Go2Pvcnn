@@ -27,6 +27,11 @@ class Go2ParallelGeometry:
     knee_pos_w: Tensor
     calf_samples_w: Tensor
     thigh_samples_w: Tensor
+    thigh_pos_w: Tensor
+    thigh_rot_w: Tensor
+    calf_pos_w: Tensor
+    calf_rot_w: Tensor
+    foot_rot_w: Tensor
 
 
 def _constant(reference: Tensor, values: tuple[tuple[float, ...], ...] | tuple[float, ...]) -> Tensor:
@@ -42,6 +47,28 @@ def rpy_to_rotation_matrix(root_rpy_w: Tensor) -> Tensor:
     row0 = torch.stack((cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr), dim=-1)
     row1 = torch.stack((sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr), dim=-1)
     row2 = torch.stack((-sp, cp * sr, cp * cr), dim=-1)
+    return torch.stack((row0, row1, row2), dim=-2)
+
+
+def _rotation_x(angle: Tensor) -> Tensor:
+    cosine = torch.cos(angle)
+    sine = torch.sin(angle)
+    zeros = torch.zeros_like(angle)
+    ones = torch.ones_like(angle)
+    row0 = torch.stack((ones, zeros, zeros), dim=-1)
+    row1 = torch.stack((zeros, cosine, -sine), dim=-1)
+    row2 = torch.stack((zeros, sine, cosine), dim=-1)
+    return torch.stack((row0, row1, row2), dim=-2)
+
+
+def _rotation_y(angle: Tensor) -> Tensor:
+    cosine = torch.cos(angle)
+    sine = torch.sin(angle)
+    zeros = torch.zeros_like(angle)
+    ones = torch.ones_like(angle)
+    row0 = torch.stack((cosine, zeros, sine), dim=-1)
+    row1 = torch.stack((zeros, ones, zeros), dim=-1)
+    row2 = torch.stack((-sine, zeros, cosine), dim=-1)
     return torch.stack((row0, row1, row2), dim=-2)
 
 
@@ -92,10 +119,20 @@ def fk_go2(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor, *, capsule
     if root_pos.shape[-1] != 3 or root_rpy.shape != root_pos.shape or joint.shape[:-1] != root_pos.shape[:-1] or joint.shape[-1] != 12:
         raise ValueError("root_pos_w/root_rpy_w/joint_pos must have shapes [...,3], [...,3], [...,12]")
     hip_body, upper_body, knee_body, foot_body = _leg_points_body(joint)
+    angles = joint.reshape(*joint.shape[:-1], 4, 3)
+    abad = angles[..., 0]
+    thigh_angle = angles[..., 1]
+    calf_angle = angles[..., 2]
     rotation = rpy_to_rotation_matrix(root_rpy)
     hip_world = torch.einsum("...ij,...lj->...li", rotation, hip_body) + root_pos.unsqueeze(-2)
+    upper_world = torch.einsum("...ij,...lj->...li", rotation, upper_body) + root_pos.unsqueeze(-2)
     knee_world = torch.einsum("...ij,...lj->...li", rotation, knee_body) + root_pos.unsqueeze(-2)
     foot_world = torch.einsum("...ij,...lj->...li", rotation, foot_body) + root_pos.unsqueeze(-2)
+    abad_rot = _rotation_x(abad)
+    thigh_local_rot = torch.matmul(abad_rot, _rotation_y(thigh_angle))
+    calf_local_rot = torch.matmul(abad_rot, _rotation_y(thigh_angle + calf_angle))
+    thigh_world_rot = torch.einsum("...ij,...ljk->...lik", rotation, thigh_local_rot)
+    calf_world_rot = torch.einsum("...ij,...ljk->...lik", rotation, calf_local_rot)
     sample_alpha = torch.linspace(
         0.0,
         1.0,
@@ -111,4 +148,9 @@ def fk_go2(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor, *, capsule
         knee_pos_w=knee_world,
         calf_samples_w=calf_samples,
         thigh_samples_w=thigh_samples,
+        thigh_pos_w=upper_world,
+        thigh_rot_w=thigh_world_rot,
+        calf_pos_w=knee_world,
+        calf_rot_w=calf_world_rot,
+        foot_rot_w=calf_world_rot,
     )

@@ -192,6 +192,11 @@ def plan_trajectory(
         knee_pos_w=geometry.knee_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
         calf_samples_w=geometry.calf_samples_w.reshape(batch, leg_count, candidate_count, 4, int(cfg.capsule_samples), 3),
         thigh_samples_w=geometry.thigh_samples_w.reshape(batch, leg_count, candidate_count, 4, int(cfg.capsule_samples), 3),
+        thigh_pos_w=geometry.thigh_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
+        thigh_rot_w=geometry.thigh_rot_w.reshape(batch, leg_count, candidate_count, 4, 3, 3),
+        calf_pos_w=geometry.calf_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
+        calf_rot_w=geometry.calf_rot_w.reshape(batch, leg_count, candidate_count, 4, 3, 3),
+        foot_rot_w=geometry.foot_rot_w.reshape(batch, leg_count, candidate_count, 4, 3, 3),
     )
     leg_select = torch.arange(leg_count, device=root.root_pos_w.device).view(1, leg_count, 1, 1, 1).expand(batch, leg_count, candidate_count, 1, 3)
     active_reachable = reachable.gather(3, leg_select[..., 0]).squeeze(3)
