@@ -34,3 +34,11 @@ def test_parallelism_viewer_draws_candidate_circle_markers():
 
     assert "parallelism_candidate_circle" in source
     assert "/Visuals/Parallelism/candidate_circle_" in source
+
+
+def test_parallelism_viewer_prints_reject_diagnostics():
+    source = VIEWER_FILE.read_text(encoding="utf-8")
+
+    assert "_format_parallelism_reject_diagnostics" in source
+    assert "parallelism_reject(" in source
+    assert "print(\n                        _format_viewer_plan_line(" in source

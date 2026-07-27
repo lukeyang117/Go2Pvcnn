@@ -1700,6 +1700,41 @@ def _format_viewer_hard_reason_diagnostics(result) -> str:
     )
 
 
+def _format_parallelism_reject_diagnostics(result) -> str:
+    diagnostics = getattr(result, "parallelism_diagnostics", None)
+    if diagnostics is None:
+        return ""
+    reject_bits = getattr(diagnostics, "candidate_reject_bits", None)
+    candidate_valid = getattr(diagnostics, "candidate_valid", None)
+    if reject_bits is None or candidate_valid is None:
+        return ""
+
+    reject_t = torch.as_tensor(reject_bits, dtype=torch.bool)
+    valid_t = torch.as_tensor(candidate_valid, dtype=torch.bool)
+    if reject_t.ndim != 4 or reject_t.shape[-1] != 6 or valid_t.ndim != 3:
+        return ""
+
+    names = (
+        "valid_map",
+        "joint",
+        "landing",
+        "collision",
+        "candidate_semantic",
+        "fk_touchdown_semantic",
+    )
+    counts = reject_t.reshape(-1, reject_t.shape[-1]).sum(dim=0).to(torch.long).tolist()
+    per_leg_valid = valid_t.reshape(-1, valid_t.shape[-2], valid_t.shape[-1])[0].sum(dim=-1).to(torch.long).tolist()
+    count_text = " ".join(f"{name}={int(count)}" for name, count in zip(names, counts))
+    per_leg_text = ",".join(str(int(count)) for count in per_leg_valid)
+    return (
+        "parallelism_reject("
+        f"valid={int(valid_t.sum().item())}/{int(valid_t.numel())} "
+        f"per_leg_valid=[{per_leg_text}] "
+        f"{count_text}"
+        ")"
+    )
+
+
 def _format_viewer_plan_line(
     *,
     backend: str,
@@ -1726,6 +1761,9 @@ def _format_viewer_plan_line(
     hard_text = _format_viewer_hard_reason_diagnostics(result)
     if hard_text:
         parts.append(hard_text)
+    parallelism_text = _format_parallelism_reject_diagnostics(result)
+    if parallelism_text:
+        parts.append(parallelism_text)
     return " ".join(parts)
 
 
@@ -2243,16 +2281,16 @@ def main() -> int:
                         semantic_map,
                         int(args_cli.heightmap_viz_stride),
                     )
-                    # print(
-                    #     _format_viewer_plan_line(
-                    #         backend=args_cli.planner_backend,
-                    #         cycle=plan_cycle,
-                    #         command=active_cmd.values,
-                    #         result=result,
-                    #         semantic_diagnostics=semantic_diag,
-                    #     ),
-                    #     flush=True,
-                    # )
+                    print(
+                        _format_viewer_plan_line(
+                            backend=args_cli.planner_backend,
+                            cycle=plan_cycle,
+                            command=active_cmd.values,
+                            result=result,
+                            semantic_diagnostics=semantic_diag,
+                        ),
+                        flush=True,
+                    )
                     playback_frame = 0
                     if joint_backend:
                         print(_format_joint_mpc_diagnostics(result), flush=True)
