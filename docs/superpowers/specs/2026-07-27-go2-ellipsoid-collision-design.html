@@ -189,6 +189,37 @@ probe_offset_l</pre>
     </table>
     <p>第一版不加椭圆体自身旋转，椭圆体轴向跟随对应 link frame。后续如果 visual mesh 的局部斜向形状必须更精确，可以新增 <code>rot_l</code>，但不进入第一版。</p>
 
+    <h3>4.1 Link local frame 语义</h3>
+    <p><code>center_l</code> 和 <code>probe_offset_l</code> 都不是 IsaacLab 直接读出来的关节坐标，也不是在 world frame 下的固定点。它们是相对某个刚体 frame 的固定局部偏移。</p>
+    <pre>joint_pos_from_isaaclab / candidate_ik_joint
+  -> FK
+  -> thigh/calf/foot link pose
+  -> link_pose_w @ center_l
+  -> ellipsoid center in world</pre>
+    <p>对 viewer 当前状态，关节角来自 IsaacLab robot state；对每个 foothold candidate，关节角来自该 candidate 的 IK 结果。两者都必须先通过 parallelism 自己的 FK 得到 <code>thigh_link_pose_w</code>、<code>calf_link_pose_w</code>、<code>foot_link_pose_w</code>，然后再叠加椭圆体局部偏移。</p>
+    <pre>center_w = link_pos_w + link_rot_w @ center_l</pre>
+    <p>因此完整位置不是“关节坐标 + 椭圆体偏移”，而是“由 root pose 和 joint position 通过 FK 算出对应刚体坐标系，再把椭圆体局部偏移变换到 world”。</p>
+
+    <h3>4.2 刚体 frame 映射</h3>
+    <p>每个椭圆体必须挂到与它 mesh 部位一致的刚体 frame。planner 内部腿顺序为 <code>FL, FR, RL, RR</code>，对应 Go2 link 名称如下：</p>
+    <table>
+      <thead>
+        <tr><th>planner leg</th><th>ThighCollision frame</th><th>CalfCollision frame</th><th>FootCollision frame</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>FL</code></td><td><code>FL_thigh</code></td><td><code>FL_calf</code></td><td><code>FL_foot</code></td></tr>
+        <tr><td><code>FR</code></td><td><code>FR_thigh</code></td><td><code>FR_calf</code></td><td><code>FR_foot</code></td></tr>
+        <tr><td><code>RL</code></td><td><code>RL_thigh</code></td><td><code>RL_calf</code></td><td><code>RL_foot</code></td></tr>
+        <tr><td><code>RR</code></td><td><code>RR_thigh</code></td><td><code>RR_calf</code></td><td><code>RR_foot</code></td></tr>
+      </tbody>
+    </table>
+    <p>绑定规则：</p>
+    <pre>thigh_* ellipsoids -> same-leg *_thigh link frame
+calf_* ellipsoids  -> same-leg *_calf link frame
+foot_* ellipsoids  -> same-leg *_foot link frame</pre>
+    <p>实现时不能用 hip 点、knee 点、foot contact 点替代这些刚体 frame。hip/knee/foot 关键点可以继续用于 IK/FK 几何求解，但椭圆体碰撞体必须使用对应 link 的刚体位姿。</p>
+    <p>如果 parallelism FK 当前只返回 hip、knee、foot 点而没有 link pose，本任务需要补足内部 FK 输出：至少返回每条腿的 <code>thigh_pos_w/thigh_rot_w</code>、<code>calf_pos_w/calf_rot_w</code>、<code>foot_pos_w/foot_rot_w</code>。这些 pose 由 root pose 和 candidate joint angles 计算，不能从 viewer 的 body state 直接拷贝到 candidate 上。</p>
+
     <h2>5. 默认椭圆体参数</h2>
     <p>以下参数是按 visual mesh 外形的第一版近似，单位都是米。左右腿需要按 leg side 镜像外侧方向；实现时 config 可以存一份模板，再根据 FL/FR/RL/RR 的 side sign 转换。</p>
 
@@ -330,7 +361,33 @@ terrain_p_l:      [B, L, C, E, P, 3]
 inside:           [B, L, C, E, P]
 ellipsoid_hit:    [B, L, C, E]
 candidate_hit:    [B, L, C]</pre>
-    <p>所有判断使用 torch 条件判断，不用 Python 逐 candidate 或逐高程点循环。</p>
+    <p>所有判断必须使用 torch 条件判断和 reduction，例如 <code>&lt;=</code>、<code>torch.logical_or</code>、<code>torch.any</code>、<code>torch.where</code>。不能用 Python <code>if</code> 对单个 candidate、单个 env、单个 probe 做逐项分支。</p>
+
+    <h3>7.1 显存控制</h3>
+    <p>1024 个环境时，第一版维度约为：</p>
+    <pre>B = 1024
+L = 4
+C = 50
+E = 10
+P = 5
+
+total probe checks = B * L * C * E * P = 10,240,000</pre>
+    <p>如果一次性同时保留 <code>probe_w</code>、<code>terrain_p_w</code>、<code>terrain_p_l</code>、<code>link_rot_w</code> 等大 tensor，collision 本身就可能接近数百 MB，再叠加 FK、IK、terrain query 和 PyTorch 临时 tensor，峰值显存可能明显升高。</p>
+    <p>实现时不允许为了简单而长期保存所有中间大 tensor。推荐按 <code>link_type</code> 或 ellipsoid chunk 分块计算，并且每块立即 reduce 到命中 mask：</p>
+    <pre>candidate_hit = zeros([B, L, C], dtype=bool)
+ellipsoid_hit_diag = zeros([B, L, C, E], dtype=bool)
+
+for group in [thigh_ellipsoids, calf_ellipsoids, foot_ellipsoids]:
+  probe_w = compute_probe_world_for_group(...)
+  terrain_p_w = query_height_map(probe_w.xy)
+  terrain_p_l = world_to_link_for_group(terrain_p_w)
+  inside = ellipsoid_equation(terrain_p_l)
+  group_hit = torch.any(inside, dim=-1)
+  candidate_hit = torch.logical_or(candidate_hit, torch.any(group_hit, dim=-1))
+  ellipsoid_hit_diag[..., group_indices] = group_hit
+  release large temporaries before next group</pre>
+    <p>这个循环只在椭圆体 group 维度上做小粒度分块，不破坏 env、leg、candidate、probe 的 torch 并行。1024 env 下最大临时张量按 calf 组 <code>E=5</code> 估算，比一次性 <code>E=10</code> 全展开低一半，且不会同时保留多份重复中间量。</p>
+    <p>如果后续增加椭圆体数量或 probe 数量，必须优先增加 group/chunk 分块，而不是全量展开所有 <code>[B,L,C,E,P,3]</code> 中间张量。</p>
 
     <h2>8. Config 可调性</h2>
     <p>所有椭圆体参数必须放入 <code>ParallelismCfg</code> 或其嵌套 dataclass。planner 内不应保留隐藏的 hard-coded collision boundary。</p>
