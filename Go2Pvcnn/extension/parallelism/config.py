@@ -30,6 +30,7 @@ class ParallelismCfg:
     swing_height_m: float = 0.08
     landing_tolerance_m: float = 0.025
     collision_margin_m: float = 0.003
+    semantic_touchdown_margin_m: float = 0.0
     vx_limit: float = 1.0
     vy_limit: float = 0.5
     vyaw_limit: float = 1.0
