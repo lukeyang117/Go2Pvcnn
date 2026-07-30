@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism 语义 Margin 与调试面板设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8f8;
+      --panel: #ffffff;
+      --ink: #172026;
+      --muted: #5f6b72;
+      --line: #d9e1e5;
+      --accent: #356b5b;
+      --accent-soft: #e7f1ed;
+      --code-bg: #eef2f3;
+      --warn: #93610c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+    main {
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    h1, h2, h3 { margin: 0; line-height: 1.25; }
+    h1 { font-size: 30px; margin-bottom: 10px; }
+    h2 {
+      font-size: 21px;
+      margin-top: 34px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+    h3 { font-size: 17px; margin-top: 22px; margin-bottom: 8px; }
+    p { margin: 8px 0; }
+    ul { margin: 8px 0 12px 22px; padding: 0; }
+    li { margin: 4px 0; }
+    code {
+      background: var(--code-bg);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.93em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      line-height: 1.45;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      background: var(--panel);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #edf3f3; font-weight: 650; }
+    .hero {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px 24px;
+      margin-bottom: 24px;
+    }
+    .summary { color: var(--muted); font-size: 15px; }
+    .note {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 10px 14px;
+      margin: 14px 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .warn { color: var(--warn); font-weight: 650; }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>Parallelism 语义 Margin 与调试面板设计</h1>
+    <p class="summary">
+      本设计继承 <code>2026-07-30-go2-official-surface-point-collision-design.html</code>：
+      Go2 leg 碰撞仍使用官方 USD collision primitive 的表面点，active leg only 与 standstill fallback 逻辑保持不变。
+      本次只补充 touchdown 语义 margin、调试面板速度范围、以及 <code>show mesh</code> 可视化开关。
+    </p>
+  </section>
+
+  <h2>1. 本次目标</h2>
+  <ul>
+    <li>速度调试面板支持带方向速度，直接输出 root 坐标系下的 signed command。</li>
+    <li>新增一个语义 margin 参数，只控制 touchdown 是否落在语义障碍物附近。</li>
+    <li>nominal candidate touchdown 与 IK 后 FK touchdown 共用同一个语义 margin。</li>
+    <li><code>show mesh</code> checkbox 必须真正控制 IsaacSim 中 Go2 visual mesh 的可见性。</li>
+    <li>不改变 official collision surface point 检测，不改变 height landing tolerance，不改变 score。</li>
+  </ul>
+
+  <h2>2. 速度调试面板</h2>
+  <p>调试面板内的速度滑块表示 root/body frame 下的带符号速度，滑块中点为 <code>0</code>。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>参数</th>
+        <th>范围</th>
+        <th>含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>vx</code></td>
+        <td><code>[-1.0, 1.0]</code></td>
+        <td>前进/后退速度，正值向前，负值向后。</td>
+      </tr>
+      <tr>
+        <td><code>vy</code></td>
+        <td><code>[-0.5, 0.5]</code></td>
+        <td>横向速度，正负方向与现有键盘 root-frame 语义一致。</td>
+      </tr>
+      <tr>
+        <td><code>vyaw</code></td>
+        <td><code>[-1.0, 1.0]</code></td>
+        <td>yaw rate，正负方向与现有键盘 yaw 语义一致。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    面板只覆盖 test terminal command。键盘 teleop 的 scale 与按键映射不在本次修改范围内。
+    当 viewer 使用 scripted command 时，面板速度不应覆盖 scripted command，保持前一次修复后的确定性测试行为。
+  </p>
+  <p>
+    面板还需要提供 <code>semantic_touchdown_margin_m</code> 滑块。该滑块实时写入 parallelism planner config，
+    下一次 replan 时同时影响 nominal candidate touchdown 与 FK 后 touchdown 的语义过滤。
+  </p>
+
+  <h2>3. 单参数语义 Margin</h2>
+  <p>新增配置项：</p>
+  <pre><code>semantic_touchdown_margin_m: float = 0.0</code></pre>
+  <table>
+    <thead>
+      <tr>
+        <th>字段</th>
+        <th>设计值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>默认值</td>
+        <td><code>0.0 m</code>，保持当前行为完全兼容。</td>
+      </tr>
+      <tr>
+        <td>调试面板范围</td>
+        <td><code>[0.0, 0.12] m</code>。</td>
+      </tr>
+      <tr>
+        <td>推荐调试起点</td>
+        <td><code>0.03 m</code>。在 <code>0.01 m</code> 语义图分辨率下，相当于约 3 个 grid cell 的外扩。</td>
+      </tr>
+      <tr>
+        <td>作用对象</td>
+        <td>只作用于语义 id <code>1</code> 和 <code>2</code> 的 touchdown 过滤。</td>
+      </tr>
+      <tr>
+        <td>不作用对象</td>
+        <td>不影响 official collision point、高程 landing 检查、valid map、IK 关节限位和 score。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. 语义外扩方法</h2>
+  <p>
+    语义外扩使用高分辨率 <code>ParallelismTerrain.semantic_id</code>，不使用 RL 后续降采样图。
+    先把 obstacle semantic ids <code>(1, 2)</code> 转成二值 mask，然后按 margin 转换出的 grid 半径做二维方形膨胀。
+  </p>
+  <pre><code>radius_cells = ceil(semantic_touchdown_margin_m / terrain.resolution)
+kernel_size = 2 * radius_cells + 1
+expanded_obstacle = max_pool2d(obstacle_mask, kernel_size, stride=1, padding=radius_cells) &gt; 0</code></pre>
+  <p>
+    touchdown 过滤时仍然只做单点查询：先把 touchdown world xy 映射到 terrain grid，再读取
+    <code>expanded_obstacle[row, col]</code>。如果为真，则该 touchdown invalid。
+  </p>
+  <div class="note">
+    这个外扩是方形外扩。它比每个 touchdown 周围多点采样更快，也更容易保持 GPU 并行；
+    代价是边界会略保守。对于“不要踩到小障碍物附近”的需求，这个保守性是可接受的。
+  </div>
+
+  <h2>5. Planner 数据流</h2>
+  <h3>5.1 Nominal candidate touchdown</h3>
+  <p>
+    <code>build_candidates</code> 仍然负责生成每条腿 50 个候选点，并查询原始高度、原始语义与 valid map。
+    语义 hard filter 不再只看原始 <code>candidate_semantic</code>，而是额外用 expanded obstacle mask 检查 candidate touchdown 中心点。
+  </p>
+
+  <h3>5.2 FK 后 touchdown</h3>
+  <p>
+    IK 后再 FK 得到 <code>fk_touchdown</code> 后，继续做原有 landing height 检查。
+    语义 hard filter 同样查询 expanded obstacle mask；如果 FK 后真实落脚点进入外扩障碍区域，则该 candidate invalid。
+  </p>
+
+  <h3>5.3 Reject bits</h3>
+  <p>
+    现有 reject bit 位置保持兼容：
+  </p>
+  <ul>
+    <li><code>candidate_semantic</code> reject bit：表示 nominal candidate touchdown 命中外扩语义障碍。</li>
+    <li><code>fk_touchdown_semantic</code> reject bit：表示 FK 后真实 touchdown 命中外扩语义障碍。</li>
+  </ul>
+  <p>diagnostics 中的 raw semantic tensor 可以继续保留，用于观察原始 touchdown 所在格子的语义 id。</p>
+
+  <h2>6. 计算量与并行性</h2>
+  <p>
+    对于分辨率 <code>0.01 m</code> 的高分辨率语义图，<code>0.03 m</code> margin 会变成
+    <code>radius_cells = 3</code>，方形 kernel 为 <code>7 x 7</code>。
+    这一步是每次 terrain 输入后的整图 GPU 操作，之后所有 touchdown 都是单点查表。
+  </p>
+  <ul>
+    <li>避免对每个 candidate 周围采样多个点，计算量不会随周围采样点数放大。</li>
+    <li>nominal 与 FK touchdown 共用同一张 expanded obstacle mask。</li>
+    <li>所有条件判断使用 <code>torch</code> 张量逻辑，保持 env、leg、candidate 维度并行。</li>
+    <li>RL 后续 downsample 仍然可以独立放到 raycaster 投影后缓存，但不参与本次 planner touchdown 过滤。</li>
+  </ul>
+
+  <h2>7. Show Mesh 可视化开关</h2>
+  <p>
+    当前面板里的 <code>show mesh</code> 只更新 state，没有真正隐藏 Go2 本体。新行为需要把 checkbox 绑定到 IsaacSim visual prim 的 visibility。
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>状态</th>
+        <th>行为</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>show_mesh = true</code></td>
+        <td>Go2 visual mesh 显示。</td>
+      </tr>
+      <tr>
+        <td><code>show_mesh = false</code></td>
+        <td>Go2 visual mesh 隐藏，但 robot prim 不删除，planner 和关节姿态更新继续运行。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <code>show collision body</code> 与 <code>show contact points</code> 保持独立：
+    关闭 mesh 后仍可单独观察碰撞体中心/碰撞点，以便检查 official collision primitive 是否贴合 Go2 mesh。
+  </p>
+
+  <h2>8. 测试与验收</h2>
+  <ul>
+    <li>单元测试覆盖 signed velocity sliders：负 <code>vx/vy/vyaw</code> 能进入 test terminal command。</li>
+    <li>单元测试覆盖 semantic margin：中心点原始语义为 <code>0</code>，但进入外扩区域时被 hard reject。</li>
+    <li>单元测试分别覆盖 nominal candidate 与 FK touchdown 两个语义 reject bit。</li>
+    <li>viewer 测试需要证明调试面板能打开，速度滑块改变 planner command，<code>semantic_touchdown_margin_m</code> 能进入 <code>ParallelismCfg</code>。</li>
+    <li>IsaacSim 目视验收：关闭 <code>show mesh</code> 后 Go2 本体消失；碰撞点和碰撞体开关仍独立生效。</li>
+  </ul>
+
+  <h2>9. 不做的事</h2>
+  <ul>
+    <li>不把 planner touchdown 过滤切到低分辨率 RL semantic map。</li>
+    <li>不在 observation 中迁移 downsample 逻辑。</li>
+    <li>不改变 score，仍只用速度跟踪位移误差。</li>
+    <li>不改变 root 搜索、trot 周期、active-leg-only 碰撞边界。</li>
+    <li>不复用 <code>joint_mpc_rti</code> 代码。</li>
+  </ul>
+</main>
+</body>
+</html>
