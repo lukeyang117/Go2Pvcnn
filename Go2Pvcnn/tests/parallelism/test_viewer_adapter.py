@@ -100,6 +100,33 @@ def test_viewer_test_terminal_state_scales_command():
     assert torch.allclose(command, torch.tensor([[0.5, 0.25, 0.75]]))
 
 
+def test_test_terminal_command_supports_signed_velocity():
+    from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _apply_test_terminal_command
+
+    state = ViewerTestTerminalState(vx=-0.4, vy=-0.2, vyaw=-0.7, enabled=True)
+    command = _apply_test_terminal_command(torch.zeros(2, 3), state)
+
+    assert torch.allclose(command, torch.tensor([[-0.4, -0.2, -0.7], [-0.4, -0.2, -0.7]]))
+
+
+def test_parallelism_cfg_from_viewer_uses_semantic_margin():
+    from argparse import Namespace
+    from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _parallelism_cfg_from_viewer_args
+
+    cfg = _parallelism_cfg_from_viewer_args(
+        Namespace(plan_dt=0.02),
+        ViewerTestTerminalState(
+            swing_height=0.11,
+            semantic_touchdown_margin_m=0.04,
+            standstill_fallback_enabled=False,
+        ),
+    )
+
+    assert cfg.swing_height_m == 0.11
+    assert cfg.semantic_touchdown_margin_m == 0.04
+    assert cfg.standstill_fallback_enabled is False
+
+
 def test_parallelism_visualization_flags_preserve_values():
     from extension.viz.go2_foostep_planner import _parallelism_visualization_flags
 

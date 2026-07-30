@@ -11,6 +11,7 @@ import atexit
 import copy
 import math
 import os
+import re
 import select
 import signal
 import sys
@@ -117,6 +118,7 @@ class ViewerTestTerminalState:
     vy: float = 0.0
     vyaw: float = 0.0
     swing_height: float = 0.08
+    semantic_touchdown_margin_m: float = 0.0
     standstill_fallback_enabled: bool = True
     show_mesh: bool = True
     show_collision_body: bool = False
@@ -144,6 +146,83 @@ def _parallelism_visualization_flags(
     )
 
 
+def _robot_prim_path_candidates(base_env) -> tuple[str, ...]:
+    try:
+        robot = base_env.scene["robot"]
+    except Exception:
+        return ()
+    values: list[str] = []
+    for attr in ("prim_path", "root_prim_path"):
+        value = getattr(robot, attr, None)
+        if value:
+            values.append(str(value))
+    cfg = getattr(robot, "cfg", None)
+    for attr in ("prim_path", "root_prim_path"):
+        value = getattr(cfg, attr, None)
+        if value:
+            values.append(str(value))
+    return tuple(dict.fromkeys(values))
+
+
+def _prim_path_regex(path_pattern: str) -> re.Pattern[str]:
+    pattern = re.escape(path_pattern)
+    pattern = pattern.replace(re.escape("{ENV_REGEX_NS}"), r"/World/envs/env_\d+")
+    pattern = pattern.replace(r"\.\*", r".*")
+    pattern = pattern.replace(r"\*", r".*")
+    return re.compile(f"^{pattern}$")
+
+
+def _set_go2_mesh_visibility(base_env, visible: bool) -> bool:
+    try:
+        import omni.usd
+        from pxr import UsdGeom
+    except Exception:
+        return False
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return False
+
+    prims = []
+    raw_paths = _robot_prim_path_candidates(base_env)
+    for raw_path in raw_paths:
+        if not any(token in raw_path for token in ("*", "{ENV_REGEX_NS}")):
+            prim = stage.GetPrimAtPath(raw_path)
+            if prim.IsValid():
+                prims.append(prim)
+    if raw_paths:
+        patterns = tuple(_prim_path_regex(path) for path in raw_paths)
+        for prim in stage.Traverse():
+            path = str(prim.GetPath())
+            if any(pattern.match(path) for pattern in patterns):
+                prims.append(prim)
+    if not prims:
+        for prim in stage.Traverse():
+            path = str(prim.GetPath())
+            name = str(prim.GetName()).lower()
+            if path.startswith("/World/envs/") and (name in {"robot", "go2"} or path.endswith("/Robot")):
+                prims.append(prim)
+
+    token = "inherited" if bool(visible) else "invisible"
+    changed = False
+    seen: set[str] = set()
+    for root_prim in prims:
+        root_path = str(root_prim.GetPath())
+        for prim in stage.Traverse():
+            path = str(prim.GetPath())
+            if path != root_path and not path.startswith(root_path + "/"):
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            imageable = UsdGeom.Imageable(prim)
+            if not imageable:
+                continue
+            imageable.GetVisibilityAttr().Set(token)
+            changed = True
+    return changed
+
+
 def _apply_test_terminal_command(command: torch.Tensor, state: ViewerTestTerminalState | None) -> torch.Tensor:
     if state is None or not bool(state.enabled):
         return command
@@ -162,7 +241,7 @@ def _create_viewer_test_terminal(state: ViewerTestTerminalState):
         print(f"[WARN][ViewerTestTerminal] omni.ui unavailable: {exc}", flush=True)
         return None
 
-    window = ui.Window("Parallelism Test Terminal", width=330, height=315)
+    window = ui.Window("Parallelism Test Terminal", width=360, height=345)
 
     def _slider(label: str, attr: str, minimum: float, maximum: float):
         with ui.HStack(height=28):
@@ -192,10 +271,11 @@ def _create_viewer_test_terminal(state: ViewerTestTerminalState):
     with window.frame:
         with ui.VStack(spacing=6):
             ui.Label("Parallelism 调试面板", height=24)
-            _slider("vx", "vx", 0.0, 1.0)
-            _slider("vy", "vy", 0.0, 0.5)
-            _slider("vyaw", "vyaw", 0.0, 1.0)
+            _slider("vx", "vx", -1.0, 1.0)
+            _slider("vy", "vy", -0.5, 0.5)
+            _slider("vyaw", "vyaw", -1.0, 1.0)
             _slider("swing_height", "swing_height", 0.0, 0.25)
+            _slider("semantic_margin", "semantic_touchdown_margin_m", 0.0, 0.12)
             _checkbox("standstill fallback", "standstill_fallback_enabled")
             _checkbox("show mesh", "show_mesh")
             _checkbox("show collision body", "show_collision_body")
@@ -2206,6 +2286,23 @@ def _parallelism_state_from_env(base_env, foot_ids):
     )
 
 
+def _parallelism_cfg_from_viewer_args(args_cli: argparse.Namespace, test_terminal_state: ViewerTestTerminalState | None):
+    from extension.parallelism import ParallelismCfg
+
+    return ParallelismCfg(
+        dt=float(args_cli.plan_dt),
+        swing_height_m=float(test_terminal_state.swing_height)
+        if test_terminal_state is not None
+        else ParallelismCfg.swing_height_m,
+        semantic_touchdown_margin_m=float(test_terminal_state.semantic_touchdown_margin_m)
+        if test_terminal_state is not None
+        else ParallelismCfg.semantic_touchdown_margin_m,
+        standstill_fallback_enabled=bool(test_terminal_state.standstill_fallback_enabled)
+        if test_terminal_state is not None
+        else True,
+    )
+
+
 def _plan_parallelism_viewer_trajectory(
     *,
     base_env,
@@ -2215,19 +2312,12 @@ def _plan_parallelism_viewer_trajectory(
     args_cli: argparse.Namespace,
     test_terminal_state: ViewerTestTerminalState | None = None,
 ):
-    from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory
     from extension.parallelism.viewer_adapter import parallelism_trajectory_to_viewer_result
 
     terrain, ray_hits = _compute_parallelism_terrain(scanner)
     state = _parallelism_state_from_env(base_env, foot_ids)
-    cfg = ParallelismCfg(
-        dt=float(args_cli.plan_dt),
-        swing_height_m=float(test_terminal_state.swing_height) if test_terminal_state is not None else ParallelismCfg.swing_height_m,
-        standstill_fallback_enabled=bool(test_terminal_state.standstill_fallback_enabled)
-        if test_terminal_state is not None
-        else True,
-    )
+    cfg = _parallelism_cfg_from_viewer_args(args_cli, test_terminal_state)
     trajectory = plan_trajectory(
         state,
         torch.as_tensor(command, dtype=state.root_pos_w.dtype, device=state.root_pos_w.device),
@@ -2307,6 +2397,7 @@ def main() -> int:
     result = None
     playback_frame = 0
     last_cmd = None
+    last_show_mesh = None
     plan_cycle = 0
     scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
     scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
@@ -2354,6 +2445,11 @@ def main() -> int:
                         active_cmd,
                         values=_apply_test_terminal_command(active_cmd.values, test_terminal_state),
                     )
+                if parallel_backend and test_terminal_state is not None:
+                    show_mesh = bool(test_terminal_state.show_mesh)
+                    if last_show_mesh is None or show_mesh != last_show_mesh:
+                        _set_go2_mesh_visibility(base_env, show_mesh)
+                        last_show_mesh = show_mesh
 
                 if active_cmd.reset_requested:
                     selected_origin = _reset_viewer_env(
