@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Parallelism Terrain-Aware Swing Clearance 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5b667a;
+      --line: #d8deea;
+      --brand: #17406d;
+      --accent: #0f766e;
+      --warn: #9a3412;
+      --code: #0f172a;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+    }
+    header {
+      background: var(--brand);
+      color: white;
+      padding: 28px 36px;
+    }
+    header h1 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+    header p {
+      margin: 0;
+      color: #dbeafe;
+      max-width: 980px;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 28px 24px 48px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px 22px;
+      margin-bottom: 18px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 19px;
+      color: #102033;
+    }
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 16px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    ul {
+      margin: 8px 0 0 22px;
+      padding: 0;
+    }
+    li {
+      margin: 5px 0;
+    }
+    code {
+      background: #eef2f7;
+      border: 1px solid #d9e1ec;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.94em;
+    }
+    pre {
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      overflow-x: auto;
+      background: var(--code);
+      color: #dbeafe;
+      border-radius: 7px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .note {
+      border-left: 4px solid var(--accent);
+      padding-left: 12px;
+      color: var(--muted);
+    }
+    .warn {
+      border-left-color: var(--warn);
+    }
+    .tag {
+      display: inline-block;
+      color: #064e3b;
+      background: #dff7ef;
+      border: 1px solid #b9eadb;
+      border-radius: 5px;
+      padding: 1px 7px;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Parallelism 地形感知 Swing Clearance 设计</h1>
+    <p>目标是在不放松 hard filter、不增加 clearance score、不改变 touchdown score 的前提下，让 foot swing 的抛物线自动越过 XY 路径上的高程障碍，使小障碍物前的规划不再因为 FL/RL 摆腿碰撞全灭而进入 standstill。</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>背景与结论</h2>
+      <p>当前复现中，机器人向前走到小障碍物前后，规划进入 <code>standstill</code>。按腿拆解后，卡住轮次为 <code>per_leg_valid=[0,29,0,29]</code>，即 <code>FL</code> 和 <code>RL</code> 的候选被 hard filter 全部清空。</p>
+      <p>进一步检查 official collision surface points 与 Go2 visual mesh 的 USD local AABB，thigh/calf 碰撞点与 mesh 基本对齐；因此本设计不处理 collision frame 错位，而是处理 swing 轨迹本身对高程障碍不感知的问题。</p>
+      <p class="note warn">本次设计不改 score。最终 touchdown 选择仍只使用速度跟踪 score；semantic、joint、landing、collision 仍然是 hard filter。</p>
+    </section>
+
+    <section>
+      <h2>核心思路</h2>
+      <p>保留抛物线形式，但抛物线高度不再是固定的 <code>swing_height_m</code>。对每条 swing，从当前 stance 足端到候选 touchdown 足端，沿 XY 路径采样高程，计算一条能够越过这些高程点的最小抛物线高度。</p>
+      <pre><code>xy(t) = lerp(start_xy, touchdown_xy, t)
+terrain_z(t) = height_map_query(xy(t))
+safe_z(t) = terrain_z(t) + swing_clearance_m
+
+base_z(t) = lerp(start_z, touchdown_z, t)
+shape(t) = 4 * t * (1 - t)
+
+required_A(t) = (safe_z(t) - base_z(t)) / shape(t)
+A = max(min_swing_apex_m, max_t(required_A(t)))
+
+foot_z(t) = base_z(t) + A * shape(t)</code></pre>
+      <p>其中 <code>A</code> 是每条 swing 轨迹的标量抛物线高度，不是矩阵。实际张量形状会随调用方变化，例如候选检查中为 <code>[num_envs, candidates]</code> 或扩展后的 <code>[num_envs, legs, candidates]</code>。</p>
+    </section>
+
+    <section>
+      <h2>参数语义</h2>
+      <div class="grid">
+        <section>
+          <h3><span class="tag">可视化面板</span>swing_clearance_m</h3>
+          <p>调试面板只调这个参数。它表示 foot swing 轨迹相对 XY 路径高程图的额外安全高度。</p>
+          <p>建议滑条范围保持 <code>[0.0, 0.25]</code>。默认值可以先使用 <code>0.05</code>，也可以继承当前面板初始值的可用体验。</p>
+        </section>
+        <section>
+          <h3><span class="tag">配置固定</span>min_swing_apex_m</h3>
+          <p>配置中保留默认最小抛物线高度 <code>0.08m</code>，不放到调试面板。</p>
+          <p>平地或者路径高程很低时，实际抛物线仍保持自然抬脚高度，避免脚尖贴地。</p>
+        </section>
+      </div>
+      <p class="note">旧的 <code>swing_height_m</code> 语义应迁移为 <code>min_swing_apex_m</code> 或逐步废弃。新面板标签和传入配置统一命名为 <code>swing_clearance_m</code>。</p>
+    </section>
+
+    <section>
+      <h2>代码结构设计</h2>
+      <h3>新增 terrain-aware swing 函数</h3>
+      <p>在 <code>Go2Pvcnn/extension/parallelism/swing.py</code> 中保留旧 <code>swing_curve()</code>，新增函数，例如：</p>
+      <pre><code>terrain_aware_swing_curve(
+    start_w,
+    touchdown_w,
+    terrain,
+    frames,
+    clearance_m,
+    min_apex_m,
+)</code></pre>
+      <p>这个函数负责构造 XY 插值、批量查询高程、计算 <code>A</code>、输出连续抛物线轨迹。</p>
+
+      <h3>替换 planner 中两处 swing 调用</h3>
+      <ul>
+        <li><code>_swing_collision_mask()</code>：候选硬过滤时使用 terrain-aware swing。</li>
+        <li><code>_assemble_foot_targets()</code>：最终输出执行轨迹时使用同一套 terrain-aware swing。</li>
+      </ul>
+      <p>这样检测轨迹和执行轨迹一致，避免“检查通过但播放轨迹不同”的问题。</p>
+    </section>
+
+    <section>
+      <h2>并行实现要求</h2>
+      <p>实现必须保持 GPU 并行风格，不使用 Python 分支决定单个候选是否有效。允许当前已有的按腿循环，但每条腿内部的 <code>candidate × frame</code> 高程查询、<code>A</code> 计算、IK/FK/collision 都应使用 torch 张量批处理。</p>
+      <pre><code># 候选 swing 检查中的典型形状
+start_w:      [B, C, 3]
+touchdown_w:  [B, C, 3]
+xy_path:      [B, C, T, 2]
+height_query: [B, C*T]
+A:            [B, C]
+swing:        [B, C, T, 3]</code></pre>
+      <p>端点 <code>t=0</code> 和 <code>t=1</code> 的 <code>shape(t)</code> 为 0，计算 <code>required_A</code> 时必须用 torch mask 或 clamp 跳过端点，最终强制端点 z 等于 start/touchdown z。</p>
+    </section>
+
+    <section>
+      <h2>Viewer 调试面板</h2>
+      <p>Parallelism 调试面板中，原 <code>swing_height</code> 控件改为 <code>swing_clearance_m</code>。用户只调 clearance，不直接调最小抛物线高度。</p>
+      <ul>
+        <li>面板显示名：<code>swing_clearance_m</code> 或短标签 <code>clearance_m</code>。</li>
+        <li>传入 <code>ParallelismCfg.swing_clearance_m</code>。</li>
+        <li><code>ParallelismCfg.min_swing_apex_m = 0.08</code> 固定保留在 config 中。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>测试与验收</h2>
+      <h3>单元测试</h3>
+      <ul>
+        <li>平地时 terrain-aware swing 与旧抛物线高度行为一致：实际 apex 至少为 <code>min_swing_apex_m</code>。</li>
+        <li>路径中间有高程障碍时，抛物线在采样点满足 <code>z >= terrain_z + swing_clearance_m</code>。</li>
+        <li>端点保持：第一帧 z 等于 start z，最后一帧 z 等于 touchdown z。</li>
+        <li>函数支持批量 <code>[B, C, 3]</code> 输入，输出 <code>[B, C, T, 3]</code>。</li>
+      </ul>
+
+      <h3>IsaacLab 真实测试</h3>
+      <p>在 <code>standstill_fallback_enabled=True</code> 的情况下，复现“小障碍物在前方”的场景，连续多周期播放 parallelism 轨迹。</p>
+      <p>需要并行测试多组速度，至少覆盖：</p>
+      <pre><code>vx:   [0.2, 0.5, 1.0]
+vy:   [-0.5, 0.0, 0.5]
+vyaw: [-1.0, 0.0, 1.0]</code></pre>
+      <p>验收指标：</p>
+      <ul>
+        <li>正向小障碍场景中，连续规划不进入 <code>standstill=True</code>。</li>
+        <li><code>result.feasible=True</code>，每条腿 <code>per_leg_valid</code> 都大于 0。</li>
+        <li>root 在非零速度命令下有对应方向位移，不能卡在障碍物前。</li>
+        <li>hard filter 仍保持有效：无 joint limit、landing、semantic touchdown、collision 的无效候选被选中。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>非目标</h2>
+      <ul>
+        <li>不加入 leg-link clearance score。</li>
+        <li>不放松 collision hard filter。</li>
+        <li>不修改官方 collision shape 参数或 link frame。</li>
+        <li>不改变 candidate 圆采样、semantic touchdown margin、速度 tracking score。</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
