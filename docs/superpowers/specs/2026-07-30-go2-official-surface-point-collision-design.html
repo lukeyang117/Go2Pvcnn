@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go2 官方碰撞体表面点碰撞检测设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f8;
+      --panel: #ffffff;
+      --ink: #182026;
+      --muted: #5c6972;
+      --line: #d9e0e4;
+      --accent: #7a4b2a;
+      --accent-soft: #efe4dc;
+      --code-bg: #eef2f4;
+      --ok: #237a57;
+      --warn: #9a5b10;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    h1, h2, h3 {
+      line-height: 1.25;
+      margin: 0;
+    }
+    h1 {
+      font-size: 30px;
+      margin-bottom: 10px;
+    }
+    h2 {
+      font-size: 21px;
+      margin-top: 34px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+    h3 {
+      font-size: 17px;
+      margin-top: 22px;
+      margin-bottom: 8px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    ul {
+      margin: 8px 0 12px 22px;
+      padding: 0;
+    }
+    li {
+      margin: 4px 0;
+    }
+    code {
+      background: var(--code-bg);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.93em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      line-height: 1.45;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      background: var(--panel);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #eef3f5;
+      font-weight: 650;
+    }
+    .hero {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px 24px;
+      margin-bottom: 24px;
+    }
+    .summary {
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .note {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 10px 14px;
+      margin: 14px 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .ok {
+      color: var(--ok);
+      font-weight: 650;
+    }
+    .warn {
+      color: var(--warn);
+      font-weight: 650;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>Go2 官方碰撞体表面点碰撞检测设计</h1>
+    <p class="summary">
+      本设计用于 <code>extension/parallelism</code> 的 kinematic Go2 foot planner。目标是删除旧椭圆体碰撞逻辑，
+      改为使用 Go2 USD 官方 collision primitive，并在每个 primitive 表面放置固定碰撞点，用 Torch/GPU 并行完成
+      touchdown 与 swing 轨迹碰撞过滤。
+    </p>
+  </section>
+
+  <h2>1. 目标与边界</h2>
+  <p>本次改动只改变碰撞几何体与碰撞点检测方式，不改变当前 planner 的候选选择策略。</p>
+  <ul>
+    <li>保留当前 active-leg-only 的碰撞筛选范围。</li>
+    <li>保留每条腿独立 50 个候选点的规划方式，不做对角 swing pair 的 <code>50 x 50</code> 组合。</li>
+    <li>保留现有 filter / score / standstill 行为。</li>
+    <li>删除旧的 ellipsoid 碰撞体配置和检测逻辑。</li>
+    <li>新碰撞检测必须在 env、leg、candidate、time、shape、point 维度上并行。</li>
+  </ul>
+  <div class="note">
+    本版本不检查 stance legs，也不做 trot 对角双腿联合碰撞。IK/FK 可以继续计算完整四腿姿态，但 reject 条件只看当前 active leg 的官方碰撞点。
+  </div>
+
+  <h2>2. 官方碰撞体数据</h2>
+  <p>数据来自 <code>assets/teacher_object/Robots/Unitree/Go2/go2.usd</code> 中的官方 collision primitive。单位为米，局部坐标均相对对应 link frame。</p>
+
+  <h3>2.1 Thigh</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>字段</th>
+        <th>数值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>类型</td><td><code>Cube</code></td></tr>
+      <tr><td>中心</td><td><code>(0.0, 0.0, -0.1065)</code></td></tr>
+      <tr><td>full size</td><td><code>(0.2130, 0.0245, 0.0340)</code></td></tr>
+      <tr><td>half extent</td><td><code>(0.1065, 0.01225, 0.0170)</code></td></tr>
+      <tr><td>局部旋转</td><td>绕 <code>Y</code> 约 <code>90 deg</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>2.2 Calf</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>几何体</th>
+        <th>适用腿</th>
+        <th>中心</th>
+        <th>半径</th>
+        <th>高度</th>
+        <th>局部旋转</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>mesh_0 Cylinder</code></td>
+        <td><code>FL</code></td>
+        <td><code>(0.0080, 0.0, -0.0600)</code></td>
+        <td><code>0.0120</code></td>
+        <td><code>0.1200</code></td>
+        <td>绕 <code>Y</code> 约 <code>-12.03 deg</code></td>
+      </tr>
+      <tr>
+        <td><code>mesh_0 Cylinder</code></td>
+        <td><code>FR/RL/RR</code></td>
+        <td><code>(0.0100, 0.0, -0.0600)</code></td>
+        <td><code>0.0130</code></td>
+        <td><code>0.1200</code></td>
+        <td>绕 <code>Y</code> 约 <code>-11.46 deg</code></td>
+      </tr>
+      <tr>
+        <td><code>mesh_1 Cylinder</code></td>
+        <td>四条腿</td>
+        <td><code>(0.0200, 0.0, -0.1480)</code></td>
+        <td><code>0.0110</code></td>
+        <td><code>0.0650</code></td>
+        <td>绕 <code>Y</code> 约 <code>+2.86 deg</code></td>
+      </tr>
+      <tr>
+        <td><code>mesh_2 Cylinder</code></td>
+        <td>四条腿</td>
+        <td><code>(0.0080, 0.0, -0.18745)</code></td>
+        <td><code>0.0155</code></td>
+        <td><code>0.0300</code></td>
+        <td>绕 <code>Y</code> 约 <code>+30.37 deg</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>2.3 Foot</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>字段</th>
+        <th>数值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>类型</td><td><code>Sphere</code></td></tr>
+      <tr><td>中心</td><td><code>(-0.0020, 0.0, 0.0)</code></td></tr>
+      <tr><td>半径</td><td><code>0.0220</code></td></tr>
+      <tr><td>局部旋转</td><td>无旋转</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. 表面碰撞点设计</h2>
+  <p>每个官方 primitive 会预先生成一组表面点。点先定义在 primitive local frame，再通过官方 <code>translate + orient</code> 变换到 link local frame，运行时再通过 FK 的 link pose 变到 world frame。</p>
+
+  <h3>3.1 Thigh box 表面点</h3>
+  <p>初版使用 6 个面心点，位于 box primitive local frame：</p>
+  <pre><code>(+0.1065, 0, 0)
+(-0.1065, 0, 0)
+(0, +0.01225, 0)
+(0, -0.01225, 0)
+(0, 0, +0.0170)
+(0, 0, -0.0170)</code></pre>
+  <p>后续加密方式：在每个面上加网格点。例如 <code>x</code> 面在 <code>y/z</code> 范围内加密，<code>y</code> 面在 <code>x/z</code> 范围内加密，<code>z</code> 面在 <code>x/y</code> 范围内加密。</p>
+
+  <h3>3.2 Calf cylinder 表面点</h3>
+  <p>初版每段 cylinder 使用 6 个点。圆柱轴在 primitive local frame 的 <code>x</code> 方向。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>几何体</th>
+        <th>表面点</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>mesh_0</code></td>
+        <td>
+          <code>(-0.0600, 0, 0)</code>,
+          <code>(+0.0600, 0, 0)</code>,
+          <code>(0, +0.0120, 0)</code>,
+          <code>(0, -0.0120, 0)</code>,
+          <code>(0, 0, +0.0120)</code>,
+          <code>(0, 0, -0.0120)</code>。
+          对 <code>FR/RL/RR</code>，圆周点半径改为 <code>0.0130</code>。
+        </td>
+      </tr>
+      <tr>
+        <td><code>mesh_1</code></td>
+        <td>
+          <code>(-0.0325, 0, 0)</code>,
+          <code>(+0.0325, 0, 0)</code>,
+          <code>(0, +0.0110, 0)</code>,
+          <code>(0, -0.0110, 0)</code>,
+          <code>(0, 0, +0.0110)</code>,
+          <code>(0, 0, -0.0110)</code>
+        </td>
+      </tr>
+      <tr>
+        <td><code>mesh_2</code></td>
+        <td>
+          <code>(-0.0150, 0, 0)</code>,
+          <code>(+0.0150, 0, 0)</code>,
+          <code>(0, +0.0155, 0)</code>,
+          <code>(0, -0.0155, 0)</code>,
+          <code>(0, 0, +0.0155)</code>,
+          <code>(0, 0, -0.0155)</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>后续加密方式：沿 <code>x in [-height/2, height/2]</code> 增加 <code>layers</code>，每层沿圆周增加 <code>angles</code> 个点。</p>
+
+  <h3>3.3 Foot sphere 表面点</h3>
+  <p>初版使用 6 个轴向表面点，位于 sphere primitive local frame：</p>
+  <pre><code>(+0.0220, 0, 0)
+(-0.0220, 0, 0)
+(0, +0.0220, 0)
+(0, -0.0220, 0)
+(0, 0, +0.0220)
+(0, 0, -0.0220)</code></pre>
+  <p>后续加密方式：增加更多球面方向向量，例如经纬度采样或固定方向表。</p>
+
+  <h2>4. 碰撞判定逻辑</h2>
+  <p>碰撞点不是逐个 Python 循环判断，而是一次性构造成张量并行处理。</p>
+  <ol>
+    <li>根据 active leg 的 link pose，计算所有 surface points 的世界坐标。</li>
+    <li>使用 IsaacLab 返回的高程图和语义图，对这些点批量查询 <code>height / semantic / valid</code>。</li>
+    <li>如果点所在 map 无效，则该点对应 candidate 被过滤。</li>
+    <li>如果点落在障碍语义 <code>1</code> 或 <code>2</code> 上，则该点对应 candidate 被过滤。</li>
+    <li>如果地形高度高于碰撞点高度加容差，则认为该 surface point 被地形侵入，该 candidate 被过滤。</li>
+  </ol>
+  <p>推荐的高度条件：</p>
+  <pre><code>point_collision = terrain_height &gt;= point_z - collision_margin_m</code></pre>
+  <p>其中 <code>collision_margin_m</code> 默认继续使用 <code>0.003</code>。最终沿 <code>point / shape / time</code> 做 <code>torch.any</code>，得到每个 candidate 的碰撞状态。</p>
+
+  <h2>5. Touchdown 与 Swing 检查</h2>
+  <h3>5.1 Touchdown collision</h3>
+  <p>touchdown 检查使用 candidate 对应的 IK/FK 结果，取 active leg 的官方 surface points。此时可以把时间维视为 <code>T=1</code>。</p>
+
+  <h3>5.2 Swing collision</h3>
+  <p>本版本保留当前 active-leg-only 语义：</p>
+  <ul>
+    <li>每条 active leg 独立评估 50 个 candidate。</li>
+    <li>每个 candidate 生成 12 帧 swing 轨迹。</li>
+    <li>12 帧一次性展开到 batch 维度并行 IK/FK。</li>
+    <li>只取 active leg 的 <code>thigh / calf / foot</code> surface points 做碰撞。</li>
+    <li>任意一帧任意 surface point 碰撞，则该 candidate reject。</li>
+  </ul>
+  <p>这不是时间步串行，也不是 <code>t+1</code> 依赖 <code>t</code>：</p>
+  <pre><code>all swing targets
+-&gt; batched IK
+-&gt; batched FK
+-&gt; batched surface point collision
+-&gt; any over T / shape / point</code></pre>
+
+  <h2>6. 抬脚高度含义</h2>
+  <p><code>swing_height_m</code> 表示 swing 曲线中间峰值额外抬高的高度，不表示整段轨迹都抬高。</p>
+  <p>当前 swing 轨迹是从当前 foot 到 target touchdown 的线性插值，并在 <code>z</code> 上叠加单峰抛物线：</p>
+  <pre><code>z = z_linear + swing_height_m * 4 * tau * (1 - tau)</code></pre>
+  <p>当 <code>tau=0.5</code> 时，额外抬高达到最大值 <code>swing_height_m</code>；起点和终点额外抬高为 <code>0</code>。</p>
+
+  <h2>7. 配置设计</h2>
+  <p>不新增新的碰撞规格文件。官方 collision primitive 和 surface point 密度参数放入 <code>extension/parallelism/config.py</code>。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>配置项</th>
+        <th>含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>official_collision_shapes</code></td><td>官方 <code>thigh/calf/foot</code> primitive 参数集合。</td></tr>
+      <tr><td><code>box_surface_points</code></td><td>box 每个面上的采样密度。初版等价于 6 个面心点。</td></tr>
+      <tr><td><code>cylinder_layers</code></td><td>cylinder 沿轴向的采样层数。初版可设为 1，加上端面中心点。</td></tr>
+      <tr><td><code>cylinder_angles</code></td><td>cylinder 每层圆周采样点数。初版等价于 4 个方向点。</td></tr>
+      <tr><td><code>sphere_surface_points</code></td><td>sphere 表面方向点数。初版等价于 6 个轴向点。</td></tr>
+      <tr><td><code>collision_margin_m</code></td><td>碰撞高度容差，默认 <code>0.003</code>。</td></tr>
+    </tbody>
+  </table>
+  <p>旧配置项 <code>EllipsoidSpec</code>、<code>collision_ellipsoids</code>、<code>collision_probe_count</code>、<code>contact_tolerant_collision_names</code> 应删除或改名，不再保留旧语义。</p>
+
+  <h2>8. 可视化设计</h2>
+  <p>可视化入口为 <code>extension/viz/go2_foostep_planner.py</code>。新增命令行参数 <code>--used-test-terminal</code>，默认开启。</p>
+  <p>面板只包含以下控制：</p>
+  <ul>
+    <li><code>vx</code> 滑条：最左 <code>0</code>，最右 <code>1</code>。</li>
+    <li><code>vy</code> 滑条：最左 <code>0</code>，最右 <code>0.5</code>。</li>
+    <li><code>vyaw</code> 滑条：最左 <code>0</code>，最右 <code>1</code>。</li>
+    <li><code>swing_height</code> 滑条：调节 swing 中间峰值抬脚高度。</li>
+    <li><code>show_mesh</code> 勾选：显示或隐藏 Go2 视觉 mesh。</li>
+    <li><code>show_collision_body</code> 勾选：显示或隐藏官方 collision body。</li>
+    <li><code>show_contact_points</code> 勾选：显示或隐藏 surface contact points。</li>
+  </ul>
+  <p>surface contact points 在 IsaacSim 中显示为棕色。mesh 与 collision body 可以同时勾选，用来观察官方碰撞体与 Go2 mesh 是否贴合。</p>
+
+  <h2>9. 测试设计</h2>
+  <h3>9.1 Planner touchdown 有效性</h3>
+  <ul>
+    <li>平地高程为 <code>0</code>，语义全可通行。</li>
+    <li>给非零速度，例如 <code>vx=0.3, vy=0, vyaw=0</code>。</li>
+    <li>断言 <code>traj.valid == True</code>。</li>
+    <li>断言 <code>candidate_valid.any() == True</code>。</li>
+    <li>断言每条腿至少有有效 candidate。</li>
+    <li>断言 selected touchdown 高度接近地面。</li>
+  </ul>
+
+  <h3>9.2 无有效候选时保持不动</h3>
+  <ul>
+    <li>构造全部 invalid 的 valid map。</li>
+    <li>断言 <code>traj.valid == False</code>。</li>
+    <li>断言 root、joint、foot 都保持当前状态。</li>
+    <li>断言 contact state 全部为 stance。</li>
+  </ul>
+
+  <h3>9.3 Surface points 并行性</h3>
+  <ul>
+    <li>验证 touchdown surface point 张量形状包含 <code>B / leg / candidate / shape / point / xyz</code>。</li>
+    <li>验证 swing surface point 张量形状包含 <code>B / leg / candidate / T / shape / point / xyz</code>。</li>
+    <li>验证碰撞结果通过 <code>torch.any</code> 聚合。</li>
+    <li>避免在 candidate 或 point 维度使用 Python 逐项循环。</li>
+  </ul>
+
+  <h3>9.4 Viz 面板测试</h3>
+  <ul>
+    <li>启动 <code>go2_foostep_planner.py</code> 时默认打开 <code>used_test_terminal</code> 面板。</li>
+    <li>拖动 <code>vx</code> 滑条后，planner command 的 <code>vx</code> 发生变化。</li>
+    <li>拖动 <code>vy</code> 滑条后，planner command 的 <code>vy</code> 发生变化。</li>
+    <li>拖动 <code>vyaw</code> 滑条后，planner command 的 <code>vyaw</code> 发生变化。</li>
+    <li>拖动 <code>swing_height</code> 滑条后，swing 中间高度发生变化。</li>
+    <li>勾选或取消三个 checkbox 后，IsaacSim 中 mesh、collision body、棕色 surface points 显示状态变化。</li>
+  </ul>
+
+  <h3>9.5 IsaacSim 真实 viewer 验证</h3>
+  <p>参考命令保持 <code>--planner-backend parallelism</code>。验证日志需要输出：</p>
+  <ul>
+    <li><code>valid</code></li>
+    <li><code>per_leg_valid</code></li>
+    <li><code>collision</code></li>
+    <li><code>collision_detail</code></li>
+    <li>当前面板速度值</li>
+    <li>selected touchdown 信息</li>
+  </ul>
+
+  <h2>10. 实现边界</h2>
+  <ul>
+    <li>不新增 <code>official_collision_spec.py</code>。</li>
+    <li>不复用其他 extension 下除 <code>viz</code> 以外的代码。</li>
+    <li>不修改 <code>joint_mpc_rti</code> 逻辑。</li>
+    <li>保留当前 active-leg-only planner 行为。</li>
+    <li>旧 ellipsoid 碰撞逻辑在实现阶段删除，不保留兼容分支。</li>
+  </ul>
+
+  <h2>11. 完成标准</h2>
+  <ul>
+    <li class="ok">平地给速度时可以输出有效 touchdowns。</li>
+    <li class="ok">碰撞点、时间步、候选点均通过 Torch 张量并行处理。</li>
+    <li class="ok">旧椭圆体命名与诊断字段不再出现。</li>
+    <li class="ok">可视化面板可以调节速度和抬脚高度。</li>
+    <li class="ok">IsaacSim 中可以按勾选显示 mesh、official collision body 和棕色 surface points。</li>
+  </ul>
+</main>
+</body>
+</html>
