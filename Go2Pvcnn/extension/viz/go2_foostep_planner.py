@@ -119,6 +119,7 @@ class ViewerTestTerminalState:
     vyaw: float = 0.0
     swing_height: float = 0.08
     semantic_touchdown_margin_m: float = 0.0
+    candidate_radius_m: float = 0.24
     standstill_fallback_enabled: bool = True
     show_mesh: bool = True
     show_collision_body: bool = False
@@ -275,6 +276,7 @@ def _create_viewer_test_terminal(state: ViewerTestTerminalState):
             _slider("vy", "vy", -0.5, 0.5)
             _slider("vyaw", "vyaw", -1.0, 1.0)
             _slider("swing_height", "swing_height", 0.0, 0.25)
+            _slider("candidate_radius", "candidate_radius_m", 0.24, 0.50)
             _slider("semantic_margin", "semantic_touchdown_margin_m", 0.0, 0.12)
             _checkbox("standstill fallback", "standstill_fallback_enabled")
             _checkbox("show mesh", "show_mesh")
@@ -2297,6 +2299,9 @@ def _parallelism_cfg_from_viewer_args(args_cli: argparse.Namespace, test_termina
         semantic_touchdown_margin_m=float(test_terminal_state.semantic_touchdown_margin_m)
         if test_terminal_state is not None
         else ParallelismCfg.semantic_touchdown_margin_m,
+        candidate_radius_m=float(test_terminal_state.candidate_radius_m)
+        if test_terminal_state is not None
+        else ParallelismCfg.candidate_radius_m,
         standstill_fallback_enabled=bool(test_terminal_state.standstill_fallback_enabled)
         if test_terminal_state is not None
         else True,

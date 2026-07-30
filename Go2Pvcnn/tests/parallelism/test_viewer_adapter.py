@@ -118,12 +118,14 @@ def test_parallelism_cfg_from_viewer_uses_semantic_margin():
         ViewerTestTerminalState(
             swing_height=0.11,
             semantic_touchdown_margin_m=0.04,
+            candidate_radius_m=0.42,
             standstill_fallback_enabled=False,
         ),
     )
 
     assert cfg.swing_height_m == 0.11
     assert cfg.semantic_touchdown_margin_m == 0.04
+    assert cfg.candidate_radius_m == 0.42
     assert cfg.standstill_fallback_enabled is False
 
 
