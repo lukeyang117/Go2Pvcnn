@@ -106,8 +106,10 @@ def _swing_collision_mask(
     for leg_idx in range(leg_count):
         phase_start = 0 if leg_idx in (0, 3) else half_cycle
         phase_stop = phase_start + half_cycle
-        root_phase_pos = root_pos[:, phase_start:phase_stop]
-        root_phase_rpy = root_rpy[:, phase_start:phase_stop]
+        eval_stop = int(cfg.horizon) if leg_idx in (0, 3) else phase_stop
+        eval_count = eval_stop - phase_start
+        root_phase_pos = root_pos[:, phase_start:eval_stop]
+        root_phase_rpy = root_rpy[:, phase_start:eval_stop]
         swing = terrain_aware_swing_curve(
             current_foot[:, None, leg_idx].expand(batch, candidate_count, 3),
             candidates.candidate_w[:, leg_idx],
@@ -116,12 +118,17 @@ def _swing_collision_mask(
             clearance_m=cfg.swing_clearance_m,
             min_apex_m=cfg.min_swing_apex_m,
         )
-        foot_targets = current_foot[:, None, None, :, :].expand(batch, candidate_count, half_cycle, 4, 3).clone()
-        foot_targets[..., leg_idx, :] = swing
-        root_eval_pos = root_phase_pos[:, None].expand(batch, candidate_count, half_cycle, 3)
-        root_eval_rpy = root_phase_rpy[:, None].expand(batch, candidate_count, half_cycle, 3)
+        if eval_count > half_cycle:
+            stance = candidates.candidate_w[:, leg_idx, :, None].expand(batch, candidate_count, eval_count - half_cycle, 3)
+            active_path = torch.cat((swing, stance), dim=2)
+        else:
+            active_path = swing
+        foot_targets = current_foot[:, None, None, :, :].expand(batch, candidate_count, eval_count, 4, 3).clone()
+        foot_targets[..., leg_idx, :] = active_path
+        root_eval_pos = root_phase_pos[:, None].expand(batch, candidate_count, eval_count, 3)
+        root_eval_rpy = root_phase_rpy[:, None].expand(batch, candidate_count, eval_count, 3)
         joint_candidate, reachable = ik_go2(root_eval_pos, root_eval_rpy, foot_targets)
-        flat_count = batch * candidate_count * half_cycle
+        flat_count = batch * candidate_count * eval_count
         geometry = fk_go2(
             root_eval_pos.reshape(flat_count, 3),
             root_eval_rpy.reshape(flat_count, 3),
@@ -130,10 +137,10 @@ def _swing_collision_mask(
         sample_count = int(geometry.calf_samples_w.shape[-2])
 
         def _expand_candidate_leg(value: Tensor, *tail: int) -> Tensor:
-            return value.reshape(batch, candidate_count * half_cycle, 4, *tail).unsqueeze(1).expand(
+            return value.reshape(batch, candidate_count * eval_count, 4, *tail).unsqueeze(1).expand(
                 batch,
                 leg_count,
-                candidate_count * half_cycle,
+                candidate_count * eval_count,
                 4,
                 *tail,
             )
@@ -142,12 +149,12 @@ def _swing_collision_mask(
             hip_pos_w=_expand_candidate_leg(geometry.hip_pos_w, 3),
             foot_pos_w=_expand_candidate_leg(geometry.foot_pos_w, 3),
             knee_pos_w=_expand_candidate_leg(geometry.knee_pos_w, 3),
-            calf_samples_w=geometry.calf_samples_w.reshape(batch, candidate_count * half_cycle, 4, sample_count, 3)
+            calf_samples_w=geometry.calf_samples_w.reshape(batch, candidate_count * eval_count, 4, sample_count, 3)
             .unsqueeze(1)
-            .expand(batch, leg_count, candidate_count * half_cycle, 4, sample_count, 3),
-            thigh_samples_w=geometry.thigh_samples_w.reshape(batch, candidate_count * half_cycle, 4, sample_count, 3)
+            .expand(batch, leg_count, candidate_count * eval_count, 4, sample_count, 3),
+            thigh_samples_w=geometry.thigh_samples_w.reshape(batch, candidate_count * eval_count, 4, sample_count, 3)
             .unsqueeze(1)
-            .expand(batch, leg_count, candidate_count * half_cycle, 4, sample_count, 3),
+            .expand(batch, leg_count, candidate_count * eval_count, 4, sample_count, 3),
             thigh_pos_w=_expand_candidate_leg(geometry.thigh_pos_w, 3),
             thigh_rot_w=_expand_candidate_leg(geometry.thigh_rot_w, 3, 3),
             calf_pos_w=_expand_candidate_leg(geometry.calf_pos_w, 3),
@@ -158,13 +165,13 @@ def _swing_collision_mask(
         active_collision_bits = collision_bits[:, leg_idx].reshape(
             batch,
             candidate_count,
-            half_cycle,
+            eval_count,
             -1,
         ).clone()
         contact_indices = _contact_tolerant_indices(cfg, device=active_collision_bits.device)
         if int(contact_indices.numel()) > 0:
             active_collision_bits[:, :, 0].index_fill_(dim=-1, index=contact_indices, value=False)
-            active_collision_bits[:, :, -1].index_fill_(dim=-1, index=contact_indices, value=False)
+            active_collision_bits[:, :, half_cycle - 1].index_fill_(dim=-1, index=contact_indices, value=False)
         active_collision_ok = ~active_collision_bits.any(dim=-1)
         swing_ok[:, leg_idx] = active_collision_ok.all(dim=-1)
         swing_bits[:, leg_idx] = active_collision_bits.any(dim=2)

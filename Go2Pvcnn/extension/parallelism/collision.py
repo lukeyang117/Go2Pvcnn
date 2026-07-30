@@ -179,9 +179,6 @@ def _official_group_collision(
     )
     terrain_h = query.height.reshape(batch, leg_count, candidate_count, group_count, point_count)
     terrain_valid = query.valid.reshape(batch, leg_count, candidate_count, group_count, point_count)
-    semantic = query.semantic.reshape(batch, leg_count, candidate_count, group_count, point_count)
-    obstacle_ids = torch.tensor(tuple(cfg.obstacle_semantic_ids), dtype=semantic.dtype, device=semantic.device)
-    semantic_hit = (semantic[..., None] == obstacle_ids).any(dim=-1)
     terrain_hit = terrain_h >= (points_w[..., 2] - float(cfg.collision_margin_m))
     tolerant_names = set(cfg.contact_tolerant_collision_shape_names)
     terrain_checked = torch.tensor(
@@ -191,7 +188,7 @@ def _official_group_collision(
     ).view(1, 1, 1, group_count, 1)
     terrain_hit = terrain_hit & terrain_checked
     valid_point = point_mask.view(1, 1, 1, group_count, point_count)
-    point_hit = valid_point & ((~terrain_valid) | semantic_hit | terrain_hit)
+    point_hit = valid_point & ((~terrain_valid) | terrain_hit)
     return point_hit.any(dim=-1)
 
 

@@ -140,6 +140,51 @@ def test_official_collision_uses_batched_surface_points():
     assert bool(bits[0, 0, 0, 0])
 
 
+def test_official_collision_does_not_hit_semantic_obstacle_when_surface_is_above_height():
+    import torch
+    from types import SimpleNamespace
+    from extension.parallelism.collision import official_collision_mask
+    from extension.parallelism.config import OfficialCollisionShapeSpec, ParallelismCfg
+    from extension.parallelism.types import ParallelismTerrain
+
+    cfg = ParallelismCfg(
+        collision_margin_m=0.0,
+        contact_tolerant_collision_shape_names=(),
+        official_collision_shapes=(
+            OfficialCollisionShapeSpec(
+                name="probe_foot",
+                leg_name=None,
+                link_type="foot",
+                shape_type="sphere",
+                center_l=(0.0, 0.0, 0.0),
+                quat_wxyz_l=(1.0, 0.0, 0.0, 0.0),
+                radius_m=0.02,
+            ),
+        ),
+    )
+    terrain = ParallelismTerrain(
+        height_w=torch.full((1, 3, 3), 0.10),
+        semantic_id=torch.ones(1, 3, 3, dtype=torch.long),
+        valid_mask=torch.ones(1, 3, 3, dtype=torch.bool),
+        origin_w=torch.tensor([[-0.1, -0.1, 0.0]]),
+        yaw_w=torch.zeros(1),
+        resolution=0.1,
+    )
+    geometry = SimpleNamespace(
+        foot_pos_w=torch.tensor([[[[[0.0, 0.0, 0.50]]]]], dtype=torch.float32),
+        foot_rot_w=torch.eye(3).view(1, 1, 1, 1, 3, 3),
+        thigh_pos_w=torch.zeros(1, 1, 1, 1, 3),
+        thigh_rot_w=torch.eye(3).view(1, 1, 1, 1, 3, 3),
+        calf_pos_w=torch.zeros(1, 1, 1, 1, 3),
+        calf_rot_w=torch.eye(3).view(1, 1, 1, 1, 3, 3),
+    )
+
+    ok, bits = official_collision_mask(terrain, geometry, cfg)
+
+    assert bool(ok[0, 0, 0])
+    assert not bool(bits[0, 0, 0, 0])
+
+
 def test_swing_collision_mask_preserves_candidate_shape():
     import torch
     from types import SimpleNamespace
