@@ -103,6 +103,7 @@
   <h2>1. 本次目标</h2>
   <ul>
     <li>速度调试面板支持带方向速度，直接输出 root 坐标系下的 signed command。</li>
+    <li>候选足端圆圈半径可以在调试面板中调整，用于快速观察更大采样范围。</li>
     <li>新增一个语义 margin 参数，只控制 touchdown 是否落在语义障碍物附近。</li>
     <li>nominal candidate touchdown 与 IK 后 FK touchdown 共用同一个语义 margin。</li>
     <li><code>show mesh</code> checkbox 必须真正控制 IsaacSim 中 Go2 visual mesh 的可见性。</li>
@@ -144,6 +145,11 @@
   <p>
     面板还需要提供 <code>semantic_touchdown_margin_m</code> 滑块。该滑块实时写入 parallelism planner config，
     下一次 replan 时同时影响 nominal candidate touchdown 与 FK 后 touchdown 的语义过滤。
+  </p>
+  <p>
+    面板还需要提供 <code>candidate_radius_m</code> 滑块。默认值继承当前 planner 默认候选圆半径
+    <code>0.24 m</code>，最小值为 <code>0.24 m</code>，最大值为 <code>0.50 m</code>。
+    该参数实时写入 <code>ParallelismCfg.candidate_radius_m</code>，下一次 replan 时影响四条腿各自 50 个候选点的圆盘采样范围。
   </p>
 
   <h2>3. 单参数语义 Margin</h2>
@@ -263,6 +269,7 @@ expanded_obstacle = max_pool2d(obstacle_mask, kernel_size, stride=1, padding=rad
   <h2>8. 测试与验收</h2>
   <ul>
     <li>单元测试覆盖 signed velocity sliders：负 <code>vx/vy/vyaw</code> 能进入 test terminal command。</li>
+    <li>单元测试覆盖 <code>candidate_radius_m</code>：面板值能进入 <code>ParallelismCfg</code>，默认仍为 <code>0.24 m</code>。</li>
     <li>单元测试覆盖 semantic margin：中心点原始语义为 <code>0</code>，但进入外扩区域时被 hard reject。</li>
     <li>单元测试分别覆盖 nominal candidate 与 FK touchdown 两个语义 reject bit。</li>
     <li>viewer 测试需要证明调试面板能打开，速度滑块改变 planner command，<code>semantic_touchdown_margin_m</code> 能进入 <code>ParallelismCfg</code>。</li>
@@ -274,6 +281,7 @@ expanded_obstacle = max_pool2d(obstacle_mask, kernel_size, stride=1, padding=rad
     <li>不把 planner touchdown 过滤切到低分辨率 RL semantic map。</li>
     <li>不在 observation 中迁移 downsample 逻辑。</li>
     <li>不改变 score，仍只用速度跟踪位移误差。</li>
+    <li>不改变每条腿候选点数量，仍保持每足 <code>50</code> 个候选点。</li>
     <li>不改变 root 搜索、trot 周期、active-leg-only 碰撞边界。</li>
     <li>不复用 <code>joint_mpc_rti</code> 代码。</li>
   </ul>
