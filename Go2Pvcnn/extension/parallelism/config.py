@@ -27,7 +27,8 @@ class ParallelismCfg:
     hip_lateral_bias_m: float = 0.0955
     foothold_step_gain: float = 1.5
     root_clearance_m: float = 0.30
-    swing_height_m: float = 0.08
+    swing_clearance_m: float = 0.05
+    min_swing_apex_m: float = 0.08
     landing_tolerance_m: float = 0.025
     collision_margin_m: float = 0.003
     semantic_touchdown_margin_m: float = 0.0
