@@ -229,6 +229,7 @@ vyaw: [-1.0, 0.0, 1.0]</code></pre>
         <li>正向小障碍场景中，连续规划不进入 <code>standstill=True</code>。</li>
         <li><code>result.feasible=True</code>，每条腿 <code>per_leg_valid</code> 都大于 0。</li>
         <li>root 在非零速度命令下有对应方向位移，不能卡在障碍物前。</li>
+        <li>root 的 XY 轨迹必须穿过前方小障碍物区域：测试中记录小障碍物的世界坐标和外接半径，检查 root path segment 在命令方向上的投影从障碍物前侧越过障碍物后侧，且横向距离落在障碍物影响宽度内。</li>
         <li>hard filter 仍保持有效：无 joint limit、landing、semantic touchdown、collision 的无效候选被选中。</li>
       </ul>
     </section>
