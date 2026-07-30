@@ -10,7 +10,7 @@ from extension.parallelism.ik import ik_go2
 from extension.parallelism.kinematics import JOINT_LOWER, JOINT_UPPER, fk_go2
 from extension.parallelism.root import clamp_command, rollout_root
 from extension.parallelism.swing import swing_curve
-from extension.parallelism.terrain import query_height_semantic_valid
+from extension.parallelism.terrain import expanded_obstacle_mask, query_expanded_obstacle, query_height_semantic_valid
 from extension.parallelism.types import (
     ParallelismDiagnostics,
     ParallelismState,
@@ -265,9 +265,22 @@ def plan_trajectory(
     swing_collision_ok, swing_collision_bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg)
     collision_ok = touchdown_collision_ok & swing_collision_ok
     collision_bits = touchdown_collision_bits | swing_collision_bits
-    candidate_semantic_ok = _semantic_ok(candidates.candidate_semantic, cfg)
+    semantic_obstacle = expanded_obstacle_mask(
+        terrain,
+        tuple(cfg.obstacle_semantic_ids),
+        margin_m=float(cfg.semantic_touchdown_margin_m),
+    )
+    candidate_semantic_ok = ~query_expanded_obstacle(
+        terrain,
+        candidates.candidate_w[..., :2].reshape(batch, leg_count * candidate_count, 2),
+        semantic_obstacle,
+    ).reshape(batch, leg_count, candidate_count)
     fk_touchdown_semantic = landing_query.semantic.reshape(batch, leg_count, candidate_count)
-    fk_touchdown_semantic_ok = _semantic_ok(fk_touchdown_semantic, cfg)
+    fk_touchdown_semantic_ok = ~query_expanded_obstacle(
+        terrain,
+        fk_touchdown[..., :2].reshape(batch, leg_count * candidate_count, 2),
+        semantic_obstacle,
+    ).reshape(batch, leg_count, candidate_count)
     candidate_valid = (
         valid_map_ok
         & joint_ok

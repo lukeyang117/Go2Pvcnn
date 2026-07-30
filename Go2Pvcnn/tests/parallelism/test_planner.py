@@ -125,6 +125,43 @@ def test_obstacle_semantic_touchdowns_are_hard_rejected():
         )
 
 
+def test_semantic_touchdown_margin_rejects_nearby_obstacle_cells():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.planner import plan_trajectory
+
+    terrain = _terrain()
+    semantic = terrain.semantic_id.clone()
+    semantic[:, 29:32, 29:32] = 1
+    terrain = type(terrain)(
+        height_w=terrain.height_w,
+        semantic_id=semantic,
+        valid_mask=terrain.valid_mask,
+        origin_w=terrain.origin_w,
+        yaw_w=terrain.yaw_w,
+        resolution=terrain.resolution,
+    )
+
+    no_margin = plan_trajectory(
+        _state(),
+        torch.zeros(1, 3),
+        terrain,
+        ParallelismCfg(semantic_touchdown_margin_m=0.0),
+    )
+    with_margin = plan_trajectory(
+        _state(),
+        torch.zeros(1, 3),
+        terrain,
+        ParallelismCfg(semantic_touchdown_margin_m=0.2),
+    )
+
+    assert int(with_margin.diagnostics.candidate_reject_bits[..., 4].sum().item()) > int(
+        no_margin.diagnostics.candidate_reject_bits[..., 4].sum().item()
+    )
+    assert int(with_margin.diagnostics.candidate_reject_bits[..., 5].sum().item()) >= int(
+        no_margin.diagnostics.candidate_reject_bits[..., 5].sum().item()
+    )
+
+
 def test_filter_score_source_uses_torch_conditions():
     import extension.parallelism.planner as planner
 
