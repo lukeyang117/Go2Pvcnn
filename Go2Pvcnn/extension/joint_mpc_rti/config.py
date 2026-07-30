@@ -16,6 +16,7 @@ class JointMpcRtiRuntimeCfg:
     sqp_iterations_per_step: int = 1
     max_field_age_steps: int = 0
     dtype: torch.dtype = torch.float32
+    nominal_only: bool = False
 
 
 @dataclass
@@ -56,10 +57,10 @@ class JointMpcRtiGaitCfg:
 
 @dataclass
 class JointMpcRtiNominalCfg:
-    command_scale: float = 0.85
+    command_scale: float = 1.0
     yaw_command_scale: float = 1.0
     published_root_hold_phases: int = 2
-    step_reference_scale: float = 0.0
+    step_reference_scale: float = 1.0
     unreachable_step_scale: float = 0.5
     measurement_decay_nodes: int = 6
     terminal_command_fill_scale: float = 0.5

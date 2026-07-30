@@ -204,14 +204,14 @@ def test_warm_seed_delays_published_root_xy_for_only_two_swing_phases() -> None:
     assert rebased[1, 1, 0] > measured.root_pos_w[1, 0]
 
 
-def test_warm_root_profile_uses_fast_near_edges_and_bounded_far_edges() -> None:
+def test_warm_root_profile_integrates_command_across_full_horizon() -> None:
     measured = make_state(1)
     phase = torch.tensor([2])
     previous = _seed(measured, phase, initialized=True)
     cfg = JointMpcRtiCfg()
 
-    assert cfg.nominal.command_scale == pytest.approx(0.85)
-    assert cfg.nominal.step_reference_scale == pytest.approx(0.0)
+    assert cfg.nominal.command_scale == pytest.approx(1.0)
+    assert cfg.nominal.step_reference_scale == pytest.approx(1.0)
 
     rebased = build_rebased_seed(
         measured,
@@ -221,11 +221,9 @@ def test_warm_root_profile_uses_fast_near_edges_and_bounded_far_edges() -> None:
         cfg,
     )
 
-    assert rebased[0, 1, 0] == pytest.approx(0.85 * cfg.runtime.dt)
-    assert rebased[0, 12, 0] == pytest.approx(12 * 0.85 * cfg.runtime.dt)
-    assert rebased[0, -1, 0] == pytest.approx(
-        12 * 0.85 * cfg.runtime.dt
-    )
+    assert rebased[0, 1, 0] == pytest.approx(cfg.runtime.dt)
+    assert rebased[0, 12, 0] == pytest.approx(12 * cfg.runtime.dt)
+    assert rebased[0, -1, 0] == pytest.approx(30 * cfg.runtime.dt)
 
 
 def _to_device(field: JointMpcPerceptiveField, device: str) -> JointMpcPerceptiveField:

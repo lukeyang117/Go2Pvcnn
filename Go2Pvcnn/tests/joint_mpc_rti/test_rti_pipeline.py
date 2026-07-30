@@ -40,6 +40,33 @@ def test_planner_runs_each_final_stage_exactly_once(monkeypatch) -> None:
     )
 
 
+def test_nominal_only_mode_skips_rti_and_returns_alpha_zero(monkeypatch) -> None:
+    from extension.joint_mpc_rti import planner
+
+    cfg = JointMpcRtiCfg()
+    cfg.runtime.nominal_only = True
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("nominal-only mode must skip LQ/QP/line search")
+
+    monkeypatch.setattr(planner, "perceptive_sqp_rti_update", fail_if_called)
+    result = planner.step(
+        make_state(1), make_command(1), make_flat_field(1), None, cfg
+    )
+
+    torch.testing.assert_close(
+        result.full_trajectory.state_nodes, result.diagnostics.nominal_state
+    )
+    torch.testing.assert_close(
+        result.diagnostics.qp_direction,
+        torch.zeros_like(result.diagnostics.qp_direction),
+    )
+    torch.testing.assert_close(
+        result.diagnostics.selected_alpha, torch.zeros_like(result.diagnostics.selected_alpha)
+    )
+    assert result.full_trajectory.fallback.all()
+
+
 def test_first_call_is_cold_and_every_later_call_is_warm() -> None:
     from extension.joint_mpc_rti import planner
 

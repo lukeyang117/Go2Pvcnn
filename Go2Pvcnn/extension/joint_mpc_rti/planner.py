@@ -15,7 +15,11 @@ from extension.joint_mpc_rti.model.nominal import (
     build_rebased_seed,
 )
 from extension.joint_mpc_rti.model.perceptive_plan import select_touchdowns
-from extension.joint_mpc_rti.solver.sqp_rti import perceptive_sqp_rti_update
+from extension.joint_mpc_rti.solver.line_search import HARD_FILTER_NAMES
+from extension.joint_mpc_rti.solver.sqp_rti import (
+    SqpRtiUpdate,
+    perceptive_sqp_rti_update,
+)
 from extension.joint_mpc_rti.solver.trajectory_qp import JOINT_LOWER, JOINT_UPPER
 from extension.joint_mpc_rti.tensor_constants import constant_like
 from extension.joint_mpc_rti.terrain.perceptive_field import build_perceptive_field
@@ -95,6 +99,56 @@ def _stance_anchors_from_state(
         schedule.swing.to(torch.int64).cumsum(dim=1) > 0
     )
     return torch.where(future_stance[..., None], touchdown, anchor[:, None])
+
+
+def _nominal_only_update(
+    nominal: NominalTrajectory, *, stage_profiler=None
+) -> SqpRtiUpdate:
+    state = nominal.state
+    batch = int(state.shape[0])
+    alpha_count = 5
+    filter_count = len(HARD_FILTER_NAMES)
+    safe = nominal.nominal_safe
+    reject_bits = torch.ones(
+        batch,
+        alpha_count,
+        filter_count,
+        dtype=torch.bool,
+        device=state.device,
+    )
+    reject_bits[:, -1] = (~safe)[:, None].expand(-1, filter_count)
+    if stage_profiler is not None:
+        for name in ("linearization", "scan_qp", "line_search_safety"):
+            stage_profiler.record(name)
+    return SqpRtiUpdate(
+        state=state,
+        direction=torch.zeros_like(state),
+        alpha=state.new_zeros(batch),
+        loss_before=state.new_zeros(batch),
+        selected_loss=state.new_zeros(batch),
+        selected_index=torch.full(
+            (batch,), alpha_count - 1, dtype=torch.long, device=state.device
+        ),
+        used_nominal=torch.ones(batch, dtype=torch.bool, device=state.device),
+        status=(~safe).to(torch.long),
+        candidate_loss=state.new_zeros(batch, alpha_count),
+        candidate_filter_valid=~reject_bits,
+        candidate_swing_safe_z=state.new_zeros(batch, alpha_count, 4),
+        support_target=state.new_zeros(batch, 6),
+        active=None,
+        loss_breakdown={},
+        node_loss_breakdown={},
+        kkt_primal_residual=state.new_zeros(batch),
+        kkt_dual_residual=state.new_zeros(batch),
+        slack_max={},
+        active_constraint_count={},
+        alpha_reject_bits=reject_bits,
+        alpha_min_clearance=nominal.minimum_clearance_by_part[:, None].expand(
+            -1, alpha_count, -1
+        ),
+        publish=safe,
+        stop=~safe,
+    )
 
 
 def step(
@@ -184,8 +238,12 @@ def step(
         cfg,
         perceptive_field=perceptive_field,
     )
-    update = perceptive_sqp_rti_update(
-        nominal, context, cfg, stage_profiler=stage_profiler
+    update = (
+        _nominal_only_update(nominal, stage_profiler=stage_profiler)
+        if bool(cfg.runtime.nominal_only)
+        else perceptive_sqp_rti_update(
+            nominal, context, cfg, stage_profiler=stage_profiler
+        )
     )
     state = update.state
     foot_pos_w = _foot_positions(state)
