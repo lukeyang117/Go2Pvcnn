@@ -138,7 +138,8 @@
   <ul>
     <li>保留当前 active-leg-only 的碰撞筛选范围。</li>
     <li>保留每条腿独立 50 个候选点的规划方式，不做对角 swing pair 的 <code>50 x 50</code> 组合。</li>
-    <li>保留现有 filter / score / standstill 行为。</li>
+    <li>保留现有 filter / score 行为。</li>
+    <li>standstill fallback 默认开启；当关闭时，规划失败不再输出默认保持轨迹，而是显式暴露 invalid 结果。</li>
     <li>删除旧的 ellipsoid 碰撞体配置和检测逻辑。</li>
     <li>新碰撞检测必须在 env、leg、candidate、time、shape、point 维度上并行。</li>
   </ul>
@@ -356,9 +357,11 @@
       <tr><td><code>cylinder_angles</code></td><td>cylinder 每层圆周采样点数。初版等价于 4 个方向点。</td></tr>
       <tr><td><code>sphere_surface_points</code></td><td>sphere 表面方向点数。初版等价于 6 个轴向点。</td></tr>
       <tr><td><code>collision_margin_m</code></td><td>碰撞高度容差，默认 <code>0.003</code>。</td></tr>
+      <tr><td><code>contact_tolerant_collision_shape_names</code></td><td>允许与地面接触的官方 shape 名称，默认包含 <code>calf_lower_cylinder</code> 和 <code>foot_sphere</code>；这些 shape 仍检查语义障碍。</td></tr>
+      <tr><td><code>standstill_fallback_enabled</code></td><td>规划失败时是否输出当前 root、joint、foot 的保持轨迹，默认 <code>True</code>。</td></tr>
     </tbody>
   </table>
-  <p>旧配置项 <code>EllipsoidSpec</code>、<code>collision_ellipsoids</code>、<code>collision_probe_count</code>、<code>contact_tolerant_collision_names</code> 应删除或改名，不再保留旧语义。</p>
+  <p>旧配置项 <code>EllipsoidSpec</code>、<code>collision_ellipsoids</code>、<code>collision_probe_count</code>、<code>contact_tolerant_collision_names</code> 应删除或改名，不再保留旧椭圆体语义。</p>
 
   <h2>8. 可视化设计</h2>
   <p>可视化入口为 <code>extension/viz/go2_foostep_planner.py</code>。新增命令行参数 <code>--used-test-terminal</code>，默认开启。</p>
@@ -371,8 +374,10 @@
     <li><code>show_mesh</code> 勾选：显示或隐藏 Go2 视觉 mesh。</li>
     <li><code>show_collision_body</code> 勾选：显示或隐藏官方 collision body。</li>
     <li><code>show_contact_points</code> 勾选：显示或隐藏 surface contact points。</li>
+    <li><code>standstill_fallback_enabled</code> 勾选：控制规划失败时是否输出默认保持轨迹，默认勾选。</li>
   </ul>
   <p>surface contact points 在 IsaacSim 中显示为棕色。mesh 与 collision body 可以同时勾选，用来观察官方碰撞体与 Go2 mesh 是否贴合。</p>
+  <p>当 <code>standstill_fallback_enabled=True</code> 且所有候选点 invalid 时，输出当前 root、joint、foot 的保持轨迹，保持现有安全行为。当该选项关闭时，planner 仍返回 <code>valid=False</code>，但不把输出替换成默认保持轨迹；viewer 需要显示失败状态，便于观察为什么没有可用 touchdown。</p>
 
   <h2>9. 测试设计</h2>
   <h3>9.1 Planner touchdown 有效性</h3>
@@ -388,12 +393,22 @@
   <h3>9.2 无有效候选时保持不动</h3>
   <ul>
     <li>构造全部 invalid 的 valid map。</li>
+    <li>使用默认 <code>standstill_fallback_enabled=True</code>。</li>
     <li>断言 <code>traj.valid == False</code>。</li>
     <li>断言 root、joint、foot 都保持当前状态。</li>
     <li>断言 contact state 全部为 stance。</li>
   </ul>
 
-  <h3>9.3 Surface points 并行性</h3>
+  <h3>9.3 关闭 Standstill Fallback</h3>
+  <ul>
+    <li>构造全部 invalid 的 valid map。</li>
+    <li>设置 <code>standstill_fallback_enabled=False</code>。</li>
+    <li>断言 <code>traj.valid == False</code>。</li>
+    <li>断言 planner 不再把 root、joint、foot 输出替换成当前保持轨迹。</li>
+    <li>viewer 面板需要显示该失败状态，避免用户误以为 planner 仍然输出了默认 standstill。</li>
+  </ul>
+
+  <h3>9.4 Surface points 并行性</h3>
   <ul>
     <li>验证 touchdown surface point 张量形状包含 <code>B / leg / candidate / shape / point / xyz</code>。</li>
     <li>验证 swing surface point 张量形状包含 <code>B / leg / candidate / T / shape / point / xyz</code>。</li>
@@ -401,7 +416,7 @@
     <li>避免在 candidate 或 point 维度使用 Python 逐项循环。</li>
   </ul>
 
-  <h3>9.4 Viz 面板测试</h3>
+  <h3>9.5 Viz 面板测试</h3>
   <ul>
     <li>启动 <code>go2_foostep_planner.py</code> 时默认打开 <code>used_test_terminal</code> 面板。</li>
     <li>拖动 <code>vx</code> 滑条后，planner command 的 <code>vx</code> 发生变化。</li>
@@ -409,9 +424,10 @@
     <li>拖动 <code>vyaw</code> 滑条后，planner command 的 <code>vyaw</code> 发生变化。</li>
     <li>拖动 <code>swing_height</code> 滑条后，swing 中间高度发生变化。</li>
     <li>勾选或取消三个 checkbox 后，IsaacSim 中 mesh、collision body、棕色 surface points 显示状态变化。</li>
+    <li>取消 <code>standstill_fallback_enabled</code> 后，人为制造无有效 touchdown，viewer 能显示 <code>valid=False</code> 且不再输出默认保持轨迹。</li>
   </ul>
 
-  <h3>9.5 IsaacSim 真实 viewer 验证</h3>
+  <h3>9.6 IsaacSim 真实 viewer 验证</h3>
   <p>参考命令保持 <code>--planner-backend parallelism</code>。验证日志需要输出：</p>
   <ul>
     <li><code>valid</code></li>

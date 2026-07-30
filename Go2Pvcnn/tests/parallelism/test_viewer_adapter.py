@@ -22,9 +22,9 @@ def test_viewer_adapter_contract():
             candidate_score=torch.zeros(1, 4, 50),
             candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
             candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
-            candidate_collision_bits=torch.zeros(1, 4, 50, 10, dtype=torch.bool),
-            collision_ellipsoid_names=tuple(f"ellipsoid_{idx}" for idx in range(10)),
-            collision_probe_count=5,
+            candidate_collision_bits=torch.zeros(1, 4, 50, 5, dtype=torch.bool),
+            collision_shape_names=tuple(f"shape_{idx}" for idx in range(5)),
+            collision_surface_point_count=6,
             candidate_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             fk_touchdown_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             selected_index=torch.zeros(1, 4, dtype=torch.long),
@@ -59,9 +59,9 @@ def test_viewer_adapter_exposes_overlay_optional_fields():
             candidate_score=torch.zeros(1, 4, 50),
             candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
             candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
-            candidate_collision_bits=torch.zeros(1, 4, 50, 10, dtype=torch.bool),
-            collision_ellipsoid_names=tuple(f"ellipsoid_{idx}" for idx in range(10)),
-            collision_probe_count=5,
+            candidate_collision_bits=torch.zeros(1, 4, 50, 5, dtype=torch.bool),
+            collision_shape_names=tuple(f"shape_{idx}" for idx in range(5)),
+            collision_surface_point_count=6,
             candidate_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             fk_touchdown_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             selected_index=torch.zeros(1, 4, dtype=torch.long),
@@ -74,7 +74,7 @@ def test_viewer_adapter_exposes_overlay_optional_fields():
     assert result.alpha_candidate_state is None
 
 
-def test_viewer_parallelism_reject_uses_ellipsoid_names():
+def test_viewer_parallelism_reject_uses_collision_shape_names():
     from types import SimpleNamespace
     from extension.viz.go2_foostep_planner import _format_parallelism_reject_diagnostics
 
@@ -82,10 +82,33 @@ def test_viewer_parallelism_reject_uses_ellipsoid_names():
         candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
         candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
         candidate_collision_bits=torch.zeros(1, 4, 50, 2, dtype=torch.bool),
-        collision_ellipsoid_names=("calf_mid_bar", "foot_pad"),
+        collision_shape_names=("calf_mid_cylinder", "foot_sphere"),
     )
     diagnostics.candidate_collision_bits[..., 0] = True
 
     text = _format_parallelism_reject_diagnostics(SimpleNamespace(parallelism_diagnostics=diagnostics))
 
-    assert "collision_detail(calf_mid_bar=200 foot_pad=0)" in text
+    assert "collision_detail(calf_mid_cylinder=200 foot_sphere=0)" in text
+
+
+def test_viewer_test_terminal_state_scales_command():
+    from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _apply_test_terminal_command
+
+    state = ViewerTestTerminalState(vx=0.5, vy=0.25, vyaw=0.75, swing_height=0.12, enabled=True)
+    command = _apply_test_terminal_command(torch.zeros(1, 3), state)
+
+    assert torch.allclose(command, torch.tensor([[0.5, 0.25, 0.75]]))
+
+
+def test_parallelism_visualization_flags_preserve_values():
+    from extension.viz.go2_foostep_planner import _parallelism_visualization_flags
+
+    flags = _parallelism_visualization_flags(
+        show_mesh=True,
+        show_collision_body=False,
+        show_contact_points=True,
+    )
+
+    assert flags.show_mesh is True
+    assert flags.show_collision_body is False
+    assert flags.show_contact_points is True

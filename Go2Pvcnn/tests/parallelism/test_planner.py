@@ -57,9 +57,9 @@ def test_full_flat_trajectory_contract():
     assert traj.valid.shape == (1,)
     assert traj.diagnostics.candidate_w.shape == (1, 4, 50, 3)
     assert traj.diagnostics.candidate_reject_bits.shape == (1, 4, 50, 6)
-    assert traj.diagnostics.candidate_collision_bits.shape == (1, 4, 50, 10)
-    assert traj.diagnostics.collision_ellipsoid_names == tuple(spec.name for spec in cfg.collision_ellipsoids)
-    assert traj.diagnostics.collision_probe_count == 5
+    assert traj.diagnostics.candidate_collision_bits.shape == (1, 4, 50, len(cfg.official_collision_shapes))
+    assert traj.diagnostics.collision_shape_names == tuple(spec.name for spec in cfg.official_collision_shapes)
+    assert traj.diagnostics.collision_surface_point_count == 6
     assert traj.diagnostics.fk_touchdown_semantic.shape == (1, 4, 50)
     assert traj.diagnostics.candidate_valid.any()
 
@@ -90,6 +90,22 @@ def test_invalid_plan_holds_current_state():
     assert torch.allclose(traj.foot_pos_w, current_foot[:, None].expand(-1, 24, -1, -1), atol=1e-6)
     assert torch.equal(traj.selected_foothold_w, current_foot)
     assert traj.contact_state.all()
+
+
+def test_invalid_plan_can_disable_standstill_fallback():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.planner import plan_trajectory
+
+    state = _state()
+    traj = plan_trajectory(
+        state,
+        torch.tensor([[0.7, 0.2, 0.3]]),
+        _terrain(invalid=True),
+        ParallelismCfg(standstill_fallback_enabled=False),
+    )
+
+    assert not bool(traj.valid[0])
+    assert not torch.allclose(traj.root_pos_w, state.root_pos_w[:, None].expand(-1, 24, -1))
 
 
 def test_obstacle_semantic_touchdowns_are_hard_rejected():

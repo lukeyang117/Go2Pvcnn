@@ -1,4 +1,4 @@
-from extension.parallelism.config import ParallelismCfg
+from extension.parallelism.config import OfficialCollisionShapeSpec, ParallelismCfg
 from extension.parallelism.types import (
     ParallelismDiagnostics,
     ParallelismReference,
@@ -10,6 +10,7 @@ from extension.parallelism.types import (
 
 __all__ = [
     "ParallelismCfg",
+    "OfficialCollisionShapeSpec",
     "ParallelismDiagnostics",
     "ParallelismReference",
     "ParallelismState",

@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 
 from extension.parallelism.candidates import build_candidates
-from extension.parallelism.collision import ellipsoid_collision_mask
+from extension.parallelism.collision import official_collision_mask
 from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.ik import ik_go2
 from extension.parallelism.kinematics import JOINT_LOWER, JOINT_UPPER, fk_go2
@@ -64,12 +64,12 @@ def _collision_mask(
     geometry,
     cfg: ParallelismCfg,
 ) -> tuple[Tensor, Tensor]:
-    return ellipsoid_collision_mask(terrain, geometry, cfg)
+    return official_collision_mask(terrain, geometry, cfg)
 
 
 def _contact_tolerant_indices(cfg: ParallelismCfg, *, device: torch.device) -> Tensor:
-    names = tuple(spec.name for spec in cfg.collision_ellipsoids)
-    indices = [idx for idx, name in enumerate(names) if name in set(cfg.contact_tolerant_collision_names)]
+    names = tuple(spec.name for spec in cfg.official_collision_shapes)
+    indices = [idx for idx, name in enumerate(names) if name in set(cfg.contact_tolerant_collision_shape_names)]
     return torch.tensor(indices, dtype=torch.long, device=device)
 
 
@@ -98,7 +98,7 @@ def _swing_collision_mask(
         batch,
         leg_count,
         candidate_count,
-        len(tuple(cfg.collision_ellipsoids)),
+        len(tuple(cfg.official_collision_shapes)),
         dtype=torch.bool,
         device=root_pos.device,
     )
@@ -308,23 +308,24 @@ def plan_trajectory(
     current_root_rpy = torch.as_tensor(state.root_rpy_w, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
     current_joint = torch.as_tensor(state.joint_pos, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
     current_foot = _current_foot_pos(state, current_root_pos, current_root_rpy)
-    env_mask_3 = selected_valid[:, None, None]
+    output_planned = selected_valid | (torch.full_like(selected_valid, True) if not bool(cfg.standstill_fallback_enabled) else torch.zeros_like(selected_valid))
+    env_mask_3 = output_planned[:, None, None]
     root_pos_out = torch.where(env_mask_3, root.root_pos_w, current_root_pos[:, None].expand(-1, int(cfg.horizon), -1))
     root_rpy_out = torch.where(env_mask_3, root.root_rpy_w, current_root_rpy[:, None].expand(-1, int(cfg.horizon), -1))
     joint_pos_out = torch.where(env_mask_3, joint_pos, current_joint[:, None].expand(-1, int(cfg.horizon), -1))
     foot_pos_out = torch.where(
-        selected_valid[:, None, None, None],
+        output_planned[:, None, None, None],
         foot_pos,
         current_foot[:, None].expand(-1, int(cfg.horizon), -1, -1),
     )
     contact_state = _contact_state(root.root_pos_w, cfg)
     contact_state_out = torch.where(
-        selected_valid[:, None, None],
+        output_planned[:, None, None],
         contact_state,
         torch.ones_like(contact_state),
     )
     selected_foothold_out = torch.where(
-        selected_valid[:, None, None],
+        output_planned[:, None, None],
         selected_foothold,
         current_foot,
     )
@@ -350,8 +351,12 @@ def plan_trajectory(
             candidate_valid=candidate_valid,
             candidate_reject_bits=reject_bits,
             candidate_collision_bits=collision_bits,
-            collision_ellipsoid_names=tuple(spec.name for spec in cfg.collision_ellipsoids),
-            collision_probe_count=int(cfg.collision_probe_count),
+            collision_shape_names=tuple(spec.name for spec in cfg.official_collision_shapes),
+            collision_surface_point_count=max(
+                int(cfg.box_surface_points),
+                int(cfg.cylinder_layers) * int(cfg.cylinder_angles) + 2,
+                int(cfg.sphere_surface_points),
+            ),
             candidate_semantic=candidates.candidate_semantic,
             fk_touchdown_semantic=fk_touchdown_semantic,
             selected_index=selected_index,

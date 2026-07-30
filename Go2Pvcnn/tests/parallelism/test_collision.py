@@ -1,28 +1,27 @@
 from __future__ import annotations
 
 
-def test_default_collision_ellipsoid_specs_are_named_and_grouped():
+def test_default_official_collision_shapes_match_go2_usd():
     from extension.parallelism.config import ParallelismCfg
 
     cfg = ParallelismCfg()
-    names = tuple(spec.name for spec in cfg.collision_ellipsoids)
-    link_types = tuple(spec.link_type for spec in cfg.collision_ellipsoids)
+    names = tuple(spec.name for spec in cfg.official_collision_shapes)
+    link_types = tuple(spec.link_type for spec in cfg.official_collision_shapes)
 
     assert names == (
-        "thigh_body_inner",
-        "thigh_body_mid",
-        "thigh_body_outer",
-        "thigh_outer_cap",
-        "calf_knee_cap",
-        "calf_upper_bar",
-        "calf_mid_bar",
-        "calf_lower_bar",
-        "calf_ankle_cap",
-        "foot_pad",
+        "thigh_box",
+        "fl_calf_upper_cylinder",
+        "calf_upper_cylinder",
+        "calf_mid_cylinder",
+        "calf_lower_cylinder",
+        "foot_sphere",
     )
-    assert link_types == ("thigh", "thigh", "thigh", "thigh", "calf", "calf", "calf", "calf", "calf", "foot")
-    assert cfg.collision_probe_count == 5
+    assert link_types == ("thigh", "calf", "calf", "calf", "calf", "foot")
     assert cfg.collision_margin_m == 0.003
+    assert cfg.box_surface_points == 6
+    assert cfg.cylinder_layers == 1
+    assert cfg.cylinder_angles == 4
+    assert cfg.sphere_surface_points == 6
 
 
 def test_fk_returns_link_poses_for_collision_frames():
@@ -45,43 +44,79 @@ def test_fk_returns_link_poses_for_collision_frames():
     assert torch.allclose(geometry.calf_rot_w @ geometry.calf_rot_w.transpose(-1, -2), eye, atol=1e-5)
 
 
-def test_probe_offset_checks_four_neighbors_and_center():
+def test_official_surface_points_match_default_primitive_samples():
     import torch
-    from extension.parallelism.collision import build_ellipsoid_probe_l
-    from extension.parallelism.config import EllipsoidSpec
+    from extension.parallelism.collision import build_official_surface_points_l
+    from extension.parallelism.config import ParallelismCfg
 
-    specs = (EllipsoidSpec("e", "foot", (1.0, 2.0, 3.0), (0.1, 0.2, 0.3), (0.4, 0.5)),)
+    cfg = ParallelismCfg()
 
-    probes = build_ellipsoid_probe_l(specs, dtype=torch.float32, device=torch.device("cpu"))
+    points, mask = build_official_surface_points_l(
+        cfg.official_collision_shapes,
+        cfg,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+    )
 
-    assert probes.shape == (1, 5, 3)
+    assert points.shape == (6, 6, 3)
+    assert mask.shape == (6, 6)
+    assert mask.all()
     assert torch.allclose(
-        probes[0],
+        points[0],
         torch.tensor(
             [
-                [1.0, 2.0, 3.0],
-                [1.4, 2.0, 3.0],
-                [0.6, 2.0, 3.0],
-                [1.0, 2.5, 3.0],
-                [1.0, 1.5, 3.0],
+                [0.0, 0.0, -0.2130],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.01225, -0.1065],
+                [0.0, -0.01225, -0.1065],
+                [0.0170, 0.0, -0.1065],
+                [-0.0170, 0.0, -0.1065],
             ]
         ),
+        atol=1e-5,
+    )
+    assert torch.allclose(
+        points[5],
+        torch.tensor(
+            [
+                [0.0200, 0.0, 0.0],
+                [-0.0240, 0.0, 0.0],
+                [-0.0020, 0.0220, 0.0],
+                [-0.0020, -0.0220, 0.0],
+                [-0.0020, 0.0, 0.0220],
+                [-0.0020, 0.0, -0.0220],
+            ]
+        ),
+        atol=1e-5,
     )
 
 
-def test_ellipsoid_collision_uses_link_local_height_points():
+def test_official_collision_uses_batched_surface_points():
     import torch
     from types import SimpleNamespace
-    from extension.parallelism.collision import ellipsoid_collision_mask
-    from extension.parallelism.config import EllipsoidSpec, ParallelismCfg
+    from extension.parallelism.collision import official_collision_mask
+    from extension.parallelism.config import OfficialCollisionShapeSpec, ParallelismCfg
     from extension.parallelism.types import ParallelismTerrain
 
     cfg = ParallelismCfg(
         collision_margin_m=0.0,
-        collision_ellipsoids=(EllipsoidSpec("foot_pad", "foot", (0.0, 0.0, 0.0), (0.10, 0.10, 0.10), (0.05, 0.05)),),
+        contact_tolerant_collision_shape_names=(),
+        official_collision_shapes=(
+            OfficialCollisionShapeSpec(
+                name="foot_sphere",
+                leg_name=None,
+                link_type="foot",
+                shape_type="sphere",
+                center_l=(0.0, 0.0, 0.0),
+                quat_wxyz_l=(1.0, 0.0, 0.0, 0.0),
+                size_l=(0.0, 0.0, 0.0),
+                radius_m=0.10,
+                height_m=0.0,
+            ),
+        ),
     )
     terrain = ParallelismTerrain(
-        height_w=torch.full((1, 11, 11), 0.05),
+        height_w=torch.full((1, 11, 11), 0.10),
         semantic_id=torch.zeros(1, 11, 11, dtype=torch.long),
         valid_mask=torch.ones(1, 11, 11, dtype=torch.bool),
         origin_w=torch.tensor([[-0.5, -0.5, 0.0]]),
@@ -97,7 +132,7 @@ def test_ellipsoid_collision_uses_link_local_height_points():
         calf_rot_w=torch.eye(3).view(1, 1, 1, 1, 3, 3),
     )
 
-    ok, bits = ellipsoid_collision_mask(terrain, geometry, cfg)
+    ok, bits = official_collision_mask(terrain, geometry, cfg)
 
     assert ok.shape == (1, 1, 1)
     assert bits.shape == (1, 1, 1, 1)
@@ -135,4 +170,4 @@ def test_swing_collision_mask_preserves_candidate_shape():
     ok, bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg)
 
     assert ok.shape == (1, 4, 2)
-    assert bits.shape == (1, 4, 2, len(cfg.collision_ellipsoids))
+    assert bits.shape == (1, 4, 2, len(cfg.official_collision_shapes))

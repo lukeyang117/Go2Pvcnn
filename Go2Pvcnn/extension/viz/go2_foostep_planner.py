@@ -111,6 +111,98 @@ class ViewerStepGate:
         return bool(step_requested)
 
 
+@dataclass
+class ViewerTestTerminalState:
+    vx: float = 0.0
+    vy: float = 0.0
+    vyaw: float = 0.0
+    swing_height: float = 0.08
+    standstill_fallback_enabled: bool = True
+    show_mesh: bool = True
+    show_collision_body: bool = False
+    show_contact_points: bool = False
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class ParallelismVisualizationFlags:
+    show_mesh: bool
+    show_collision_body: bool
+    show_contact_points: bool
+
+
+def _parallelism_visualization_flags(
+    *,
+    show_mesh: bool,
+    show_collision_body: bool,
+    show_contact_points: bool,
+) -> ParallelismVisualizationFlags:
+    return ParallelismVisualizationFlags(
+        show_mesh=bool(show_mesh),
+        show_collision_body=bool(show_collision_body),
+        show_contact_points=bool(show_contact_points),
+    )
+
+
+def _apply_test_terminal_command(command: torch.Tensor, state: ViewerTestTerminalState | None) -> torch.Tensor:
+    if state is None or not bool(state.enabled):
+        return command
+    values = torch.tensor(
+        [[float(state.vx), float(state.vy), float(state.vyaw)]],
+        dtype=command.dtype,
+        device=command.device,
+    )
+    return values.expand_as(command).clone()
+
+
+def _create_viewer_test_terminal(state: ViewerTestTerminalState):
+    try:
+        import omni.ui as ui
+    except Exception as exc:  # pragma: no cover - only used inside IsaacSim UI runtime.
+        print(f"[WARN][ViewerTestTerminal] omni.ui unavailable: {exc}", flush=True)
+        return None
+
+    window = ui.Window("Parallelism Test Terminal", width=330, height=315)
+
+    def _slider(label: str, attr: str, minimum: float, maximum: float):
+        with ui.HStack(height=28):
+            ui.Label(label, width=95)
+            model = ui.SimpleFloatModel(float(getattr(state, attr)))
+            ui.FloatSlider(model=model, min=minimum, max=maximum, width=170)
+            value_label = ui.Label(f"{float(getattr(state, attr)):.3f}", width=55)
+
+            def _changed(model=model, attr=attr, value_label=value_label):
+                value = float(model.get_value_as_float())
+                setattr(state, attr, value)
+                value_label.text = f"{value:.3f}"
+
+            model.add_value_changed_fn(_changed)
+
+    def _checkbox(label: str, attr: str):
+        with ui.HStack(height=24):
+            model = ui.SimpleBoolModel(bool(getattr(state, attr)))
+            ui.CheckBox(model=model, width=22)
+            ui.Label(label)
+
+            def _changed(model=model, attr=attr):
+                setattr(state, attr, bool(model.get_value_as_bool()))
+
+            model.add_value_changed_fn(_changed)
+
+    with window.frame:
+        with ui.VStack(spacing=6):
+            ui.Label("Parallelism 调试面板", height=24)
+            _slider("vx", "vx", 0.0, 1.0)
+            _slider("vy", "vy", 0.0, 0.5)
+            _slider("vyaw", "vyaw", 0.0, 1.0)
+            _slider("swing_height", "swing_height", 0.0, 0.25)
+            _checkbox("standstill fallback", "standstill_fallback_enabled")
+            _checkbox("show mesh", "show_mesh")
+            _checkbox("show collision body", "show_collision_body")
+            _checkbox("show contact points", "show_contact_points")
+    return window
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
 
@@ -141,6 +233,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vx-scale", type=float, default=0.5, help="Teleop forward/backward speed.")
     parser.add_argument("--vy-scale", type=float, default=0.4, help="Teleop lateral speed.")
     parser.add_argument("--yaw-scale", type=float, default=1, help="Teleop yaw-rate command.")
+    parser.add_argument(
+        "--used-test-terminal",
+        dest="used_test_terminal",
+        action="store_true",
+        default=True,
+        help="Open the Parallelism test terminal panel.",
+    )
+    parser.add_argument(
+        "--no-used-test-terminal",
+        dest="used_test_terminal",
+        action="store_false",
+        help="Disable the Parallelism test terminal panel.",
+    )
     parser.add_argument("--key-hold-timeout", type=float, default=0.18, help="Seconds before a key press expires.")
     parser.add_argument("--heightmap-viz-stride", type=int, default=10, help="Subsample stride for heightmap markers.")
     parser.add_argument(
@@ -1079,6 +1184,20 @@ class PlannerVisualizer:
             )
             for alpha_index, color in enumerate(alpha_colors)
         ]
+        self.parallelism_contact_points = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/Parallelism/contact_points",
+                radius=0.010,
+                color=(0.45, 0.24, 0.10),
+            )
+        )
+        self.parallelism_collision_body = VisualizationMarkers(
+            _make_marker_cfg(
+                "/Visuals/Parallelism/collision_body_centers",
+                radius=0.018,
+                color=(0.0, 0.7, 0.9),
+            )
+        )
         self.foot_traj = []
         self.touchdowns = []
         self.parallelism_candidate_circle = []
@@ -1164,6 +1283,7 @@ class PlannerVisualizer:
         command: torch.Tensor,
         root_yaw: torch.Tensor,
         height_points_by_class: dict[int, torch.Tensor],
+        parallelism_flags: ParallelismVisualizationFlags | None = None,
     ) -> None:
         from extension.convention import quat_wxyz_to_xyzw
 
@@ -1179,6 +1299,30 @@ class PlannerVisualizer:
             else:
                 self.parallelism_candidate_circle[leg_idx].set_visibility(True)
                 self.parallelism_candidate_circle[leg_idx].visualize(translations=circle_points.to(torch.float32))
+
+        if parallelism_flags is not None and bool(parallelism_flags.show_contact_points):
+            contact_points = getattr(result, "parallelism_collision_surface_points_w", None)
+            if contact_points is not None:
+                contact_points = torch.as_tensor(contact_points).reshape(-1, 3)
+            if contact_points is not None and bool(contact_points.numel()):
+                self.parallelism_contact_points.set_visibility(True)
+                self.parallelism_contact_points.visualize(translations=contact_points.to(torch.float32))
+            else:
+                self.parallelism_contact_points.set_visibility(False)
+        else:
+            self.parallelism_contact_points.set_visibility(False)
+
+        if parallelism_flags is not None and bool(parallelism_flags.show_collision_body):
+            body_points = getattr(result, "parallelism_collision_body_centers_w", None)
+            if body_points is not None:
+                body_points = torch.as_tensor(body_points).reshape(-1, 3)
+            if body_points is not None and bool(body_points.numel()):
+                self.parallelism_collision_body.set_visibility(True)
+                self.parallelism_collision_body.visualize(translations=body_points.to(torch.float32))
+            else:
+                self.parallelism_collision_body.set_visibility(False)
+        else:
+            self.parallelism_collision_body.set_visibility(False)
 
         for semantic_id, markers in self.heightmap.items():
             points = height_points_by_class.get(semantic_id)
@@ -1730,7 +1874,7 @@ def _format_parallelism_reject_diagnostics(result) -> str:
     collision_text = ""
     if collision_bits is not None:
         collision_t = torch.as_tensor(collision_bits, dtype=torch.bool)
-        collision_names = tuple(getattr(diagnostics, "collision_ellipsoid_names", ()))
+        collision_names = tuple(getattr(diagnostics, "collision_shape_names", ()))
         if collision_t.ndim == 4 and collision_names and collision_t.shape[-1] == len(collision_names):
             collision_counts = collision_t.reshape(-1, collision_t.shape[-1]).sum(dim=0).to(torch.long).tolist()
             collision_detail = " ".join(
@@ -2069,6 +2213,7 @@ def _plan_parallelism_viewer_trajectory(
     foot_ids,
     command: torch.Tensor,
     args_cli: argparse.Namespace,
+    test_terminal_state: ViewerTestTerminalState | None = None,
 ):
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory
@@ -2076,7 +2221,13 @@ def _plan_parallelism_viewer_trajectory(
 
     terrain, ray_hits = _compute_parallelism_terrain(scanner)
     state = _parallelism_state_from_env(base_env, foot_ids)
-    cfg = ParallelismCfg(dt=float(args_cli.plan_dt))
+    cfg = ParallelismCfg(
+        dt=float(args_cli.plan_dt),
+        swing_height_m=float(test_terminal_state.swing_height) if test_terminal_state is not None else ParallelismCfg.swing_height_m,
+        standstill_fallback_enabled=bool(test_terminal_state.standstill_fallback_enabled)
+        if test_terminal_state is not None
+        else True,
+    )
     trajectory = plan_trajectory(
         state,
         torch.as_tensor(command, dtype=state.root_pos_w.dtype, device=state.root_pos_w.device),
@@ -2125,6 +2276,8 @@ def main() -> int:
     foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
     scanner = _reference_height_scanner(base_env, env_cfg)
     visualizer = PlannerVisualizer()
+    test_terminal_state = ViewerTestTerminalState(enabled=bool(getattr(args_cli, "used_test_terminal", True)))
+    test_terminal_window = _create_viewer_test_terminal(test_terminal_state) if parallel_backend and test_terminal_state.enabled else None
 
     print("[Viewer] Terrain source: teacher_elevation_trajectory env config", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
@@ -2195,6 +2348,12 @@ def main() -> int:
                         step_mode_enabled=step_gate.enabled,
                     ),
                 )
+                scripted_active = scripted_command is not None and scripted_cycles_remaining > 0
+                if parallel_backend and not scripted_active:
+                    active_cmd = replace(
+                        active_cmd,
+                        values=_apply_test_terminal_command(active_cmd.values, test_terminal_state),
+                    )
 
                 if active_cmd.reset_requested:
                     selected_origin = _reset_viewer_env(
@@ -2283,6 +2442,7 @@ def main() -> int:
                             foot_ids=foot_ids,
                             command=active_cmd.values,
                             args_cli=args_cli,
+                            test_terminal_state=test_terminal_state,
                         )
                     else:
                         state = _mpc_state_from_env(base_env, foot_ids)
@@ -2322,6 +2482,13 @@ def main() -> int:
                             command=active_cmd.values,
                             root_yaw=root_yaw,
                             height_points_by_class=height_points_by_class,
+                            parallelism_flags=_parallelism_visualization_flags(
+                                show_mesh=test_terminal_state.show_mesh,
+                                show_collision_body=test_terminal_state.show_collision_body,
+                                show_contact_points=test_terminal_state.show_contact_points,
+                            )
+                            if parallel_backend
+                            else None,
                         )
 
                     _viewer_update_visualizer_when_permitted(

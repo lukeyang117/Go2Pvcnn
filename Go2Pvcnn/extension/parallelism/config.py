@@ -5,12 +5,16 @@ from typing import ClassVar
 
 
 @dataclass(frozen=True)
-class EllipsoidSpec:
+class OfficialCollisionShapeSpec:
     name: str
+    leg_name: str | None
     link_type: str
     center_l: tuple[float, float, float]
-    radii_l: tuple[float, float, float]
-    probe_offset_l: tuple[float, float]
+    quat_wxyz_l: tuple[float, float, float, float]
+    shape_type: str
+    size_l: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    radius_m: float = 0.0
+    height_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -29,23 +33,75 @@ class ParallelismCfg:
     vx_limit: float = 1.0
     vy_limit: float = 0.5
     vyaw_limit: float = 1.0
+    standstill_fallback_enabled: bool = True
     foot_radius_m: float = 0.022
     knee_radius_m: float = 0.030
     calf_radius_m: float = 0.015
     thigh_radius_m: float = 0.035
     capsule_samples: int = 5
-    collision_probe_count: int = 5
-    contact_tolerant_collision_names: tuple[str, ...] = ("calf_ankle_cap", "foot_pad")
-    collision_ellipsoids: tuple[EllipsoidSpec, ...] = (
-        EllipsoidSpec("thigh_body_inner", "thigh", (0.000, 0.035, -0.005), (0.055, 0.050, 0.035), (0.045, 0.045)),
-        EllipsoidSpec("thigh_body_mid", "thigh", (0.000, 0.085, -0.005), (0.060, 0.055, 0.032), (0.050, 0.050)),
-        EllipsoidSpec("thigh_body_outer", "thigh", (0.000, 0.135, -0.006), (0.060, 0.050, 0.032), (0.050, 0.045)),
-        EllipsoidSpec("thigh_outer_cap", "thigh", (0.000, 0.180, -0.010), (0.050, 0.040, 0.038), (0.040, 0.035)),
-        EllipsoidSpec("calf_knee_cap", "calf", (0.006, 0.000, -0.025), (0.030, 0.020, 0.032), (0.024, 0.018)),
-        EllipsoidSpec("calf_upper_bar", "calf", (0.010, 0.000, -0.070), (0.026, 0.016, 0.045), (0.022, 0.014)),
-        EllipsoidSpec("calf_mid_bar", "calf", (0.016, 0.000, -0.115), (0.024, 0.015, 0.045), (0.020, 0.013)),
-        EllipsoidSpec("calf_lower_bar", "calf", (0.018, 0.000, -0.158), (0.023, 0.014, 0.038), (0.019, 0.012)),
-        EllipsoidSpec("calf_ankle_cap", "calf", (0.008, 0.000, -0.195), (0.028, 0.018, 0.026), (0.022, 0.015)),
-        EllipsoidSpec("foot_pad", "foot", (-0.002, 0.000, 0.030), (0.026, 0.024, 0.022), (0.020, 0.018)),
+    box_surface_points: int = 6
+    cylinder_layers: int = 1
+    cylinder_angles: int = 4
+    sphere_surface_points: int = 6
+    contact_tolerant_collision_shape_names: tuple[str, ...] = ("calf_lower_cylinder", "foot_sphere")
+    official_collision_shapes: tuple[OfficialCollisionShapeSpec, ...] = (
+        OfficialCollisionShapeSpec(
+            "thigh_box",
+            None,
+            "thigh",
+            (0.0, 0.0, -0.1065),
+            (0.7071067690849304, 0.0, 0.7071067690849304, 0.0),
+            "box",
+            size_l=(0.2130, 0.0245, 0.0340),
+        ),
+        OfficialCollisionShapeSpec(
+            "fl_calf_upper_cylinder",
+            "FL",
+            "calf",
+            (0.0080, 0.0, -0.0600),
+            (0.9944925904273987, 0.0, -0.10480716824531555, 0.0),
+            "cylinder",
+            radius_m=0.0120,
+            height_m=0.1200,
+        ),
+        OfficialCollisionShapeSpec(
+            "calf_upper_cylinder",
+            "!FL",
+            "calf",
+            (0.0100, 0.0, -0.0600),
+            (0.9950041770935059, 0.0, -0.0998334214091301, 0.0),
+            "cylinder",
+            radius_m=0.0130,
+            height_m=0.1200,
+        ),
+        OfficialCollisionShapeSpec(
+            "calf_mid_cylinder",
+            None,
+            "calf",
+            (0.0200, 0.0, -0.1480),
+            (0.9996874928474426, 0.0, 0.024997396394610405, 0.0),
+            "cylinder",
+            radius_m=0.0110,
+            height_m=0.0650,
+        ),
+        OfficialCollisionShapeSpec(
+            "calf_lower_cylinder",
+            None,
+            "calf",
+            (0.008013331331312656, 0.0, -0.18745021522045135),
+            (0.9650924801826477, 0.0, 0.26190924644470215, 0.0),
+            "cylinder",
+            radius_m=0.0155,
+            height_m=0.0300,
+        ),
+        OfficialCollisionShapeSpec(
+            "foot_sphere",
+            None,
+            "foot",
+            (-0.0020, 0.0, 0.0),
+            (1.0, 0.0, 0.0, 0.0),
+            "sphere",
+            radius_m=0.0220,
+        ),
     )
     obstacle_semantic_ids: ClassVar[tuple[int, ...]] = (1, 2)

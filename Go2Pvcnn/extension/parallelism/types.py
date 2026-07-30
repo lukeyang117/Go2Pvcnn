@@ -38,8 +38,8 @@ class ParallelismDiagnostics:
     candidate_valid: Tensor
     candidate_reject_bits: Tensor
     candidate_collision_bits: Tensor
-    collision_ellipsoid_names: tuple[str, ...]
-    collision_probe_count: int
+    collision_shape_names: tuple[str, ...]
+    collision_surface_point_count: int
     candidate_semantic: Tensor
     fk_touchdown_semantic: Tensor
     selected_index: Tensor
