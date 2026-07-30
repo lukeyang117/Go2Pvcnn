@@ -9,7 +9,7 @@ from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.ik import ik_go2
 from extension.parallelism.kinematics import JOINT_LOWER, JOINT_UPPER, fk_go2
 from extension.parallelism.root import clamp_command, rollout_root
-from extension.parallelism.swing import swing_curve
+from extension.parallelism.swing import terrain_aware_swing_curve
 from extension.parallelism.terrain import expanded_obstacle_mask, query_expanded_obstacle, query_height_semantic_valid
 from extension.parallelism.types import (
     ParallelismDiagnostics,
@@ -108,11 +108,13 @@ def _swing_collision_mask(
         phase_stop = phase_start + half_cycle
         root_phase_pos = root_pos[:, phase_start:phase_stop]
         root_phase_rpy = root_rpy[:, phase_start:phase_stop]
-        swing = swing_curve(
+        swing = terrain_aware_swing_curve(
             current_foot[:, None, leg_idx].expand(batch, candidate_count, 3),
             candidates.candidate_w[:, leg_idx],
+            terrain,
             frames=half_cycle,
-            height_m=cfg.swing_height_m,
+            clearance_m=cfg.swing_clearance_m,
+            min_apex_m=cfg.min_swing_apex_m,
         )
         foot_targets = current_foot[:, None, None, :, :].expand(batch, candidate_count, half_cycle, 4, 3).clone()
         foot_targets[..., leg_idx, :] = swing
@@ -192,13 +194,34 @@ def _semantic_ok(semantic: Tensor, cfg: ParallelismCfg) -> Tensor:
     return ~(semantic[..., None] == obstacle_ids).any(dim=-1)
 
 
-def _assemble_foot_targets(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor, selected_foothold_w: Tensor, cfg: ParallelismCfg) -> Tensor:
+def _assemble_foot_targets(
+    state: ParallelismState,
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    selected_foothold_w: Tensor,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+) -> Tensor:
     batch = root_pos.shape[0]
     foot0 = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
     first = foot0[:, None].expand(-1, int(cfg.half_cycle), -1, -1).clone()
     second = first.clone()
-    first_swing = swing_curve(foot0[:, (0, 3)], selected_foothold_w[:, (0, 3)], frames=int(cfg.half_cycle), height_m=cfg.swing_height_m)
-    second_swing = swing_curve(foot0[:, (1, 2)], selected_foothold_w[:, (1, 2)], frames=int(cfg.half_cycle), height_m=cfg.swing_height_m)
+    first_swing = terrain_aware_swing_curve(
+        foot0[:, (0, 3)],
+        selected_foothold_w[:, (0, 3)],
+        terrain,
+        frames=int(cfg.half_cycle),
+        clearance_m=cfg.swing_clearance_m,
+        min_apex_m=cfg.min_swing_apex_m,
+    )
+    second_swing = terrain_aware_swing_curve(
+        foot0[:, (1, 2)],
+        selected_foothold_w[:, (1, 2)],
+        terrain,
+        frames=int(cfg.half_cycle),
+        clearance_m=cfg.swing_clearance_m,
+        min_apex_m=cfg.min_swing_apex_m,
+    )
     first[:, :, (0, 3)] = first_swing.transpose(1, 2)
     second[:, :, (0, 3)] = selected_foothold_w[:, None, (0, 3)]
     second[:, :, (1, 2)] = second_swing.transpose(1, 2)
@@ -308,7 +331,7 @@ def plan_trajectory(
     per_leg_has_valid = candidate_valid.any(dim=-1)
     selected_valid = per_leg_has_valid.all(dim=-1)
 
-    foot_targets = _assemble_foot_targets(state, root.root_pos_w, root.root_rpy_w, selected_foothold, cfg)
+    foot_targets = _assemble_foot_targets(state, root.root_pos_w, root.root_rpy_w, selected_foothold, terrain, cfg)
     joint_traj, _reachable = ik_go2(root.root_pos_w, root.root_rpy_w, foot_targets)
     joint_pos = joint_traj.reshape(batch, int(cfg.horizon), 12)
     fk = fk_go2(

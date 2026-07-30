@@ -172,6 +172,30 @@ def test_filter_score_source_uses_torch_conditions():
     assert "for candidate" not in source
 
 
+def test_planner_uses_terrain_aware_swing_for_collision_and_output(monkeypatch):
+    import extension.parallelism.planner as planner
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.swing import swing_curve
+
+    calls: list[tuple[int, float, float]] = []
+
+    def fake_terrain_aware_swing(start_w, touchdown_w, terrain, *, frames: int, clearance_m: float, min_apex_m: float):
+        calls.append((int(frames), float(clearance_m), float(min_apex_m)))
+        return swing_curve(start_w, touchdown_w, frames=int(frames), height_m=float(min_apex_m))
+
+    monkeypatch.setattr(planner, "terrain_aware_swing_curve", fake_terrain_aware_swing, raising=False)
+
+    planner.plan_trajectory(
+        _state(),
+        torch.tensor([[0.2, 0.0, 0.0]], dtype=torch.float32),
+        _terrain(),
+        ParallelismCfg(swing_clearance_m=0.07, min_swing_apex_m=0.08),
+    )
+
+    assert len(calls) >= 6
+    assert all(call == (12, 0.07, 0.08) for call in calls)
+
+
 def test_parallel_batch_contract():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory

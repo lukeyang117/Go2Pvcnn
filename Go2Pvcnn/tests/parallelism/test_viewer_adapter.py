@@ -95,7 +95,7 @@ def test_viewer_parallelism_reject_uses_collision_shape_names():
 def test_viewer_test_terminal_state_scales_command():
     from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _apply_test_terminal_command
 
-    state = ViewerTestTerminalState(vx=0.5, vy=0.25, vyaw=0.75, swing_height=0.12, enabled=True)
+    state = ViewerTestTerminalState(vx=0.5, vy=0.25, vyaw=0.75, swing_clearance_m=0.12, enabled=True)
     command = _apply_test_terminal_command(torch.zeros(1, 3), state)
 
     assert torch.allclose(command, torch.tensor([[0.5, 0.25, 0.75]]))
@@ -110,21 +110,22 @@ def test_test_terminal_command_supports_signed_velocity():
     assert torch.allclose(command, torch.tensor([[-0.4, -0.2, -0.7], [-0.4, -0.2, -0.7]]))
 
 
-def test_parallelism_cfg_from_viewer_uses_semantic_margin():
+def test_parallelism_cfg_from_viewer_uses_debug_panel_values():
     from argparse import Namespace
     from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _parallelism_cfg_from_viewer_args
 
     cfg = _parallelism_cfg_from_viewer_args(
         Namespace(plan_dt=0.02),
         ViewerTestTerminalState(
-            swing_height=0.11,
+            swing_clearance_m=0.11,
             semantic_touchdown_margin_m=0.04,
             candidate_radius_m=0.42,
             standstill_fallback_enabled=False,
         ),
     )
 
-    assert cfg.swing_height_m == 0.11
+    assert cfg.swing_clearance_m == 0.11
+    assert cfg.min_swing_apex_m == 0.08
     assert cfg.semantic_touchdown_margin_m == 0.04
     assert cfg.candidate_radius_m == 0.42
     assert cfg.standstill_fallback_enabled is False
