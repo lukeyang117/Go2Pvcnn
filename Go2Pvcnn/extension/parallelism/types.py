@@ -43,6 +43,7 @@ class ParallelismDiagnostics:
     candidate_semantic: Tensor
     fk_touchdown_semantic: Tensor
     selected_index: Tensor
+    candidate_radius_m: float = 0.24
 
 
 @dataclass(frozen=True)

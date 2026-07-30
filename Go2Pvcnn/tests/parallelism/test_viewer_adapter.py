@@ -28,6 +28,7 @@ def test_viewer_adapter_contract():
             candidate_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             fk_touchdown_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
             selected_index=torch.zeros(1, 4, dtype=torch.long),
+            candidate_radius_m=0.42,
         ),
     )
     result = parallelism_trajectory_to_viewer_result(traj)
@@ -37,7 +38,7 @@ def test_viewer_adapter_contract():
     assert result.foot_pos_w.shape == (1, 24, 4, 3)
     assert result.planned_touchdown_w.shape == (1, 4, 3)
     assert result.parallelism_candidate_center_w.shape == (1, 4, 3)
-    assert result.parallelism_candidate_radius_m == 0.24
+    assert result.parallelism_candidate_radius_m == 0.42
 
 
 def test_viewer_adapter_exposes_overlay_optional_fields():

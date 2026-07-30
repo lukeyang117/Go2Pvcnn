@@ -72,7 +72,7 @@ def parallelism_trajectory_to_viewer_result(trajectory: ParallelismTrajectory):
         contact_state=trajectory.contact_state,
         planned_touchdown_w=trajectory.selected_foothold_w,
         parallelism_candidate_center_w=trajectory.diagnostics.candidate_center_w,
-        parallelism_candidate_radius_m=0.24,
+        parallelism_candidate_radius_m=float(trajectory.diagnostics.candidate_radius_m),
         parallelism_collision_surface_points_w=surface_points_w,
         parallelism_collision_body_centers_w=collision_body_centers_w,
         feasible=trajectory.valid,

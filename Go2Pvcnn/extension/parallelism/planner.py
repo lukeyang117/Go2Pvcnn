@@ -373,5 +373,6 @@ def plan_trajectory(
             candidate_semantic=candidates.candidate_semantic,
             fk_touchdown_semantic=fk_touchdown_semantic,
             selected_index=selected_index,
+            candidate_radius_m=float(cfg.candidate_radius_m),
         ),
     )
