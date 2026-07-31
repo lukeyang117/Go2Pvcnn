@@ -24,6 +24,35 @@ def _fake_env(num_envs: int = 2):
     return SimpleNamespace(num_envs=num_envs, device=device, scene=scene, command_manager=command_manager)
 
 
+def _fake_env_with_scanner(num_envs: int = 2):
+    env = _fake_env(num_envs)
+    side = 151
+    elevation = torch.arange(num_envs * side * side, dtype=torch.float32).reshape(num_envs, side, side) * 0.001
+    ray_hits = torch.zeros(num_envs, side * side, 3, dtype=torch.float32)
+    grid_x = torch.arange(side, dtype=torch.float32) * 0.01
+    grid_y = torch.arange(side, dtype=torch.float32) * 0.01
+    xx, yy = torch.meshgrid(grid_x, grid_y, indexing="ij")
+    ray_hits[..., 0] = xx.reshape(1, -1)
+    ray_hits[..., 1] = yy.reshape(1, -1)
+    ray_hits[..., 2] = elevation.reshape(num_envs, -1) + 1.0
+    semantic = torch.zeros(num_envs, side, side, dtype=torch.long)
+    semantic[0, 10, 20] = 1
+    semantic[1, 30, 40] = 2
+    valid = torch.ones(num_envs, side, side, dtype=torch.bool)
+    valid[1, 0, 0] = False
+    scanner = SimpleNamespace(
+        data=SimpleNamespace(
+            elevation_map=elevation,
+            ray_hits_w=ray_hits,
+            semantic_map=semantic,
+            valid_mask=valid,
+        )
+    )
+    env.scene["semantic_height_scanner"] = scanner
+    env.scene.sensors = {"semantic_height_scanner": scanner}
+    return env, ray_hits[..., 2].reshape(num_envs, side, side), semantic, valid
+
+
 def test_manager_replans_on_reset_and_after_horizon(monkeypatch):
     env = _fake_env()
     manager = ParallelismReferenceManager(env, autostart=False)
@@ -79,3 +108,19 @@ def test_repeated_refresh_at_reset_does_not_replan(monkeypatch):
     manager.refresh()
     manager.refresh()
     assert manager.plan_count.tolist() == [1, 1]
+
+
+def test_terrain_reads_semantic_height_scanner_maps():
+    env, elevation, semantic, valid = _fake_env_with_scanner()
+    env.scene["robot"].data.root_pos_w[:, 0] = torch.tensor([1.0, -2.0])
+    env.scene["robot"].data.root_pos_w[:, 1] = torch.tensor([0.5, 3.0])
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    terrain = manager._terrain(env.scene["robot"].data.root_pos_w)
+
+    assert torch.equal(terrain.height_w, elevation)
+    assert torch.equal(terrain.semantic_id, semantic)
+    assert torch.equal(terrain.valid_mask, valid)
+    assert terrain.resolution == 0.01
+    assert torch.allclose(terrain.origin_w[:, 0], torch.zeros(2))
+    assert torch.allclose(terrain.origin_w[:, 1], torch.zeros(2))

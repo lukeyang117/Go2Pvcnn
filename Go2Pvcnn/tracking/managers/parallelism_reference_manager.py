@@ -172,18 +172,84 @@ class ParallelismReferenceManager:
         joint = torch.as_tensor(robot.data.joint_pos, dtype=torch.float32, device=self.device).index_select(0, env_ids)
         return ParallelismState(root_pos_w=root_pos, root_rpy_w=root_rpy, joint_pos=joint, foot_pos_w=None)
 
-    def _terrain(self, root_pos: Tensor) -> ParallelismTerrain:
+    def _terrain(self, root_pos: Tensor, env_ids: Tensor | None = None) -> ParallelismTerrain:
         n = int(root_pos.shape[0])
-        side = self.terrain_grid_size
-        resolution = self.terrain_resolution
+        ids = (
+            torch.as_tensor(env_ids, dtype=torch.long, device=self.device).reshape(-1)
+            if env_ids is not None
+            else None
+        )
+        scanner = self._semantic_height_scanner()
+        data = getattr(scanner, "data", None) if scanner is not None else None
+        ray_hits_source = getattr(data, "ray_hits_w", None)
+        height_source = getattr(data, "elevation_map", None)
+        semantic_source = getattr(getattr(scanner, "data", None), "semantic_map", None) if scanner is not None else None
+        valid_source = getattr(getattr(scanner, "data", None), "valid_mask", None) if scanner is not None else None
+        if (ray_hits_source is not None or height_source is not None) and semantic_source is not None:
+            origin_xy = None
+            yaw = None
+            if ray_hits_source is not None:
+                ray_hits = torch.as_tensor(ray_hits_source, dtype=torch.float32, device=self.device)
+                if ray_hits.ndim != 3 or int(ray_hits.shape[-1]) != 3:
+                    raise ValueError(f"semantic_height_scanner ray_hits_w must have shape [B,H*W,3], got {tuple(ray_hits.shape)}")
+                if ids is not None and int(ray_hits.shape[0]) == self.num_envs:
+                    ray_hits = ray_hits.index_select(0, ids)
+                side = int(round(float(ray_hits.shape[1]) ** 0.5))
+                if side * side != int(ray_hits.shape[1]):
+                    raise ValueError(f"semantic_height_scanner ray count {int(ray_hits.shape[1])} is not a square grid")
+                ray_grid = ray_hits.reshape(int(ray_hits.shape[0]), side, side, 3)
+                finite_ray = torch.isfinite(ray_grid).all(dim=-1)
+                height = ray_grid[..., 2]
+                origin_xy = ray_grid[:, 0, 0, :2]
+                if side > 1:
+                    step_xy = ray_grid[:, 0, 1, :2] - ray_grid[:, 0, 0, :2]
+                    yaw = torch.atan2(step_xy[:, 1], step_xy[:, 0])
+            else:
+                height = torch.as_tensor(height_source, dtype=torch.float32, device=self.device)
+                finite_ray = torch.isfinite(height)
+            semantic = torch.as_tensor(semantic_source, dtype=torch.long, device=self.device)
+            if ids is not None and int(height.shape[0]) == self.num_envs:
+                height = height.index_select(0, ids)
+                finite_ray = finite_ray.index_select(0, ids)
+            if ids is not None and int(semantic.shape[0]) == self.num_envs:
+                semantic = semantic.index_select(0, ids)
+            if valid_source is not None:
+                valid_source = torch.as_tensor(valid_source, dtype=torch.bool, device=self.device)
+                if ids is not None and int(valid_source.shape[0]) == self.num_envs:
+                    valid_source = valid_source.index_select(0, ids)
+            if height.ndim == 2:
+                height = height.unsqueeze(0).expand(n, -1, -1)
+            if semantic.ndim == 2:
+                semantic = semantic.unsqueeze(0).expand(n, -1, -1)
+            side = int(height.shape[-1])
+            resolution = self._scanner_resolution(scanner, fallback=self.terrain_resolution)
+            valid = (
+                torch.as_tensor(valid_source, dtype=torch.bool, device=self.device)
+                if valid_source is not None
+                else finite_ray
+            )
+            if valid.ndim == 2:
+                valid = valid.unsqueeze(0).expand(n, -1, -1)
+            height = torch.nan_to_num(height, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            side = self.terrain_grid_size
+            resolution = self.terrain_resolution
+            height = torch.zeros(n, side, side, dtype=torch.float32, device=self.device)
+            semantic = torch.zeros(n, side, side, dtype=torch.long, device=self.device)
+            valid = torch.ones(n, side, side, dtype=torch.bool, device=self.device)
+            origin_xy = None
+            yaw = None
         half_extent = 0.5 * float(side - 1) * resolution
         origin = torch.zeros(n, 3, dtype=torch.float32, device=self.device)
-        origin[:, 0] = root_pos[:, 0] - half_extent
-        origin[:, 1] = root_pos[:, 1] - half_extent
-        height = torch.zeros(n, side, side, dtype=torch.float32, device=self.device)
-        semantic = torch.zeros(n, side, side, dtype=torch.long, device=self.device)
-        valid = torch.ones(n, side, side, dtype=torch.bool, device=self.device)
-        yaw = torch.zeros(n, dtype=torch.float32, device=self.device)
+        if origin_xy is None or int(origin_xy.shape[0]) != n:
+            origin[:, 0] = root_pos[:, 0] - half_extent
+            origin[:, 1] = root_pos[:, 1] - half_extent
+        else:
+            origin[:, :2] = origin_xy.to(dtype=origin.dtype, device=origin.device)
+        if yaw is None or int(yaw.shape[0]) != n:
+            yaw = torch.zeros(n, dtype=torch.float32, device=self.device)
+        else:
+            yaw = yaw.to(dtype=torch.float32, device=self.device)
         return ParallelismTerrain(
             height_w=height,
             semantic_id=semantic,
@@ -199,7 +265,7 @@ class ParallelismReferenceManager:
             subset = env_ids[start : start + batch_size]
             subset_cycle = cycle[start : start + batch_size]
             state = self._state(subset)
-            trajectory = plan_trajectory(state, self._command(subset), self._terrain(state.root_pos_w), self.cfg)
+            trajectory = plan_trajectory(state, self._command(subset), self._terrain(state.root_pos_w, subset), self.cfg)
             self.root_pos_w[subset] = trajectory.root_pos_w
             self.root_rpy_w[subset] = trajectory.root_rpy_w
             self.joint_pos[subset] = trajectory.joint_pos
@@ -209,6 +275,30 @@ class ParallelismReferenceManager:
             self._cached_cycle[subset] = subset_cycle
             self._initialized[subset] = True
             self.plan_count[subset] += 1
+
+    def _semantic_height_scanner(self):
+        scene = getattr(self.env, "scene", None)
+        if scene is None:
+            return None
+        sensors = getattr(scene, "sensors", None)
+        if sensors is not None:
+            try:
+                return sensors["semantic_height_scanner"]
+            except Exception:  # noqa: BLE001 - Isaac containers and test doubles are both duck-typed.
+                scanner = getattr(sensors, "semantic_height_scanner", None)
+                if scanner is not None:
+                    return scanner
+        try:
+            return scene["semantic_height_scanner"]
+        except Exception:  # noqa: BLE001
+            return getattr(scene, "semantic_height_scanner", None)
+
+    def _scanner_resolution(self, scanner, *, fallback: float) -> float:
+        pattern_cfg = getattr(getattr(scanner, "cfg", None), "pattern_cfg", None)
+        resolution = getattr(pattern_cfg, "resolution", None)
+        if resolution is None:
+            return float(fallback)
+        return float(resolution)
 
     def _take(self, values: Tensor, phase: Tensor) -> Tensor:
         batch = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
