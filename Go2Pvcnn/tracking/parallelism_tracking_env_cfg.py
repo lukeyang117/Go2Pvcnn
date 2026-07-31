@@ -192,6 +192,7 @@ class ParallelismTrackingFlatEnvCfg(TeacherElevationTrajectoryMpcSemanticEnvCfg)
             lin_vel_y=(-0.5, 0.5),
             ang_vel_z=(-1.0, 1.0),
         )
+        self.scene.robot.init_state.pos = (0.0, 0.0, 0.3)
         self.rewards.reference_foot_pos = None
         self.rewards.semantic_contact_collision = None
         self.rewards.semantic_body_part_clearance = None

@@ -10,6 +10,7 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert "parallelism_ref_joint_pos_too_far" in source
     assert "ParallelismTrackingFlatEnvCfg" in source
     assert "parallelism_plan_batch_size: int = 64" in source
+    assert "self.scene.robot.init_state.pos = (0.0, 0.0, 0.3)" in source
 
 
 def test_train_script_contains_parallelism_tracking_experiment() -> None:

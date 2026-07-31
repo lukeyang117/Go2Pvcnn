@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import functools
 
 import torch
 from torch import Tensor
@@ -11,6 +12,22 @@ from extension.convention import extract_roll_pitch_batch, extract_yaw_batch
 from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.planner import plan_trajectory
 from extension.parallelism.types import ParallelismState, ParallelismTerrain
+
+_PLANNER_JOINT_ORDER = (
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint",
+)
+_PLANNER_FOOT_ORDER = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
 
 
 def _env_root(env):
@@ -24,6 +41,41 @@ def _as_env_ids(env_ids, *, num_envs: int, device: torch.device) -> Tensor:
     if tensor.dtype == torch.bool:
         return tensor.nonzero(as_tuple=False).flatten().to(dtype=torch.long)
     return tensor.to(dtype=torch.long).flatten()
+
+
+def _normalize_name(name: str) -> str:
+    normalized = str(name).split("/")[-1]
+    normalized = normalized.split(":")[-1]
+    return normalized.lower()
+
+
+def _order_indices(source_order: Sequence[str], target_order: Sequence[str], *, device: torch.device) -> Tensor | None:
+    source_to_index = {_normalize_name(name): idx for idx, name in enumerate(source_order)}
+    indices: list[int] = []
+    for name in target_order:
+        idx = source_to_index.get(_normalize_name(name))
+        if idx is None:
+            return None
+        indices.append(idx)
+    return torch.tensor(indices, dtype=torch.long, device=device)
+
+
+def _reorder_last(values: Tensor, *, source_order: Sequence[str] | None, target_order: Sequence[str]) -> Tensor:
+    tensor = torch.as_tensor(values)
+    if not source_order or not target_order:
+        return tensor
+    indices = _order_indices(source_order, target_order, device=tensor.device)
+    if indices is None or int(tensor.shape[-1]) != len(tuple(source_order)):
+        return tensor
+    return tensor.index_select(-1, indices)
+
+
+def _reorder_joint_from_planner(values: Tensor, robot_joint_names) -> Tensor:
+    return _reorder_last(values, source_order=_PLANNER_JOINT_ORDER, target_order=tuple(robot_joint_names or ()))
+
+
+def _reorder_joint_to_planner(values: Tensor, robot_joint_names) -> Tensor:
+    return _reorder_last(values, source_order=tuple(robot_joint_names or ()), target_order=_PLANNER_JOINT_ORDER)
 
 
 class ParallelismReferenceManager:
@@ -63,6 +115,7 @@ class ParallelismReferenceManager:
         self.foot_pos_w = torch.zeros(self.num_envs, self.horizon, 4, 3, dtype=torch.float32, device=self.device)
         self.contact_state = torch.ones(self.num_envs, self.horizon, 4, dtype=torch.bool, device=self.device)
         self.valid = torch.zeros(self.num_envs, self.horizon, dtype=torch.bool, device=self.device)
+        self._install_env_reset_hook()
 
         if autostart:
             self.reset()
@@ -86,6 +139,23 @@ class ParallelismReferenceManager:
         self._manual_episode_length[ids] = 0
         self.phase[ids] = 0
         self._plan(ids, cycle)
+
+    def _install_env_reset_hook(self) -> None:
+        original = getattr(self.env, "reset", None)
+        if original is None or not callable(original) or getattr(original, "_parallelism_reference_reset_hook_wrapped", False):
+            return
+
+        @functools.wraps(original)
+        def wrapped(*args, **kwargs):
+            result = original(*args, **kwargs)
+            env_ids = kwargs.get("env_ids", None)
+            if env_ids is None and args:
+                env_ids = args[0]
+            self.reset(env_ids)
+            return result
+
+        wrapped._parallelism_reference_reset_hook_wrapped = True
+        self.env.reset = wrapped
 
     def step(self) -> None:
         self._manual_episode_length += 1
@@ -169,8 +239,31 @@ class ParallelismReferenceManager:
         roll, pitch = extract_roll_pitch_batch(root_quat)
         yaw = extract_yaw_batch(root_quat)
         root_rpy = torch.stack((roll, pitch, yaw), dim=-1)
-        joint = torch.as_tensor(robot.data.joint_pos, dtype=torch.float32, device=self.device).index_select(0, env_ids)
-        return ParallelismState(root_pos_w=root_pos, root_rpy_w=root_rpy, joint_pos=joint, foot_pos_w=None)
+        joint = torch.as_tensor(robot.data.joint_pos, dtype=torch.float32, device=self.device)
+        joint = _reorder_joint_to_planner(joint, getattr(robot, "joint_names", None)).index_select(0, env_ids)
+        foot_pos = self._measured_foot_pos_w(robot, env_ids)
+        return ParallelismState(root_pos_w=root_pos, root_rpy_w=root_rpy, joint_pos=joint, foot_pos_w=foot_pos)
+
+    def _measured_foot_pos_w(self, robot, env_ids: Tensor) -> Tensor | None:
+        body_pos = getattr(getattr(robot, "data", None), "body_pos_w", None)
+        if body_pos is None:
+            return None
+        body_pos = torch.as_tensor(body_pos, dtype=torch.float32, device=self.device)
+        body_ids = None
+        if hasattr(robot, "find_bodies"):
+            try:
+                body_ids, body_names = robot.find_bodies(".*_foot")
+            except Exception:  # noqa: BLE001 - fall back to the common Go2 body layout.
+                body_ids = None
+        if body_ids is None:
+            foot_pos = body_pos[:, -4:]
+        else:
+            body_ids = torch.as_tensor(body_ids, dtype=torch.long, device=self.device)
+            order = _order_indices(body_names, _PLANNER_FOOT_ORDER, device=self.device)
+            if order is not None:
+                body_ids = body_ids.index_select(0, order)
+            foot_pos = body_pos.index_select(1, body_ids)
+        return foot_pos.index_select(0, env_ids)
 
     def _terrain(self, root_pos: Tensor, env_ids: Tensor | None = None) -> ParallelismTerrain:
         n = int(root_pos.shape[0])
@@ -268,7 +361,7 @@ class ParallelismReferenceManager:
             trajectory = plan_trajectory(state, self._command(subset), self._terrain(state.root_pos_w, subset), self.cfg)
             self.root_pos_w[subset] = trajectory.root_pos_w
             self.root_rpy_w[subset] = trajectory.root_rpy_w
-            self.joint_pos[subset] = trajectory.joint_pos
+            self.joint_pos[subset] = _reorder_joint_from_planner(trajectory.joint_pos, getattr(self._robot(), "joint_names", None))
             self.foot_pos_w[subset] = trajectory.foot_pos_w
             self.contact_state[subset] = trajectory.contact_state
             self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)

@@ -11,17 +11,24 @@ class _Scene(dict):
 
 def _fake_env(num_envs: int = 2):
     device = "cpu"
+    body_pos_w = torch.zeros(num_envs, 8, 3)
+    body_pos_w[:, -4:, 2] = torch.tensor([0.11, 0.12, 0.13, 0.14])
     robot = SimpleNamespace(
         data=SimpleNamespace(
             root_pos_w=torch.zeros(num_envs, 3),
             root_quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0]]).repeat(num_envs, 1),
             joint_pos=torch.zeros(num_envs, 12),
             joint_vel=torch.zeros(num_envs, 12),
+            body_pos_w=body_pos_w,
         )
     )
     scene = _Scene(robot=robot)
     command_manager = SimpleNamespace(get_command=lambda name: torch.zeros(num_envs, 3))
-    return SimpleNamespace(num_envs=num_envs, device=device, scene=scene, command_manager=command_manager)
+
+    def reset(*args, **kwargs):
+        return args, kwargs
+
+    return SimpleNamespace(num_envs=num_envs, device=device, scene=scene, command_manager=command_manager, reset=reset)
 
 
 def _fake_env_with_scanner(num_envs: int = 2):
@@ -124,3 +131,63 @@ def test_terrain_reads_semantic_height_scanner_maps():
     assert terrain.resolution == 0.01
     assert torch.allclose(terrain.origin_w[:, 0], torch.zeros(2))
     assert torch.allclose(terrain.origin_w[:, 1], torch.zeros(2))
+
+
+def test_state_uses_measured_foot_body_positions():
+    env = _fake_env()
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    state = manager._state(torch.tensor([0, 1]))
+
+    assert state.foot_pos_w is not None
+    assert torch.equal(state.foot_pos_w, env.scene["robot"].data.body_pos_w[:, -4:])
+
+
+def test_state_reorders_robot_joints_into_parallelism_leg_order():
+    env = _fake_env()
+    robot = env.scene["robot"]
+    robot.joint_names = [
+        "FR_hip_joint",
+        "FR_thigh_joint",
+        "FR_calf_joint",
+        "FL_hip_joint",
+        "FL_thigh_joint",
+        "FL_calf_joint",
+        "RR_hip_joint",
+        "RR_thigh_joint",
+        "RR_calf_joint",
+        "RL_hip_joint",
+        "RL_thigh_joint",
+        "RL_calf_joint",
+    ]
+    robot.data.joint_pos[:] = torch.arange(12, dtype=torch.float32)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    state = manager._state(torch.tensor([0, 1]))
+
+    expected = torch.tensor(
+        [
+            3.0,
+            4.0,
+            5.0,
+            0.0,
+            1.0,
+            2.0,
+            9.0,
+            10.0,
+            11.0,
+            6.0,
+            7.0,
+            8.0,
+        ]
+    ).expand(2, -1)
+    assert torch.equal(state.joint_pos, expected)
+
+
+def test_env_reset_hook_replans_after_reset():
+    env = _fake_env()
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    env.reset()
+
+    assert int(manager.plan_count.sum().item()) == env.num_envs
