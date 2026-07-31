@@ -170,6 +170,36 @@ planner_cycle_s = 24 * 0.02 = 0.48s</code></pre>
     </section>
 
     <section>
+      <h2>Parallelism 重规划逻辑</h2>
+      <p>tracking 任务需要显式管理 parallelism 的 24 帧 reference cache。第一版只在两个事件触发重规划：</p>
+      <ol>
+        <li>环境 reset。</li>
+        <li>当前 24 帧 reference 执行完成。</li>
+      </ol>
+      <h3>环境 reset 触发</h3>
+      <p>当某些 env reset 时，只对这些 env 重新初始化 parallelism reference：</p>
+      <pre><code>reset env_ids:
+  phase[env_ids] = 0
+  使用 reset 后的 robot/root/foot 状态读取当前 base_velocity command
+  parallelism 对 env_ids 重新规划 24 帧
+  reference cache[env_ids] 覆盖为新轨迹</code></pre>
+      <p>reset 重规划保证 policy 在 episode 第一帧看到的 reference 和 reset 后真实机器人状态对齐，避免继续消费 reset 前的旧轨迹。</p>
+      <h3>24 帧执行完成触发</h3>
+      <p>每个 env 独立维护 phase。每个 control step 后：</p>
+      <pre><code>phase += 1
+
+if phase == 24:
+  phase = 0
+  base_velocity command 在 cycle 边界更新
+  parallelism 使用新 command 和当前 robot 状态重新规划 24 帧
+  reference cache 覆盖为新轨迹</code></pre>
+      <p>24 帧内不重规划，不重新采样速度；这保证 planner reference、policy 速度观测和 reward 使用同一组 command。</p>
+      <div class="note">
+        除 reset 和 24 帧完成外，planner invalid 不触发额外重规划。invalid 情况走已有 standstill/fallback，避免一个 cycle 中 reference 和 command 频繁跳变。
+      </div>
+    </section>
+
+    <section>
       <h2>Reference 定义</h2>
       <p>参考 InstinctLab 的拆分方式，reference 不作为散乱的普通 observation 拼接，而由 tracking 任务提供统一的 parallelism reference source。第一版实际输入 policy 的 reference 为：</p>
       <pre><code>parallelism_ref_joint_pos_rel_t
@@ -404,7 +434,7 @@ elevation_semantic_map 保留</code></pre>
       <ol>
         <li>task 能在平地启动训练。</li>
         <li><code>base_velocity</code> 每 0.48s 更新一次，24 帧内不变化。</li>
-        <li>parallelism planner 每 24 帧重新规划一次。</li>
+        <li>parallelism planner 在环境 reset 和每 24 帧执行完成时重新规划。</li>
         <li>policy 每步只读取当前 phase 的 1 帧 reference。</li>
         <li>actor 和 critic 都包含 <code>elevation_semantic_map</code>。</li>
         <li><code>parallelism_ref_joint_pos_too_far</code> 默认开启，并能在指标中看到触发次数。</li>
