@@ -13,6 +13,6 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
 "${ISAAC_ENV}/bin/python" \
   Go2Pvcnn/scripts/train.py \
   --experiment parallelism_tracking_flat \
-  --num_envs 1024 \
+  --num_envs 4096 \
   --headless \
   --max_iterations 20000
