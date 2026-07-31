@@ -433,6 +433,7 @@ elevation_semantic_map 保留</code></pre>
       <h2>验证要求</h2>
       <ol>
         <li>task 能在平地启动训练。</li>
+        <li>使用 1024 个环境启动一次真实训练，训练过程有日志输出，epoch/iteration 计数持续增加。</li>
         <li><code>base_velocity</code> 每 0.48s 更新一次，24 帧内不变化。</li>
         <li>parallelism planner 在环境 reset 和每 24 帧执行完成时重新规划。</li>
         <li>policy 每步只读取当前 phase 的 1 帧 reference。</li>
