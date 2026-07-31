@@ -125,6 +125,18 @@ def _parse_args() -> argparse.Namespace:
     return build_arg_parser().parse_args()
 
 
+def _yaml_safe(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(_yaml_safe(key)): _yaml_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_yaml_safe(item) for item in value]
+    if hasattr(value, "__module__") and hasattr(value, "__qualname__"):
+        return f"{value.__module__}:{value.__qualname__}"
+    return str(value)
+
+
 def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
     # Critical for Isaac Lab/CUDA startup ordering: the allocator must be configured
     # before AppLauncher constructs the simulation app.
@@ -773,10 +785,10 @@ def main() -> int:
     if rank == 0:
         # Save environment config
         env_cfg_dict = env_cfg.to_dict()
-        dump_yaml(os.path.join(log_dir, "env_cfg.yaml"), env_cfg_dict)
+        dump_yaml(os.path.join(log_dir, "env_cfg.yaml"), _yaml_safe(env_cfg_dict))
         
         # Save training config
-        dump_yaml(os.path.join(log_dir, "train_cfg.yaml"), train_cfg)
+        dump_yaml(os.path.join(log_dir, "train_cfg.yaml"), _yaml_safe(train_cfg))
         
         print(f"\n[Config] Configurations saved to {log_dir}")
     

@@ -35,6 +35,7 @@ class ParallelismReferenceManager:
         cfg: ParallelismCfg | None = None,
         *,
         command_name: str = "base_velocity",
+        plan_batch_size: int | None = None,
         terrain_grid_size: int = 151,
         terrain_resolution: float = 0.01,
         autostart: bool = True,
@@ -42,6 +43,7 @@ class ParallelismReferenceManager:
         self.env = _env_root(env)
         self.cfg = cfg or ParallelismCfg()
         self.command_name = str(command_name)
+        self.plan_batch_size = int(plan_batch_size or getattr(getattr(self.env, "cfg", None), "parallelism_plan_batch_size", 64))
         self.device = torch.device(getattr(self.env, "device", "cpu"))
         self.num_envs = int(getattr(self.env, "num_envs"))
         self.horizon = int(self.cfg.horizon)
@@ -69,7 +71,7 @@ class ParallelismReferenceManager:
         episode_length = self._episode_length()
         cycle = torch.div(episode_length, self.horizon, rounding_mode="floor")
         phase = torch.remainder(episode_length, self.horizon)
-        reset_mask = episode_length == 0
+        reset_mask = (episode_length == 0) & ((~self._initialized) | (self._cached_cycle != 0))
         needs_plan = (~self._initialized) | reset_mask | (cycle != self._cached_cycle)
         env_ids = needs_plan.nonzero(as_tuple=False).flatten()
         if int(env_ids.numel()) > 0:
@@ -192,17 +194,21 @@ class ParallelismReferenceManager:
         )
 
     def _plan(self, env_ids: Tensor, cycle: Tensor) -> None:
-        state = self._state(env_ids)
-        trajectory = plan_trajectory(state, self._command(env_ids), self._terrain(state.root_pos_w), self.cfg)
-        self.root_pos_w[env_ids] = trajectory.root_pos_w
-        self.root_rpy_w[env_ids] = trajectory.root_rpy_w
-        self.joint_pos[env_ids] = trajectory.joint_pos
-        self.foot_pos_w[env_ids] = trajectory.foot_pos_w
-        self.contact_state[env_ids] = trajectory.contact_state
-        self.valid[env_ids] = trajectory.valid[:, None].expand(-1, self.horizon)
-        self._cached_cycle[env_ids] = cycle
-        self._initialized[env_ids] = True
-        self.plan_count[env_ids] += 1
+        batch_size = max(int(self.plan_batch_size), 1)
+        for start in range(0, int(env_ids.numel()), batch_size):
+            subset = env_ids[start : start + batch_size]
+            subset_cycle = cycle[start : start + batch_size]
+            state = self._state(subset)
+            trajectory = plan_trajectory(state, self._command(subset), self._terrain(state.root_pos_w), self.cfg)
+            self.root_pos_w[subset] = trajectory.root_pos_w
+            self.root_rpy_w[subset] = trajectory.root_rpy_w
+            self.joint_pos[subset] = trajectory.joint_pos
+            self.foot_pos_w[subset] = trajectory.foot_pos_w
+            self.contact_state[subset] = trajectory.contact_state
+            self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)
+            self._cached_cycle[subset] = subset_cycle
+            self._initialized[subset] = True
+            self.plan_count[subset] += 1
 
     def _take(self, values: Tensor, phase: Tensor) -> Tensor:
         batch = torch.arange(self.num_envs, dtype=torch.long, device=self.device)

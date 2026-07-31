@@ -62,3 +62,20 @@ def test_current_joint_velocity_uses_finite_difference(monkeypatch):
     manager.reset()
     vel = manager.current_joint_vel
     assert torch.allclose(vel, torch.full((2, 12), 1.0 / manager.dt))
+
+
+def test_repeated_refresh_at_reset_does_not_replan(monkeypatch):
+    env = _fake_env()
+    env.episode_length_buf = torch.zeros(2, dtype=torch.long)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.refresh()
+    manager.refresh()
+    manager.refresh()
+    assert manager.plan_count.tolist() == [1, 1]

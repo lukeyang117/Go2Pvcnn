@@ -160,6 +160,7 @@ class ParallelismTrackingFlatEnvCfg(TeacherElevationTrajectoryMpcSemanticEnvCfg)
     curriculum: ParallelismTrackingCurriculumCfg = ParallelismTrackingCurriculumCfg()
     planner_owned_reference_cache: bool = False
     use_batched_reference_trajectory: bool = False
+    parallelism_plan_batch_size: int = 64
     semantic_obstacle_curriculum: SemanticObstacleCurriculumCfg = field(
         default_factory=lambda: SemanticObstacleCurriculumCfg(
             enabled=False,
