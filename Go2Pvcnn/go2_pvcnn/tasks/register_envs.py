@@ -55,3 +55,8 @@ print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-v0")
 print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0")
 print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-v0")
 print("[go2_pvcnn]   - Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-Play-v0")
+
+try:
+    import tracking.register_envs  # noqa: F401
+except Exception as exc:  # noqa: BLE001 - tracking registration is optional for static imports.
+    print(f"[go2_pvcnn] Tracking env registration skipped: {exc}")

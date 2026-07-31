@@ -99,6 +99,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=[
             "teacher_elevation_trajectory_mpc_semantic",
             "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+            "parallelism_tracking_flat",
         ],
         help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
     )
@@ -425,6 +426,7 @@ def main() -> int:
         TeacherElevationTrajectoryMpcSemanticEnvCfg,
         TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
     )
+    from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.utils.dict import print_dict
@@ -497,6 +499,10 @@ def main() -> int:
         "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance": (
             TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
             "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-v0",
+        ),
+        "parallelism_tracking_flat": (
+            ParallelismTrackingFlatEnvCfg,
+            "Isaac-Go2-Parallelism-Tracking-Flat-v0",
         ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
