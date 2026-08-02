@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import torch
+import sys
+from types import SimpleNamespace
 
 from scripts import play
 
@@ -39,3 +41,20 @@ def test_all_suppressed_terminations_produce_no_done() -> None:
     done, _ = play._filter_termination_masks(raw_masks, {"time_out": True, "bad_orientation": True})
 
     assert done.tolist() == [False]
+
+
+def test_play_parser_accepts_parallelism_tracking_flat(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["play.py", "--run_dir", "test"])
+    parser = play.build_arg_parser()
+    experiment = next(action for action in parser._actions if action.dest == "experiment")
+
+    assert "parallelism_tracking_flat" in experiment.choices
+
+
+def test_panel_command_updates_env0_only() -> None:
+    command = torch.zeros(2, 3, dtype=torch.float32)
+    env = SimpleNamespace(command_manager=SimpleNamespace(get_command=lambda _name: command))
+
+    play._apply_panel_velocity_command(env, play.ParallelismPlayPanelState(vx=0.4, vy=-0.2, vyaw=0.3))
+
+    torch.testing.assert_close(command, torch.tensor([[0.4, -0.2, 0.3], [0.0, 0.0, 0.0]]))

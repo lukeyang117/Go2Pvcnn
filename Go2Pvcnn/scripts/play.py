@@ -95,8 +95,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=[
             "teacher_elevation_trajectory_mpc_semantic",
             "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+            "parallelism_tracking_flat",
         ],
-        help="Experiment/task: semantic MPC teacher or flat-small avoidance continuation",
+        help="Experiment/task to play.",
     )
     parser.add_argument("--sample", action="store_true", default=False, help="Sample actions with std instead of using policy")
     parser.add_argument("--max-steps", type=int, default=0, help="Stop after this many play steps; 0 means run until the app exits.")
@@ -134,8 +135,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--planner-backend",
         type=str,
         default="mpc",
-        choices=["mpc"],
-        help="Trajectory planner backend. Cleanup build supports only mpc.",
+        choices=["mpc", "parallelism"],
+        help="Trajectory planner backend.",
     )
 
     AppLauncher.add_app_launcher_args(parser)
@@ -345,6 +346,19 @@ def _apply_keyboard_velocity_command(base_env, controller: _KeyboardVelocityCont
         return None
     target = controller.command_tensor(device=command.device, dtype=command.dtype, num_envs=int(command.shape[0]))
     command[:, :3] = target
+    return command
+
+
+def _apply_panel_velocity_command(base_env, state: ParallelismPlayPanelState) -> torch.Tensor | None:
+    """Apply the visual panel command to env0 without changing other environments."""
+
+    command_manager = getattr(base_env, "command_manager", None)
+    if command_manager is None or not hasattr(command_manager, "get_command"):
+        return None
+    command = command_manager.get_command("base_velocity")
+    if command is None or int(command.shape[0]) == 0:
+        return None
+    command[0, :3] = _panel_command_tensor(state, command)[0]
     return command
 
 
@@ -808,6 +822,7 @@ def main() -> int:
         TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY,
         TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
     )
+    from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.utils.dict import print_dict
@@ -825,6 +840,10 @@ def main() -> int:
         "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance": (
             TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY,
             "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Flat-Small-Avoidance-Go2-Play-v0",
+        ),
+        "parallelism_tracking_flat": (
+            ParallelismTrackingFlatEnvCfg_PLAY,
+            "Isaac-Go2-Parallelism-Tracking-Flat-v0",
         ),
     }
 
@@ -857,7 +876,9 @@ def main() -> int:
         env_cfg,
         use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),
     )
-    env_cfg.planner_backend = str(args_cli.planner_backend)
+    env_cfg.planner_backend = (
+        "parallelism" if experiment_name == "parallelism_tracking_flat" else str(args_cli.planner_backend)
+    )
 
     render_mode = _resolve_render_mode(args_cli)
     if render_mode is not None:
