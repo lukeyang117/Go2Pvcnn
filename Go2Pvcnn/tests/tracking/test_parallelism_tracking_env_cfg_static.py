@@ -33,14 +33,28 @@ def test_tracking_play_cfg_spawns_a_non_colliding_reference_go2() -> None:
     assert "collision_enabled=False" in source
 
 
-def test_tracking_play_cfg_does_not_override_instanced_reference_material() -> None:
+def test_tracking_play_cfg_keeps_reference_gravity_disabled() -> None:
     source = (ROOT / "tracking/parallelism_tracking_env_cfg.py").read_text()
     reference_source = source[
         source.index("reference_robot: ArticulationCfg")
         : source.index("\n\n\n@configclass", source.index("reference_robot: ArticulationCfg"))
     ]
 
-    assert "visual_material=" not in reference_source
+    assert "disable_gravity=True" in reference_source
+
+
+def test_tracking_play_cfg_uses_a_distinct_pale_blue_reference_material() -> None:
+    source = (ROOT / "tracking/parallelism_tracking_env_cfg.py").read_text()
+    reference_source = source[
+        source.index("reference_robot: ArticulationCfg")
+        : source.index("\n\n\n@configclass", source.index("reference_robot: ArticulationCfg"))
+    ]
+    assert "visual_material=sim_utils.PreviewSurfaceCfg" in reference_source
+    assert "diffuse_color=(0.35, 0.72, 1.0)" in reference_source
+    assert "func=_spawn_pale_reference_go2" in reference_source
+    assert '"/visuals" in child.GetPath().pathString' in source
+    assert "child.SetInstanceable(False)" in source
+    assert '"/visuals" in path' in source
 
 
 def test_tracking_play_cfg_disables_timeout_for_unbounded_play() -> None:

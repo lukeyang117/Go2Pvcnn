@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import field
+from typing import Any
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
@@ -15,6 +16,9 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from isaaclab.sim.spawners.from_files import spawn_from_usd
+from isaaclab.sim.utils import bind_visual_material, clone
+from pxr import Usd, UsdGeom
 
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
@@ -29,6 +33,38 @@ from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
 import go2_pvcnn.mdp as go2_mdp
 from go2_pvcnn.assets import UNITREE_GO2_CFG
 import tracking.mdp as tracking_mdp
+
+
+@clone
+def _spawn_pale_reference_go2(
+    prim_path: str,
+    cfg: Any,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+):
+    """Spawn a pale reference Go2 without changing collision instances."""
+
+    prim = spawn_from_usd(
+        prim_path,
+        cfg,
+        translation=translation,
+        orientation=orientation,
+    )
+    # The Go2 USD is instanceable. Detach only visual subtrees before the
+    # articulation tensor view is created; collision instances remain shared.
+    for child in Usd.PrimRange(prim):
+        if child.IsInstance() and "/visuals" in child.GetPath().pathString:
+            child.SetInstanceable(False)
+
+    material_path = "/World/Looks/ParallelismReferencePaleBlue"
+    stage = prim.GetStage()
+    if not stage.GetPrimAtPath(material_path).IsValid():
+        cfg.visual_material.func(material_path, cfg.visual_material)
+    for child in Usd.PrimRange(prim):
+        path = child.GetPath().pathString
+        if "/visuals" in path and child.IsA(UsdGeom.Gprim):
+            bind_visual_material(path, material_path)
+    return prim
 
 
 @configclass
@@ -216,9 +252,16 @@ class ParallelismTrackingPlaySceneCfg(TeacherElevationTrajectoryMpcSemanticScene
     reference_robot: ArticulationCfg = UNITREE_GO2_CFG.replace(
         prim_path="{ENV_REGEX_NS}/ParallelismReferenceGo2",
         spawn=UNITREE_GO2_CFG.spawn.replace(
+            func=_spawn_pale_reference_go2,
             activate_contact_sensors=False,
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             rigid_props=UNITREE_GO2_CFG.spawn.rigid_props.replace(disable_gravity=True),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.35, 0.72, 1.0),
+                emissive_color=(0.02, 0.05, 0.12),
+                roughness=0.45,
+                opacity=0.65,
+            ),
         ),
     )
 

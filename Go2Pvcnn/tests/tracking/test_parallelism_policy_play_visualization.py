@@ -43,6 +43,28 @@ def test_all_suppressed_terminations_produce_no_done() -> None:
     assert done.tolist() == [False]
 
 
+def test_termination_checkbox_checked_enables_reset() -> None:
+    raw_masks = {"base_contact": torch.tensor([True])}
+    state = play.ParallelismPlayPanelState()
+
+    play._set_panel_termination_checkbox(state, "base_contact", True)
+
+    done, _ = play._filter_termination_masks(raw_masks, state.suppress_termination)
+
+    assert done.tolist() == [True]
+
+
+def test_termination_checkbox_unchecked_suppresses_reset() -> None:
+    raw_masks = {"base_contact": torch.tensor([True])}
+    state = play.ParallelismPlayPanelState()
+
+    play._set_panel_termination_checkbox(state, "base_contact", False)
+
+    done, _ = play._filter_termination_masks(raw_masks, state.suppress_termination)
+
+    assert done.tolist() == [False]
+
+
 def test_play_parser_accepts_parallelism_tracking_flat(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["play.py", "--run_dir", "test"])
     parser = play.build_arg_parser()
@@ -147,3 +169,90 @@ def test_reference_articulation_receives_current_root_and_joint_frame() -> None:
     torch.testing.assert_close(reference_robot.root_velocity, torch.zeros(1, 6))
     torch.testing.assert_close(reference_robot.joint_pos, torch.arange(12, dtype=torch.float32).unsqueeze(0))
     torch.testing.assert_close(reference_robot.joint_vel, torch.zeros(1, 12))
+
+
+def test_reference_root_write_uses_current_frame_without_joint_write() -> None:
+    class FakeReferenceRobot:
+        def __init__(self) -> None:
+            self.root_pose = None
+            self.root_velocity = None
+            self.joint_writes = 0
+
+        def write_root_pose_to_sim(self, value):
+            self.root_pose = value.clone()
+
+        def write_root_velocity_to_sim(self, value):
+            self.root_velocity = value.clone()
+
+        def write_joint_state_to_sim(self, *_args):
+            self.joint_writes += 1
+
+    reference_robot = FakeReferenceRobot()
+    frame = play.ParallelismVisualFrame(
+        root_pos_w=torch.tensor([1.0, 2.0, 0.3]),
+        root_rpy_w=torch.zeros(3),
+        joint_pos=torch.zeros(12),
+        foot_pos_w=torch.zeros(4, 3),
+        contact_state=torch.ones(4, dtype=torch.bool),
+        future_root_pos_w=torch.zeros(1, 3),
+        future_foot_pos_w=torch.zeros(1, 4, 3),
+        future_contact_state=torch.ones(1, 4, dtype=torch.bool),
+    )
+
+    play._write_parallelism_reference_root(reference_robot, frame)
+
+    torch.testing.assert_close(reference_robot.root_pose, torch.tensor([[1.0, 2.0, 0.3, 1.0, 0.0, 0.0, 0.0]]))
+    assert reference_robot.joint_writes == 0
+
+
+def test_parallelism_joint_error_data_matches_reference_and_policy_order() -> None:
+    robot = SimpleNamespace(
+        joint_names=("j0", "j1"),
+        data=SimpleNamespace(joint_pos=torch.tensor([[0.4, -0.1]], dtype=torch.float32)),
+    )
+    env = SimpleNamespace(scene={"robot": robot})
+    frame = play.ParallelismVisualFrame(
+        root_pos_w=torch.zeros(3),
+        root_rpy_w=torch.zeros(3),
+        joint_pos=torch.tensor([0.1, 0.2], dtype=torch.float32),
+        foot_pos_w=torch.zeros(4, 3),
+        contact_state=torch.ones(4, dtype=torch.bool),
+        future_root_pos_w=torch.zeros(1, 3),
+        future_foot_pos_w=torch.zeros(1, 4, 3),
+        future_contact_state=torch.ones(1, 4, dtype=torch.bool),
+    )
+
+    names, reference, actual, error = play._parallelism_joint_error_data(env, frame)
+
+    assert names == ("j0", "j1")
+    torch.testing.assert_close(reference, torch.tensor([0.1, 0.2]))
+    torch.testing.assert_close(actual, torch.tensor([0.4, -0.1]))
+    torch.testing.assert_close(error, torch.tensor([0.3, -0.3]))
+
+
+def test_reference_visualizer_refreshes_manager_before_writing(monkeypatch) -> None:
+    visualizer = object.__new__(play._ParallelismPlayVisualizer)
+
+    class FakeManager:
+        def __init__(self):
+            self.refresh_count = 0
+
+        def refresh(self):
+            self.refresh_count += 1
+
+    manager = FakeManager()
+    frame = object()
+    reference_robot = object()
+    base_env = SimpleNamespace(scene={"reference_robot": reference_robot})
+    monkeypatch.setattr(play, "_parallelism_visual_frame", lambda _manager: frame)
+    written = []
+    monkeypatch.setattr(
+        play,
+        "_write_parallelism_reference_robot",
+        lambda robot, value: written.append((robot, value)),
+    )
+
+    visualizer.write_reference(base_env, manager)
+
+    assert manager.refresh_count == 1
+    assert written == [(reference_robot, frame)]

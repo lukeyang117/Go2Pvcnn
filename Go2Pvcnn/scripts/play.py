@@ -70,6 +70,20 @@ def _filter_termination_masks(
     return effective_done, diagnostics
 
 
+def _set_panel_termination_checkbox(
+    state: ParallelismPlayPanelState,
+    name: str,
+    checked: bool,
+) -> None:
+    """Map the UI checkbox to the termination filter.
+
+    An unchecked box means the play viewer must keep running. Checking a term
+    explicitly opts into allowing that term to reset the environment.
+    """
+
+    state.suppress_termination[name] = not bool(checked)
+
+
 @dataclass(frozen=True)
 class ParallelismVisualFrame:
     root_pos_w: torch.Tensor
@@ -85,6 +99,59 @@ class ParallelismVisualFrame:
 @dataclass
 class ParallelismTerminationDiagnostics:
     raw_masks: dict[str, torch.Tensor] = field(default_factory=dict)
+
+
+def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timestep: int) -> None:
+    """Print the state boundaries needed to diagnose play-only alignment/reset issues."""
+
+    if timestep > 5 and not bool(torch.as_tensor(dones).any().item()):
+        return
+    frame = _parallelism_visual_frame(manager)
+    policy_robot = base_env.scene["robot"]
+    reference_robot = base_env.scene["reference_robot"]
+    policy_root = torch.as_tensor(policy_robot.data.root_pos_w[0]).detach().cpu()
+    manager_root = torch.as_tensor(frame.root_pos_w).detach().cpu()
+    reference_root = torch.as_tensor(reference_robot.data.root_pos_w[0]).detach().cpu()
+    origin = getattr(getattr(base_env.scene, "env_origins", None), "__getitem__", lambda _: None)(0)
+    if origin is None:
+        origin = torch.zeros(3)
+    else:
+        origin = torch.as_tensor(origin).detach().cpu()
+    raw = {
+        name: bool(torch.as_tensor(value)[0].item())
+        for name, value in (diagnostics.raw_masks.items() if diagnostics is not None else ())
+    }
+    effective_terminated = bool(torch.as_tensor(base_env.termination_manager._terminated_buf)[0].item())
+    effective_truncated = bool(torch.as_tensor(base_env.termination_manager._truncated_buf)[0].item())
+    episode_length = int(torch.as_tensor(base_env.episode_length_buf)[0].item())
+    print(
+        "[Parallelism][debug] "
+        f"step={timestep} phase={int(torch.as_tensor(manager.phase)[0].item())} "
+        f"episode_length={episode_length} "
+        f"policy_root={policy_root.tolist()} manager_ref={manager_root.tolist()} "
+        f"reference_data={reference_root.tolist()} env_origin={origin.tolist()} "
+        f"policy-ref={torch.linalg.vector_norm(policy_root - manager_root).item():.6f} "
+        f"reference-ref={torch.linalg.vector_norm(reference_root - manager_root).item():.6f} "
+        f"dones={torch.as_tensor(dones).detach().cpu().tolist()} "
+        f"effective(terminated={effective_terminated},truncated={effective_truncated}) "
+        f"raw={raw}",
+        flush=True,
+    )
+
+
+def _parallelism_joint_error_data(base_env, frame: ParallelismVisualFrame, *, env_id: int = 0):
+    """Return policy/reference joint values in the robot articulation order."""
+
+    robot = base_env.scene["robot"]
+    actual = torch.as_tensor(robot.data.joint_pos[env_id], dtype=frame.joint_pos.dtype, device=frame.joint_pos.device)
+    reference = torch.as_tensor(frame.joint_pos, dtype=actual.dtype, device=actual.device)
+    if actual.shape != reference.shape:
+        return None
+    names = tuple(getattr(robot, "joint_names", ()) or ())
+    if len(names) != int(actual.numel()):
+        names = tuple(f"joint_{index}" for index in range(int(actual.numel())))
+    error = actual - reference
+    return names, reference, actual, error
 
 
 def _parallelism_visual_frame(manager, *, env_id: int = 0) -> ParallelismVisualFrame:
@@ -158,6 +225,19 @@ def _write_parallelism_reference_robot(reference_robot, frame: ParallelismVisual
     )
 
 
+def _write_parallelism_reference_root(reference_robot, frame: ParallelismVisualFrame) -> None:
+    """Synchronize only the root after stepping, avoiding a second joint write."""
+
+    from extension.convention import euler_to_quat_batch
+
+    root_pos_w = frame.root_pos_w.reshape(1, 3)
+    root_rpy_w = frame.root_rpy_w.reshape(1, 3)
+    root_quat_w = euler_to_quat_batch(root_rpy_w[:, 0], root_rpy_w[:, 1], root_rpy_w[:, 2])
+    root_pose = torch.cat((root_pos_w, root_quat_w), dim=-1)
+    reference_robot.write_root_pose_to_sim(root_pose)
+    reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
+
+
 class _ParallelismPlayPanel:
     """Small in-app control panel for the physical parallelism rollout."""
 
@@ -171,7 +251,7 @@ class _ParallelismPlayPanel:
             self.window = None
             return
         self._ui = ui
-        self.window = ui.Window("Parallelism Policy Debug", width=340, height=500)
+        self.window = ui.Window("Parallelism Policy Debug", width=440, height=760)
         with self.window.frame:
             with ui.VStack(spacing=8, height=0):
                 ui.Label("速度命令 (root 坐标系)", height=20)
@@ -179,21 +259,24 @@ class _ParallelismPlayPanel:
                 self._add_speed_slider("vy", -0.5, 0.5)
                 self._add_speed_slider("vyaw", -1.0, 1.0)
                 ui.Spacer(height=8)
-                ui.Label("Termination", height=20)
-                all_model = ui.SimpleBoolModel(True)
+                ui.Label("Termination / Reset (勾选后允许)", height=20)
+                all_model = ui.SimpleBoolModel(False)
                 all_model.add_value_changed_fn(self._set_all_suppressed)
                 self._models["all"] = all_model
                 with ui.HStack(height=22):
                     ui.CheckBox(model=all_model, width=20)
-                    ui.Label("全部不终止")
+                    ui.Label("允许全部 termination / reset")
                 for name in PARALLELISM_TERMINATION_NAMES:
-                    model = ui.SimpleBoolModel(True)
+                    model = ui.SimpleBoolModel(False)
                     model.add_value_changed_fn(lambda value, key=name: self._set_suppressed(key, value))
                     self._models[name] = model
                     with ui.HStack(height=22):
                         ui.CheckBox(model=model, width=20)
                         ui.Label(name, width=245)
-                        self._status_models[name] = ui.Label("正常", width=55)
+                        self._status_models[name] = ui.Label("未启用", width=55)
+                ui.Spacer(height=8)
+                ui.Label("规划关节 / policy 实际关节 / 差值 (rad)", height=20)
+                self._joint_summary = ui.Label("等待关节数据...", height=0, word_wrap=True)
 
     def _add_speed_slider(self, name: str, lower: float, upper: float) -> None:
         ui = self._ui
@@ -208,13 +291,13 @@ class _ParallelismPlayPanel:
             ui.FloatField(model=model, width=65)
 
     def _set_suppressed(self, name: str, model) -> None:
-        self.state.suppress_termination[name] = bool(model.get_value_as_bool())
+        _set_panel_termination_checkbox(self.state, name, model.get_value_as_bool())
         self._sync_all_model()
 
     def _set_all_suppressed(self, model) -> None:
         enabled = bool(model.get_value_as_bool())
         for name in PARALLELISM_TERMINATION_NAMES:
-            self.state.suppress_termination[name] = enabled
+            self.state.suppress_termination[name] = not enabled
             item = self._models.get(name)
             if item is not None and bool(item.get_value_as_bool()) != enabled:
                 item.set_value(enabled)
@@ -223,7 +306,7 @@ class _ParallelismPlayPanel:
         model = self._models.get("all")
         if model is None:
             return
-        enabled = all(self.state.suppress_termination.get(name, False) for name in PARALLELISM_TERMINATION_NAMES)
+        enabled = all(not self.state.suppress_termination.get(name, True) for name in PARALLELISM_TERMINATION_NAMES)
         if bool(model.get_value_as_bool()) != enabled:
             model.set_value(enabled)
 
@@ -233,64 +316,115 @@ class _ParallelismPlayPanel:
         for name, label in self._status_models.items():
             raw = diagnostics.raw_masks.get(name)
             triggered = raw is not None and bool(torch.as_tensor(raw)[0].item())
-            label.text = "触发" if triggered else "正常"
+            enabled = not self.state.suppress_termination.get(name, True)
+            label.text = "触发" if triggered and enabled else ("已启用" if enabled else "未启用")
 
-
-def _parallelism_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]):
-    import isaaclab.sim as sim_utils
-    from isaaclab.markers import VisualizationMarkersCfg
-
-    return VisualizationMarkersCfg(
-        prim_path=prim_path,
-        markers={
-            "marker": sim_utils.SphereCfg(
-                radius=radius,
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+    def update_joint_error(self, error_data) -> None:
+        if error_data is None or not hasattr(self, "_joint_summary"):
+            return
+        names, reference, actual, error = error_data
+        lines = [
+            f"max |e| = {float(torch.max(torch.abs(error)).item()):+.4f}   "
+            f"RMS = {float(torch.sqrt(torch.mean(error.square())).item()):+.4f}"
+        ]
+        for name, ref, act, diff in zip(names, reference, actual, error):
+            lines.append(
+                f"{name:<18} ref {float(ref):+7.3f}  "
+                f"act {float(act):+7.3f}  e {float(diff):+7.3f}"
             )
-        },
-    )
+        self._joint_summary.text = "\n".join(lines)
 
 
 class _ParallelismPlayVisualizer:
-    """Shows the remaining reference plan while the policy robot stays physical."""
+    """Shows the reference robot and plan with Kit debug-draw overlays."""
 
-    _LEG_COLORS = ((0.1, 0.9, 1.0), (1.0, 0.45, 0.1), (0.3, 1.0, 0.3), (1.0, 0.2, 0.8))
+    _LEG_COLORS = ((0.0, 0.9, 1.0, 1.0), (1.0, 0.35, 0.0, 1.0), (0.25, 1.0, 0.25, 1.0), (1.0, 0.15, 0.8, 1.0))
+    _ROOT_COLOR = (1.0, 0.8, 0.1, 1.0)
+    _REFERENCE_BODY_COLOR = (0.1, 0.45, 1.0, 1.0)
+    _POLICY_BODY_COLOR = (1.0, 0.75, 0.05, 1.0)
+    _ERROR_COLOR = (1.0, 0.05, 0.05, 1.0)
+    _POINT_SIZE = 6
+    _LINE_SIZE = 3
 
     def __init__(self) -> None:
-        from isaaclab.markers import VisualizationMarkers
+        from isaacsim.util.debug_draw import _debug_draw
 
-        self.root = VisualizationMarkers(
-            _parallelism_marker_cfg("/Visuals/ParallelismPolicyPlay/root", radius=0.022, color=(1.0, 0.8, 0.1))
+        self._draw = _debug_draw.acquire_debug_draw_interface()
+        self._last_marker_plan_count: int | None = None
+
+    def _draw_path(self, positions: torch.Tensor, color: tuple[float, float, float, float]) -> None:
+        points = torch.as_tensor(positions).detach().to(device="cpu", dtype=torch.float32).tolist()
+        if len(points) < 2:
+            return
+        start_points = [tuple(point) for point in points[:-1]]
+        end_points = [tuple(point) for point in points[1:]]
+        self._draw.draw_lines(
+            start_points,
+            end_points,
+            [color] * len(start_points),
+            [self._LINE_SIZE] * len(start_points),
         )
-        self.foot = [
-            VisualizationMarkers(
-                _parallelism_marker_cfg(
-                    f"/Visuals/ParallelismPolicyPlay/foot_{leg_idx}", radius=0.016, color=color
-                )
-            )
-            for leg_idx, color in enumerate(self._LEG_COLORS)
-        ]
-        self.touchdown = [
-            VisualizationMarkers(
-                _parallelism_marker_cfg(
-                    f"/Visuals/ParallelismPolicyPlay/touchdown_{leg_idx}", radius=0.028, color=color
-                )
-            )
-            for leg_idx, color in enumerate(self._LEG_COLORS)
-        ]
+
+    def _draw_point(self, position: torch.Tensor, color: tuple[float, float, float, float]) -> None:
+        point = torch.as_tensor(position).detach().to(device="cpu", dtype=torch.float32).tolist()
+        self._draw.draw_points([tuple(point)], [color], [self._POINT_SIZE])
+
+    def _draw_error_lines(self, base_env) -> None:
+        actual_robot = base_env.scene["robot"]
+        reference_robot = base_env.scene["reference_robot"]
+        actual = getattr(getattr(actual_robot, "data", None), "body_pos_w", None)
+        reference = getattr(getattr(reference_robot, "data", None), "body_pos_w", None)
+        if actual is None or reference is None:
+            return
+        actual = torch.as_tensor(actual[0], dtype=torch.float32)
+        reference = torch.as_tensor(reference[0], dtype=torch.float32, device=actual.device)
+        if actual.shape != reference.shape or actual.ndim != 2 or actual.shape[-1] != 3:
+            return
+        start_points = [tuple(point) for point in actual.detach().cpu().tolist()]
+        end_points = [tuple(point) for point in reference.detach().cpu().tolist()]
+        self._draw.draw_lines(
+            start_points,
+            end_points,
+            [self._ERROR_COLOR] * len(start_points),
+            [self._LINE_SIZE] * len(start_points),
+        )
+        self._draw.draw_points(
+            end_points,
+            [self._REFERENCE_BODY_COLOR] * len(end_points),
+            [self._POINT_SIZE] * len(end_points),
+        )
+        self._draw.draw_points(
+            start_points,
+            [self._POLICY_BODY_COLOR] * len(start_points),
+            [self._POINT_SIZE] * len(start_points),
+        )
+
+    def write_reference(self, base_env, manager) -> None:
+        # Isaac Lab performs internal resets inside env.step(). Refresh here so
+        # the first post-reset frame is rebuilt from the live policy state.
+        manager.refresh()
+        frame = _parallelism_visual_frame(manager)
+        _write_parallelism_reference_robot(base_env.scene["reference_robot"], frame)
 
     def update(self, base_env, manager) -> None:
         frame = _parallelism_visual_frame(manager)
-        self.root.visualize(translations=frame.future_root_pos_w.to(dtype=torch.float32))
-        for leg_idx, markers in enumerate(self.foot):
-            future = frame.future_foot_pos_w[:, leg_idx].to(dtype=torch.float32)
-            markers.visualize(translations=future)
-            contact = frame.future_contact_state[:, leg_idx]
-            transition = torch.nonzero((~contact[:-1]) & contact[1:], as_tuple=False).flatten()
-            touchdown_idx = int(transition[0].item() + 1) if int(transition.numel()) else int(future.shape[0] - 1)
-            self.touchdown[leg_idx].visualize(translations=future[touchdown_idx : touchdown_idx + 1])
 
-        _write_parallelism_reference_robot(base_env.scene["reference_robot"], frame)
+        plan_count = int(torch.as_tensor(getattr(manager, "plan_count", torch.zeros(1)))[0].item())
+        self._draw.clear_lines()
+        self._draw_error_lines(base_env)
+        self._draw_path(frame.future_root_pos_w, self._ROOT_COLOR)
+        for leg_idx in range(4):
+            future = frame.future_foot_pos_w[:, leg_idx].to(dtype=torch.float32)
+            self._draw_path(future, self._LEG_COLORS[leg_idx])
+        if self._last_marker_plan_count != plan_count:
+            self._last_marker_plan_count = plan_count
+            self._draw.clear_points()
+            for leg_idx in range(4):
+                future = frame.future_foot_pos_w[:, leg_idx].to(dtype=torch.float32)
+                contact = frame.future_contact_state[:, leg_idx]
+                transition = torch.nonzero((~contact[:-1]) & contact[1:], as_tuple=False).flatten()
+                touchdown_idx = int(transition[0].item() + 1) if int(transition.numel()) else int(future.shape[0] - 1)
+                self._draw_point(future[touchdown_idx], self._LEG_COLORS[leg_idx])
 
 
 THIS_FILE = Path(__file__).resolve()
@@ -1193,7 +1327,12 @@ def main() -> int:
 
     obs, _ = wrapped_env.consume_initial_observations()
     if parallelism_visualizer is not None and parallelism_manager is not None:
+        parallelism_visualizer.write_reference(base_env, parallelism_manager)
         parallelism_visualizer.update(base_env, parallelism_manager)
+        if parallelism_panel is not None:
+            parallelism_panel.update_joint_error(
+                _parallelism_joint_error_data(base_env, _parallelism_visual_frame(parallelism_manager))
+            )
     timestep = 0
     camera_interval = _livestream_camera_update_interval(getattr(args_cli, "livestream", 0))
     debug.mark_startup("first observations")
@@ -1241,6 +1380,8 @@ def main() -> int:
                         _apply_panel_velocity_command(base_env, parallelism_panel_state)
                     else:
                         _apply_keyboard_velocity_command(base_env, keyboard_controller)
+                    if parallelism_visualizer is not None and parallelism_manager is not None:
+                        parallelism_visualizer.write_reference(base_env, parallelism_manager)
                     env_start = perf_counter()
                     obs, rewards, dones, extras = wrapped_env.step(actions)
                     env_step_s = perf_counter() - env_start
@@ -1250,11 +1391,31 @@ def main() -> int:
                         _apply_keyboard_velocity_command(base_env, keyboard_controller)
 
                 timestep += 1
+                if parallelism_visualizer is not None and parallelism_manager is not None:
+                    if bool(torch.as_tensor(dones).any().item()):
+                        parallelism_visualizer.write_reference(base_env, parallelism_manager)
+                    else:
+                        _write_parallelism_reference_root(
+                            base_env.scene["reference_robot"],
+                            _parallelism_visual_frame(parallelism_manager),
+                        )
+                if args_cli.debug_livestream and parallelism_manager is not None:
+                    _parallelism_debug_snapshot(
+                        base_env,
+                        parallelism_manager,
+                        parallelism_diagnostics,
+                        dones,
+                        timestep=timestep,
+                    )
 
                 if parallelism_visualizer is not None and parallelism_manager is not None:
                     parallelism_visualizer.update(base_env, parallelism_manager)
                 if parallelism_panel is not None:
                     parallelism_panel.update_diagnostics(parallelism_diagnostics)
+                    if parallelism_manager is not None:
+                        parallelism_panel.update_joint_error(
+                            _parallelism_joint_error_data(base_env, _parallelism_visual_frame(parallelism_manager))
+                        )
 
                 camera_s = 0.0
                 if _should_update_follow_camera(
@@ -1288,11 +1449,11 @@ def main() -> int:
         print("\n[Play] Interrupted by user")
 
     finally:
-        wrapped_env.env.close()
-        debug.print_loop_summary(prefix="[debug-livestream][final]")
         print(f"\n{'=' * 80}")
         print(f"Play Complete - Timesteps: {timestep}")
         print(f"{'=' * 80}\n")
+        debug.print_loop_summary(prefix="[debug-livestream][final]")
+        wrapped_env.env.close()
         simulation_app.close()
 
     return 0

@@ -364,6 +364,17 @@ class ParallelismReferenceManager:
             self.joint_pos[subset] = _reorder_joint_from_planner(trajectory.joint_pos, getattr(self._robot(), "joint_names", None))
             self.foot_pos_w[subset] = trajectory.foot_pos_w
             self.contact_state[subset] = trajectory.contact_state
+            # The first frame of every episode/cycle is the measured robot state.
+            # This prevents a reset from displaying a planned pose before the robot
+            # has reached the planner's first sample.
+            self.root_pos_w[subset, 0] = state.root_pos_w
+            self.root_rpy_w[subset, 0] = state.root_rpy_w
+            self.joint_pos[subset, 0] = _reorder_joint_from_planner(
+                state.joint_pos,
+                getattr(self._robot(), "joint_names", None),
+            )
+            if state.foot_pos_w is not None:
+                self.foot_pos_w[subset, 0] = state.foot_pos_w
             self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)
             self._cached_cycle[subset] = subset_cycle
             self._initialized[subset] = True
