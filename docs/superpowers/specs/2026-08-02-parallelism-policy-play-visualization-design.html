@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Parallelism RL Policy 回放与参考规划可视化设计</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; background: #f4f6f8; color: #16202a; font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    header { padding: 30px max(24px, calc((100vw - 1050px) / 2)); background: #12343b; color: #fff; }
+    header h1 { margin: 0 0 8px; font-size: 27px; font-weight: 700; }
+    header p { margin: 0; color: #d7ece8; }
+    main { max-width: 1050px; margin: 0 auto; padding: 28px 24px 48px; }
+    section { margin: 20px 0; padding: 22px; background: #fff; border: 1px solid #d8e0e5; border-radius: 7px; }
+    h2 { margin: 0 0 10px; color: #12343b; font-size: 20px; }
+    h3 { margin: 18px 0 7px; font-size: 17px; }
+    p, li { max-width: 960px; }
+    code { padding: 1px 4px; border-radius: 3px; background: #edf2f3; color: #153e47; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { padding: 10px; text-align: left; vertical-align: top; border: 1px solid #d8e0e5; }
+    th { background: #e7f0ef; }
+    .flow { padding: 14px; border-left: 4px solid #138a75; background: #eef8f5; white-space: pre-wrap; }
+    .note { padding: 12px 14px; background: #fff4d6; border-left: 4px solid #c68a16; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Parallelism RL Policy 回放与参考规划可视化设计</h1>
+    <p>分支：Parallelism-flat-rl。目标：在真实 IsaacLab 物理 rollout 中同时观察 policy 动作、Parallelism 24 帧参考和逐项 termination。</p>
+  </header>
+  <main>
+    <section>
+      <h2>1. 目标与边界</h2>
+      <p>修改 <code>Go2Pvcnn/scripts/play.py</code>，加入 <code>parallelism_tracking_flat</code> experiment。它加载该实验的 RSL-RL checkpoint，在单环境、非 headless IsaacLab 中运行真实 policy。</p>
+      <p>此次不修改训练环境、PPO、planner 轨迹、reward 或 termination 阈值。可视化只使用训练时同一套 <code>ParallelismReferenceManager</code>、高程/语义 raycaster 输入和 policy observation 语义。</p>
+    </section>
+
+    <section>
+      <h2>2. 一致的运行链路</h2>
+      <div class="flow">ImGui 速度面板
+  -&gt; env0 base_velocity command
+  -&gt; ParallelismReferenceManager（reset 或每 24 帧重新规划）
+  -&gt; policy observation 中的当前 reference frame
+  -&gt; policy action
+  -&gt; 真实物理 Go2
+  -&gt; 可视化实际状态、reference 状态与逐项 termination</div>
+      <p>速度 command 是 root/body 坐标系速度。面板值每个 control step 写入 env0 的 <code>base_velocity</code>；policy 和 planner 因此读取同一份 command。planner 仅在周期边界采用新 command，保证一个 24 帧计划内 command 不变，符合训练语义。</p>
+      <p>每次环境 reset 以及 episode frame 计数跨入新的 24 帧周期时，manager 使用当前真实 root、joint、foot 与 raycaster 高程/语义图生成新的 plan。回放不复用 <code>extension/viz/go2_foostep_planner.py</code> 的运动学直接写回逻辑。</p>
+    </section>
+
+    <section>
+      <h2>3. 双 Go2 关节参考显示</h2>
+      <p>真实 Go2 是场景原 robot，由 policy action 与物理仿真驱动，保持官方默认 mesh 和材质。</p>
+      <p>新增 reference Go2 articulation，使用相同 Go2 USD，关闭其全部 collision，且不参与控制、奖励、观测和 contact sensor。它与真实 Go2 完全重叠，不使用空间偏移；材质替换为半透明青绿色，以便从每个 hip、thigh、calf 和 foot 的外形直接比较当前 12 个 reference joint angle 与实际 joint angle。</p>
+      <p>每个 control step，reference articulation 写入 <code>manager.current_root_pos_w</code>、由 current RPY 构造的 root orientation、以及 <code>manager.current_joint_pos</code>。root/joint 顺序必须沿用 manager 已有的 planner-to-robot 映射，不能假设 USD DOF 顺序与 planner 顺序相同。</p>
+      <p>这个设计参考 InstinctLab motion-reference 的做法：reference articulation 仅作可视化，marker 与 reference robot 均由同一 reference frame 数据更新。</p>
+    </section>
+
+    <section>
+      <h2>4. Parallelism 规划 marker</h2>
+      <p>在 reference Go2 之外，复用 Parallelism viewer 已验证的 marker 视觉语言，但数据源改为 manager 的 24 帧缓存：</p>
+      <table>
+        <thead><tr><th>marker</th><th>数据</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>未来 root trajectory</td><td><code>root_pos_w[0, phase:]</code></td><td>显示当前周期剩余 root reference。</td></tr>
+          <tr><td>四足 future swing</td><td><code>foot_pos_w[0, phase:, leg]</code></td><td>显示每条腿当前及后续足端轨迹。</td></tr>
+          <tr><td>touchdown</td><td>每条腿该周期的接触转换/目标足端</td><td>明确落脚目标。</td></tr>
+          <tr><td>actual-reference foot error line</td><td>真实 foot world pose 到当前 reference foot world pose</td><td>区分 policy 跟踪误差与 planner 轨迹问题。</td></tr>
+        </tbody>
+      </table>
+      <p>候选圆、候选点、surface collision points 不是本次必需项，仍由独立 planner viewer 用于 planner 调试，避免 RL rollout 画面过载。</p>
+    </section>
+
+    <section>
+      <h2>5. Isaac Sim 面板</h2>
+      <p>面板是 app 内 ImGui 窗口，不依赖 terminal 键盘。它只控制 env0，play 默认 <code>--num_envs 1</code>。</p>
+      <table>
+        <thead><tr><th>控件</th><th>范围/默认</th><th>行为</th></tr></thead>
+        <tbody>
+          <tr><td><code>vx</code></td><td>[-1.0, 1.0] m/s，默认 0</td><td>写入 body-frame forward command。</td></tr>
+          <tr><td><code>vy</code></td><td>[-0.5, 0.5] m/s，默认 0</td><td>写入 body-frame lateral command。</td></tr>
+          <tr><td><code>vyaw</code></td><td>[-1.0, 1.0] rad/s，默认 0</td><td>写入 body-frame yaw-rate command。</td></tr>
+          <tr><td><code>全部不终止</code></td><td>默认勾选</td><td>批量勾选或取消下列逐项开关。</td></tr>
+          <tr><td>逐项 <code>不终止</code></td><td>默认全部勾选</td><td>每一项仍计算并显示触发状态；勾选表示该项不参与 done/reset。</td></tr>
+        </tbody>
+      </table>
+      <p>逐项开关固定为：<code>time_out</code>、<code>base_contact</code>、<code>bad_orientation</code>、<code>parallelism_ref_root_z_too_far</code>、<code>parallelism_ref_projected_gravity_too_far</code>、<code>parallelism_ref_foot_z_too_far</code> 和 <code>parallelism_ref_joint_pos_too_far</code>。</p>
+    </section>
+
+    <section>
+      <h2>6. Termination 精确语义</h2>
+      <p>面板始终显示每项的原始触发结果。本 step 触发时对应行高亮，即使它的 <code>不终止</code> 开关已勾选。这样可以连续观察“本应因 joint error 终止”的状态，而不丢失诊断事实。</p>
+      <p class="note">屏蔽必须发生在 IsaacLab 消费 termination 结果并执行 reset 之前。不能在 <code>env.step()</code> 返回后再修改 dones，因为自动 reset 可能已经完成，画面已无法保留失败状态。</p>
+      <p>最终 done 是所有未勾选“不终止”的原始 termination 的逻辑或。勾选全部不终止后，所有项只诊断、不 reset；用户可关闭某一个开关恢复该项正常 reset。训练时的 termination 配置及训练脚本完全不变。</p>
+    </section>
+
+    <section>
+      <h2>7. 文件与接口</h2>
+      <table>
+        <thead><tr><th>文件</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td><code>Go2Pvcnn/scripts/play.py</code></td><td>新增 experiment 映射、Parallelism manager 获取、panel 生命周期、reference articulation 和 marker 更新、termination runtime mask。</td></tr>
+          <tr><td><code>tracking/parallelism_tracking_env_cfg.py</code></td><td>仅在需要时补充 play-only reference visual articulation 配置；不改变训练 cfg。</td></tr>
+          <tr><td><code>tracking/register_envs.py</code></td><td>若 play task id 必须独立注册，注册只指向 PLAY cfg 的 task；否则沿用现有 task id 并显式传入 PLAY cfg。</td></tr>
+          <tr><td><code>tests/tracking/...</code></td><td>覆盖 experiment 映射、panel command 写入、reference frame joint/root 读取、逐项 termination mask 语义。</td></tr>
+        </tbody>
+      </table>
+      <p>不复制 InstinctLab 源码，不修改 <code>raw/</code>，也不把 planner 的纯 kinematic playback 混入 RL 物理 rollout。</p>
+    </section>
+
+    <section>
+      <h2>8. 验收</h2>
+      <ol>
+        <li>静态/单元测试确认 <code>parallelism_tracking_flat</code> 能从 <code>play.py</code> 解析、加载对应 checkpoint，且 manager 的 planner/robot joint reorder 保持正确。</li>
+        <li>真实 IsaacLab 非 headless 单环境启动，面板可调整三轴速度；policy command 与 manager command 在每个 control step 相等。</li>
+        <li>reference Go2 与真实 Go2 重叠出现，reference 为青绿色无碰撞模型；随 phase 改变，12 个关节与 root pose 连续更新。</li>
+        <li>未来 root/foot/touchdown marker 与 manager 当前周期缓存一致；真实 foot 到参考 foot 的误差线随 policy 状态改变。</li>
+        <li>逐项触发 termination 时面板高亮。勾选该项“不终止”后不 reset；取消勾选后恢复正常 reset。验证至少 <code>parallelism_ref_joint_pos_too_far</code> 与一个非 reference termination。</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>
