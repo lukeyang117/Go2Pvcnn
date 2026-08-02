@@ -233,6 +233,7 @@ class ParallelismTrackingFlatEnvCfg_PLAY(ParallelismTrackingFlatEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        self.terminations.time_out = None
         self.curriculum.parallelism_velocity = None
         self.observations.policy_elevation_semantic_map.enable_corruption = False
         self.observations.policy_state.enable_corruption = False

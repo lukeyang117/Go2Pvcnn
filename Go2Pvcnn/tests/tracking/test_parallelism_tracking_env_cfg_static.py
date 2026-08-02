@@ -43,8 +43,8 @@ def test_tracking_play_cfg_does_not_override_instanced_reference_material() -> N
     assert "visual_material=" not in reference_source
 
 
-def test_tracking_play_cfg_keeps_timeout_available_for_panel_diagnostics() -> None:
+def test_tracking_play_cfg_disables_timeout_for_unbounded_play() -> None:
     source = (ROOT / "tracking/parallelism_tracking_env_cfg.py").read_text()
     play_source = source[source.index("class ParallelismTrackingFlatEnvCfg_PLAY") :]
 
-    assert "self.terminations.time_out = None" not in play_source
+    assert "self.terminations.time_out = None" in play_source
