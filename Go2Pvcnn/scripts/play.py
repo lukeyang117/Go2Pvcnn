@@ -1205,11 +1205,11 @@ def main() -> int:
             flush=True,
         )
 
-    print(f"\n{'=' * 80}")
-    print("Starting Play Loop")
+    print(f"\n{'=' * 80}", flush=True)
+    print("Starting Play Loop", flush=True)
     if args_cli.step_mode:
         print("Step mode enabled: press Space to advance one env/render step.", flush=True)
-    print(f"{'=' * 80}\n")
+    print(f"{'=' * 80}\n", flush=True)
 
     keyboard_controller = _KeyboardVelocityController(
         enabled=bool(args_cli.keyboard_control) and not is_parallelism_play,
