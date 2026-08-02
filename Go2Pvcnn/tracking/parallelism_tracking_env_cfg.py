@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import field
 
+import isaaclab.sim as sim_utils
+from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -25,6 +27,7 @@ from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
     _flat_small_avoidance_terrain_cfg,
 )
 import go2_pvcnn.mdp as go2_mdp
+from go2_pvcnn.assets import UNITREE_GO2_CFG
 import tracking.mdp as tracking_mdp
 
 
@@ -207,8 +210,26 @@ class ParallelismTrackingFlatEnvCfg(TeacherElevationTrajectoryMpcSemanticEnvCfg)
 
 
 @configclass
+class ParallelismTrackingPlaySceneCfg(TeacherElevationTrajectoryMpcSemanticSceneCfg):
+    """Play-only scene with a visual reference articulation outside policy physics."""
+
+    reference_robot: ArticulationCfg = UNITREE_GO2_CFG.replace(
+        prim_path="{ENV_REGEX_NS}/ParallelismReferenceGo2",
+        spawn=UNITREE_GO2_CFG.spawn.replace(
+            activate_contact_sensors=False,
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            rigid_props=UNITREE_GO2_CFG.spawn.rigid_props.replace(disable_gravity=True),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.0, 0.9, 0.85),
+                opacity=0.42,
+            ),
+        ),
+    )
+
+
+@configclass
 class ParallelismTrackingFlatEnvCfg_PLAY(ParallelismTrackingFlatEnvCfg):
-    scene: TeacherElevationTrajectoryMpcSemanticSceneCfg = TeacherElevationTrajectoryMpcSemanticSceneCfg(
+    scene: ParallelismTrackingPlaySceneCfg = ParallelismTrackingPlaySceneCfg(
         num_envs=32,
         env_spacing=2.5,
         replicate_physics=True,
@@ -216,7 +237,6 @@ class ParallelismTrackingFlatEnvCfg_PLAY(ParallelismTrackingFlatEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.terminations.time_out = None
         self.curriculum.parallelism_velocity = None
         self.observations.policy_elevation_semantic_map.enable_corruption = False
         self.observations.policy_state.enable_corruption = False

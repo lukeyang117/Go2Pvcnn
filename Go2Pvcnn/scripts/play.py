@@ -70,6 +70,229 @@ def _filter_termination_masks(
     return effective_done, diagnostics
 
 
+@dataclass(frozen=True)
+class ParallelismVisualFrame:
+    root_pos_w: torch.Tensor
+    root_rpy_w: torch.Tensor
+    joint_pos: torch.Tensor
+    foot_pos_w: torch.Tensor
+    contact_state: torch.Tensor
+    future_root_pos_w: torch.Tensor
+    future_foot_pos_w: torch.Tensor
+    future_contact_state: torch.Tensor
+
+
+@dataclass
+class ParallelismTerminationDiagnostics:
+    raw_masks: dict[str, torch.Tensor] = field(default_factory=dict)
+
+
+def _parallelism_visual_frame(manager, *, env_id: int = 0) -> ParallelismVisualFrame:
+    """Extract one manager phase consistently for the reference robot and markers."""
+
+    phase = int(torch.as_tensor(manager.phase)[env_id].item())
+    return ParallelismVisualFrame(
+        root_pos_w=manager.root_pos_w[env_id, phase],
+        root_rpy_w=manager.root_rpy_w[env_id, phase],
+        joint_pos=manager.joint_pos[env_id, phase],
+        foot_pos_w=manager.foot_pos_w[env_id, phase],
+        contact_state=manager.contact_state[env_id, phase],
+        future_root_pos_w=manager.root_pos_w[env_id, phase:],
+        future_foot_pos_w=manager.foot_pos_w[env_id, phase:],
+        future_contact_state=manager.contact_state[env_id, phase:],
+    )
+
+
+def _install_parallelism_termination_filter(termination_manager, state: ParallelismPlayPanelState):
+    """Mask selected reset terms before ManagerBasedRLEnv reads termination buffers."""
+
+    existing = getattr(termination_manager, "_parallelism_play_diagnostics", None)
+    if existing is not None:
+        return existing
+
+    diagnostics = ParallelismTerminationDiagnostics()
+    original_compute = termination_manager.compute
+
+    def compute():
+        original_compute()
+        raw_masks = {
+            name: value.clone()
+            for name, value in getattr(termination_manager, "_term_dones", {}).items()
+        }
+        diagnostics.raw_masks = raw_masks
+        if not raw_masks:
+            return termination_manager._truncated_buf | termination_manager._terminated_buf
+
+        termination_manager._truncated_buf.zero_()
+        termination_manager._terminated_buf.zero_()
+        for name, term_cfg in zip(termination_manager._term_names, termination_manager._term_cfgs):
+            value = raw_masks[name]
+            if bool(state.suppress_termination.get(name, False)):
+                continue
+            if bool(getattr(term_cfg, "time_out", False)):
+                termination_manager._truncated_buf |= value
+            else:
+                termination_manager._terminated_buf |= value
+        return termination_manager._truncated_buf | termination_manager._terminated_buf
+
+    termination_manager.compute = compute
+    termination_manager._parallelism_play_diagnostics = diagnostics
+    return diagnostics
+
+
+def _write_parallelism_reference_robot(reference_robot, frame: ParallelismVisualFrame) -> None:
+    """Write one reference frame into the play-only, collision-free Go2."""
+
+    from extension.convention import euler_to_quat_batch
+
+    root_pos_w = frame.root_pos_w.reshape(1, 3)
+    root_rpy_w = frame.root_rpy_w.reshape(1, 3)
+    root_quat_w = euler_to_quat_batch(root_rpy_w[:, 0], root_rpy_w[:, 1], root_rpy_w[:, 2])
+    root_pose = torch.cat((root_pos_w, root_quat_w), dim=-1)
+    joint_pos = frame.joint_pos.reshape(1, -1)
+    reference_robot.write_root_pose_to_sim(root_pose)
+    reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
+    reference_robot.write_joint_state_to_sim(
+        joint_pos,
+        torch.zeros_like(joint_pos),
+    )
+
+
+class _ParallelismPlayPanel:
+    """Small in-app control panel for the physical parallelism rollout."""
+
+    def __init__(self, state: ParallelismPlayPanelState) -> None:
+        self.state = state
+        self._status_models = {}
+        self._models = {}
+        try:
+            import omni.ui as ui
+        except ModuleNotFoundError:
+            self.window = None
+            return
+        self._ui = ui
+        self.window = ui.Window("Parallelism Policy Debug", width=340, height=500)
+        with self.window.frame:
+            with ui.VStack(spacing=8, height=0):
+                ui.Label("速度命令 (root 坐标系)", height=20)
+                self._add_speed_slider("vx", -1.0, 1.0)
+                self._add_speed_slider("vy", -0.5, 0.5)
+                self._add_speed_slider("vyaw", -1.0, 1.0)
+                ui.Spacer(height=8)
+                ui.Label("Termination", height=20)
+                all_model = ui.SimpleBoolModel(True)
+                all_model.add_value_changed_fn(self._set_all_suppressed)
+                self._models["all"] = all_model
+                with ui.HStack(height=22):
+                    ui.CheckBox(model=all_model, width=20)
+                    ui.Label("全部不终止")
+                for name in PARALLELISM_TERMINATION_NAMES:
+                    model = ui.SimpleBoolModel(True)
+                    model.add_value_changed_fn(lambda value, key=name: self._set_suppressed(key, value))
+                    self._models[name] = model
+                    with ui.HStack(height=22):
+                        ui.CheckBox(model=model, width=20)
+                        ui.Label(name, width=245)
+                        self._status_models[name] = ui.Label("正常", width=55)
+
+    def _add_speed_slider(self, name: str, lower: float, upper: float) -> None:
+        ui = self._ui
+        model = ui.SimpleFloatModel(getattr(self.state, name))
+        model.add_value_changed_fn(
+            lambda value, key=name: setattr(self.state, key, float(value.get_value_as_float()))
+        )
+        self._models[name] = model
+        with ui.HStack(height=26):
+            ui.Label(name, width=42)
+            ui.FloatSlider(model=model, min=lower, max=upper, width=220)
+            ui.FloatField(model=model, width=65)
+
+    def _set_suppressed(self, name: str, model) -> None:
+        self.state.suppress_termination[name] = bool(model.get_value_as_bool())
+        self._sync_all_model()
+
+    def _set_all_suppressed(self, model) -> None:
+        enabled = bool(model.get_value_as_bool())
+        for name in PARALLELISM_TERMINATION_NAMES:
+            self.state.suppress_termination[name] = enabled
+            item = self._models.get(name)
+            if item is not None and bool(item.get_value_as_bool()) != enabled:
+                item.set_value(enabled)
+
+    def _sync_all_model(self) -> None:
+        model = self._models.get("all")
+        if model is None:
+            return
+        enabled = all(self.state.suppress_termination.get(name, False) for name in PARALLELISM_TERMINATION_NAMES)
+        if bool(model.get_value_as_bool()) != enabled:
+            model.set_value(enabled)
+
+    def update_diagnostics(self, diagnostics: ParallelismTerminationDiagnostics | None) -> None:
+        if diagnostics is None:
+            return
+        for name, label in self._status_models.items():
+            raw = diagnostics.raw_masks.get(name)
+            triggered = raw is not None and bool(torch.as_tensor(raw)[0].item())
+            label.text = "触发" if triggered else "正常"
+
+
+def _parallelism_marker_cfg(prim_path: str, *, radius: float, color: tuple[float, float, float]):
+    import isaaclab.sim as sim_utils
+    from isaaclab.markers import VisualizationMarkersCfg
+
+    return VisualizationMarkersCfg(
+        prim_path=prim_path,
+        markers={
+            "marker": sim_utils.SphereCfg(
+                radius=radius,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+            )
+        },
+    )
+
+
+class _ParallelismPlayVisualizer:
+    """Shows the remaining reference plan while the policy robot stays physical."""
+
+    _LEG_COLORS = ((0.1, 0.9, 1.0), (1.0, 0.45, 0.1), (0.3, 1.0, 0.3), (1.0, 0.2, 0.8))
+
+    def __init__(self) -> None:
+        from isaaclab.markers import VisualizationMarkers
+
+        self.root = VisualizationMarkers(
+            _parallelism_marker_cfg("/Visuals/ParallelismPolicyPlay/root", radius=0.022, color=(1.0, 0.8, 0.1))
+        )
+        self.foot = [
+            VisualizationMarkers(
+                _parallelism_marker_cfg(
+                    f"/Visuals/ParallelismPolicyPlay/foot_{leg_idx}", radius=0.016, color=color
+                )
+            )
+            for leg_idx, color in enumerate(self._LEG_COLORS)
+        ]
+        self.touchdown = [
+            VisualizationMarkers(
+                _parallelism_marker_cfg(
+                    f"/Visuals/ParallelismPolicyPlay/touchdown_{leg_idx}", radius=0.028, color=color
+                )
+            )
+            for leg_idx, color in enumerate(self._LEG_COLORS)
+        ]
+
+    def update(self, base_env, manager) -> None:
+        frame = _parallelism_visual_frame(manager)
+        self.root.visualize(translations=frame.future_root_pos_w.to(dtype=torch.float32))
+        for leg_idx, markers in enumerate(self.foot):
+            future = frame.future_foot_pos_w[:, leg_idx].to(dtype=torch.float32)
+            markers.visualize(translations=future)
+            contact = frame.future_contact_state[:, leg_idx]
+            transition = torch.nonzero((~contact[:-1]) & contact[1:], as_tuple=False).flatten()
+            touchdown_idx = int(transition[0].item() + 1) if int(transition.numel()) else int(future.shape[0] - 1)
+            self.touchdown[leg_idx].visualize(translations=future[touchdown_idx : touchdown_idx + 1])
+
+        _write_parallelism_reference_robot(base_env.scene["reference_robot"], frame)
+
+
 THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parent.parent
 RSL_RL_ROOT = GO2PVCNN_ROOT / "rsl_rl"
@@ -916,6 +1139,25 @@ def main() -> int:
     _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     step_probe = _install_env_step_probes(base_env, enabled=bool(args_cli.debug_livestream))
 
+    is_parallelism_play = experiment_name == "parallelism_tracking_flat"
+    parallelism_panel_state = None
+    parallelism_manager = None
+    parallelism_diagnostics = None
+    parallelism_panel = None
+    parallelism_visualizer = None
+    if is_parallelism_play:
+        from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
+
+        parallelism_panel_state = ParallelismPlayPanelState()
+        parallelism_manager = get_parallelism_reference_manager(base_env)
+        parallelism_diagnostics = _install_parallelism_termination_filter(
+            base_env.termination_manager,
+            parallelism_panel_state,
+        )
+        parallelism_panel = _ParallelismPlayPanel(parallelism_panel_state)
+        parallelism_visualizer = _ParallelismPlayVisualizer()
+        print("[Parallelism] Policy play visualization enabled.", flush=True)
+
     print("\n[Wrapper] Creating RSL-RL environment wrapper...", flush=True)
     wrapped_env = _make_env_wrapper(
         base_env,
@@ -950,6 +1192,8 @@ def main() -> int:
     print(f"[Policy] Using {'sampling' if args_cli.sample else 'inference'} mode", flush=True)
 
     obs, _ = wrapped_env.consume_initial_observations()
+    if parallelism_visualizer is not None and parallelism_manager is not None:
+        parallelism_visualizer.update(base_env, parallelism_manager)
     timestep = 0
     camera_interval = _livestream_camera_update_interval(getattr(args_cli, "livestream", 0))
     debug.mark_startup("first observations")
@@ -968,7 +1212,7 @@ def main() -> int:
     print(f"{'=' * 80}\n")
 
     keyboard_controller = _KeyboardVelocityController(
-        enabled=bool(args_cli.keyboard_control),
+        enabled=bool(args_cli.keyboard_control) and not is_parallelism_play,
         linear_speed=float(args_cli.keyboard_linear_speed),
         lateral_speed=float(args_cli.keyboard_lateral_speed),
         yaw_speed=float(args_cli.keyboard_yaw_speed),
@@ -984,19 +1228,33 @@ def main() -> int:
                     continue
                 step_start = perf_counter()
                 with torch.inference_mode():
-                    _apply_keyboard_velocity_command(base_env, keyboard_controller)
+                    if parallelism_panel_state is not None:
+                        _apply_panel_velocity_command(base_env, parallelism_panel_state)
+                    else:
+                        _apply_keyboard_velocity_command(base_env, keyboard_controller)
                     obs, _ = wrapped_env.get_observations()
                     policy_start = perf_counter()
                     actions = policy(obs)
                     policy_s = perf_counter() - policy_start
 
-                    _apply_keyboard_velocity_command(base_env, keyboard_controller)
+                    if parallelism_panel_state is not None:
+                        _apply_panel_velocity_command(base_env, parallelism_panel_state)
+                    else:
+                        _apply_keyboard_velocity_command(base_env, keyboard_controller)
                     env_start = perf_counter()
                     obs, rewards, dones, extras = wrapped_env.step(actions)
                     env_step_s = perf_counter() - env_start
-                    _apply_keyboard_velocity_command(base_env, keyboard_controller)
+                    if parallelism_panel_state is not None:
+                        _apply_panel_velocity_command(base_env, parallelism_panel_state)
+                    else:
+                        _apply_keyboard_velocity_command(base_env, keyboard_controller)
 
                 timestep += 1
+
+                if parallelism_visualizer is not None and parallelism_manager is not None:
+                    parallelism_visualizer.update(base_env, parallelism_manager)
+                if parallelism_panel is not None:
+                    parallelism_panel.update_diagnostics(parallelism_diagnostics)
 
                 camera_s = 0.0
                 if _should_update_follow_camera(

@@ -58,3 +58,92 @@ def test_panel_command_updates_env0_only() -> None:
     play._apply_panel_velocity_command(env, play.ParallelismPlayPanelState(vx=0.4, vy=-0.2, vyaw=0.3))
 
     torch.testing.assert_close(command, torch.tensor([[0.4, -0.2, 0.3], [0.0, 0.0, 0.0]]))
+
+
+def test_reference_visual_frame_uses_current_manager_phase() -> None:
+    manager = SimpleNamespace(
+        horizon=24,
+        phase=torch.tensor([3]),
+        root_pos_w=torch.arange(24 * 3, dtype=torch.float32).reshape(1, 24, 3),
+        root_rpy_w=torch.zeros(1, 24, 3),
+        joint_pos=torch.arange(24 * 12, dtype=torch.float32).reshape(1, 24, 12),
+        foot_pos_w=torch.arange(24 * 4 * 3, dtype=torch.float32).reshape(1, 24, 4, 3),
+        contact_state=torch.ones(1, 24, 4, dtype=torch.bool),
+    )
+
+    frame = play._parallelism_visual_frame(manager, env_id=0)
+
+    torch.testing.assert_close(frame.root_pos_w, manager.root_pos_w[0, 3])
+    torch.testing.assert_close(frame.joint_pos, manager.joint_pos[0, 3])
+    torch.testing.assert_close(frame.foot_pos_w, manager.foot_pos_w[0, 3])
+    assert frame.future_foot_pos_w.shape == (21, 4, 3)
+
+
+def test_termination_filter_suppresses_before_env_reads_reset_buffers() -> None:
+    class FakeTerminationManager:
+        def __init__(self) -> None:
+            self._term_names = ("time_out", "parallelism_ref_joint_pos_too_far")
+            self._term_cfgs = (SimpleNamespace(time_out=True), SimpleNamespace(time_out=False))
+            self._term_dones = {
+                "time_out": torch.zeros(1, dtype=torch.bool),
+                "parallelism_ref_joint_pos_too_far": torch.zeros(1, dtype=torch.bool),
+            }
+            self._truncated_buf = torch.zeros(1, dtype=torch.bool)
+            self._terminated_buf = torch.zeros(1, dtype=torch.bool)
+
+        def compute(self):
+            self._term_dones["time_out"][:] = True
+            self._term_dones["parallelism_ref_joint_pos_too_far"][:] = True
+            self._truncated_buf[:] = True
+            self._terminated_buf[:] = True
+            return self._truncated_buf | self._terminated_buf
+
+    state = play.ParallelismPlayPanelState()
+    manager = FakeTerminationManager()
+    diagnostics = play._install_parallelism_termination_filter(manager, state)
+
+    done = manager.compute()
+
+    assert diagnostics.raw_masks["time_out"].item() is True
+    assert diagnostics.raw_masks["parallelism_ref_joint_pos_too_far"].item() is True
+    assert done.item() is False
+    assert manager._truncated_buf.item() is False
+    assert manager._terminated_buf.item() is False
+
+
+def test_reference_articulation_receives_current_root_and_joint_frame() -> None:
+    class FakeReferenceRobot:
+        def __init__(self) -> None:
+            self.root_pose = None
+            self.root_velocity = None
+            self.joint_pos = None
+            self.joint_vel = None
+
+        def write_root_pose_to_sim(self, value):
+            self.root_pose = value.clone()
+
+        def write_root_velocity_to_sim(self, value):
+            self.root_velocity = value.clone()
+
+        def write_joint_state_to_sim(self, joint_pos, joint_vel):
+            self.joint_pos = joint_pos.clone()
+            self.joint_vel = joint_vel.clone()
+
+    reference_robot = FakeReferenceRobot()
+    frame = play.ParallelismVisualFrame(
+        root_pos_w=torch.tensor([1.0, 2.0, 0.3]),
+        root_rpy_w=torch.zeros(3),
+        joint_pos=torch.arange(12, dtype=torch.float32),
+        foot_pos_w=torch.zeros(4, 3),
+        contact_state=torch.ones(4, dtype=torch.bool),
+        future_root_pos_w=torch.zeros(1, 3),
+        future_foot_pos_w=torch.zeros(1, 4, 3),
+        future_contact_state=torch.ones(1, 4, dtype=torch.bool),
+    )
+
+    play._write_parallelism_reference_robot(reference_robot, frame)
+
+    torch.testing.assert_close(reference_robot.root_pose, torch.tensor([[1.0, 2.0, 0.3, 1.0, 0.0, 0.0, 0.0]]))
+    torch.testing.assert_close(reference_robot.root_velocity, torch.zeros(1, 6))
+    torch.testing.assert_close(reference_robot.joint_pos, torch.arange(12, dtype=torch.float32).unsqueeze(0))
+    torch.testing.assert_close(reference_robot.joint_vel, torch.zeros(1, 12))
