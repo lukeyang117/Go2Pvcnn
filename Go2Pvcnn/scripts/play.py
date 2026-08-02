@@ -1393,7 +1393,17 @@ def main() -> int:
                 timestep += 1
                 if parallelism_visualizer is not None and parallelism_manager is not None:
                     if bool(torch.as_tensor(dones).any().item()):
-                        parallelism_visualizer.write_reference(base_env, parallelism_manager)
+                        # ManagerBasedRLEnv resets inside env.step(). Rebuild the
+                        # reference cache from the reset policy state, but defer
+                        # writing the reference articulation until the next loop.
+                        # Isaac Sim can close when an articulation is written in
+                        # the same frame as its internal reset.
+                        done_mask = torch.as_tensor(
+                            dones,
+                            dtype=torch.bool,
+                            device=parallelism_manager.device,
+                        )
+                        parallelism_manager.reset(done_mask)
                     else:
                         _write_parallelism_reference_root(
                             base_env.scene["reference_robot"],
