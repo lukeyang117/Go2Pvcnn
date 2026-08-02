@@ -33,6 +33,16 @@ def test_tracking_play_cfg_spawns_a_non_colliding_reference_go2() -> None:
     assert "collision_enabled=False" in source
 
 
+def test_tracking_play_cfg_does_not_override_instanced_reference_material() -> None:
+    source = (ROOT / "tracking/parallelism_tracking_env_cfg.py").read_text()
+    reference_source = source[
+        source.index("reference_robot: ArticulationCfg")
+        : source.index("\n\n\n@configclass", source.index("reference_robot: ArticulationCfg"))
+    ]
+
+    assert "visual_material=" not in reference_source
+
+
 def test_tracking_play_cfg_keeps_timeout_available_for_panel_diagnostics() -> None:
     source = (ROOT / "tracking/parallelism_tracking_env_cfg.py").read_text()
     play_source = source[source.index("class ParallelismTrackingFlatEnvCfg_PLAY") :]

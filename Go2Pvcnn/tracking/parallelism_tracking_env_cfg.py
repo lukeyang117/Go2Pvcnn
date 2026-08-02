@@ -219,10 +219,6 @@ class ParallelismTrackingPlaySceneCfg(TeacherElevationTrajectoryMpcSemanticScene
             activate_contact_sensors=False,
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             rigid_props=UNITREE_GO2_CFG.spawn.rigid_props.replace(disable_gravity=True),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.0, 0.9, 0.85),
-                opacity=0.42,
-            ),
         ),
     )
 
