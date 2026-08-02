@@ -19,6 +19,57 @@ import numpy as np
 import torch
 
 
+PARALLELISM_TERMINATION_NAMES = (
+    "time_out",
+    "base_contact",
+    "bad_orientation",
+    "parallelism_ref_root_z_too_far",
+    "parallelism_ref_projected_gravity_too_far",
+    "parallelism_ref_foot_z_too_far",
+    "parallelism_ref_joint_pos_too_far",
+)
+
+
+@dataclass
+class ParallelismPlayPanelState:
+    """UI-owned command and diagnostic-only termination controls."""
+
+    vx: float = 0.0
+    vy: float = 0.0
+    vyaw: float = 0.0
+    suppress_termination: dict[str, bool] = field(
+        default_factory=lambda: dict.fromkeys(PARALLELISM_TERMINATION_NAMES, True)
+    )
+
+
+def _panel_command_tensor(state: ParallelismPlayPanelState, command: torch.Tensor) -> torch.Tensor:
+    """Return one clamped body-frame command in the command tensor's dtype/device."""
+
+    values = command.new_tensor(((state.vx, state.vy, state.vyaw),))
+    lower = command.new_tensor((-1.0, -0.5, -1.0))
+    upper = command.new_tensor((1.0, 0.5, 1.0))
+    return torch.maximum(torch.minimum(values, upper), lower)
+
+
+def _filter_termination_masks(
+    raw_masks: dict[str, torch.Tensor],
+    suppress_termination: dict[str, bool],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Keep raw diagnostics while OR-ing only termination terms allowed to reset."""
+
+    if not raw_masks:
+        raise ValueError("raw_masks must contain at least one termination term")
+    first = next(iter(raw_masks.values()))
+    effective_done = torch.zeros_like(torch.as_tensor(first), dtype=torch.bool)
+    diagnostics: dict[str, torch.Tensor] = {}
+    for name, value in raw_masks.items():
+        raw = torch.as_tensor(value, dtype=torch.bool, device=effective_done.device)
+        diagnostics[name] = raw
+        if not bool(suppress_termination.get(name, False)):
+            effective_done |= raw
+    return effective_done, diagnostics
+
+
 THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parent.parent
 RSL_RL_ROOT = GO2PVCNN_ROOT / "rsl_rl"
