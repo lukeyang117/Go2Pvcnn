@@ -26,6 +26,38 @@ def _tolerance(error: torch.Tensor, tracking_tolerance: float) -> torch.Tensor:
     return torch.sign(error) * torch.clamp(torch.abs(error) - float(tracking_tolerance), min=0.0)
 
 
+def _quat_to_matrix_wxyz(quat: torch.Tensor) -> torch.Tensor:
+    q = torch.as_tensor(quat)
+    w, x, y, z = q.unbind(dim=-1)
+    two = q.new_tensor(2.0)
+    matrix = torch.empty(q.shape[:-1] + (3, 3), dtype=q.dtype, device=q.device)
+    matrix[..., 0, 0] = 1 - two * (y * y + z * z)
+    matrix[..., 0, 1] = two * (x * y - w * z)
+    matrix[..., 0, 2] = two * (x * z + w * y)
+    matrix[..., 1, 0] = two * (x * y + w * z)
+    matrix[..., 1, 1] = 1 - two * (x * x + z * z)
+    matrix[..., 1, 2] = two * (y * z - w * x)
+    matrix[..., 2, 0] = two * (x * z - w * y)
+    matrix[..., 2, 1] = two * (y * z + w * x)
+    matrix[..., 2, 2] = 1 - two * (x * x + y * y)
+    return matrix
+
+
+def _points_to_root_frame(points_w: torch.Tensor, root_pos_w: torch.Tensor, root_quat_w: torch.Tensor) -> torch.Tensor:
+    matrix_w = _quat_to_matrix_wxyz(root_quat_w)
+    rel_w = points_w - root_pos_w[:, None, :]
+    return torch.matmul(matrix_w.transpose(-1, -2)[:, None], rel_w.unsqueeze(-1)).squeeze(-1)
+
+
+def _actual_foot_pos_w(asset, asset_cfg: SceneEntityCfg, ref: torch.Tensor) -> torch.Tensor:
+    body_ids = getattr(asset_cfg, "body_ids", None)
+    if body_ids is not None:
+        body_pos = asset.data.body_pos_w[:, body_ids, :]
+    else:
+        body_pos = asset.data.body_pos_w[:, -4:, :]
+    return torch.as_tensor(body_pos, dtype=ref.dtype, device=ref.device)
+
+
 def _current_parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg) -> dict[str, torch.Tensor]:
     asset = env.scene[asset_cfg.name]
     manager = get_parallelism_reference_manager(env)
@@ -36,11 +68,34 @@ def _current_parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg) -> dict
     ref_joint = manager.current_joint_pos
     actual_joint = torch.as_tensor(asset.data.joint_pos, dtype=ref_joint.dtype, device=ref_joint.device)
     joint_abs_error = torch.abs(actual_joint - ref_joint)
+    if hasattr(asset.data, "body_pos_w"):
+        ref_foot = manager.current_foot_pos_w
+        actual_foot = _actual_foot_pos_w(
+            asset,
+            SceneEntityCfg(asset_cfg.name, body_names=".*_foot"),
+            ref_foot,
+        )
+        root_pos = torch.as_tensor(asset.data.root_pos_w, dtype=ref_foot.dtype, device=ref_foot.device)
+        root_quat = torch.as_tensor(asset.data.root_quat_w, dtype=ref_foot.dtype, device=ref_foot.device)
+        foot_abs_error = torch.linalg.vector_norm(
+            _points_to_root_frame(actual_foot, root_pos, root_quat)
+            - _points_to_root_frame(ref_foot, root_pos, root_quat),
+            dim=-1,
+        )
+    else:
+        foot_abs_error = torch.zeros(
+            actual_joint.shape[0],
+            4,
+            dtype=actual_joint.dtype,
+            device=actual_joint.device,
+        )
     return {
         "lin_vel_error": torch.linalg.vector_norm(actual_lin - ref_lin, dim=-1),
         "ang_vel_error": torch.linalg.vector_norm(actual_ang - ref_ang, dim=-1),
         "joint_mean_error": torch.mean(joint_abs_error, dim=-1),
         "joint_max_error": torch.max(joint_abs_error, dim=-1).values,
+        "foot_mean_error": torch.mean(foot_abs_error, dim=-1),
+        "foot_max_error": torch.max(foot_abs_error, dim=-1).values,
     }
 
 
@@ -84,6 +139,8 @@ def update_parallelism_tracking_error_stats(
     if not hasattr(env, "_parallelism_tracking_joint_mean_sum"):
         env._parallelism_tracking_joint_mean_sum = torch.zeros(count, dtype=errors["joint_mean_error"].dtype, device=device)
         env._parallelism_tracking_joint_max = torch.zeros_like(env._parallelism_tracking_joint_mean_sum)
+        env._parallelism_tracking_foot_mean_sum = torch.zeros_like(env._parallelism_tracking_joint_mean_sum)
+        env._parallelism_tracking_foot_max = torch.zeros_like(env._parallelism_tracking_joint_mean_sum)
         env._parallelism_tracking_lin_vel_sum = torch.zeros_like(env._parallelism_tracking_joint_mean_sum)
         env._parallelism_tracking_ang_vel_sum = torch.zeros_like(env._parallelism_tracking_joint_mean_sum)
         env._parallelism_tracking_error_frames = torch.zeros(count, dtype=torch.long, device=device)
@@ -94,6 +151,13 @@ def update_parallelism_tracking_error_stats(
     env._parallelism_tracking_joint_max = torch.maximum(
         env._parallelism_tracking_joint_max,
         torch.where(update_mask, errors["joint_max_error"], torch.zeros_like(errors["joint_max_error"])),
+    )
+    env._parallelism_tracking_foot_mean_sum += torch.where(
+        update_mask, errors["foot_mean_error"], torch.zeros_like(errors["foot_mean_error"])
+    )
+    env._parallelism_tracking_foot_max = torch.maximum(
+        env._parallelism_tracking_foot_max,
+        torch.where(update_mask, errors["foot_max_error"], torch.zeros_like(errors["foot_max_error"])),
     )
     env._parallelism_tracking_lin_vel_sum += torch.where(
         update_mask, errors["lin_vel_error"], torch.zeros_like(errors["lin_vel_error"])
@@ -108,6 +172,8 @@ def update_parallelism_tracking_error_stats(
         **errors,
         "episode_joint_mean_error": env._parallelism_tracking_joint_mean_sum / frames,
         "episode_joint_max_error": env._parallelism_tracking_joint_max,
+        "episode_foot_mean_error": env._parallelism_tracking_foot_mean_sum / frames,
+        "episode_foot_max_error": env._parallelism_tracking_foot_max,
         "episode_lin_vel_error": env._parallelism_tracking_lin_vel_sum / frames,
         "episode_ang_vel_error": env._parallelism_tracking_ang_vel_sum / frames,
     }
@@ -122,11 +188,14 @@ def reset_parallelism_tracking_error_stats(env, env_ids: torch.Tensor) -> None:
     for name in (
         "_parallelism_tracking_joint_mean_sum",
         "_parallelism_tracking_joint_max",
+        "_parallelism_tracking_foot_mean_sum",
+        "_parallelism_tracking_foot_max",
         "_parallelism_tracking_lin_vel_sum",
         "_parallelism_tracking_ang_vel_sum",
         "_parallelism_tracking_error_frames",
     ):
-        getattr(env, name)[ids] = 0
+        if hasattr(env, name):
+            getattr(env, name)[ids] = 0
     if hasattr(env, "_parallelism_tracking_last_step"):
         env._parallelism_tracking_last_step[ids] = -1
     if hasattr(env, "_parallelism_tracking_error_cache"):
@@ -141,9 +210,13 @@ def parallelism_tracking_episode_errors(env) -> dict[str, torch.Tensor]:
     frames = env._parallelism_tracking_error_frames.clamp_min(1).to(
         dtype=env._parallelism_tracking_joint_mean_sum.dtype
     )
+    foot_mean_sum = getattr(env, "_parallelism_tracking_foot_mean_sum", torch.zeros_like(env._parallelism_tracking_joint_mean_sum))
+    foot_max = getattr(env, "_parallelism_tracking_foot_max", torch.zeros_like(env._parallelism_tracking_joint_mean_sum))
     return {
         "episode_joint_mean_error": env._parallelism_tracking_joint_mean_sum / frames,
         "episode_joint_max_error": env._parallelism_tracking_joint_max,
+        "episode_foot_mean_error": foot_mean_sum / frames,
+        "episode_foot_max_error": foot_max,
         "episode_lin_vel_error": env._parallelism_tracking_lin_vel_sum / frames,
         "episode_ang_vel_error": env._parallelism_tracking_ang_vel_sum / frames,
     }
@@ -201,6 +274,33 @@ def reference_root_ang_vel_reward(
     return _gaussian_error_reward(actual - ref, std)
 
 
+def reference_foot_pos_reward(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*_foot"),
+    std: float = 0.12,
+    stance_weight: float = 1.0,
+    swing_weight: float = 2.0,
+) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    manager = get_parallelism_reference_manager(env)
+    ref_w = manager.current_foot_pos_w
+    actual_w = _actual_foot_pos_w(asset, asset_cfg, ref_w)
+    root_pos = torch.as_tensor(asset.data.root_pos_w, dtype=ref_w.dtype, device=ref_w.device)
+    root_quat = torch.as_tensor(asset.data.root_quat_w, dtype=ref_w.dtype, device=ref_w.device)
+    ref_b = _points_to_root_frame(ref_w, root_pos, root_quat)
+    actual_b = _points_to_root_frame(actual_w, root_pos, root_quat)
+    contact = getattr(manager, "current_contact_state", torch.ones(ref_w.shape[:2], dtype=torch.bool, device=ref_w.device))
+    contact = torch.as_tensor(contact, dtype=torch.bool, device=ref_w.device)
+    weight = torch.where(
+        contact,
+        torch.full(contact.shape, float(stance_weight), dtype=ref_w.dtype, device=ref_w.device),
+        torch.full(contact.shape, float(swing_weight), dtype=ref_w.dtype, device=ref_w.device),
+    )
+    squared_error = torch.sum(torch.square(actual_b - ref_b), dim=-1)
+    normalized_error = torch.sum(weight * squared_error, dim=-1) / torch.clamp_min(torch.sum(weight, dim=-1), 1.0e-6)
+    return torch.exp(-normalized_error / (float(std) * float(std)))
+
+
 def parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> dict[str, torch.Tensor]:
     errors = update_parallelism_tracking_error_stats(env, asset_cfg)
     return {
@@ -209,8 +309,12 @@ def parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg = SceneEntityCfg(
         "joint_error": errors["joint_mean_error"],
         "joint_mean_error": errors["joint_mean_error"],
         "joint_max_error": errors["joint_max_error"],
+        "foot_mean_error": errors["foot_mean_error"],
+        "foot_max_error": errors["foot_max_error"],
         "episode_lin_vel_error": errors["episode_lin_vel_error"],
         "episode_ang_vel_error": errors["episode_ang_vel_error"],
         "episode_joint_mean_error": errors["episode_joint_mean_error"],
         "episode_joint_max_error": errors["episode_joint_max_error"],
+        "episode_foot_mean_error": errors["episode_foot_mean_error"],
+        "episode_foot_max_error": errors["episode_foot_max_error"],
     }

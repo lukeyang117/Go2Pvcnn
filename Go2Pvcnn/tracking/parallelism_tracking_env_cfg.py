@@ -174,6 +174,16 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
             "tracking_tolerance": 0.0,
         },
     )
+    reference_foot_pos = RewTerm(
+        func=tracking_mdp.reference_foot_pos_reward,
+        weight=0.75,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+            "std": 0.12,
+            "stance_weight": 1.0,
+            "swing_weight": 2.0,
+        },
+    )
 
 
 @configclass
@@ -209,10 +219,10 @@ class ParallelismTrackingCurriculumCfg:
         params={
             "command_name": "base_velocity",
             "max_level": 10,
-            "lin_vel_threshold": 0.25,
-            "ang_vel_threshold": 0.35,
-            "joint_mean_threshold": 0.20,
-            "joint_max_threshold": 0.45,
+            "lin_vel_threshold": 0.30,
+            "ang_vel_threshold": 0.75,
+            "joint_mean_threshold": 0.22,
+            "joint_max_threshold": 0.75,
         },
     )
 

@@ -10,6 +10,7 @@ from tracking.mdp.observations import (
 )
 from tracking.mdp.rewards import (
     parallelism_tracking_errors,
+    reference_foot_pos_reward,
     reference_joint_pos_reward,
     reference_root_lin_vel_reward,
 )
@@ -26,6 +27,13 @@ def _fake_env():
         current_joint_vel=torch.ones(2, 12),
         current_root_lin_vel_b_policy=torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.3, 0.0]]),
         current_root_ang_vel_b_policy=torch.zeros(2, 3),
+        current_foot_pos_w=torch.tensor(
+            [
+                [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
+                [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
+            ]
+        ),
+        current_contact_state=torch.ones(2, 4, dtype=torch.bool),
     )
     robot = SimpleNamespace(
         data=SimpleNamespace(
@@ -34,6 +42,14 @@ def _fake_env():
             default_joint_pos=torch.zeros(2, 12),
             root_lin_vel_b=torch.zeros(2, 3),
             root_ang_vel_b=torch.zeros(2, 3),
+            root_pos_w=torch.zeros(2, 3),
+            root_quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]),
+            body_pos_w=torch.tensor(
+                [
+                    [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
+                    [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
+                ]
+            ),
         )
     )
     env = SimpleNamespace(num_envs=2, device="cpu", parallelism_reference_manager=manager, scene=_Scene(robot=robot))
@@ -86,6 +102,14 @@ def test_reference_root_velocity_reward_tracks_reference_not_command():
     env.command_manager = SimpleNamespace(get_command=lambda name: torch.ones(2, 3) * 9.0)
 
     reward = reference_root_lin_vel_reward(env)
+
+    assert torch.allclose(reward, torch.ones(2))
+
+
+def test_reference_foot_position_reward_is_one_when_feet_match():
+    env = _fake_env()
+
+    reward = reference_foot_pos_reward(env)
 
     assert torch.allclose(reward, torch.ones(2))
 

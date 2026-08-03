@@ -343,9 +343,12 @@ class OnPolicyRunner:
         if self.logger_type in ["neptune", "wandb"]:
             self.writer.save_model(path, self.current_learning_iteration)
 
-    def load(self, path, load_optimizer=True):
+    def load(self, path, load_optimizer=True, keep_std=True):
         loaded_dict = torch.load(path)
         state_dict = loaded_dict["model_state_dict"]
+        if not keep_std:
+            state_dict = dict(state_dict)
+            state_dict.pop("std", None)
         self.alg.actor_critic.load_state_dict(state_dict, strict=False)
         if self.empirical_normalization:
             self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])

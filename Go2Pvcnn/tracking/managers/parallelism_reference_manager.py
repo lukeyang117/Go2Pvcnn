@@ -229,6 +229,11 @@ class ParallelismReferenceManager:
         return self._current_take(self.foot_pos_w)
 
     @property
+    def current_contact_state(self) -> Tensor:
+        self.refresh()
+        return self._current_take(self.contact_state)
+
+    @property
     def current_root_lin_vel_b(self) -> Tensor:
         """Backward-compatible alias for the live-policy-frame reference velocity."""
 

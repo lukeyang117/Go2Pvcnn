@@ -87,6 +87,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--load_run", type=str, default=None, help="Name of run to load when resuming.")
     parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
     parser.add_argument(
+        "--keep_std",
+        action="store_true",
+        default=False,
+        help="Keep the action std stored in the checkpoint when resuming; default resets it to init_noise_std.",
+    )
+    parser.add_argument(
         "--distributed",
         action="store_true",
         default=False,
@@ -774,8 +780,12 @@ def main() -> int:
         checkpoint_path = os.path.join(resume_path, checkpoint_file)
         
         if os.path.exists(checkpoint_path):
-            runner.load(checkpoint_path)
+            runner.load(checkpoint_path, keep_std=args_cli.keep_std)
             print(f"[Resume] Checkpoint loaded: {checkpoint_path}")
+            if args_cli.keep_std:
+                print("[Resume] Keeping action std from checkpoint")
+            else:
+                print("[Resume] Resetting action std to init_noise_std")
         else:
             print(f"[Resume] WARNING: Checkpoint not found: {checkpoint_path}")
     

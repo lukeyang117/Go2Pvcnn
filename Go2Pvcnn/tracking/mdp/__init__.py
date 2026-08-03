@@ -10,6 +10,7 @@ from tracking.mdp.observations import (
 from tracking.mdp.rewards import (
     reference_joint_pos_reward,
     reference_joint_vel_reward,
+    reference_foot_pos_reward,
     reference_root_ang_vel_reward,
     reference_root_lin_vel_reward,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "parallelism_velocity_curriculum",
     "reference_joint_pos_reward",
     "reference_joint_vel_reward",
+    "reference_foot_pos_reward",
     "reference_root_ang_vel_reward",
     "reference_root_lin_vel_reward",
 ]
