@@ -108,6 +108,13 @@ def test_reference_root_velocity_reward_tracks_reference_not_command():
 
 def test_reference_foot_position_reward_is_one_when_feet_match():
     env = _fake_env()
+    env.scene["robot"].data.body_pos_w = torch.cat(
+        (
+            torch.zeros(2, 15, 3),
+            env.scene["robot"].data.body_pos_w,
+        ),
+        dim=1,
+    )
 
     reward = reference_foot_pos_reward(env)
 

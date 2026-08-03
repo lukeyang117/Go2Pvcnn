@@ -51,7 +51,7 @@ def _points_to_root_frame(points_w: torch.Tensor, root_pos_w: torch.Tensor, root
 
 def _actual_foot_pos_w(asset, asset_cfg: SceneEntityCfg, ref: torch.Tensor) -> torch.Tensor:
     body_ids = getattr(asset_cfg, "body_ids", None)
-    if body_ids is not None:
+    if body_ids is not None and not (isinstance(body_ids, slice) and body_ids == slice(None)):
         body_pos = asset.data.body_pos_w[:, body_ids, :]
     else:
         body_pos = asset.data.body_pos_w[:, -4:, :]
