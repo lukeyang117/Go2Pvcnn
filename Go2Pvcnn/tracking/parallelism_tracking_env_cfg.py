@@ -18,7 +18,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.sim.spawners.from_files import spawn_from_usd
 from isaaclab.sim.utils import bind_visual_material, clone
-from pxr import Usd, UsdGeom
+from pxr import Usd, UsdGeom, UsdPhysics
 
 from extension.mdp.observations import downsampled_elevation_semantic_scan
 from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
@@ -42,7 +42,7 @@ def _spawn_pale_reference_go2(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ):
-    """Spawn a pale reference Go2 without changing collision instances."""
+    """Spawn a kinematic, collision-free pale reference Go2."""
 
     prim = spawn_from_usd(
         prim_path,
@@ -50,14 +50,27 @@ def _spawn_pale_reference_go2(
         translation=translation,
         orientation=orientation,
     )
-    # The Go2 USD is instanceable. Detach only visual subtrees before the
-    # articulation tensor view is created; collision instances remain shared.
+    stage = prim.GetStage()
+    # The Go2 USD is instanceable. Detach visual and collision subtrees so
+    # their per-instance USD properties can be changed safely.
     for child in Usd.PrimRange(prim):
-        if child.IsInstance() and "/visuals" in child.GetPath().pathString:
+        path = child.GetPath().pathString
+        if child.IsInstance() and ("/visuals" in path or "/collisions" in path):
             child.SetInstanceable(False)
 
+    # The spawn config's collision_props cannot reach instanceable collision
+    # prims. Disable every reference collider explicitly after detaching it.
+    for child in Usd.PrimRange(prim):
+        path = child.GetPath().pathString
+        if "/collisions" not in path:
+            continue
+        if child.IsA(UsdGeom.Gprim):
+            collision_api = UsdPhysics.CollisionAPI.Get(stage, child.GetPath())
+            if not collision_api:
+                collision_api = UsdPhysics.CollisionAPI.Apply(child)
+            collision_api.CreateCollisionEnabledAttr().Set(False)
+
     material_path = "/World/Looks/ParallelismReferencePaleBlue"
-    stage = prim.GetStage()
     if not stage.GetPrimAtPath(material_path).IsValid():
         cfg.visual_material.func(material_path, cfg.visual_material)
     for child in Usd.PrimRange(prim):
@@ -256,6 +269,9 @@ class ParallelismTrackingPlaySceneCfg(TeacherElevationTrajectoryMpcSemanticScene
             activate_contact_sensors=False,
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
             rigid_props=UNITREE_GO2_CFG.spawn.rigid_props.replace(disable_gravity=True),
+            articulation_props=UNITREE_GO2_CFG.spawn.articulation_props.replace(
+                enabled_self_collisions=False,
+            ),
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.35, 0.72, 1.0),
                 emissive_color=(0.02, 0.05, 0.12),
