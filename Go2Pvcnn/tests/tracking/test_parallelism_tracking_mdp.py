@@ -110,6 +110,23 @@ def test_tracking_errors_use_episode_joint_mean_max_and_reference_velocity():
     assert errors["joint_max_error"][1] > 0.45
 
 
+def test_tracking_error_cache_reuses_current_step_errors():
+    env = _fake_env()
+    env.common_step_counter = 10
+    env.scene["robot"].data.joint_pos[0, 0] = 0.1
+    first = parallelism_tracking_errors(env)
+
+    env.scene["robot"].data.joint_pos[0, 0] = 0.7
+    second = parallelism_tracking_errors(env)
+
+    assert torch.allclose(first["joint_max_error"], second["joint_max_error"])
+
+    env.common_step_counter = 11
+    third = parallelism_tracking_errors(env)
+
+    assert third["joint_max_error"][0] > second["joint_max_error"][0]
+
+
 def test_velocity_curriculum_blocks_upgrade_when_episode_joint_max_is_high():
     env = _fake_env()
     env.reset_time_outs = torch.ones(2, dtype=torch.bool)

@@ -50,7 +50,19 @@ def update_parallelism_tracking_error_stats(
 ) -> dict[str, torch.Tensor]:
     """Accumulate current-phase tracking errors once per environment step."""
 
-    errors = _current_parallelism_tracking_errors(env, asset_cfg)
+    step_token = getattr(env, "common_step_counter", None)
+    if step_token is not None:
+        step_token = int(step_token)
+    cached_token = getattr(env, "_parallelism_tracking_error_cache_token", None)
+    cached_errors = getattr(env, "_parallelism_tracking_error_cache", None)
+    if step_token is not None and cached_token == step_token and cached_errors is not None:
+        errors = cached_errors
+    else:
+        errors = _current_parallelism_tracking_errors(env, asset_cfg)
+        if step_token is not None:
+            env._parallelism_tracking_error_cache_token = step_token
+            env._parallelism_tracking_error_cache = errors
+
     device = errors["lin_vel_error"].device
     count = int(getattr(env, "num_envs", errors["lin_vel_error"].shape[0]))
     episode_step = getattr(env, "episode_length_buf", None)
@@ -117,6 +129,8 @@ def reset_parallelism_tracking_error_stats(env, env_ids: torch.Tensor) -> None:
         getattr(env, name)[ids] = 0
     if hasattr(env, "_parallelism_tracking_last_step"):
         env._parallelism_tracking_last_step[ids] = -1
+    if hasattr(env, "_parallelism_tracking_error_cache"):
+        env._parallelism_tracking_error_cache_token = None
 
 
 def parallelism_tracking_episode_errors(env) -> dict[str, torch.Tensor]:
