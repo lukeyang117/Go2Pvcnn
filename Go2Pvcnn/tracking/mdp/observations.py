@@ -27,8 +27,8 @@ def parallelism_ref_joint_vel_t(env) -> torch.Tensor:
 
 
 def parallelism_ref_root_lin_vel_b_t(env) -> torch.Tensor:
-    return get_parallelism_reference_manager(env).current_root_lin_vel_b
+    return get_parallelism_reference_manager(env).current_root_lin_vel_b_policy
 
 
 def parallelism_ref_root_ang_vel_b_t(env) -> torch.Tensor:
-    return get_parallelism_reference_manager(env).current_root_ang_vel_b
+    return get_parallelism_reference_manager(env).current_root_ang_vel_b_policy

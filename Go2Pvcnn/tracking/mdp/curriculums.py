@@ -6,7 +6,10 @@ from collections.abc import Sequence
 
 import torch
 
-from tracking.mdp.rewards import parallelism_tracking_errors
+from tracking.mdp.rewards import (
+    parallelism_tracking_episode_errors,
+    reset_parallelism_tracking_error_stats,
+)
 
 
 def _lerp_range(initial: tuple[float, float], final: tuple[float, float], alpha: float) -> tuple[float, float]:
@@ -23,7 +26,8 @@ def parallelism_velocity_curriculum(
     max_level: int = 10,
     lin_vel_threshold: float = 0.25,
     ang_vel_threshold: float = 0.35,
-    joint_threshold: float = 0.35,
+    joint_mean_threshold: float = 0.20,
+    joint_max_threshold: float = 0.45,
 ) -> torch.Tensor:
     command_term = env.command_manager.get_term(command_name)
     if not hasattr(command_term.cfg, "ranges") or not hasattr(command_term.cfg, "limit_ranges"):
@@ -34,7 +38,7 @@ def parallelism_velocity_curriculum(
         env._parallelism_velocity_curriculum_level = torch.zeros(int(env.num_envs), dtype=torch.long, device=device)
 
     ids = torch.as_tensor(env_ids, dtype=torch.long, device=device)
-    errors = parallelism_tracking_errors(env)
+    errors = parallelism_tracking_episode_errors(env)
     time_out = getattr(env, "reset_time_outs", None)
     terminated = getattr(env, "reset_terminated", None)
     if time_out is None:
@@ -44,9 +48,10 @@ def parallelism_velocity_curriculum(
     success = (
         torch.as_tensor(time_out, dtype=torch.bool, device=device)[ids]
         & ~torch.as_tensor(terminated, dtype=torch.bool, device=device)[ids]
-        & (errors["lin_vel_error"][ids] < float(lin_vel_threshold))
-        & (errors["ang_vel_error"][ids] < float(ang_vel_threshold))
-        & (errors["joint_error"][ids] < float(joint_threshold))
+        & (errors["episode_lin_vel_error"][ids] < float(lin_vel_threshold))
+        & (errors["episode_ang_vel_error"][ids] < float(ang_vel_threshold))
+        & (errors["episode_joint_mean_error"][ids] < float(joint_mean_threshold))
+        & (errors["episode_joint_max_error"][ids] < float(joint_max_threshold))
     )
     delta = torch.where(success, torch.ones_like(ids), -torch.ones_like(ids))
     levels = env._parallelism_velocity_curriculum_level
@@ -61,4 +66,5 @@ def parallelism_velocity_curriculum(
     command_term.cfg.ranges.lin_vel_x = _lerp_range(initial_lin_x, final.lin_vel_x, alpha)
     command_term.cfg.ranges.lin_vel_y = _lerp_range(initial_lin_y, final.lin_vel_y, alpha)
     command_term.cfg.ranges.ang_vel_z = _lerp_range(initial_ang_z, final.ang_vel_z, alpha)
+    reset_parallelism_tracking_error_stats(env, ids)
     return torch.mean(levels.float())

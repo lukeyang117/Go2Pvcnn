@@ -78,6 +78,45 @@ def _reorder_joint_to_planner(values: Tensor, robot_joint_names) -> Tensor:
     return _reorder_last(values, source_order=tuple(robot_joint_names or ()), target_order=_PLANNER_JOINT_ORDER)
 
 
+def _quat_to_matrix_wxyz(quat: Tensor) -> Tensor:
+    """Convert batched wxyz quaternions to world-from-body rotation matrices."""
+
+    q = torch.as_tensor(quat)
+    w, x, y, z = q.unbind(dim=-1)
+    two = q.new_tensor(2.0)
+    matrix = torch.empty(q.shape[:-1] + (3, 3), dtype=q.dtype, device=q.device)
+    matrix[..., 0, 0] = 1 - two * (y * y + z * z)
+    matrix[..., 0, 1] = two * (x * y - w * z)
+    matrix[..., 0, 2] = two * (x * z + w * y)
+    matrix[..., 1, 0] = two * (x * y + w * z)
+    matrix[..., 1, 1] = 1 - two * (x * x + z * z)
+    matrix[..., 1, 2] = two * (y * z - w * x)
+    matrix[..., 2, 0] = two * (x * z - w * y)
+    matrix[..., 2, 1] = two * (y * z + w * x)
+    matrix[..., 2, 2] = 1 - two * (x * x + y * y)
+    return matrix
+
+
+def _rpy_to_matrix_wxyz(rpy: Tensor) -> Tensor:
+    """Convert roll-pitch-yaw values to world-from-reference-root matrices."""
+
+    roll, pitch, yaw = torch.as_tensor(rpy).unbind(dim=-1)
+    cr, sr = torch.cos(roll), torch.sin(roll)
+    cp, sp = torch.cos(pitch), torch.sin(pitch)
+    cy, sy = torch.cos(yaw), torch.sin(yaw)
+    matrix = torch.empty(rpy.shape[:-1] + (3, 3), dtype=rpy.dtype, device=rpy.device)
+    matrix[..., 0, 0] = cy * cp
+    matrix[..., 0, 1] = cy * sp * sr - sy * cr
+    matrix[..., 0, 2] = cy * sp * cr + sy * sr
+    matrix[..., 1, 0] = sy * cp
+    matrix[..., 1, 1] = sy * sp * sr + cy * cr
+    matrix[..., 1, 2] = sy * sp * cr - cy * sr
+    matrix[..., 2, 0] = -sp
+    matrix[..., 2, 1] = cp * sr
+    matrix[..., 2, 2] = cp * cr
+    return matrix
+
+
 class ParallelismReferenceManager:
     """Owns 24-frame parallelism references and exposes the current phase frame."""
 
@@ -191,27 +230,55 @@ class ParallelismReferenceManager:
 
     @property
     def current_root_lin_vel_b(self) -> Tensor:
+        """Backward-compatible alias for the live-policy-frame reference velocity."""
+
+        return self.current_root_lin_vel_b_policy
+
+    @property
+    def current_root_lin_vel_b_policy(self) -> Tensor:
+        """Reference linear velocity expressed in the current policy root frame."""
+
         self.refresh()
         next_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
         pos = self._take(self.root_pos_w, self.phase)
         nxt = self._take(self.root_pos_w, next_phase)
         vel_w = (nxt - pos) / max(self.dt, 1.0e-6)
-        yaw = self._take(self.root_rpy_w, self.phase)[:, 2]
-        cosine = torch.cos(yaw)
-        sine = torch.sin(yaw)
-        vel_b = torch.zeros_like(vel_w)
-        vel_b[:, 0] = cosine * vel_w[:, 0] + sine * vel_w[:, 1]
-        vel_b[:, 1] = -sine * vel_w[:, 0] + cosine * vel_w[:, 1]
-        vel_b[:, 2] = vel_w[:, 2]
-        return vel_b
+        ref_rpy = self._take(self.root_rpy_w, self.phase)
+        ref_matrix_w = _rpy_to_matrix_wxyz(ref_rpy)
+        ref_vel_b = torch.matmul(ref_matrix_w.transpose(-1, -2), vel_w.unsqueeze(-1)).squeeze(-1)
+        ref_vel_w = torch.matmul(ref_matrix_w, ref_vel_b.unsqueeze(-1)).squeeze(-1)
+        policy_quat_w = torch.as_tensor(
+            self._robot().data.root_quat_w,
+            dtype=ref_vel_w.dtype,
+            device=ref_vel_w.device,
+        )
+        policy_matrix_w = _quat_to_matrix_wxyz(policy_quat_w)
+        return torch.matmul(policy_matrix_w.transpose(-1, -2), ref_vel_w.unsqueeze(-1)).squeeze(-1)
 
     @property
     def current_root_ang_vel_b(self) -> Tensor:
+        """Backward-compatible alias for the live-policy-frame reference angular velocity."""
+
+        return self.current_root_ang_vel_b_policy
+
+    @property
+    def current_root_ang_vel_b_policy(self) -> Tensor:
+        """Reference angular velocity expressed in the current policy root frame."""
+
         self.refresh()
         next_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
         rpy = self._take(self.root_rpy_w, self.phase)
         nxt = self._take(self.root_rpy_w, next_phase)
-        return (nxt - rpy) / max(self.dt, 1.0e-6)
+        ref_rpy_rate = (nxt - rpy) / max(self.dt, 1.0e-6)
+        ref_matrix_w = _rpy_to_matrix_wxyz(rpy)
+        ref_ang_vel_w = torch.matmul(ref_matrix_w, ref_rpy_rate.unsqueeze(-1)).squeeze(-1)
+        policy_quat_w = torch.as_tensor(
+            self._robot().data.root_quat_w,
+            dtype=ref_ang_vel_w.dtype,
+            device=ref_ang_vel_w.device,
+        )
+        policy_matrix_w = _quat_to_matrix_wxyz(policy_quat_w)
+        return torch.matmul(policy_matrix_w.transpose(-1, -2), ref_ang_vel_w.unsqueeze(-1)).squeeze(-1)
 
     def _episode_length(self) -> Tensor:
         value = getattr(self.env, "episode_length_buf", None)

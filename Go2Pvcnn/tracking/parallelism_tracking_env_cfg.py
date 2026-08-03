@@ -54,8 +54,9 @@ def _spawn_pale_reference_go2(
     # The Go2 USD is instanceable. Detach visual and collision subtrees so
     # their per-instance USD properties can be changed safely.
     for child in Usd.PrimRange(prim):
-        path = child.GetPath().pathString
-        if child.IsInstance() and ("/visuals" in path or "/collisions" in path):
+        if child.IsInstance() and (
+            "/visuals" in child.GetPath().pathString or "/collisions" in child.GetPath().pathString
+        ):
             child.SetInstanceable(False)
 
     # The spawn config's collision_props cannot reach instanceable collision
@@ -105,6 +106,7 @@ class ParallelismTrackingObservationsCfg(TeacherElevationTrajectoryMpcSemanticOb
     @configclass
     class PolicyStateCfg(TeacherElevationTrajectoryMpcSemanticObservationsCfg.PolicyStateCfg):
         base_lin_vel = ObsTerm(func=isaac_mdp.base_lin_vel, noise=Unoise(n_min=-0.1, n_max=0.1))
+        velocity_commands = None
         parallelism_ref_joint_pos = ObsTerm(func=tracking_mdp.parallelism_ref_joint_pos_rel_t)
         parallelism_ref_joint_vel = ObsTerm(func=tracking_mdp.parallelism_ref_joint_vel_t)
         parallelism_ref_root_lin_vel = ObsTerm(func=tracking_mdp.parallelism_ref_root_lin_vel_b_t)
@@ -112,6 +114,7 @@ class ParallelismTrackingObservationsCfg(TeacherElevationTrajectoryMpcSemanticOb
 
     @configclass
     class CriticStateCfg(TeacherElevationTrajectoryMpcSemanticObservationsCfg.CriticStateCfg):
+        velocity_commands = None
         parallelism_ref_joint_pos = ObsTerm(func=tracking_mdp.parallelism_ref_joint_pos_rel_t)
         parallelism_ref_joint_vel = ObsTerm(func=tracking_mdp.parallelism_ref_joint_vel_t)
         parallelism_ref_root_lin_vel = ObsTerm(func=tracking_mdp.parallelism_ref_root_lin_vel_b_t)
@@ -143,15 +146,33 @@ class ParallelismTrackingObservationsCfg(TeacherElevationTrajectoryMpcSemanticOb
 
 @configclass
 class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewardsCfg):
+    track_lin_vel_xy = RewTerm(
+        func=tracking_mdp.reference_root_lin_vel_reward,
+        weight=1.5,
+        params={"std": math.sqrt(0.25)},
+    )
+    track_ang_vel_z = RewTerm(
+        func=tracking_mdp.reference_root_ang_vel_reward,
+        weight=0.75,
+        params={"std": math.sqrt(0.25)},
+    )
     reference_joint_pos = RewTerm(
         func=tracking_mdp.reference_joint_pos_reward,
         weight=1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*"), "std": 0.35},
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "std": 0.7,
+            "tracking_tolerance": 0.0,
+        },
     )
     reference_joint_vel = RewTerm(
         func=tracking_mdp.reference_joint_vel_reward,
         weight=0.25,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*"), "std": 2.0},
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "std": 2.0,
+            "tracking_tolerance": 0.0,
+        },
     )
 
 
@@ -190,7 +211,8 @@ class ParallelismTrackingCurriculumCfg:
             "max_level": 10,
             "lin_vel_threshold": 0.25,
             "ang_vel_threshold": 0.35,
-            "joint_threshold": 0.35,
+            "joint_mean_threshold": 0.20,
+            "joint_max_threshold": 0.45,
         },
     )
 

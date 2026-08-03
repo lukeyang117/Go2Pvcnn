@@ -100,6 +100,31 @@ def test_current_joint_velocity_uses_finite_difference(monkeypatch):
     assert torch.allclose(vel, torch.full((2, 12), 1.0 / manager.dt))
 
 
+def test_reference_root_velocity_uses_live_policy_root_frame(monkeypatch):
+    env = _fake_env(num_envs=1)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+        manager.root_pos_w[env_ids] = torch.zeros(1, manager.horizon, 3)
+        manager.root_rpy_w[env_ids] = torch.zeros(1, manager.horizon, 3)
+        manager.root_pos_w[env_ids, 1, 0] = manager.dt
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+
+    env.scene["robot"].data.root_quat_w[:] = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    forward = manager.current_root_lin_vel_b_policy
+    assert torch.allclose(forward, torch.tensor([[1.0, 0.0, 0.0]]), atol=1.0e-5)
+
+    half = 0.5**0.5
+    env.scene["robot"].data.root_quat_w[:] = torch.tensor([[half, 0.0, 0.0, half]])
+    rotated = manager.current_root_lin_vel_b_policy
+    assert torch.allclose(rotated, torch.tensor([[0.0, -1.0, 0.0]]), atol=1.0e-5)
+
+
 def test_repeated_refresh_at_reset_does_not_replan(monkeypatch):
     env = _fake_env()
     env.episode_length_buf = torch.zeros(2, dtype=torch.long)
