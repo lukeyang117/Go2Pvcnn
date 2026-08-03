@@ -8,6 +8,8 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert "resampling_time_range=(0.48, 0.48)" in source
     assert "downsampled_elevation_semantic_scan" in source
     assert "parallelism_ref_joint_pos_too_far" in source
+    assert "reference_foot_pos = RewTerm" in source
+    assert "self.rewards.reference_foot_pos = None" not in source
     assert "ParallelismTrackingFlatEnvCfg" in source
     assert "parallelism_plan_batch_size: int = 64" in source
     assert "self.scene.robot.init_state.pos = (0.0, 0.0, 0.3)" in source
