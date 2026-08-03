@@ -101,6 +101,59 @@ class ParallelismTerminationDiagnostics:
     raw_masks: dict[str, torch.Tensor] = field(default_factory=dict)
 
 
+def _parallelism_contact_debug_data(base_env, *, env_id: int = 0) -> dict[str, object]:
+    """Collect resolved contact sensor data for diagnosing play reset terms."""
+
+    result: dict[str, object] = {}
+    try:
+        sensor = base_env.scene["contact_forces"]
+    except Exception as exc:  # noqa: BLE001 - debug-only best effort.
+        return {"error": f"missing contact_forces sensor: {exc}"}
+
+    body_names = tuple(getattr(sensor, "body_names", ()) or ())
+    result["sensor_body_names"] = body_names
+    forces = torch.as_tensor(sensor.data.net_forces_w[env_id]).detach()
+    force_norm = torch.linalg.vector_norm(forces, dim=-1)
+    result["force_norm"] = force_norm.detach().cpu().tolist()
+    history = torch.as_tensor(sensor.data.net_forces_w_history[env_id]).detach()
+    history_norm_max = torch.max(torch.linalg.vector_norm(history, dim=-1), dim=0).values
+    result["history_force_norm_max"] = history_norm_max.detach().cpu().tolist()
+    if body_names and int(force_norm.numel()) == len(body_names):
+        max_index = int(torch.argmax(force_norm).item())
+        result["max_force_body"] = body_names[max_index]
+        result["max_force_norm"] = float(force_norm[max_index].item())
+        result["base_force_norms"] = [
+            (name, float(force_norm[index].item()))
+            for index, name in enumerate(body_names)
+            if "base" in name
+        ]
+        result["foot_force_norms"] = [
+            (name, float(force_norm[index].item()))
+            for index, name in enumerate(body_names)
+            if "foot" in name
+        ]
+
+    for name, term_cfg in zip(base_env.termination_manager._term_names, base_env.termination_manager._term_cfgs):
+        if name != "base_contact":
+            continue
+        sensor_cfg = getattr(term_cfg, "params", {}).get("sensor_cfg")
+        result["base_contact_body_names_cfg"] = getattr(sensor_cfg, "body_names", None)
+        result["base_contact_body_ids"] = list(getattr(sensor_cfg, "body_ids", []) or [])
+        body_ids = getattr(sensor_cfg, "body_ids", None)
+        if body_ids is not None:
+            ids_tensor = torch.as_tensor(body_ids, dtype=torch.long, device=force_norm.device)
+            selected = force_norm.index_select(0, ids_tensor)
+            selected_history = history_norm_max.index_select(0, ids_tensor)
+            result["base_contact_selected_force_norm"] = selected.detach().cpu().tolist()
+            result["base_contact_selected_history_force_norm_max"] = selected_history.detach().cpu().tolist()
+            if body_names:
+                result["base_contact_selected_body_names"] = [
+                    body_names[int(index)] for index in ids_tensor.detach().cpu().tolist()
+                ]
+        break
+    return result
+
+
 def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timestep: int) -> None:
     """Print the state boundaries needed to diagnose play-only alignment/reset issues."""
 
@@ -137,6 +190,12 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
         f"raw={raw}",
         flush=True,
     )
+    if timestep <= 5 or bool(raw.get("base_contact", False)):
+        print(
+            "[Parallelism][contact-debug] "
+            f"step={timestep} {_parallelism_contact_debug_data(base_env)}",
+            flush=True,
+        )
 
 
 def _parallelism_joint_error_data(base_env, frame: ParallelismVisualFrame, *, env_id: int = 0):
@@ -1283,13 +1342,16 @@ def main() -> int:
         from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
 
         parallelism_panel_state = ParallelismPlayPanelState()
+        if os.environ.get("PARALLELISM_PLAY_ALLOW_BASE_CONTACT_RESET", "").strip() == "1":
+            parallelism_panel_state.suppress_termination["base_contact"] = False
         parallelism_manager = get_parallelism_reference_manager(base_env)
         parallelism_diagnostics = _install_parallelism_termination_filter(
             base_env.termination_manager,
             parallelism_panel_state,
         )
-        parallelism_panel = _ParallelismPlayPanel(parallelism_panel_state)
-        parallelism_visualizer = _ParallelismPlayVisualizer()
+        if not bool(getattr(args_cli, "headless", False)):
+            parallelism_panel = _ParallelismPlayPanel(parallelism_panel_state)
+            parallelism_visualizer = _ParallelismPlayVisualizer()
         print("[Parallelism] Policy play visualization enabled.", flush=True)
 
     print("\n[Wrapper] Creating RSL-RL environment wrapper...", flush=True)
