@@ -346,7 +346,6 @@ class OnPolicyRunner:
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path)
         state_dict = loaded_dict["model_state_dict"]
-        state_dict.pop("std", None)  # Remove the 'std' key if it exists
         self.alg.actor_critic.load_state_dict(state_dict, strict=False)
         if self.empirical_normalization:
             self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
