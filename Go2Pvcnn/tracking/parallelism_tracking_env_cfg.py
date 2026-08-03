@@ -204,7 +204,7 @@ class ParallelismTrackingTerminationsCfg:
     )
     parallelism_ref_foot_z_too_far = DoneTerm(
         func=tracking_mdp.parallelism_ref_foot_z_too_far,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"), "threshold": 0.25},
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"), "threshold": 0.03},
     )
     parallelism_ref_joint_pos_too_far = DoneTerm(
         func=tracking_mdp.parallelism_ref_joint_pos_too_far,
