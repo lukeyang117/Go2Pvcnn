@@ -74,7 +74,12 @@ def rollout_root(
     ) + float(cfg.root_clearance_m)
     root_pos = torch.cat((root_xy, z[..., None]), dim=-1)
     root_rpy = torch.zeros(root_pos.shape[0], int(cfg.horizon), 3, dtype=root0.dtype, device=root0.device)
-    root_rpy[..., 0] = rpy0[:, None, 0]
-    root_rpy[..., 1] = rpy0[:, None, 1]
+    leveling_frames = max(int(cfg.root_leveling_frames), 1)
+    frame = torch.arange(int(cfg.horizon), dtype=root0.dtype, device=root0.device)
+    u = torch.clamp(frame / float(leveling_frames), min=0.0, max=1.0)
+    smoothstep = u * u * (3.0 - 2.0 * u)
+    level_scale = (1.0 - smoothstep)[None, :]
+    root_rpy[..., 0] = rpy0[:, None, 0] * level_scale
+    root_rpy[..., 1] = rpy0[:, None, 1] * level_scale
     root_rpy[..., 2] = yaw
     return RootRollout(root_pos_w=root_pos, root_rpy_w=root_rpy, clamped_command_body=command)

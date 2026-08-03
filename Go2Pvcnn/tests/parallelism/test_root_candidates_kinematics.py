@@ -41,6 +41,30 @@ def test_root_rollout_body_command_half_cycle_displacement():
     assert torch.allclose(result.root_pos_w[..., 2], torch.full((1, 24), 0.30), atol=1e-6)
 
 
+def test_root_rollout_levels_tilted_root_before_second_half_cycle():
+    from extension.parallelism import ParallelismCfg, ParallelismState
+    from extension.parallelism.root import rollout_root
+
+    state = _state()
+    state = ParallelismState(
+        root_pos_w=state.root_pos_w,
+        root_rpy_w=torch.tensor([[0.20, 0.15, 0.40]]),
+        joint_pos=state.joint_pos,
+    )
+    cfg = ParallelismCfg(root_leveling_frames=12)
+    result = rollout_root(state, torch.tensor([[1.0, 0.0, 0.2]]), _terrain(), cfg)
+
+    assert torch.allclose(result.root_rpy_w[0, 0, :2], torch.tensor([0.20, 0.15]), atol=1e-6)
+    assert torch.allclose(result.root_rpy_w[0, 12:, :2], torch.zeros(12, 2), atol=1e-6)
+    assert torch.allclose(result.root_rpy_w[0, 0, 2], torch.tensor(0.40), atol=1e-6)
+    assert torch.all(result.root_rpy_w[0, 1:, :2].abs() <= result.root_rpy_w[0, :-1, :2].abs() + 1e-6)
+    assert torch.isclose(
+        torch.linalg.vector_norm(result.root_pos_w[0, 11, :2] - result.root_pos_w[0, 0, :2]),
+        torch.tensor(12 * cfg.dt),
+        atol=1e-5,
+    )
+
+
 def test_candidate_shape_and_reference_hips():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.candidates import build_candidates

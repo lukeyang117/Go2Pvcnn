@@ -22,6 +22,7 @@ class ParallelismCfg:
     horizon: int = 24
     dt: float = 0.02
     half_cycle: int = 12
+    root_leveling_frames: int = 12
     candidate_radius_m: float = 0.24
     candidates_per_leg: int = 50
     hip_lateral_bias_m: float = 0.0955
