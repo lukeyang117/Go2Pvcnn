@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Root 姿态快速水平化设计</title>
+  <style>
+    :root { color-scheme: light; --ink: #1d2939; --muted: #667085; --line: #d0d5dd; --accent: #175cd3; --bg: #f8fafc; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 980px; margin: 0 auto; padding: 48px 24px 72px; }
+    h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.2; }
+    h2 { margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); font-size: 23px; }
+    h3 { margin: 24px 0 8px; font-size: 18px; }
+    p { margin: 10px 0; }
+    .lead { color: var(--muted); margin-bottom: 28px; }
+    .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; margin: 16px 0; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { background: #eef4ff; color: #1849a9; padding: 1px 5px; border-radius: 4px; }
+    pre { overflow-x: auto; background: #101828; color: #f2f4f7; border-radius: 8px; padding: 16px; line-height: 1.5; }
+    ul, ol { padding-left: 24px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: 10px 12px; }
+    th { background: #f2f4f7; }
+    .tag { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: #ecfdf3; color: #027a48; font-size: 13px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Parallelism Root 姿态快速水平化设计</h1>
+  <p class="lead">目标：机器狗从倾斜 root 状态开始规划时，第一帧保持真实状态对齐，并在第 12 帧之前快速、连续地恢复到水平。</p>
+
+  <h2>一、问题与目标</h2>
+  <div class="panel">
+    <p>当前 rollout 会把测量状态中的 roll/pitch 原样复制到整段 24 帧。机器人如果开始时倾斜，候选 hip、IK、FK 和碰撞几何体都会持续使用倾斜 root，造成候选点大量失效。</p>
+    <p>本设计要求：</p>
+    <ul>
+      <li>第 0 帧 reference 与 policy 当前真实状态完全一致。</li>
+      <li>roll 和 pitch 在前 12 帧内恢复到 0。</li>
+      <li>第 12 帧至第 23 帧保持水平。</li>
+      <li>yaw 继续按原有速度规划。</li>
+      <li>所有几何计算使用同一帧的水平化 root 姿态。</li>
+    </ul>
+  </div>
+
+  <h2>二、姿态轨迹</h2>
+  <p>在配置中增加可调参数：</p>
+  <pre><code>root_leveling_frames = 12</code></pre>
+  <p>对每个 batch、每个 horizon frame 并行计算：</p>
+  <pre><code>u = clamp(frame / root_leveling_frames, 0, 1)
+s = u * u * (3 - 2 * u)
+
+roll_t  = roll_0  * (1 - s)
+pitch_t = pitch_0 * (1 - s)
+yaw_t   = yaw_0 + yaw_delta_t</code></pre>
+  <p>其中 <code>roll_0</code>、<code>pitch_0</code> 是当前实测状态。这样第 0 帧完全对齐，第 12 帧精确水平，且使用 GPU 上的 Torch 张量操作，不增加逐帧 Python 循环。</p>
+
+  <table>
+    <thead><tr><th>帧范围</th><th>roll/pitch</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>第 0 帧</td><td>当前实测值</td><td>保证 reset、重规划和 policy reference 对齐</td></tr>
+      <tr><td>第 1~11 帧</td><td>平滑下降到 0</td><td>避免 root 和关节 reference 瞬时跳变</td></tr>
+      <tr><td>第 12~23 帧</td><td>固定为 0</td><td>以水平 root 进行稳定行走规划</td></tr>
+    </tbody>
+  </table>
+
+  <h2>三、几何计算一致性</h2>
+  <p>水平化后的 <code>root_rpy_w[:, t]</code> 是该帧唯一的 root 姿态输入，并统一传给：</p>
+  <ol>
+    <li>四个 hip 对应的 candidate 参考位置；</li>
+    <li>candidate IK 和 FK 硬过滤；</li>
+    <li>active leg 的 swing collision 检查；</li>
+    <li>最终 24 帧 IK/FK 轨迹；</li>
+    <li>输出给 RL 的 root、joint 和 foot reference。</li>
+  </ol>
+  <p>不能只在显示或最终输出阶段水平化，否则规划内部几何体仍然会使用倾斜 root，造成检查结果与实际 reference 不一致。</p>
+
+  <h2>四、root 位置与 fallback</h2>
+  <div class="panel">
+    <p>root 的 XY 位移和 yaw 逻辑保持不变。root Z 继续使用当前 stance 足端对应的高程加 <code>root_clearance_m</code>，不额外引入新的 root 高度策略。</p>
+    <p>如果候选点全部无效且启用 standstill fallback：</p>
+    <ul>
+      <li>root、joint、foot 输出保持当前实测状态；</li>
+      <li>不输出一段虚假的水平化轨迹；</li>
+      <li>contact state 继续保持全 stance。</li>
+    </ul>
+  </div>
+
+  <h2>五、并行性与接口</h2>
+  <p>输入为 <code>[B, 3]</code> 的 root position 和 root RPY，输出为：</p>
+  <pre><code>root_rpy_w: [B, 24, 3]</code></pre>
+  <p>帧索引通过广播生成，roll、pitch、yaw 全部使用 Torch 运算。该设计适用于 1 个环境和 1024 个环境，不改变 Parallelism 规划的 24 帧固定形状。</p>
+
+  <h2>六、验收标准</h2>
+  <ul>
+    <li>水平初始状态：root roll/pitch 全程保持 0，既有平地规划结果不变。</li>
+    <li>仅 roll 倾斜：第 0 帧保留初始 roll，第 12 帧及以后为 0。</li>
+    <li>仅 pitch 倾斜：第 0 帧保留初始 pitch，第 12 帧及以后为 0。</li>
+    <li>roll 和 pitch 同时倾斜：候选点不再因为整段倾斜而系统性失效。</li>
+    <li>检查 24 帧 root、joint、foot shape 和 GPU batch 计算。</li>
+    <li>无效规划时 fallback 仍保持实测状态。</li>
+    <li>重规划时新轨迹第 0 帧仍与当前 policy 状态一致。</li>
+  </ul>
+
+  <h2>七、明确不修改的内容</h2>
+  <p><span class="tag">保持</span> root XY 位移</p>
+  <p><span class="tag">保持</span> yaw 速度 rollout</p>
+  <p><span class="tag">保持</span> trot contact schedule</p>
+  <p><span class="tag">保持</span> touchdown candidate、semantic filter、score 和碰撞几何体</p>
+  <p><span class="tag">保持</span> RL reward、termination 和 curriculum</p>
+</main>
+</body>
+</html>
