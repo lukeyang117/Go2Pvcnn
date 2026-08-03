@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Reference 对齐与关节门控速度课程设计</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #52606d;
+      --line: #d9e2ec;
+      --paper: #ffffff;
+      --bg: #f4f7fa;
+      --blue: #1769aa;
+      --blue-soft: #e8f2fb;
+      --orange: #b45309;
+      --orange-soft: #fff4e5;
+      --green: #176b4d;
+      --green-soft: #e8f6ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.75 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(1080px, calc(100% - 32px));
+      margin: 32px auto 64px;
+    }
+    header, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 28px 32px;
+      margin-bottom: 18px;
+    }
+    header { border-top: 5px solid var(--blue); }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.25; }
+    h2 { margin: 0 0 14px; font-size: 22px; }
+    h3 { margin: 22px 0 8px; font-size: 18px; }
+    p { margin: 8px 0; }
+    .meta { color: var(--muted); margin: 0; }
+    .callout {
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+      padding: 12px 16px;
+      margin: 14px 0;
+    }
+    .warning {
+      border-left-color: var(--orange);
+      background: var(--orange-soft);
+    }
+    .success {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      overflow-x: auto;
+      background: #f7f9fb;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px 16px;
+      line-height: 1.55;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+    }
+    th { color: var(--muted); font-weight: 650; }
+    ul { margin: 8px 0; padding-left: 24px; }
+    .flow {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(3, 1fr);
+      margin: 16px 0;
+    }
+    .flow div {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+    .label {
+      color: var(--blue);
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: .02em;
+    }
+    @media (max-width: 720px) {
+      header, section { padding: 22px 18px; }
+      .flow { grid-template-columns: 1fr; }
+      h1 { font-size: 25px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="label">设计文档 · 2026-08-03</p>
+    <h1>Parallelism Reference 对齐与关节门控速度课程</h1>
+    <p class="meta">适用分支：<code>Parallelism-flat-rl</code>　|　任务：平地 Go2 Parallelism tracking</p>
+    <div class="callout">
+      <strong>核心目标：</strong>Parallelism 规划逻辑保持不变。RL 接口负责把规划结果转换成 policy 当前 root 坐标系下的 reference；速度课程只有在关节位置持续跟踪良好、且 root reference 速度跟踪达标时才允许升级。
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 范围与不变项</h2>
+    <h3>本次修改范围</h3>
+    <ul>
+      <li>只修改 tracking/RL 接口、reference observation、reward、curriculum 和 termination 对齐逻辑。</li>
+      <li>使用当前 reference phase 的数据，不使用整段 24 帧平均 reference 作为 policy 当前输入。</li>
+      <li>增加 episode 内关节误差统计，用于速度课程的严格门控。</li>
+    </ul>
+    <h3>明确不修改</h3>
+    <ul>
+      <li>Parallelism 的 root、foot、touchdown、swing、IK、FK 和 trot 规划逻辑。</li>
+      <li>24 帧规划长度、规划频率和每 24 帧重规划机制。</li>
+      <li>原始 <code>base_velocity</code> 的采样和传入 planner 的语义。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. Reference root 速度坐标变换</h2>
+    <p>Parallelism 输出的 root 速度先被视为 reference root frame 下的 6D twist：</p>
+    <pre>twist_ref_b_ref = [vx, vy, vz, wx, wy, wz]</pre>
+    <p>RL 接口执行两级转换：</p>
+    <pre>v_ref_w = R_ref_w * v_ref_b_ref
+w_ref_w = R_ref_w * w_ref_b_ref
+
+v_ref_b_policy = transpose(R_policy_w) * v_ref_w
+w_ref_b_policy = transpose(R_policy_w) * w_ref_w</pre>
+    <p>其中：</p>
+    <ul>
+      <li><code>R_ref_w</code> 是当前 reference root 到世界系的旋转。</li>
+      <li><code>R_policy_w</code> 是<strong>当前时刻实时读取的 policy robot root</strong> 到世界系的旋转。</li>
+      <li>最终输入、奖励和课程使用的是 <code>twist_ref_b_policy</code>。</li>
+      <li>线速度和角速度都使用完整三维旋转，不只使用 yaw。</li>
+    </ul>
+    <div class="callout warning">
+      <strong>防止坐标混用：</strong>不能直接把 reference root frame 下的速度当成 policy body-frame 速度。每一个 RL step 都必须读取 policy 当前真实 root 姿态，先经过 reference frame 到世界系、再到当前 policy root frame 的转换。不能缓存 episode 开始时的 policy 姿态，也不能使用 reference 自己的姿态代替 policy 当前姿态。
+    </div>
+    <h3>统一转换接口</h3>
+    <p>训练和 play 共用同一个 tracking 接口，例如语义上统一为：</p>
+    <pre>reference_root_twist_in_policy_frame(env) -> [num_envs, 6]</pre>
+    <p>这个接口内部同时读取：</p>
+    <ul>
+      <li>Parallelism reference 当前 phase 的 root-frame twist 和 reference root pose；</li>
+      <li><code>env.scene["robot"].data.root_quat_w</code> 的 policy 实时 root 姿态；</li>
+      <li>然后批量返回当前 policy root frame 下的 reference twist。</li>
+    </ul>
+    <p>observation、reward、curriculum、velocity termination 和 play diagnostics 都不能各自实现一套坐标转换。</p>
+  </section>
+
+  <section>
+    <h2>3. RL 输入接口</h2>
+    <div class="flow">
+      <div><strong>原始 command</strong><br><code>base_velocity</code><br>只给 Parallelism 生成规划。</div>
+      <div><strong>规划结果</strong><br>当前 reference joint 和 root twist。</div>
+      <div><strong>Policy 输入</strong><br>转换后的当前 root-frame reference。</div>
+    </div>
+    <p>Actor 和 critic 都移除原始速度 command 观测：</p>
+    <pre>删除：velocity_commands = base_velocity</pre>
+    <p>改为输入：</p>
+    <pre>parallelism_ref_root_lin_vel_b_policy = [vx, vy, vz]
+parallelism_ref_root_ang_vel_b_policy = [wx, wy, wz]
+parallelism_ref_joint_pos
+parallelism_ref_joint_vel</pre>
+    <p>关节角和关节速度不做 root 坐标转换，因为它们已经是在各自关节坐标定义下的量。</p>
+    <div class="callout success">
+      <strong>训练与 play 对齐：</strong>play 使用训练时相同的 observation manager 计算 policy 输入。因此加载训练 checkpoint 后，play 中的 policy 也会在每一步根据当前真实 policy root 姿态重新计算 reference twist，不需要额外输入或手动重建速度观测。
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 当前时刻的 tracking 误差</h2>
+    <h3>关节位置误差</h3>
+    <pre>joint_abs_error_t = abs(policy_joint_pos_t - reference_joint_pos_t)
+joint_mean_error_t = mean(joint_abs_error_t)
+joint_max_error_t = max(joint_abs_error_t)</pre>
+    <p><code>joint_mean_error_t</code> 用来衡量整体跟踪质量，<code>joint_max_error_t</code> 用来防止单个关节或单条腿被平均值掩盖。</p>
+    <h3>root 速度误差</h3>
+    <pre>lin_vel_error_t =
+    norm(policy_root_lin_vel_b_t - reference_root_lin_vel_b_policy_t)
+
+ang_vel_error_t =
+    norm(policy_root_ang_vel_b_t - reference_root_ang_vel_b_policy_t)</pre>
+    <p>这三个误差都在同一个当前时刻、同一个 reference phase、同一个 policy root frame 下计算。</p>
+  </section>
+
+  <section>
+    <h2>5. Episode 内关节统计</h2>
+    <p>参考 InstinctLab 的 tracking monitor，不只检查 episode 结束时的一帧。每个 step 使用当前 reference phase 更新每个环境的统计量：</p>
+    <pre>joint_mean_sum += joint_mean_error_t
+joint_max_over_episode =
+    max(joint_max_over_episode, joint_max_error_t)
+valid_frame_count += 1
+
+episode_joint_mean_error =
+    joint_mean_sum / valid_frame_count
+episode_joint_max_error =
+    joint_max_over_episode</pre>
+    <p>环境 reset 时读取统计结果，然后清零对应环境的累计状态。任意中间摆腿阶段出现大的关节偏差，都会体现在 episode 统计中。</p>
+    <div class="callout success">
+      <strong>关键区别：</strong>“当前时刻 reference”决定每一步如何计算误差；“episode 统计”决定速度课程是否真的可以升级。这样既保持 phase 对齐，又能保证关节是持续跟踪良好。
+    </div>
+  </section>
+
+  <section>
+    <h2>6. 奖励设计</h2>
+    <h3>速度奖励</h3>
+    <p>速度奖励追踪转换到当前 policy root frame 的 reference root twist，不再直接追踪 <code>base_velocity</code>：</p>
+    <pre>track_linear_reference:
+    policy_root_lin_vel_b vs reference_root_lin_vel_b_policy
+
+track_angular_reference:
+    policy_root_ang_vel_b vs reference_root_ang_vel_b_policy</pre>
+    <p>当前版本保留原有 reward 结构和主要权重，先保证目标替换正确，再根据 TensorBoard 调整权重。</p>
+    <h3>关节奖励：采用 InstinctLab 风格</h3>
+    <p>关节跟踪奖励参考 InstinctLab 的 <code>joint_pos_tracking_gauss</code> 和 <code>joint_vel_imitation_gauss</code>。每个当前 reference phase 都计算所有 12 个关节的误差，先合并关节误差，再通过 Gaussian 指数得到一个整体 tracking reward。</p>
+    <pre>joint_pos_diff = policy_joint_pos_t - reference_joint_pos_t
+joint_pos_diff = sign(joint_pos_diff)
+                 * max(abs(joint_pos_diff) - tracking_tolerance, 0)
+joint_pos_err = sum(square(joint_pos_diff), dim=-1)
+
+reference_joint_pos_reward =
+    exp(-joint_pos_err / (joint_pos_sigma * joint_pos_sigma))</pre>
+    <p>关节速度使用同样的结构：</p>
+    <pre>joint_vel_diff = policy_joint_vel_t - reference_joint_vel_t
+joint_vel_err = sum(square(joint_vel_diff), dim=-1)
+
+reference_joint_vel_reward =
+    exp(-joint_vel_err / (joint_vel_sigma * joint_vel_sigma))</pre>
+    <ul>
+      <li>默认采用 InstinctLab <code>combine_method="prod"</code> 的等价形式：先对所有关节平方误差求和，再计算一次指数。</li>
+      <li>不使用当前实现的 <code>mean(square(error))</code> 作为唯一关节 tracking reward。</li>
+      <li><code>tracking_tolerance</code> 以内的微小误差不继续惩罚，用于吸收仿真噪声和执行器误差。</li>
+      <li>位置和速度奖励都逐步作用于全部 12 个关节，不修改 planner reference，不做 default pose 与 reference 的混合。</li>
+      <li><code>joint_pos_sigma</code>、<code>joint_vel_sigma</code> 和 <code>tracking_tolerance</code> 放入 tracking config，后续可以独立调节。</li>
+    </ul>
+    <div class="callout warning">
+      <strong>尺度注意：</strong>对 12 个关节求和会比平均误差更严格。sigma 不能直接照搬当前 reward 的 <code>std=0.35</code>，需要结合 TensorBoard 中的 reward 分布调节，否则 reward 可能在摆腿阶段快速接近 0。
+    </div>
+  </section>
+
+  <section>
+    <h2>7. 速度课程门控</h2>
+    <p>不新增独立 joint level。关节 tracking 是速度课程的严格前置条件。</p>
+    <h3>单个 episode 的升级条件</h3>
+    <table>
+      <thead>
+        <tr><th>指标</th><th>条件</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>episode 结束方式</td>
+          <td>正常 timeout，且没有 termination</td>
+          <td>不能通过提前失败来升级</td>
+        </tr>
+        <tr>
+          <td>关节平均误差</td>
+          <td><code>episode_joint_mean_error &lt; 0.20 rad</code></td>
+          <td>整体关节跟踪稳定</td>
+        </tr>
+        <tr>
+          <td>关节最大误差</td>
+          <td><code>episode_joint_max_error &lt; 0.45 rad</code></td>
+          <td>不能有单关节严重偏离</td>
+        </tr>
+        <tr>
+          <td>root 线速度误差</td>
+          <td><code>episode_lin_vel_error &lt; 0.25 m/s</code></td>
+          <td>跟踪当前 reference root 线速度</td>
+        </tr>
+        <tr>
+          <td>root 角速度误差</td>
+          <td><code>episode_ang_vel_error &lt; 0.35 rad/s</code></td>
+          <td>跟踪当前 reference root 角速度</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>其中 root 速度误差也应按 episode 累计平均，和关节误差一样不能只看最后一帧。</p>
+    <pre>episode_lin_vel_error =
+    mean_over_valid_frames(lin_vel_error_t)
+
+episode_ang_vel_error =
+    mean_over_valid_frames(ang_vel_error_t)</pre>
+    <h3>升级规则</h3>
+    <ul>
+      <li>所有条件同时满足，当前环境 velocity level 才加 1。</li>
+      <li>只要关节 mean、关节 max 或 root 速度任一项失败，当前环境不升级。</li>
+      <li>发生关节、root、姿态或接触 termination 时，当前环境降级 1 级。</li>
+      <li>level 始终限制在 <code>0~max_level</code>。</li>
+      <li>速度范围由所有环境 level 的平均值线性插值，但升级资格按环境独立判断。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. Termination 对齐</h2>
+    <p>所有 reference tracking termination 继续使用当前 reference phase：</p>
+    <ul>
+      <li>root z：policy 当前 root z 与当前 reference root z 比较；</li>
+      <li>projected gravity：policy 当前姿态与当前 reference 姿态比较；</li>
+      <li>foot z：policy 当前足端高度与当前 reference 足端高度比较；</li>
+      <li>joint position：policy 当前关节角与当前 reference 关节角比较。</li>
+    </ul>
+    <p>如果保留或新增 root velocity termination，它必须使用同一份由实时 policy root 姿态转换得到的 <code>twist_ref_b_policy</code>，不能重新使用 <code>base_velocity</code>，也不能使用 episode 初始姿态转换出来的缓存速度。</p>
+    <p><code>base_contact</code>、<code>bad_orientation</code> 和实际物理非法接触仍然判断 policy robot 自身状态，不被 reference 坐标转换替代。</p>
+  </section>
+
+  <section>
+    <h2>9. TensorBoard 验证指标</h2>
+    <p>训练中需要明确区分“当前帧”和“episode 统计”：</p>
+    <table>
+      <thead>
+        <tr><th>日志指标</th><th>用途</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>Metrics/reference_joint_mean_error_current</code></td><td>当前 reference phase 的平均关节误差</td></tr>
+        <tr><td><code>Metrics/reference_joint_max_error_current</code></td><td>当前 reference phase 的最大关节误差</td></tr>
+        <tr><td><code>Metrics/reference_joint_mean_error</code></td><td>episode 平均关节误差</td></tr>
+        <tr><td><code>Metrics/reference_joint_max_error</code></td><td>episode 内最大单关节误差</td></tr>
+        <tr><td><code>Metrics/reference_root_lin_vel_error</code></td><td>episode 平均 root 线速度误差</td></tr>
+        <tr><td><code>Metrics/reference_root_ang_vel_error</code></td><td>episode 平均 root 角速度误差</td></tr>
+        <tr><td><code>Curriculum/parallelism_velocity</code></td><td>全环境平均速度课程等级</td></tr>
+        <tr><td><code>Curriculum/parallelism_velocity_upgrade_blocked_joint</code></td><td>因关节 mean/max 不达标而阻止升级的次数</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warning">
+      如果速度课程继续上升，但 episode 平均关节误差、episode 最大关节误差或 joint termination 仍然很高，说明课程门控实现或统计时机有问题，不能只看速度 reward。
+    </div>
+  </section>
+
+  <section>
+    <h2>10. Play 接口与 reset/replan 同步</h2>
+    <p>训练和 play 必须遵守同一时序：</p>
+    <pre>1. 读取或更新 base_velocity，仅用于触发 planner
+2. Parallelism manager 刷新当前 phase
+3. 读取 policy robot 当前实时 root pose
+4. 计算当前 policy root frame 下的 reference twist
+5. observation manager 生成 actor/critic 输入
+6. policy 推理并执行 action
+7. env.step()
+8. 若 reset/replan，下一次 observation 前重新读取 policy root 状态</pre>
+    <p>reset 后不使用 reset 前的 root 姿态缓存。重规划后 reference phase 可以变化，但坐标转换始终使用当前 policy robot 的真实 root 姿态。</p>
+    <p>play 中的 reference Go2 只负责显示 reference pose/joint，不参与 policy reference twist 的坐标转换，也不参与物理约束。policy 的输入必须来自和训练相同的 observation term。</p>
+  </section>
+
+  <section>
+    <h2>11. 验证标准</h2>
+    <ul>
+      <li>Planner 输出和 viewer 中的 Parallelism reference 不发生变化。</li>
+      <li>Actor 和 critic 不再接收原始 <code>base_velocity</code> 速度观测。</li>
+      <li>reference root twist 经过 reference root frame → world → 当前 policy root frame 的两级转换。</li>
+      <li>连续改变 policy 当前 yaw、roll、pitch 时，reference twist 输入会实时随 policy root frame 变化。</li>
+      <li>reward、curriculum、velocity termination 使用同一份当前 phase 的转换后 reference twist。</li>
+      <li>关节 position 和 velocity reward 使用当前 phase 的原始 joint reference。</li>
+      <li>速度等级只有在 episode 平均 joint mean、episode joint max、root 线速度和角速度都达标时才提升。</li>
+      <li>1024 个环境下所有统计和条件判断保持 Torch/GPU 批量执行，不使用逐环境 Python 循环。</li>
+      <li>训练得到的 checkpoint 使用当前 <code>scripts/play.py</code> 启动后，policy 输入维度、reference 速度语义和训练保持一致。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
