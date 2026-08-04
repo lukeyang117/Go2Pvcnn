@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Root 相对参考观测设计</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f7fa; --paper:#fff; --ink:#17202a; --muted:#667085; --line:#d9e0e8; --code:#eef2f6; --accent:#176b87; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif; line-height:1.65; }
+    main { max-width:1050px; margin:0 auto; padding:36px 22px 64px; }
+    article { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:32px; }
+    h1,h2,h3 { line-height:1.3; } h1 { font-size:30px; } h2 { margin-top:32px; padding-top:22px; border-top:1px solid var(--line); font-size:21px; } h3 { margin-top:22px; font-size:17px; }
+    p { margin:10px 0; } li { margin:5px 0; }
+    code { background:var(--code); border-radius:4px; padding:1px 5px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre { overflow:auto; background:var(--code); border:1px solid var(--line); border-radius:7px; padding:13px 15px; }
+    pre code { background:transparent; padding:0; } table { width:100%; border-collapse:collapse; margin:14px 0 20px; } th,td { border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top; } th { background:#f0f5f7; }
+    .lead { color:var(--muted); font-size:16px; } .note { border-left:4px solid var(--accent); padding:9px 14px; background:#edf7fa; } .small { color:var(--muted); font-size:14px; }
+  </style>
+</head>
+<body>
+<main><article>
+  <h1>Parallelism Root 相对参考观测设计</h1>
+  <p class="lead">将 RL policy 的 root reference 从“参考速度”改为“下一帧相对 root 位置和相对 root 姿态”，对齐 Instinct Lab 的当前机器人坐标系设计。</p>
+
+  <h2>1. 目标与范围</h2>
+  <ul>
+    <li>policy 在当前时刻 <code>t</code> 执行动作。</li>
+    <li>policy 观察 Parallelism 轨迹的下一帧 <code>t+1</code>。</li>
+    <li>所有 root reference 都相对于当前 IsaacLab 中 policy Go2 的真实 root。</li>
+    <li>保持两个 root reference 槽位各 3 维，因此 actor、critic 输入总维度不变。</li>
+    <li>不修改 Parallelism 的规划算法、root 规划轨迹、swing 轨迹和重规划逻辑。</li>
+    <li>不修改现有 reward、termination、curriculum 的具体计算公式；本设计只定义 RL observation 接口。</li>
+  </ul>
+
+  <h2>2. Instinct Lab 对齐原则</h2>
+  <p>Instinct Lab 的 reference root 不是直接输入绝对世界位置。位置使用相对当前机器人 root 的量，姿态使用当前机器人 root 与 reference root 的相对旋转；当前机器人的速度和重力方向仍在当前 base frame 中表达。</p>
+  <table>
+    <tr><th>内容</th><th>Instinct Lab 做法</th><th>Parallelism 采用的对应做法</th></tr>
+    <tr><td>reference 位置</td><td>reference position 相对 robot anchor</td><td>reference root position 减当前 policy root position，再转到 policy root frame</td></tr>
+    <tr><td>reference 姿态</td><td>reference quaternion 相对当前 robot quaternion</td><td><code>q_policy^-1 * q_reference</code> 转成 3 维 axis-angle</td></tr>
+    <tr><td>当前 proprioception</td><td>当前 root 的 angular velocity、projected gravity 等</td><td>保留当前项目已有 proprioception</td></tr>
+  </table>
+
+  <h2>3. 新的 observation 定义</h2>
+  <h3>3.1 Root 相对位置</h3>
+  <p>定义新 term：<code>parallelism_ref_root_pos_b_t</code>。</p>
+  <pre><code>delta_pos_w = reference_root_pos_w[t + 1] - policy_root_pos_w[t]
+ref_root_pos_b = quat_rotate_inverse(policy_root_quat_w[t], delta_pos_w)</code></pre>
+  <p>输出顺序为 <code>(x, y, z)</code>，坐标系是当前 policy root 坐标系。它表达“当前机器人还需要向自身前、左、上哪个方向移动多少”。</p>
+
+  <h3>3.2 Root 相对姿态</h3>
+  <p>定义新 term：<code>parallelism_ref_root_rot_b_t</code>。</p>
+  <pre><code>q_relative = quat_mul(quat_inverse(policy_root_quat_w[t]), reference_root_quat_w[t + 1])
+ref_root_rot_b = axis_angle_from_quat(q_relative)</code></pre>
+  <p>输出为 3 维 axis-angle。它表达 reference 相对于当前 policy root 的 roll、pitch、yaw 旋转误差。</p>
+  <p class="note">不使用 6 维 tangent-normal，避免 actor/critic 输入维度增加，也避免已有网络结构因 observation 维度变化而无法加载。</p>
+
+  <h2>4. 时间边界</h2>
+  <table>
+    <tr><th>情况</th><th>reference 输入</th></tr>
+    <tr><td>普通执行</td><td>当前真实状态为 <code>t</code>，输入轨迹 <code>t+1</code></td></tr>
+    <tr><td>轨迹到最后一帧</td><td>位置和姿态都钳制到最后一帧，直到重规划</td></tr>
+    <tr><td>重规划完成</td><td>新轨迹第 0 帧对齐当前真实状态；policy 下一次输入新轨迹第 1 帧</td></tr>
+    <tr><td>重规划失败并进入 standstill</td><td>保持现有 standstill 行为，不生成新的 reference 目标</td></tr>
+  </table>
+  <p>因此不会出现读取 <code>t+1</code> 超出 24 帧的问题。索引访问统一使用 <code>min(t + 1, horizon - 1)</code>。</p>
+
+  <h2>5. 维度和接口兼容性</h2>
+  <table>
+    <tr><th>旧字段</th><th>新字段</th><th>维度</th></tr>
+    <tr><td><code>parallelism_ref_root_lin_vel</code></td><td><code>parallelism_ref_root_pos_b</code></td><td>3</td></tr>
+    <tr><td><code>parallelism_ref_root_ang_vel</code></td><td><code>parallelism_ref_root_rot_b</code></td><td>3</td></tr>
+  </table>
+  <p>root reference 总维度仍为 6，actor 和 critic 的总 observation 维度不变。语义字段名需要同步更新，避免继续把位置和姿态误认为速度。</p>
+
+  <h2>6. 不在本次修改的内容</h2>
+  <ul>
+    <li>不改变 Parallelism planner 的 root 预测方式。</li>
+    <li>不把 root position 规划改成新的轨迹。</li>
+    <li>不修改 joint reference、foot reference 或地图 observation。</li>
+    <li>不擅自修改 root velocity reward；速度 reward 仍按现有 Parallelism reference 速度计算。</li>
+    <li>不修改 termination 和 curriculum 的阈值及公式。</li>
+  </ul>
+
+  <h2>7. 验证要求</h2>
+  <ul>
+    <li>静态检查 observation term 名称、维度和 actor/critic 配置一致。</li>
+    <li>用 policy root yaw 旋转的场景验证：reference 前进方向在 policy frame 中仍正确。</li>
+    <li>用 root roll、pitch、yaw 非零的场景验证相对姿态 axis-angle 有限且方向正确。</li>
+    <li>验证普通末帧、重规划成功、重规划失败三种边界不会索引越界。</li>
+    <li>运行 tracking 相关单元测试，确认现有 planner 和 play 逻辑没有被改变。</li>
+  </ul>
+
+  <p class="small">文档日期：2026-08-04。实现前提：Parallelism manager 已提供当前目标帧的 root world pose，IsaacLab robot asset 已提供当前真实 root world pose。</p>
+</article></main>
+</body>
+</html>
