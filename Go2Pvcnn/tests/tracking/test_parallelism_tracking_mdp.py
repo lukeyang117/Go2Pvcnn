@@ -11,12 +11,14 @@ from tracking.mdp.observations import (
 )
 from tracking.mdp.rewards import (
     parallelism_tracking_errors,
+    parallelism_tracking_episode_errors,
     reference_active_swing_foot_max_reward,
     reference_foot_pos_reward,
     reference_joint_max_reward,
     reference_joint_pos_reward,
     reference_root_pos_reward,
     reference_root_rot_reward,
+    reset_parallelism_tracking_error_stats,
 )
 from tracking.mdp.terminations import parallelism_ref_joint_pos_too_far
 
@@ -51,6 +53,20 @@ def _fake_env():
         current_contact_state=torch.ones(2, 4, dtype=torch.bool),
     )
     robot = SimpleNamespace(
+        joint_names=(
+            "FL_hip_joint",
+            "FL_thigh_joint",
+            "FL_calf_joint",
+            "FR_hip_joint",
+            "FR_thigh_joint",
+            "FR_calf_joint",
+            "RL_hip_joint",
+            "RL_thigh_joint",
+            "RL_calf_joint",
+            "RR_hip_joint",
+            "RR_thigh_joint",
+            "RR_calf_joint",
+        ),
         data=SimpleNamespace(
             joint_pos=torch.zeros(2, 12),
             joint_vel=torch.zeros(2, 12),
@@ -65,6 +81,7 @@ def _fake_env():
             ),
         )
     )
+    robot.find_bodies = lambda _pattern: ([0, 1, 2, 3], ["FL_foot", "FR_foot", "RL_foot", "RR_foot"])
     env = SimpleNamespace(num_envs=2, device="cpu", parallelism_reference_manager=manager, scene=_Scene(robot=robot))
     return env
 
@@ -144,6 +161,10 @@ def test_reference_foot_position_reward_is_one_when_feet_match():
         ),
         dim=1,
     )
+    env.scene["robot"].find_bodies = lambda _pattern: (
+        [15, 16, 17, 18],
+        ["FL_foot", "FR_foot", "RL_foot", "RR_foot"],
+    )
 
     reward = reference_foot_pos_reward(env)
 
@@ -215,6 +236,80 @@ def test_tracking_errors_report_relative_root_pose_metrics():
     assert torch.allclose(errors["root_rot_error"], torch.tensor([0.1, 0.2]))
     assert torch.allclose(errors["episode_root_pos_error"], torch.tensor([0.2, 0.3]))
     assert torch.allclose(errors["episode_root_rot_error"], torch.tensor([0.1, 0.2]))
+
+
+def test_tracking_errors_restore_canonical_foot_order_from_articulation_names():
+    env = _fake_env()
+    robot = env.scene["robot"]
+    shuffled_names = ["RR_foot", "misc", "FL_foot", "RL_foot", "FR_foot"]
+    body_pos = torch.zeros(2, len(shuffled_names), 3)
+    body_pos[:, 0, 0] = 0.4
+    body_pos[:, 2, 0] = 0.1
+    body_pos[:, 3, 0] = 0.3
+    body_pos[:, 4, 0] = 0.2
+    robot.data.body_pos_w = body_pos
+    robot.find_bodies = lambda _pattern: ([0, 2, 3, 4], ["RR_foot", "FL_foot", "RL_foot", "FR_foot"])
+    env.parallelism_reference_manager.step_foot_pos_w.zero_()
+
+    errors = parallelism_tracking_errors(env)
+
+    assert torch.allclose(errors["foot_error_per_leg"], torch.tensor([[0.1, 0.2, 0.3, 0.4]]).expand(2, -1))
+
+
+def test_episode_tracking_stats_accumulate_active_swing_and_per_leg_errors():
+    env = _fake_env()
+    env.episode_length_buf = torch.zeros(2, dtype=torch.long)
+    env.common_step_counter = 1
+    env.parallelism_reference_manager.current_contact_state[:] = torch.tensor([False, True, True, False])
+    env.scene["robot"].data.body_pos_w[:, 0, 0] += 0.1
+    env.scene["robot"].data.body_pos_w[:, 3, 2] += 0.2
+    env.scene["robot"].data.joint_pos[:, 5] = 0.4
+    parallelism_tracking_errors(env)
+
+    env.episode_length_buf += 1
+    env.common_step_counter = 2
+    env.scene["robot"].data.body_pos_w[:, 0, 0] += 0.2
+    env.scene["robot"].data.body_pos_w[:, 3, 2] -= 0.1
+    env.scene["robot"].data.joint_pos[:, 8] = 0.6
+    stats = parallelism_tracking_errors(env)
+
+    assert torch.allclose(stats["episode_active_swing_foot_mean_error"], torch.full((2,), 0.175))
+    assert torch.allclose(stats["episode_active_swing_foot_max_error"], torch.full((2,), 0.3))
+    assert torch.allclose(stats["episode_active_swing_foot_z_mean_error"], torch.full((2,), 0.075))
+    assert torch.allclose(stats["episode_active_swing_foot_z_max_error"], torch.full((2,), 0.2))
+    assert torch.allclose(
+        stats["episode_swing_foot_mean_error_per_leg"],
+        torch.tensor([[0.2, 0.0, 0.0, 0.15]]).expand(2, -1),
+    )
+    assert torch.allclose(
+        stats["episode_swing_foot_max_error_per_leg"],
+        torch.tensor([[0.3, 0.0, 0.0, 0.2]]).expand(2, -1),
+    )
+    assert torch.allclose(
+        stats["episode_swing_foot_z_mean_error_per_leg"],
+        torch.tensor([[0.0, 0.0, 0.0, 0.15]]).expand(2, -1),
+    )
+    assert torch.allclose(
+        stats["episode_joint_max_error_per_leg"],
+        torch.tensor([[0.0, 0.4, 0.6, 0.0]]).expand(2, -1),
+    )
+
+
+def test_reset_tracking_stats_clears_only_selected_environment_per_leg_buffers():
+    env = _fake_env()
+    env.episode_length_buf = torch.zeros(2, dtype=torch.long)
+    env.common_step_counter = 1
+    env.parallelism_reference_manager.current_contact_state[:] = torch.tensor([False, True, True, False])
+    env.scene["robot"].data.body_pos_w[:, 0, 0] += 0.1
+    parallelism_tracking_errors(env)
+
+    reset_parallelism_tracking_error_stats(env, torch.tensor([1]))
+    stats = parallelism_tracking_episode_errors(env)
+
+    assert stats["episode_active_swing_foot_mean_error"][0] > 0.0
+    assert stats["episode_active_swing_foot_mean_error"][1] == 0.0
+    assert stats["episode_swing_foot_max_error_per_leg"][0, 0] > 0.0
+    assert stats["episode_swing_foot_max_error_per_leg"][1, 0] == 0.0
 
 
 def test_tracking_error_cache_reuses_current_step_errors():

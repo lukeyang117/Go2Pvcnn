@@ -8,7 +8,10 @@ import torch
 from isaaclab.envs import ManagerBasedRLEnv
 
 from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
-from tracking.mdp.rewards import parallelism_tracking_episode_errors
+from tracking.mdp.rewards import parallelism_tracking_episode_errors, reset_parallelism_tracking_error_stats
+
+
+_LEG_NAMES = ("FL", "FR", "RL", "RR")
 
 
 class ParallelismTrackingEnv(ManagerBasedRLEnv):
@@ -33,10 +36,49 @@ class ParallelismTrackingEnv(ManagerBasedRLEnv):
                 ("episode_foot_max_error", "Episode_Tracking/episode_foot_max_error"),
                 ("episode_root_pos_error", "Episode_Tracking/episode_reference_root_pos_error"),
                 ("episode_root_rot_error", "Episode_Tracking/episode_reference_root_rot_error"),
+                (
+                    "episode_active_swing_foot_mean_error",
+                    "Episode_Tracking/episode_active_swing_foot_mean_error",
+                ),
+                (
+                    "episode_active_swing_foot_max_error",
+                    "Episode_Tracking/episode_active_swing_foot_max_error",
+                ),
+                (
+                    "episode_active_swing_foot_z_mean_error",
+                    "Episode_Tracking/episode_active_swing_foot_z_mean_error",
+                ),
+                (
+                    "episode_active_swing_foot_z_max_error",
+                    "Episode_Tracking/episode_active_swing_foot_z_max_error",
+                ),
             )
             for source_name, log_name in metric_names:
                 tracking_log[log_name] = stats[source_name].index_select(0, ids).mean().detach()
+            per_leg_metrics = (
+                (
+                    "episode_swing_foot_mean_error_per_leg",
+                    "Episode_Tracking/episode_swing_foot_{leg_name}_mean_error",
+                ),
+                (
+                    "episode_swing_foot_max_error_per_leg",
+                    "Episode_Tracking/episode_swing_foot_{leg_name}_max_error",
+                ),
+                (
+                    "episode_swing_foot_z_mean_error_per_leg",
+                    "Episode_Tracking/episode_swing_foot_{leg_name}_z_mean_error",
+                ),
+                (
+                    "episode_joint_max_error_per_leg",
+                    "Episode_Tracking/episode_joint_{leg_name}_max_error",
+                ),
+            )
+            for source_name, log_name in per_leg_metrics:
+                values = stats[source_name].index_select(0, ids)
+                for leg_index, leg_name in enumerate(_LEG_NAMES):
+                    tracking_log[log_name.format(leg_name=leg_name)] = values[:, leg_index].mean().detach()
 
         super()._reset_idx(env_ids)
         if tracking_log:
             self.extras.setdefault("log", {}).update(tracking_log)
+            reset_parallelism_tracking_error_stats(self, ids)

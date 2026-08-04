@@ -31,6 +31,15 @@ def test_parallelism_tracking_env_logs_episode_reference_metrics() -> None:
     assert 'Episode_Tracking/episode_joint_max_error' in source
     assert 'Episode_Tracking/episode_reference_root_pos_error' in source
     assert 'Episode_Tracking/episode_reference_root_rot_error' in source
+    assert 'Episode_Tracking/episode_active_swing_foot_mean_error' in source
+    assert 'Episode_Tracking/episode_active_swing_foot_max_error' in source
+    assert 'Episode_Tracking/episode_active_swing_foot_z_mean_error' in source
+    assert 'Episode_Tracking/episode_active_swing_foot_z_max_error' in source
+    assert 'Episode_Tracking/episode_swing_foot_{leg_name}_mean_error' in source
+    assert 'Episode_Tracking/episode_swing_foot_{leg_name}_max_error' in source
+    assert 'Episode_Tracking/episode_swing_foot_{leg_name}_z_mean_error' in source
+    assert 'Episode_Tracking/episode_joint_{leg_name}_max_error' in source
+    assert "reset_parallelism_tracking_error_stats(self, ids)" in source
     assert 'Episode_Tracking/episode_reference_root_lin_vel_error' not in source
     assert 'Episode_Tracking/episode_reference_root_ang_vel_error' not in source
     assert 'entry_point="tracking.env:ParallelismTrackingEnv"' in registration
