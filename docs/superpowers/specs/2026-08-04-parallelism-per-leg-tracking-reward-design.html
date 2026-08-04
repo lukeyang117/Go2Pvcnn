@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism RL 逐腿跟踪奖励与指标设计</title>
+  <style>
+    :root { color-scheme: light; --bg:#f4f6f8; --paper:#fff; --ink:#17202a; --muted:#667085; --line:#d8dee7; --code:#eef2f6; --accent:#16697a; --warn:#8a4b08; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif; line-height:1.68; }
+    main { max-width:1120px; margin:0 auto; padding:36px 22px 64px; }
+    article { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:32px; }
+    h1,h2,h3 { line-height:1.3; letter-spacing:0; }
+    h1 { margin-top:0; font-size:30px; }
+    h2 { margin-top:34px; padding-top:22px; border-top:1px solid var(--line); font-size:21px; }
+    h3 { margin-top:22px; font-size:17px; }
+    p { margin:10px 0; }
+    li { margin:5px 0; }
+    code { background:var(--code); border-radius:4px; padding:1px 5px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre { overflow:auto; background:var(--code); border:1px solid var(--line); border-radius:7px; padding:13px 15px; }
+    pre code { background:transparent; padding:0; }
+    table { width:100%; border-collapse:collapse; margin:14px 0 20px; }
+    th,td { border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top; }
+    th { background:#edf3f5; }
+    .lead { color:var(--muted); font-size:16px; }
+    .note { border-left:4px solid var(--accent); padding:9px 14px; background:#edf7f8; }
+    .warning { border-left:4px solid var(--warn); padding:9px 14px; background:#fff7ed; }
+    .small { color:var(--muted); font-size:14px; }
+  </style>
+</head>
+<body>
+<main><article>
+  <h1>Parallelism RL 逐腿跟踪奖励与指标设计</h1>
+  <p class="lead">在不删除任何现有奖励、不修改 Parallelism 规划、observation、termination 和 curriculum 逻辑的前提下，增强 active swing 最差足端与全部 12 关节最差误差的训练信号，并补齐逐腿 TensorBoard 指标。</p>
+
+  <h2>1. 背景与实测证据</h2>
+  <p>使用 <code>model_400.pt</code>、固定命令 <code>vx=0.5</code>，在真实 Isaac Sim play 中运行 96 step，覆盖 4 次 24 帧重规划。测试使用 deterministic inference，因此观测到的偏差不是 action std 随机采样造成的。</p>
+  <table>
+    <tr><th>腿</th><th>Planner swing apex lift</th><th>摆动期平均三维足端误差</th><th>观察结果</th></tr>
+    <tr><td>FL</td><td>约 13.3 至 15.1 cm</td><td>5.7 cm</td><td>能够明显抬腿，但仍低于 reference</td></tr>
+    <tr><td>FR</td><td>约 13.3 至 15.1 cm</td><td>9.7 cm</td><td>大部分 swing 时段抬升不足</td></tr>
+    <tr><td>RL</td><td>约 13.3 至 14.3 cm</td><td>10.7 cm</td><td>四腿中平均误差最大</td></tr>
+    <tr><td>RR</td><td>约 13.3 至 14.3 cm</td><td>8.7 cm</td><td>与 FL 同相位摆动，但经常保持接地</td></tr>
+  </table>
+  <p>Planner 对四腿生成的抬升高度基本一致，腿序为 <code>FL, FR, RL, RR</code>，步态相位为前 12 帧 <code>FL+RR</code>、后 12 帧 <code>FR+RL</code>。现有证据没有显示 planner swing 或腿序错位，问题集中在 policy 对不同腿的跟踪不均衡。</p>
+  <p class="note">现有 <code>reference_foot_pos</code> 将四条腿合并为一个加权平均误差。一条 active leg 严重偏离时，其他三条腿仍会稀释该误差；现有 joint reward 同样以 12 个关节的整体误差为主，不能单独限制最差关节。</p>
+
+  <h2>2. 目标与硬约束</h2>
+  <ul>
+    <li>让 FL、FR、RL、RR 都跟踪相同质量的 Parallelism swing，不允许只学好一条腿。</li>
+    <li>限制单个 hip、thigh 或 calf 关节出现很大误差而被其余关节平均掉。</li>
+    <li>保留全部现有 reward term；允许调整其 weight、threshold 等参数。</li>
+    <li>新增 reward 和 metric 必须使用 Torch 张量条件与归约操作，在环境、腿和关节维度上并行。</li>
+    <li>不增加逐环境 Python 循环，适配后续 1024 环境及更大规模训练。</li>
+    <li>不修改 planner、24 帧 reference 时序、重规划、standstill、actor/critic observation 和 action 定义。</li>
+    <li>不修改 termination term、termination 阈值、curriculum 判定公式和 curriculum 阈值。</li>
+  </ul>
+
+  <h2>3. 时间与坐标系对齐</h2>
+  <p>两个新增奖励必须和现有 tracking reward 使用同一个目标帧：当前动作执行后对应的 Parallelism 下一帧 reference。实际关节状态来自当前物理仿真结果，reference joint、foot 和 contact state 来自同一目标 reference 帧。</p>
+  <table>
+    <tr><th>数据</th><th>定义</th></tr>
+    <tr><td>Reference joint</td><td>当前动作追踪的下一帧 12 维关节角，按 IsaacLab robot joint order 排列</td></tr>
+    <tr><td>Reference foot</td><td>同一目标帧的四足世界坐标，顺序固定为 FL、FR、RL、RR</td></tr>
+    <tr><td>Active swing mask</td><td>同一目标帧 <code>contact_state == false</code> 的腿</td></tr>
+    <tr><td>Foot error</td><td>实际和 reference 足端都转换到当前 policy root frame 后计算三维差值</td></tr>
+    <tr><td>Joint error</td><td>IsaacLab articulation order 下的 <code>abs(q_actual - q_reference)</code></td></tr>
+  </table>
+  <p>足端误差在同一个当前 policy root frame 中计算，可以消除共同 root 平移和旋转表达差异，并与现有 foot reward 保持一致。</p>
+
+  <h2>4. 新增 active swing 最差足端奖励</h2>
+  <h3>4.1 定义</h3>
+  <pre><code>foot_error[env, leg] = norm(actual_foot_b - reference_foot_b, dim=-1)
+swing_mask[env, leg] = not reference_contact_state[env, leg]
+
+masked_error = where(swing_mask, foot_error, -inf)
+active_swing_max_error[env] = max(masked_error, dim=leg)
+
+reward = exp(-(active_swing_max_error / 0.12) ** 2)</code></pre>
+  <p>当前 trot 每帧有两条 active swing legs。奖励对这两条腿取最差三维足端误差，使另一条腿表现良好时不能掩盖未抬起的腿。</p>
+  <table>
+    <tr><th>配置项</th><th>最终值</th><th>说明</th></tr>
+    <tr><td>Reward 名称</td><td><code>reference_active_swing_foot_max</code></td><td>TensorBoard 对应 <code>Episode_Reward/reference_active_swing_foot_max</code></td></tr>
+    <tr><td>Weight</td><td><code>1.5</code></td><td>足够影响最差摆动腿，但不覆盖 root 和整体 joint tracking</td></tr>
+    <tr><td>Std</td><td><code>0.12 m</code></td><td>与现有整体 foot reward 的空间尺度一致</td></tr>
+  </table>
+  <p>误差为 5 cm、10 cm、15 cm 时，未乘 weight 的奖励约为 0.84、0.50、0.21。</p>
+  <p class="warning">不能用 <code>error * swing_mask</code> 后直接取最小或平均，因为 stance leg 的零值会参与归约。实现必须通过 <code>torch.where</code> 排除 stance leg，再在腿维度执行 <code>torch.max</code>。</p>
+
+  <h2>5. 新增最差关节误差奖励</h2>
+  <h3>5.1 定义</h3>
+  <pre><code>joint_abs_error[env, joint] = abs(q_actual - q_reference)
+joint_max_error[env] = max(joint_abs_error, dim=joint)
+
+reward = exp(-(joint_max_error / 0.8) ** 2)</code></pre>
+  <p>该奖励覆盖全部 12 个关节，不只检查 active swing legs。stance 腿关节同样需要随 root 和 reference 姿态变化，不能允许 stance 关节严重偏离。</p>
+  <table>
+    <tr><th>配置项</th><th>最终值</th><th>说明</th></tr>
+    <tr><td>Reward 名称</td><td><code>reference_joint_max</code></td><td>TensorBoard 对应 <code>Episode_Reward/reference_joint_max</code></td></tr>
+    <tr><td>Weight</td><td><code>0.75</code></td><td>作为现有 joint mean 型奖励的补充</td></tr>
+    <tr><td>Std</td><td><code>0.8 rad</code></td><td>当前约 1.1 rad 的最差误差仍有非零梯度，避免突然收紧导致奖励消失</td></tr>
+  </table>
+
+  <h2>6. 现有奖励保留与调参</h2>
+  <p>所有现有 term 都保留。只对与 reference imitation 存在竞争的四项进行温和调整，其他 term 保持当前配置。</p>
+  <table>
+    <tr><th>Reward</th><th>当前配置</th><th>新配置</th><th>原因</th></tr>
+    <tr><td><code>reference_joint_pos</code></td><td>weight 2.0，std 0.7</td><td>保持</td><td>继续约束 12 关节整体跟踪</td></tr>
+    <tr><td><code>reference_joint_vel</code></td><td>weight 0.25，std 2.0</td><td>保持</td><td>不在本次同时改变速度目标</td></tr>
+    <tr><td><code>reference_foot_pos</code></td><td>weight 1.75，std 0.12，stance 1.0，swing 2.0</td><td>保持</td><td>继续约束四腿整体三维轨迹</td></tr>
+    <tr><td><code>track_root_pos</code></td><td>weight 1.5，std 0.12</td><td>保持</td><td>当前 root position tracking 已稳定</td></tr>
+    <tr><td><code>track_root_rot</code></td><td>weight 0.75，std 0.30</td><td>保持</td><td>当前 root rotation tracking 已稳定</td></tr>
+    <tr><td><code>joint_pos</code></td><td>weight -0.7</td><td><strong>weight -0.2</strong></td><td>保留默认姿态约束，但降低其对 reference swing 关节变化的压制</td></tr>
+    <tr><td><code>feet_air_time</code></td><td>weight 0.1，threshold 0.5 s</td><td><strong>weight 0.1，threshold 0.20 s</strong></td><td>Parallelism swing 为 0.24 s，正确落脚获得小幅正奖励</td></tr>
+    <tr><td><code>air_time_variance</code></td><td>weight -1.0</td><td><strong>weight -0.1</strong></td><td>保留步态时间一致性约束，但不压制 trot 的 swing/stance 分组</td></tr>
+    <tr><td><code>action_rate</code></td><td>weight -0.1</td><td><strong>weight -0.03</strong></td><td>仍抑制抖动，同时允许 12 帧内完成 swing 关节变化</td></tr>
+  </table>
+  <p><code>base_linear_velocity</code>、<code>base_angular_velocity</code>、<code>joint_vel</code>、<code>joint_acc</code>、<code>joint_torques</code>、<code>dof_pos_limits</code>、<code>energy</code>、<code>flat_orientation_l2</code>、<code>feet_slide</code> 和 <code>undesired_contacts</code> 全部保持当前配置。</p>
+
+  <h2>7. 新增 TensorBoard 指标</h2>
+  <h3>7.1 Active swing 总体指标</h3>
+  <ul>
+    <li><code>Episode_Tracking/episode_active_swing_foot_mean_error</code>：所有 active swing 腿、所有有效 episode step 的三维误差平均值，单位 m。</li>
+    <li><code>Episode_Tracking/episode_active_swing_foot_max_error</code>：episode 内 active swing 腿三维误差最大值，单位 m。</li>
+    <li><code>Episode_Tracking/episode_active_swing_foot_z_mean_error</code>：active swing 高度绝对误差平均值，单位 m。</li>
+    <li><code>Episode_Tracking/episode_active_swing_foot_z_max_error</code>：episode 内 active swing 高度绝对误差最大值，单位 m。</li>
+  </ul>
+
+  <h3>7.2 每腿 swing 指标</h3>
+  <table>
+    <tr><th>指标模板</th><th>腿集合</th><th>含义</th></tr>
+    <tr><td><code>episode_swing_foot_{LEG}_mean_error</code></td><td>FL、FR、RL、RR</td><td>该腿只在自身 swing 帧内的三维误差平均值</td></tr>
+    <tr><td><code>episode_swing_foot_{LEG}_max_error</code></td><td>FL、FR、RL、RR</td><td>该腿在整个 episode swing 帧内的最大三维误差</td></tr>
+    <tr><td><code>episode_swing_foot_{LEG}_z_mean_error</code></td><td>FL、FR、RL、RR</td><td>该腿只在 swing 帧内的高度绝对误差平均值</td></tr>
+  </table>
+  <p>例如：</p>
+  <pre><code>Episode_Tracking/episode_swing_foot_FL_mean_error
+Episode_Tracking/episode_swing_foot_RR_max_error
+Episode_Tracking/episode_swing_foot_RL_z_mean_error</code></pre>
+
+  <h3>7.3 每腿关节指标</h3>
+  <ul>
+    <li><code>Episode_Tracking/episode_joint_FL_max_error</code></li>
+    <li><code>Episode_Tracking/episode_joint_FR_max_error</code></li>
+    <li><code>Episode_Tracking/episode_joint_RL_max_error</code></li>
+    <li><code>Episode_Tracking/episode_joint_RR_max_error</code></li>
+  </ul>
+  <p>每帧先在对应腿的 hip、thigh、calf 三个关节中取最大绝对误差，再记录整个 episode 的最大值。现有全局 joint/foot/root metric 全部保留。</p>
+
+  <h2>8. Metric 累计与并行实现</h2>
+  <p>运行时只维护固定大小 Tensor，不保存逐帧历史：</p>
+  <ul>
+    <li>总体 active swing：sum、count、max 和 Z sum、Z max。</li>
+    <li>每腿 swing：形状 <code>[num_envs, 4]</code> 的 sum、count、max 和 Z sum。</li>
+    <li>每腿 joint：形状 <code>[num_envs, 4]</code> 的 episode max。</li>
+  </ul>
+  <pre><code>swing_sum += where(swing_mask, foot_error, 0).sum(dim=1)
+swing_count += swing_mask.sum(dim=1)
+per_leg_sum += where(swing_mask, foot_error, 0)
+per_leg_count += swing_mask
+per_leg_max = maximum(per_leg_max, where(swing_mask, foot_error, 0))</code></pre>
+  <p>episode mean 使用 <code>count.clamp_min(1)</code>，避免 reset 边界除零。环境 reset 后只清零对应 <code>env_ids</code> 的累计量。所有判断使用 <code>torch.where</code>、布尔 mask、<code>sum/max</code> 和 elementwise 更新。</p>
+  <p class="note">1024 环境下这些累计 Tensor 仅为少量 <code>[1024]</code> 和 <code>[1024,4]</code> 浮点或整数数据，显存开销远小于 observation、rollout storage 和 CNN feature，不应成为性能瓶颈。</p>
+
+  <h2>9. Termination、curriculum 与恢复训练</h2>
+  <ul>
+    <li>所有 termination term 和阈值保持不变。</li>
+    <li>curriculum 继续使用 root position、root rotation、joint mean 和 joint max episode error；不加入新的 foot metric 门槛。</li>
+    <li>从当前稳定 checkpoint <code>model_400.pt</code> 恢复，不从零训练。</li>
+    <li>恢复时使用 <code>--keep_std</code>，保留 checkpoint 中约 0.31 的 policy action std。</li>
+    <li>不把 action std 重置到 1.0，避免新 reward 与大幅探索噪声同时破坏已有稳定步态。</li>
+    <li>继续加载 optimizer；新增 reward 总权重受控，critic 允许在恢复训练初期重新适应 return 分布。</li>
+  </ul>
+
+  <h2>10. 验证与验收</h2>
+  <h3>10.1 单元测试</h3>
+  <ul>
+    <li>只有一条 active leg 误差较大时，active swing max reward 必须由该腿决定。</li>
+    <li>stance leg 即使误差较大，也不能进入 active swing max reward。</li>
+    <li>全部 12 关节中任一关节误差最大时，joint max reward 必须选择该关节。</li>
+    <li>四腿 metric 的 mask、sum、count、max 和 reset-by-env-id 正确。</li>
+    <li>验证奖励和 metric 在 CPU/CUDA Tensor 上形状、dtype 和 device 一致。</li>
+  </ul>
+
+  <h3>10.2 真实训练冒烟测试</h3>
+  <ul>
+    <li>1024 环境启动真实 Isaac Sim headless 训练。</li>
+    <li>至少运行 4 iteration，确认 epoch/iteration 递增、reward 和新增 metric 均有有限输出。</li>
+    <li>确认 collection time 没有因 Python 同步或逐环境循环明显增长。</li>
+  </ul>
+
+  <h3>10.3 恢复训练阶段目标</h3>
+  <p>先恢复训练 300 至 500 iteration，再根据以下指标决定是否继续：</p>
+  <table>
+    <tr><th>指标</th><th>目标</th></tr>
+    <tr><td>四腿 swing mean error</td><td>FL、FR、RL、RR 差距明显缩小</td></tr>
+    <tr><td><code>episode_active_swing_foot_max_error</code></td><td>低于 0.15 m</td></tr>
+    <tr><td>全局 <code>episode_foot_max_error</code></td><td>从约 0.30 m 降至 0.20 m 以内</td></tr>
+    <tr><td><code>episode_joint_max_error</code></td><td>从约 1.10 rad 降至 0.8 rad 以内</td></tr>
+    <tr><td>Mean episode length</td><td>继续接近 1000</td></tr>
+    <tr><td>Root position/rotation error</td><td>不相对当前 checkpoint 明显恶化</td></tr>
+  </table>
+
+  <h2>11. 明确不在本次范围</h2>
+  <ul>
+    <li>不删除任何现有 reward term。</li>
+    <li>不新增 reference contact matching reward。</li>
+    <li>不修改 Parallelism IK、FK、swing curve、候选搜索和 collision filter。</li>
+    <li>不修改 actor/critic 网络结构、observation 维度和 action 输出形式。</li>
+    <li>不调整 termination 和 curriculum。</li>
+    <li>不修改 terrain、语义图和高程图接口。</li>
+  </ul>
+
+  <p class="small">文档日期：2026-08-04。基线分支：<code>Parallelism-flat-rl</code>。诊断基线提交：<code>c215288</code>。</p>
+</article></main>
+</body>
+</html>
