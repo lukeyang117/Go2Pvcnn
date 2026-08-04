@@ -242,6 +242,49 @@ def _contact_state(root_pos: Tensor, cfg: ParallelismCfg) -> Tensor:
     return contact
 
 
+def _standstill_recovery_trajectory(
+    state: ParallelismState,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Build a stationary, level-body fallback while preserving world foot contacts."""
+
+    current_root_pos = torch.as_tensor(state.root_pos_w)
+    current_root_rpy = torch.as_tensor(state.root_rpy_w, dtype=current_root_pos.dtype, device=current_root_pos.device)
+    current_foot = _current_foot_pos(state, current_root_pos, current_root_rpy)
+    terrain_query = query_height_semantic_valid(terrain, current_foot[..., :2].reshape(current_foot.shape[0], -1, 2))
+    terrain_height = terrain_query.height.reshape_as(current_foot[..., 0])
+    terrain_valid = terrain_query.valid.reshape_as(current_foot[..., 0])
+    support_height = torch.where(terrain_valid, terrain_height, current_foot[..., 2]).mean(dim=-1)
+
+    target_root_pos = current_root_pos.clone()
+    target_root_pos[:, 2] = support_height + float(cfg.root_clearance_m)
+    target_root_rpy = current_root_rpy.clone()
+    target_root_rpy[:, :2] = 0.0
+
+    frame = torch.arange(int(cfg.horizon), dtype=current_root_pos.dtype, device=current_root_pos.device)
+    u = torch.clamp(frame / float(max(int(cfg.root_leveling_frames), 1)), min=0.0, max=1.0)
+    smoothstep = u * u * (3.0 - 2.0 * u)
+    root_pos = current_root_pos[:, None, :] + smoothstep[None, :, None] * (
+        target_root_pos - current_root_pos
+    )[:, None, :]
+    root_rpy = current_root_rpy[:, None, :] + smoothstep[None, :, None] * (
+        target_root_rpy - current_root_rpy
+    )[:, None, :]
+
+    foot_targets = current_foot[:, None, :, :].expand(-1, int(cfg.horizon), -1, -1)
+    batch = int(current_root_pos.shape[0])
+    joint_traj, _ = ik_go2(
+        root_pos.reshape(batch * int(cfg.horizon), 3),
+        root_rpy.reshape(batch * int(cfg.horizon), 3),
+        foot_targets.reshape(batch * int(cfg.horizon), 4, 3),
+    )
+    joint_pos = joint_traj.reshape(batch, int(cfg.horizon), 12)
+    current_joint = torch.as_tensor(state.joint_pos, dtype=joint_pos.dtype, device=joint_pos.device)
+    joint_pos[:, 0] = current_joint
+    return root_pos, root_rpy, joint_pos, foot_targets
+
+
 def plan_trajectory(
     state: ParallelismState,
     command_body: Tensor,
@@ -351,15 +394,18 @@ def plan_trajectory(
     current_root_rpy = torch.as_tensor(state.root_rpy_w, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
     current_joint = torch.as_tensor(state.joint_pos, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
     current_foot = _current_foot_pos(state, current_root_pos, current_root_rpy)
+    fallback_root_pos, fallback_root_rpy, fallback_joint_pos, fallback_foot_pos = _standstill_recovery_trajectory(
+        state, terrain, cfg
+    )
     output_planned = selected_valid | (torch.full_like(selected_valid, True) if not bool(cfg.standstill_fallback_enabled) else torch.zeros_like(selected_valid))
     env_mask_3 = output_planned[:, None, None]
-    root_pos_out = torch.where(env_mask_3, root.root_pos_w, current_root_pos[:, None].expand(-1, int(cfg.horizon), -1))
-    root_rpy_out = torch.where(env_mask_3, root.root_rpy_w, current_root_rpy[:, None].expand(-1, int(cfg.horizon), -1))
-    joint_pos_out = torch.where(env_mask_3, joint_pos, current_joint[:, None].expand(-1, int(cfg.horizon), -1))
+    root_pos_out = torch.where(env_mask_3, root.root_pos_w, fallback_root_pos)
+    root_rpy_out = torch.where(env_mask_3, root.root_rpy_w, fallback_root_rpy)
+    joint_pos_out = torch.where(env_mask_3, joint_pos, fallback_joint_pos)
     foot_pos_out = torch.where(
         output_planned[:, None, None, None],
         foot_pos,
-        current_foot[:, None].expand(-1, int(cfg.horizon), -1, -1),
+        fallback_foot_pos,
     )
     contact_state = _contact_state(root.root_pos_w, cfg)
     contact_state_out = torch.where(
