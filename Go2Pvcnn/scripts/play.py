@@ -242,6 +242,37 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
         f"raw={raw}",
         flush=True,
     )
+    actual_foot = manager._measured_foot_pos_w(
+        policy_robot,
+        torch.tensor([0], dtype=torch.long, device=manager.device),
+    )
+    if actual_foot is not None:
+        actual_foot = torch.as_tensor(actual_foot[0]).detach().cpu()
+        reference_foot = torch.as_tensor(frame.foot_pos_w).detach().cpu()
+        foot_error = torch.linalg.vector_norm(actual_foot - reference_foot, dim=-1)
+        trajectory_foot = torch.as_tensor(manager.foot_pos_w[0]).detach().cpu()
+        trajectory_lift = trajectory_foot[..., 2].amax(dim=0) - trajectory_foot[0, :, 2]
+        contact = torch.as_tensor(frame.contact_state).detach().cpu()
+        joint_data = _parallelism_joint_error_data(base_env, frame)
+        joint_error_by_leg: dict[str, list[float]] = {}
+        if joint_data is not None:
+            joint_names, _, _, joint_error = joint_data
+            for leg_name in ("FL", "FR", "RL", "RR"):
+                indices = [index for index, name in enumerate(joint_names) if str(name).startswith(f"{leg_name}_")]
+                joint_error_by_leg[leg_name] = (
+                    torch.abs(joint_error[indices]).detach().cpu().tolist() if indices else []
+                )
+        print(
+            "[Parallelism][leg-debug] "
+            f"step={timestep} phase={phase} order={['FL', 'FR', 'RL', 'RR']} "
+            f"contact={contact.tolist()} "
+            f"reference_z={reference_foot[:, 2].tolist()} "
+            f"actual_z={actual_foot[:, 2].tolist()} "
+            f"foot_error={foot_error.tolist()} "
+            f"trajectory_apex_lift={trajectory_lift.tolist()} "
+            f"joint_abs_error_by_leg={joint_error_by_leg}",
+            flush=True,
+        )
     if timestep <= 5 or bool(raw.get("base_contact", False)):
         print(
             "[Parallelism][contact-debug] "
