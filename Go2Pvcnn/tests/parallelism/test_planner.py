@@ -74,29 +74,19 @@ def test_invalid_map_makes_trajectory_invalid_single_pass():
     assert not traj.diagnostics.candidate_valid.any()
 
 
-def test_invalid_plan_levels_root_and_holds_world_feet():
+def test_invalid_plan_holds_current_state():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.kinematics import fk_go2
     from extension.parallelism.planner import plan_trajectory
 
     state = _state()
-    state = type(state)(
-        root_pos_w=torch.tensor([[0.1, -0.2, 0.42]], dtype=torch.float32),
-        root_rpy_w=torch.tensor([[0.20, -0.10, 0.40]], dtype=torch.float32),
-        joint_pos=state.joint_pos,
-    )
     current_foot = fk_go2(state.root_pos_w, state.root_rpy_w, state.joint_pos).foot_pos_w
-    cfg = ParallelismCfg(root_leveling_frames=12)
-    traj = plan_trajectory(state, torch.tensor([[0.7, 0.2, 0.3]]), _semantic_terrain(semantic_id=1), cfg)
+    traj = plan_trajectory(state, torch.tensor([[0.7, 0.2, 0.3]]), _terrain(invalid=True), ParallelismCfg())
 
     assert not bool(traj.valid[0])
-    assert torch.allclose(traj.root_pos_w[:, 0], state.root_pos_w)
-    assert torch.allclose(traj.root_rpy_w[:, 0], state.root_rpy_w)
-    assert torch.allclose(traj.root_pos_w[..., :2], state.root_pos_w[:, None, :2].expand(-1, 24, -1))
-    assert torch.allclose(traj.root_rpy_w[..., 2], state.root_rpy_w[:, None, 2].expand(-1, 24))
-    assert torch.allclose(traj.root_pos_w[:, 12:, 2], torch.full((1, 12), cfg.root_clearance_m))
-    assert torch.allclose(traj.root_rpy_w[:, 12:, :2], torch.zeros(1, 12, 2))
-    assert torch.allclose(traj.joint_pos[:, 0], state.joint_pos)
+    assert torch.allclose(traj.root_pos_w, state.root_pos_w[:, None].expand(-1, 24, -1))
+    assert torch.allclose(traj.root_rpy_w, state.root_rpy_w[:, None].expand(-1, 24, -1))
+    assert torch.allclose(traj.joint_pos, state.joint_pos[:, None].expand(-1, 24, -1))
     assert torch.allclose(traj.foot_pos_w, current_foot[:, None].expand(-1, 24, -1, -1), atol=1e-6)
     assert torch.equal(traj.selected_foothold_w, current_foot)
     assert traj.contact_state.all()

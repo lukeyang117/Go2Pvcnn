@@ -215,6 +215,7 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
         - manager_root
     )
     plan_valid = bool(torch.as_tensor(manager.plan_valid)[0].item())
+    standstill_latched = bool(torch.as_tensor(manager.standstill_latched)[0].item())
     plan_valid_count = int(torch.as_tensor(manager.plan_valid_count)[0].item())
     plan_reject_counts = torch.as_tensor(manager.plan_reject_counts)[0].detach().cpu().tolist()
     plan_collision_count = int(torch.as_tensor(manager.plan_collision_counts)[0].item())
@@ -229,7 +230,7 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
         f"reference_data={reference_root.tolist()} env_origin={origin.tolist()} "
         f"manager_delta_from_frame0={manager_delta.tolist()} "
         f"manager_next_delta={manager_step_delta.tolist()} "
-        f"plan_valid={plan_valid} valid_candidates={plan_valid_count}/200 "
+        f"plan_valid={plan_valid} standstill_latched={standstill_latched} valid_candidates={plan_valid_count}/200 "
         f"reject(valid_map,joint,landing,collision,candidate_semantic,fk_semantic)={plan_reject_counts} "
         f"collision_candidates={plan_collision_count} "
         f"per_leg_valid={plan_per_leg_valid_count} "

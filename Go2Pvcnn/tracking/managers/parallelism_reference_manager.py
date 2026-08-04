@@ -10,7 +10,9 @@ from torch import Tensor
 
 from extension.convention import extract_roll_pitch_batch, extract_yaw_batch
 from extension.parallelism.config import ParallelismCfg
+from extension.parallelism.kinematics import fk_go2
 from extension.parallelism.planner import plan_trajectory
+from extension.parallelism.terrain import query_height_semantic_valid
 from extension.parallelism.types import ParallelismState, ParallelismTerrain
 
 _PLANNER_JOINT_ORDER = (
@@ -146,6 +148,7 @@ class ParallelismReferenceManager:
         self._cached_cycle = torch.full((self.num_envs,), -1, dtype=torch.long, device=self.device)
         self._initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.standstill_latched = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_valid_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.plan_reject_counts = torch.zeros(self.num_envs, 6, dtype=torch.long, device=self.device)
@@ -192,6 +195,7 @@ class ParallelismReferenceManager:
         cycle = torch.zeros_like(ids, dtype=torch.long, device=self.device)
         self._manual_episode_length[ids] = 0
         self.phase[ids] = 0
+        self.standstill_latched[ids] = False
         self._step_reference_valid[ids] = False
         self._plan(ids, cycle)
 
@@ -385,6 +389,54 @@ class ParallelismReferenceManager:
         foot_pos = self._measured_foot_pos_w(robot, env_ids)
         return ParallelismState(root_pos_w=root_pos, root_rpy_w=root_rpy, joint_pos=joint, foot_pos_w=foot_pos)
 
+    def _standard_stand_state(
+        self,
+        state: ParallelismState,
+        terrain: ParallelismTerrain,
+        env_ids: Tensor,
+    ) -> ParallelismState:
+        """Build the canonical flat standing pose used after a failed plan."""
+
+        root_pos = state.root_pos_w.clone()
+        root_rpy = state.root_rpy_w.clone()
+        root_rpy[:, :2] = 0.0
+        foot_pos = state.foot_pos_w
+        if foot_pos is None:
+            foot_pos = fk_go2(state.root_pos_w, state.root_rpy_w, state.joint_pos).foot_pos_w
+        query = query_height_semantic_valid(terrain, foot_pos[..., :2].reshape(foot_pos.shape[0], -1, 2))
+        heights = query.height.reshape_as(foot_pos[..., 2])
+        valid = query.valid.reshape_as(foot_pos[..., 2])
+        support_height = torch.where(valid, heights, foot_pos[..., 2]).mean(dim=-1)
+        root_pos[:, 2] = support_height + float(self.cfg.root_clearance_m)
+
+        robot = self._robot()
+        default_joint = getattr(getattr(robot, "data", None), "default_joint_pos", None)
+        if default_joint is None:
+            joint_pos = state.joint_pos
+        else:
+            default_joint = torch.as_tensor(default_joint, dtype=state.joint_pos.dtype, device=self.device)
+            if int(default_joint.shape[0]) == self.num_envs:
+                default_joint = default_joint.index_select(0, env_ids)
+            joint_pos = _reorder_joint_to_planner(default_joint, getattr(robot, "joint_names", None))
+            if int(joint_pos.shape[0]) != int(state.joint_pos.shape[0]):
+                joint_pos = state.joint_pos
+        canonical_foot = fk_go2(root_pos, root_rpy, joint_pos).foot_pos_w
+        foot_query = query_height_semantic_valid(
+            terrain,
+            canonical_foot[..., :2].reshape(canonical_foot.shape[0], -1, 2),
+        )
+        foot_height = foot_query.height.reshape_as(canonical_foot[..., 2])
+        foot_valid = foot_query.valid.reshape_as(canonical_foot[..., 2])
+        canonical_foot = canonical_foot.clone()
+        canonical_foot[..., 2] = torch.where(foot_valid, foot_height, canonical_foot[..., 2])
+        root_pos[:, 2] = canonical_foot[..., 2].mean(dim=-1) + float(self.cfg.root_clearance_m)
+        return ParallelismState(
+            root_pos_w=root_pos,
+            root_rpy_w=root_rpy,
+            joint_pos=joint_pos,
+            foot_pos_w=canonical_foot,
+        )
+
     def _measured_foot_pos_w(self, robot, env_ids: Tensor) -> Tensor | None:
         body_pos = getattr(getattr(robot, "data", None), "body_pos_w", None)
         if body_pos is None:
@@ -498,8 +550,28 @@ class ParallelismReferenceManager:
         for start in range(0, int(env_ids.numel()), batch_size):
             subset = env_ids[start : start + batch_size]
             subset_cycle = cycle[start : start + batch_size]
-            state = self._state(subset)
-            trajectory = plan_trajectory(state, self._command(subset), self._terrain(state.root_pos_w, subset), self.cfg)
+            live_state = self._state(subset)
+            if live_state.foot_pos_w is None:
+                live_state = ParallelismState(
+                    root_pos_w=live_state.root_pos_w,
+                    root_rpy_w=live_state.root_rpy_w,
+                    joint_pos=live_state.joint_pos,
+                    foot_pos_w=fk_go2(live_state.root_pos_w, live_state.root_rpy_w, live_state.joint_pos).foot_pos_w,
+                )
+            terrain = self._terrain(live_state.root_pos_w, subset)
+            standard_state = self._standard_stand_state(live_state, terrain, subset)
+            latched = self.standstill_latched.index_select(0, subset)
+            latch_root = latched[:, None]
+            latch_root_rpy = latched[:, None]
+            latch_joint = latched[:, None]
+            latch_foot = latched[:, None, None]
+            state = ParallelismState(
+                root_pos_w=torch.where(latch_root, standard_state.root_pos_w, live_state.root_pos_w),
+                root_rpy_w=torch.where(latch_root_rpy, standard_state.root_rpy_w, live_state.root_rpy_w),
+                joint_pos=torch.where(latch_joint, standard_state.joint_pos, live_state.joint_pos),
+                foot_pos_w=torch.where(latch_foot, standard_state.foot_pos_w, live_state.foot_pos_w),
+            )
+            trajectory = plan_trajectory(state, self._command(subset), terrain, self.cfg)
             self.root_pos_w[subset] = trajectory.root_pos_w
             self.root_rpy_w[subset] = trajectory.root_rpy_w
             self.joint_pos[subset] = _reorder_joint_from_planner(trajectory.joint_pos, getattr(self._robot(), "joint_names", None))
@@ -517,6 +589,7 @@ class ParallelismReferenceManager:
             if state.foot_pos_w is not None:
                 self.foot_pos_w[subset, 0] = state.foot_pos_w
             self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)
+            self.standstill_latched[subset] = ~trajectory.valid
             self.plan_valid[subset] = trajectory.valid
             self.plan_valid_count[subset] = trajectory.diagnostics.candidate_valid.sum(dim=(1, 2)).to(dtype=torch.long)
             self.plan_reject_counts[subset] = trajectory.diagnostics.candidate_reject_bits.sum(dim=(1, 2)).to(dtype=torch.long)
