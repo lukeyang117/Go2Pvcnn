@@ -1478,7 +1478,8 @@ def main() -> int:
                         )
                         parallelism_manager.reset(done_mask)
                     else:
-                        _write_parallelism_reference_root(
+                        parallelism_manager.refresh()
+                        _write_parallelism_reference_robot(
                             base_env.scene["reference_robot"],
                             _parallelism_visual_frame(parallelism_manager),
                         )

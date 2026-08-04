@@ -310,6 +310,10 @@ class ParallelismTrackingPlaySceneCfg(TeacherElevationTrajectoryMpcSemanticScene
                 opacity=0.65,
             ),
         ),
+        # The reference articulation is visual-only. Removing actuators
+        # prevents physics from pulling planner-written joints toward the
+        # policy robot's motor targets during env.step().
+        actuators={},
     )
 
 
