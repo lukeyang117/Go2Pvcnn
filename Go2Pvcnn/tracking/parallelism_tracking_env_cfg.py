@@ -186,6 +186,22 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
             "swing_weight": 2.0,
         },
     )
+    reference_active_swing_foot_max = RewTerm(
+        func=tracking_mdp.reference_active_swing_foot_max_reward,
+        weight=1.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+            "std": 0.12,
+        },
+    )
+    reference_joint_max = RewTerm(
+        func=tracking_mdp.reference_joint_max_reward,
+        weight=0.75,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "std": 0.8,
+        },
+    )
 
 
 @configclass
@@ -278,6 +294,10 @@ class ParallelismTrackingFlatEnvCfg(TeacherElevationTrajectoryMpcSemanticEnvCfg)
             lin_vel_y=(-0.5, 0.5),
             ang_vel_z=(-1.0, 1.0),
         )
+        self.rewards.joint_pos.weight = -0.2
+        self.rewards.feet_air_time.params["threshold"] = 0.20
+        self.rewards.air_time_variance.weight = -0.1
+        self.rewards.action_rate.weight = -0.03
         self.scene.robot.init_state.pos = (0.0, 0.0, 0.3)
         self.rewards.semantic_contact_collision = None
         self.rewards.semantic_body_part_clearance = None

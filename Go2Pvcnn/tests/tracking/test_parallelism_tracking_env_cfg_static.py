@@ -9,6 +9,8 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert "downsampled_elevation_semantic_scan" in source
     assert "parallelism_ref_joint_pos_too_far" in source
     assert "reference_foot_pos = RewTerm" in source
+    assert "reference_active_swing_foot_max = RewTerm" in source
+    assert "reference_joint_max = RewTerm" in source
     assert "self.rewards.reference_foot_pos = None" not in source
     assert "ParallelismTrackingFlatEnvCfg" in source
     assert "parallelism_plan_batch_size: int = 64" in source
@@ -20,6 +22,14 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert '"root_pos_threshold": 0.12' in source
     assert '"root_rot_threshold": 0.30' in source
     assert '"joint_max_threshold": 1.0' in source
+    assert "weight=1.5" in source
+    assert '"std": 0.12' in source
+    assert "weight=0.75" in source
+    assert '"std": 0.8' in source
+    assert 'self.rewards.joint_pos.weight = -0.2' in source
+    assert 'self.rewards.feet_air_time.params["threshold"] = 0.20' in source
+    assert 'self.rewards.air_time_variance.weight = -0.1' in source
+    assert 'self.rewards.action_rate.weight = -0.03' in source
 
 
 def test_train_script_contains_parallelism_tracking_experiment() -> None:
