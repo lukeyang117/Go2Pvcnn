@@ -298,6 +298,26 @@ def _write_parallelism_reference_root(reference_robot, frame: ParallelismVisualF
     reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
 
 
+def _sync_parallelism_reference_visual_state(base_env) -> None:
+    """Flush a planner-written reference frame using the viewer playback path."""
+
+    scene = getattr(base_env, "scene", None)
+    reference_robot = None
+    if scene is not None:
+        try:
+            reference_robot = scene["reference_robot"]
+        except (KeyError, TypeError):
+            reference_robot = getattr(scene, "reference_robot", None)
+    if reference_robot is not None and hasattr(reference_robot, "write_data_to_sim"):
+        reference_robot.write_data_to_sim()
+    sim = getattr(base_env, "sim", None)
+    if sim is not None and hasattr(sim, "render"):
+        sim.render()
+    update_fn = getattr(scene, "update", None) if scene is not None else None
+    if callable(update_fn) and not isinstance(scene, dict):
+        update_fn(float(getattr(base_env, "physics_dt", 0.0)))
+
+
 class _ParallelismPlayPanel:
     """Small in-app control panel for the physical parallelism rollout."""
 
@@ -465,6 +485,7 @@ class _ParallelismPlayVisualizer:
         manager.refresh()
         frame = _parallelism_visual_frame(manager)
         _write_parallelism_reference_robot(base_env.scene["reference_robot"], frame)
+        _sync_parallelism_reference_visual_state(base_env)
 
     def update(self, base_env, manager) -> None:
         frame = _parallelism_visual_frame(manager)
@@ -1483,6 +1504,7 @@ def main() -> int:
                             base_env.scene["reference_robot"],
                             _parallelism_visual_frame(parallelism_manager),
                         )
+                        _sync_parallelism_reference_visual_state(base_env)
                 if args_cli.debug_livestream and parallelism_manager is not None:
                     _parallelism_debug_snapshot(
                         base_env,
