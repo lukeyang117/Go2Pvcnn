@@ -82,6 +82,28 @@ def test_panel_command_updates_env0_only() -> None:
     torch.testing.assert_close(command, torch.tensor([[0.4, -0.2, 0.3], [0.0, 0.0, 0.0]]))
 
 
+def test_panel_command_invalidates_parallelism_reference_cache() -> None:
+    command = torch.zeros(1, 3, dtype=torch.float32)
+
+    class FakeParallelismManager:
+        def __init__(self) -> None:
+            self.invalidations = 0
+
+        def mark_command_changed(self, env_mask=None):
+            self.invalidations += 1
+
+    manager = FakeParallelismManager()
+    env = SimpleNamespace(
+        command_manager=SimpleNamespace(get_command=lambda _name: command),
+        parallelism_reference_manager=manager,
+    )
+
+    play._apply_panel_velocity_command(env, play.ParallelismPlayPanelState(vx=0.4, vy=-0.2, vyaw=0.3))
+
+    torch.testing.assert_close(command, torch.tensor([[0.4, -0.2, 0.3]]))
+    assert manager.invalidations == 1
+
+
 def test_reference_visual_frame_uses_current_manager_phase() -> None:
     manager = SimpleNamespace(
         horizon=24,

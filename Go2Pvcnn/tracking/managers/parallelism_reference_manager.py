@@ -189,6 +189,14 @@ class ParallelismReferenceManager:
         self._step_reference_valid[ids] = False
         self._plan(ids, cycle)
 
+    def mark_command_changed(self, env_mask: Sequence[int] | Tensor | None = None, *_, **__) -> None:
+        ids = _as_env_ids(env_mask, num_envs=self.num_envs, device=self.device)
+        if int(ids.numel()) == 0:
+            return
+        self._cached_cycle[ids] = -1
+        self._initialized[ids] = False
+        self._step_reference_valid[ids] = False
+
     def _install_env_reset_hook(self) -> None:
         original = getattr(self.env, "reset", None)
         if original is None or not callable(original) or getattr(original, "_parallelism_reference_reset_hook_wrapped", False):

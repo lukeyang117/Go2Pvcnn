@@ -37,6 +37,7 @@ class ParallelismPlayPanelState:
     vx: float = 0.0
     vy: float = 0.0
     vyaw: float = 0.0
+    last_applied_command: tuple[float, float, float] | None = None
     suppress_termination: dict[str, bool] = field(
         default_factory=lambda: dict.fromkeys(PARALLELISM_TERMINATION_NAMES, True)
     )
@@ -774,7 +775,17 @@ def _apply_panel_velocity_command(base_env, state: ParallelismPlayPanelState) ->
     command = command_manager.get_command("base_velocity")
     if command is None or int(command.shape[0]) == 0:
         return None
-    command[0, :3] = _panel_command_tensor(state, command)[0]
+    target = _panel_command_tensor(state, command)[0]
+    command[0, :3] = target
+    target_tuple = tuple(float(value) for value in target.detach().cpu().tolist())
+    if state.last_applied_command != target_tuple:
+        state.last_applied_command = target_tuple
+        manager = getattr(base_env, "parallelism_reference_manager", None)
+        mark_command_changed = getattr(manager, "mark_command_changed", None)
+        if callable(mark_command_changed):
+            env_mask = torch.zeros(int(command.shape[0]), dtype=torch.bool, device=command.device)
+            env_mask[0] = True
+            mark_command_changed(env_mask)
     return command
 
 

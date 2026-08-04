@@ -195,6 +195,50 @@ def test_repeated_refresh_at_reset_does_not_replan(monkeypatch):
     assert manager.plan_count.tolist() == [1, 1]
 
 
+def test_mark_command_changed_forces_replan_on_next_refresh(monkeypatch):
+    env = _fake_env()
+    env.episode_length_buf = torch.tensor([7, 7], dtype=torch.long)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.refresh()
+
+    manager.mark_command_changed(torch.tensor([True, False]))
+    manager.refresh()
+
+    assert manager.plan_count.tolist() == [2, 1]
+
+
+def test_panel_speed_replan_changes_reference_root(monkeypatch):
+    env = _fake_env(num_envs=1)
+    command = torch.zeros(1, 3)
+    env.command_manager = SimpleNamespace(get_command=lambda _name: command)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+        command_now = manager._command(env_ids)
+        manager.root_pos_w[env_ids] = 0.0
+        manager.root_pos_w[env_ids, :, 0] = command_now[:, 0].unsqueeze(-1)
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.refresh()
+    assert torch.allclose(manager.root_pos_w[:, :, 0], torch.zeros(1, manager.horizon))
+
+    command[:, 0] = 0.5
+    manager.mark_command_changed(torch.tensor([True]))
+    manager.refresh()
+
+    assert torch.allclose(manager.root_pos_w[:, :, 0], torch.full((1, manager.horizon), 0.5))
+
+
 def test_terrain_reads_semantic_height_scanner_maps():
     env, elevation, semantic, valid = _fake_env_with_scanner()
     env.scene["robot"].data.root_pos_w[:, 0] = torch.tensor([1.0, -2.0])
