@@ -29,7 +29,7 @@
     <li>所有 root reference 都相对于当前 IsaacLab 中 policy Go2 的真实 root。</li>
     <li>保持两个 root reference 槽位各 3 维，因此 actor、critic 输入总维度不变。</li>
     <li>不修改 Parallelism 的规划算法、root 规划轨迹、swing 轨迹和重规划逻辑。</li>
-    <li>不修改现有 reward、termination、curriculum 的具体计算公式；本设计只定义 RL observation 接口。</li>
+    <li>不修改现有 reward、termination、curriculum 的具体计算公式；tracking metric 改为记录 root 相对位置和相对姿态误差。</li>
   </ul>
 
   <h2>2. Instinct Lab 对齐原则</h2>
@@ -82,7 +82,15 @@ ref_root_rot_b = axis_angle_from_quat(q_relative)</code></pre>
     <li>不修改 termination 和 curriculum 的阈值及公式。</li>
   </ul>
 
-  <h2>7. 验证要求</h2>
+  <h2>7. Tracking metric</h2>
+  <p>对外输出的 root tracking metric 与新的 observation 语义一致：</p>
+  <ul>
+    <li><code>Episode_Tracking/episode_reference_root_pos_error</code>：当前 policy root 与下一帧 reference root 的相对位置误差范数，单位为米。</li>
+    <li><code>Episode_Tracking/episode_reference_root_rot_error</code>：当前 policy root 与下一帧 reference root 的相对姿态 axis-angle 范数，单位为弧度。</li>
+  </ul>
+  <p>内部速度误差仍保留给现有 velocity reward 和 curriculum 使用，但不再作为 root reference tracking 的对外 metric。</p>
+
+  <h2>8. 验证要求</h2>
   <ul>
     <li>静态检查 observation term 名称、维度和 actor/critic 配置一致。</li>
     <li>用 policy root yaw 旋转的场景验证：reference 前进方向在 policy frame 中仍正确。</li>
