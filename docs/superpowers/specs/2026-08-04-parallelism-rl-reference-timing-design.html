@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parallelism RL Reference 时序设计</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #5b6873;
+      --line: #d9e0e6;
+      --blue: #1967a3;
+      --blue-soft: #eef6fc;
+      --green: #237a57;
+      --green-soft: #edf8f2;
+      --amber: #93621c;
+      --amber-soft: #fff7e8;
+      --paper: #ffffff;
+      --bg: #f4f6f8;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+    }
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 40px 22px 72px;
+    }
+    header, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 26px 30px;
+      margin-bottom: 18px;
+    }
+    header {
+      border-top: 5px solid var(--blue);
+    }
+    h1, h2, h3 { line-height: 1.3; margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 {
+      color: var(--blue);
+      font-size: 22px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+      margin-bottom: 18px;
+    }
+    h3 { font-size: 17px; margin-top: 22px; }
+    p { margin: 10px 0; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .summary {
+      background: var(--blue-soft);
+      border-left: 4px solid var(--blue);
+      padding: 14px 16px;
+      margin: 14px 0;
+    }
+    .success {
+      background: var(--green-soft);
+      border-left: 4px solid var(--green);
+      padding: 14px 16px;
+      margin: 14px 0;
+    }
+    .warning {
+      background: var(--amber-soft);
+      border-left: 4px solid var(--amber);
+      padding: 14px 16px;
+      margin: 14px 0;
+    }
+    code {
+      background: #f0f3f5;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      background: #17212b;
+      color: #f4f7f9;
+      padding: 16px 18px;
+      border-radius: 6px;
+      overflow-x: auto;
+      line-height: 1.55;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 11px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f0f4f7; }
+    ul { margin-top: 8px; }
+    .keep { color: var(--green); font-weight: 600; }
+    .change { color: var(--blue); font-weight: 600; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Parallelism RL Reference 时序设计</h1>
+    <div class="meta">日期：2026-08-04　分支：Parallelism-flat-rl</div>
+    <div class="summary">
+      <strong>目标：</strong>让 policy 在动作执行前看到下一帧 Parallelism 关节目标，同时让速度 reference 使用当前帧到下一帧的差分；奖励、termination、metric 和 curriculum 使用同一套时间戳。Parallelism 仍然每次生成 24 帧，不访问不存在的第 24 帧。
+    </div>
+  </header>
+
+  <section>
+    <h2>一、范围与不变项</h2>
+    <p>本设计只修改 RL 接口读取 reference 的时间戳，不修改 Parallelism planner 的规划逻辑。</p>
+    <table>
+      <thead>
+        <tr><th>项目</th><th>处理方式</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Policy action</td><td class="keep">保持完整 12 维 action</td></tr>
+        <tr><td>IsaacLab 关节目标</td><td class="keep"><code>default_joint_pos + 0.25 * policy_action</code></td></tr>
+        <tr><td>Reward 公式</td><td class="keep">不改公式、权重、范数和聚合方式</td></tr>
+        <tr><td>Metric</td><td class="keep">不改误差实现、mean/max 和累计逻辑</td></tr>
+        <tr><td>Parallelism horizon</td><td class="keep">保持 24 帧，索引为 0 到 23</td></tr>
+        <tr><td>Planner reset/replan</td><td class="change">与新的 22 帧结束边界对齐</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>二、参考轨迹与第 0 帧</h2>
+    <p>每次 reset 或重新规划时，从 IsaacLab 读取当前 Go2 的真实状态并生成新轨迹：</p>
+    <pre>reference_new[0] = 当前 IsaacLab 真实状态
+reference_new[1...23] = Parallelism 规划出的后续轨迹</pre>
+    <p>第 0 帧包含并对齐：</p>
+    <ul>
+      <li>root 世界坐标位置；</li>
+      <li>root 姿态；</li>
+      <li>12 个关节角；</li>
+      <li>四个足端世界坐标位置。</li>
+    </ul>
+    <div class="warning">
+      <strong>第 0 帧不是 Policy 的直接目标输入。</strong>
+      它是新轨迹的真实状态锚点，并用于计算第一步的速度：
+      <code>(reference_new[1] - reference_new[0]) / dt</code>。
+    </div>
+  </section>
+
+  <section>
+    <h2>三、普通控制周期</h2>
+    <p>设当前控制周期开始时，真实状态是 <code>actual[t]</code>，Parallelism 当前帧是 <code>reference[t]</code>。</p>
+    <pre>当前时刻：
+  actual[t]
+  reference[t]
+  reference[t+1]
+
+Policy 输入：
+  joint position = reference[t+1]
+  joint velocity = (reference[t+1] - reference[t]) / dt
+  root velocity  = (reference[t+1] - reference[t]) / dt
+
+Policy 输出：
+  action[t]
+
+IsaacSim 执行：
+  actual[t] -> actual[t+1]</pre>
+    <p>root 线速度和角速度沿用当前 policy root 坐标系转换规则，只改变差分使用的 reference 帧。</p>
+  </section>
+
+  <section>
+    <h2>四、Reward、Termination 与 Metric</h2>
+    <h3>4.1 Position reward</h3>
+    <pre>actual_joint[t+1] vs reference_joint[t+1]
+actual_foot[t+1]  vs reference_foot[t+1]</pre>
+    <p>当前代码在物理推进后计算 reward，因此执行后的 reference 目标帧为 <code>t+1</code>。</p>
+
+    <h3>4.2 Velocity reward</h3>
+    <pre>actual velocity[t -> t+1]
+vs
+reference velocity[t -> t+1]
+
+reference velocity[t -> t+1]
+  = (reference[t+1] - reference[t]) / dt</pre>
+    <p>速度 reference 在动作执行前确定并保存，避免物理推进后 phase 变化导致误读成 <code>t+1 -> t+2</code>。</p>
+
+    <h3>4.3 Termination</h3>
+    <pre>actual_joint[t+1]      vs reference_joint[t+1]
+actual_foot[t+1]       vs reference_foot[t+1]
+actual_root[t+1]       vs reference_root[t+1]
+actual_gravity[t+1]    vs reference_gravity[t+1]</pre>
+    <p>termination 的判断公式不变，只保证读取动作对应的目标帧。</p>
+
+    <h3>4.4 Metric</h3>
+    <p>metric 使用与 reward 相同的时间戳：</p>
+    <pre>joint / foot position：
+  actual[t+1] vs reference[t+1]
+
+root / joint velocity：
+  actual velocity[t -> t+1]
+  vs reference velocity[t -> t+1]</pre>
+    <p>不修改 metric 内部的误差计算、mean/max、缓存、episode 累计或输出名称。</p>
+  </section>
+
+  <section>
+    <h2>五、24 帧边界与重规划</h2>
+    <p>轨迹帧索引为 <code>0...23</code>。不访问 <code>reference[24]</code>，也不跨旧轨迹和新轨迹做差分。</p>
+
+    <h3>5.1 最后一段有效控制</h3>
+    <p>当当前帧为 <code>t=22</code>：</p>
+    <pre>Policy 输入：
+  position = reference[23]
+  velocity = reference[23] - reference[22]
+
+执行：
+  actual[22] -> actual[23]</pre>
+    <p>这一步完成旧轨迹的最后一个有效控制区间。</p>
+
+    <h3>5.2 重规划触发点</h3>
+    <p>动作 <code>22 -> 23</code> 执行完成后：</p>
+    <pre>1. 使用旧轨迹 reference[23] 计算最后一次 reward、termination 和 metric
+2. 读取当前 IsaacLab 真实状态 actual[23]
+3. 生成 reference_new[0...23]
+4. 设置新轨迹 phase = 0</pre>
+    <p>因此重规划发生在旧轨迹第 22 帧动作完成之后，而不是动作执行前。</p>
+
+    <h3>5.3 新轨迹第一步</h3>
+    <pre>reference_new[0] = actual[23]
+
+下一次 Policy 输入：
+  joint position = reference_new[1]
+  joint velocity = (reference_new[1] - reference_new[0]) / dt
+  root velocity  = (reference_new[1] - reference_new[0]) / dt
+
+执行：
+  actual[23] -> actual_new[1]</pre>
+    <div class="success">
+      新轨迹的第 0 帧只作为真实状态锚点，Policy 直接输入新轨迹第 1 帧。
+      不使用旧轨迹第 23 帧到新轨迹第 0 帧的差分。
+    </div>
+  </section>
+
+  <section>
+    <h2>六、Reset 对齐</h2>
+    <p>环境 reset 与重新规划采用同样的接口：</p>
+    <pre>IsaacLab reset
+    ↓
+读取 reset 后的真实 Go2 状态
+    ↓
+生成 reference[0...23]
+    ↓
+phase = 0
+    ↓
+Policy 首次输入 reference[1]</pre>
+    <p>首次速度 reference 使用：</p>
+    <pre>(reference[1] - reference[0]) / dt</pre>
+    <p>这样 reference 第 0 帧不会与 reset 后的真实机器人状态发生跳变。</p>
+  </section>
+
+  <section>
+    <h2>七、Termination 放宽方案</h2>
+    <p>训练目标是覆盖全部速度命令并学习完整走路轨迹。训练初期不能因为 tracking 暂时误差大而频繁 reset。</p>
+    <p>保留真实物理失稳相关 termination：</p>
+    <ul>
+      <li><code>time_out</code>；</li>
+      <li><code>base_contact</code>；</li>
+      <li><code>bad_orientation</code>。</li>
+    </ul>
+    <p>Parallelism reference tracking termination 第一阶段放宽为：</p>
+    <table>
+      <thead>
+        <tr><th>Termination</th><th>第一阶段阈值</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>root z error</td><td><code>0.50 m</code></td></tr>
+        <tr><td>projected gravity error</td><td><code>1.50</code></td></tr>
+        <tr><td>foot z error</td><td><code>0.30 m</code></td></tr>
+        <tr><td>joint position max error</td><td><code>2.00 rad</code></td></tr>
+      </tbody>
+    </table>
+    <p>放宽 termination 只减少早期 reset，不修改 reward 和 metric。</p>
+  </section>
+
+  <section>
+    <h2>八、Curriculum 阈值</h2>
+    <p>Curriculum 仍然使用完整 episode 的 tracking metric，不改变升级逻辑，只放宽两个关键门槛：</p>
+    <table>
+      <thead>
+        <tr><th>参数</th><th>原值</th><th>新值</th><th>单位</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>joint_max_threshold</code></td><td>0.45</td><td><strong>1.0</strong></td><td>rad</td></tr>
+        <tr><td><code>ang_vel_threshold</code></td><td>0.35</td><td><strong>1.0</strong></td><td>rad/s</td></tr>
+      </tbody>
+    </table>
+    <p>其他 curriculum 指标、速度范围、升级方式和 episode metric 不变。</p>
+    <p>课程升级仍要求 episode 完成 timeout，且不发生真实物理 termination。</p>
+  </section>
+
+  <section>
+    <h2>九、训练输出目录</h2>
+    <p>每次训练使用当前 Git HEAD 的 short hash 建立版本目录：</p>
+    <pre>logs/rsl_rl/&lt;experiment&gt;/&lt;日期时间&gt;/&lt;git_short_hash&gt;/</pre>
+    <p>示例：</p>
+    <pre>logs/rsl_rl/parallelism_tracking_flat/2026-08-04_15-30-00/a1b2c3d/</pre>
+    <p>目录内直接保存模型和训练参数，不再生成 <code>tag.txt</code>，也不处理 dirty/clean 状态。</p>
+  </section>
+
+  <section>
+    <h2>十、最终时序摘要</h2>
+    <pre>当前控制帧 t：
+
+Policy observation：
+  q_ref[t+1]
+  v_ref[t -> t+1]
+  root_v_ref[t -> t+1]
+
+Policy action：
+  完整 12 维 action[t]
+
+IsaacSim：
+  actual[t] -> actual[t+1]
+
+Reward / Termination / Metric：
+  position：actual[t+1] vs reference[t+1]
+  velocity：actual[t -> t+1] vs reference[t -> t+1]
+
+t=22 动作完成：
+  计算旧轨迹最后一次结果
+  读取 actual[23]
+  生成 reference_new[0...23]
+
+下一次 Policy：
+  输入 reference_new[1]
+  速度使用 reference_new[0] -> reference_new[1]</pre>
+  </section>
+</main>
+</body>
+</html>
