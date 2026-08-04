@@ -1478,7 +1478,13 @@ def main() -> int:
                         )
                         parallelism_manager.reset(done_mask)
                     else:
-                        _write_parallelism_reference_root(
+                        # Isaac Sim advances the reference articulation during
+                        # env.step(). Refresh the phase after that step and
+                        # write the complete kinematic frame back. Writing only
+                        # the root here leaves joint drives/physics free to
+                        # pull the reference back after its first swing frame.
+                        parallelism_manager.refresh()
+                        _write_parallelism_reference_robot(
                             base_env.scene["reference_robot"],
                             _parallelism_visual_frame(parallelism_manager),
                         )
