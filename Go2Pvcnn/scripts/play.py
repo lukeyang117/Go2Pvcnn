@@ -272,17 +272,18 @@ def _write_parallelism_reference_robot(reference_robot, frame: ParallelismVisual
 
     from extension.convention import euler_to_quat_batch
 
-    root_pos_w = frame.root_pos_w.reshape(1, 3)
-    root_rpy_w = frame.root_rpy_w.reshape(1, 3)
-    root_quat_w = euler_to_quat_batch(root_rpy_w[:, 0], root_rpy_w[:, 1], root_rpy_w[:, 2])
-    root_pose = torch.cat((root_pos_w, root_quat_w), dim=-1)
-    joint_pos = frame.joint_pos.reshape(1, -1)
-    reference_robot.write_root_pose_to_sim(root_pose)
-    reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
-    reference_robot.write_joint_state_to_sim(
-        joint_pos,
-        torch.zeros_like(joint_pos),
-    )
+    with torch.inference_mode():
+        root_pos_w = frame.root_pos_w.reshape(1, 3)
+        root_rpy_w = frame.root_rpy_w.reshape(1, 3)
+        root_quat_w = euler_to_quat_batch(root_rpy_w[:, 0], root_rpy_w[:, 1], root_rpy_w[:, 2])
+        root_pose = torch.cat((root_pos_w, root_quat_w), dim=-1)
+        joint_pos = frame.joint_pos.reshape(1, -1)
+        reference_robot.write_root_pose_to_sim(root_pose)
+        reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
+        reference_robot.write_joint_state_to_sim(
+            joint_pos,
+            torch.zeros_like(joint_pos),
+        )
 
 
 def _write_parallelism_reference_root(reference_robot, frame: ParallelismVisualFrame) -> None:
@@ -290,32 +291,34 @@ def _write_parallelism_reference_root(reference_robot, frame: ParallelismVisualF
 
     from extension.convention import euler_to_quat_batch
 
-    root_pos_w = frame.root_pos_w.reshape(1, 3)
-    root_rpy_w = frame.root_rpy_w.reshape(1, 3)
-    root_quat_w = euler_to_quat_batch(root_rpy_w[:, 0], root_rpy_w[:, 1], root_rpy_w[:, 2])
-    root_pose = torch.cat((root_pos_w, root_quat_w), dim=-1)
-    reference_robot.write_root_pose_to_sim(root_pose)
-    reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
+    with torch.inference_mode():
+        root_pos_w = frame.root_pos_w.reshape(1, 3)
+        root_rpy_w = frame.root_rpy_w.reshape(1, 3)
+        root_quat_w = euler_to_quat_batch(root_rpy_w[:, 0], root_rpy_w[:, 1], root_rpy_w[:, 2])
+        root_pose = torch.cat((root_pos_w, root_quat_w), dim=-1)
+        reference_robot.write_root_pose_to_sim(root_pose)
+        reference_robot.write_root_velocity_to_sim(torch.zeros(1, 6, dtype=root_pose.dtype, device=root_pose.device))
 
 
 def _sync_parallelism_reference_visual_state(base_env) -> None:
     """Flush a planner-written reference frame using the viewer playback path."""
 
-    scene = getattr(base_env, "scene", None)
-    reference_robot = None
-    if scene is not None:
-        try:
-            reference_robot = scene["reference_robot"]
-        except (KeyError, TypeError):
-            reference_robot = getattr(scene, "reference_robot", None)
-    if reference_robot is not None and hasattr(reference_robot, "write_data_to_sim"):
-        reference_robot.write_data_to_sim()
-    sim = getattr(base_env, "sim", None)
-    if sim is not None and hasattr(sim, "render"):
-        sim.render()
-    update_fn = getattr(scene, "update", None) if scene is not None else None
-    if callable(update_fn) and not isinstance(scene, dict):
-        update_fn(float(getattr(base_env, "physics_dt", 0.0)))
+    with torch.inference_mode():
+        scene = getattr(base_env, "scene", None)
+        reference_robot = None
+        if scene is not None:
+            try:
+                reference_robot = scene["reference_robot"]
+            except (KeyError, TypeError):
+                reference_robot = getattr(scene, "reference_robot", None)
+        if reference_robot is not None and hasattr(reference_robot, "write_data_to_sim"):
+            reference_robot.write_data_to_sim()
+        sim = getattr(base_env, "sim", None)
+        if sim is not None and hasattr(sim, "render"):
+            sim.render()
+        update_fn = getattr(scene, "update", None) if scene is not None else None
+        if callable(update_fn) and not isinstance(scene, dict):
+            update_fn(float(getattr(base_env, "physics_dt", 0.0)))
 
 
 class _ParallelismPlayPanel:
@@ -622,9 +625,16 @@ def _should_update_follow_camera(*, timestep: int, num_envs: int, livestream: in
 
 
 def _play_loop_should_continue(simulation_app, *, timestep: int, max_steps: int) -> bool:
+    """Keep an interactive play session alive until an explicit limit is reached.
+
+    Isaac Sim can report ``is_running() == False`` transiently when the GUI is
+    attached through VNC/VirtualGL.  Treating that value as the play-loop
+    lifetime closes the viewer after the first environment step.
+    """
+
     if max_steps > 0:
         return timestep < max_steps
-    return bool(simulation_app.is_running())
+    return True
 
 
 @dataclass
@@ -1443,6 +1453,12 @@ def main() -> int:
     if args_cli.step_mode:
         print("Step mode enabled: press Space to advance one env/render step.", flush=True)
     print(f"{'=' * 80}\n", flush=True)
+    print(
+        "[Play][trace] loop_init "
+        f"max_steps={args_cli.max_steps} "
+        f"simulation_app.is_running={bool(simulation_app.is_running())}",
+        flush=True,
+    )
 
     keyboard_controller = _KeyboardVelocityController(
         enabled=bool(args_cli.keyboard_control) and not is_parallelism_play,
@@ -1454,7 +1470,21 @@ def main() -> int:
 
     try:
         with _TerminalStepGate(enabled=bool(args_cli.step_mode)) as step_gate, keyboard_controller:
-            while _play_loop_should_continue(simulation_app, timestep=timestep, max_steps=args_cli.max_steps):
+            while True:
+                should_continue = _play_loop_should_continue(
+                    simulation_app,
+                    timestep=timestep,
+                    max_steps=args_cli.max_steps,
+                )
+                print(
+                    "[Play][trace] loop_check "
+                    f"timestep={timestep} continue={should_continue} "
+                    f"simulation_app.is_running={bool(simulation_app.is_running())}",
+                    flush=True,
+                )
+                if not should_continue:
+                    break
+                print(f"[Play][trace] step_begin timestep={timestep + 1}", flush=True)
                 if not step_gate.wait_for_step():
                     if args_cli.step_mode:
                         _pump_play_paused_window(base_env)
@@ -1465,10 +1495,13 @@ def main() -> int:
                         _apply_panel_velocity_command(base_env, parallelism_panel_state)
                     else:
                         _apply_keyboard_velocity_command(base_env, keyboard_controller)
+                    print(f"[Play][trace] post_step_command_done timestep={timestep + 1}", flush=True)
                     obs, _ = wrapped_env.get_observations()
+                    print(f"[Play][trace] observations_ready timestep={timestep + 1}", flush=True)
                     policy_start = perf_counter()
                     actions = policy(obs)
                     policy_s = perf_counter() - policy_start
+                    print(f"[Play][trace] policy_ready timestep={timestep + 1}", flush=True)
 
                     if parallelism_panel_state is not None:
                         _apply_panel_velocity_command(base_env, parallelism_panel_state)
@@ -1479,6 +1512,12 @@ def main() -> int:
                     env_start = perf_counter()
                     obs, rewards, dones, extras = wrapped_env.step(actions)
                     env_step_s = perf_counter() - env_start
+                    print(
+                        "[Play][trace] env_step_done "
+                        f"timestep={timestep + 1} dones={torch.as_tensor(dones).detach().cpu().tolist()} "
+                        f"elapsed={env_step_s:.4f}s",
+                        flush=True,
+                    )
                     if parallelism_panel_state is not None:
                         _apply_panel_velocity_command(base_env, parallelism_panel_state)
                     else:
@@ -1499,12 +1538,19 @@ def main() -> int:
                         )
                         parallelism_manager.reset(done_mask)
                     else:
+                        print(f"[Play][trace] manager_refresh_begin timestep={timestep}", flush=True)
                         parallelism_manager.refresh()
+                        print(f"[Play][trace] manager_refresh_done timestep={timestep}", flush=True)
+                        print(f"[Play][trace] reference_write_begin timestep={timestep}", flush=True)
                         _write_parallelism_reference_robot(
                             base_env.scene["reference_robot"],
                             _parallelism_visual_frame(parallelism_manager),
                         )
+                        print(f"[Play][trace] reference_write_done timestep={timestep}", flush=True)
+                        print(f"[Play][trace] visual_sync_begin timestep={timestep}", flush=True)
                         _sync_parallelism_reference_visual_state(base_env)
+                        print(f"[Play][trace] visual_sync_done timestep={timestep}", flush=True)
+                    print(f"[Play][trace] reference_refresh_done timestep={timestep}", flush=True)
                 if args_cli.debug_livestream and parallelism_manager is not None:
                     _parallelism_debug_snapshot(
                         base_env,
@@ -1545,6 +1591,7 @@ def main() -> int:
                     timestep=timestep,
                     step_probe=step_probe.snapshot_and_reset() if args_cli.debug_livestream else None,
                 )
+                print(f"[Play][trace] step_complete timestep={timestep}", flush=True)
 
                 if args_cli.video and timestep == args_cli.video_length:
                     break
@@ -1553,6 +1600,16 @@ def main() -> int:
 
     except KeyboardInterrupt:
         print("\n[Play] Interrupted by user")
+    except BaseException as exc:
+        import traceback
+
+        print(
+            f"\n[Play][trace] unexpected_exit type={type(exc).__name__} "
+            f"message={exc!s} timestep={timestep}",
+            flush=True,
+        )
+        traceback.print_exc()
+        raise
 
     finally:
         print(f"\n{'=' * 80}")

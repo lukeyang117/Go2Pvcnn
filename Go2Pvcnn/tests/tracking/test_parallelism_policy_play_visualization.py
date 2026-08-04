@@ -7,6 +7,19 @@ from types import SimpleNamespace
 from scripts import play
 
 
+def test_unbounded_play_loop_ignores_transient_app_running_false() -> None:
+    simulation_app = SimpleNamespace(is_running=lambda: False)
+
+    assert play._play_loop_should_continue(simulation_app, timestep=1, max_steps=0) is True
+
+
+def test_bounded_play_loop_stops_at_explicit_step_limit() -> None:
+    simulation_app = SimpleNamespace(is_running=lambda: False)
+
+    assert play._play_loop_should_continue(simulation_app, timestep=19, max_steps=20) is True
+    assert play._play_loop_should_continue(simulation_app, timestep=20, max_steps=20) is False
+
+
 def test_panel_command_clamps_to_signed_parallelism_limits() -> None:
     state = play.ParallelismPlayPanelState(vx=3.0, vy=-2.0, vyaw=-4.0)
     command = torch.zeros(1, 3, dtype=torch.float32)
@@ -164,12 +177,15 @@ def test_reference_articulation_receives_current_root_and_joint_frame() -> None:
             self.joint_vel = None
 
         def write_root_pose_to_sim(self, value):
+            assert torch.is_inference_mode_enabled()
             self.root_pose = value.clone()
 
         def write_root_velocity_to_sim(self, value):
+            assert torch.is_inference_mode_enabled()
             self.root_velocity = value.clone()
 
         def write_joint_state_to_sim(self, joint_pos, joint_vel):
+            assert torch.is_inference_mode_enabled()
             self.joint_pos = joint_pos.clone()
             self.joint_vel = joint_vel.clone()
 
