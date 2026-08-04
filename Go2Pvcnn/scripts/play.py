@@ -43,6 +43,27 @@ class ParallelismPlayPanelState:
     )
 
 
+def _parallelism_debug_command_from_env() -> tuple[float, float, float] | None:
+    """Read an optional fixed command used for non-interactive play diagnosis."""
+
+    value = os.environ.get("PARALLELISM_PLAY_DEBUG_COMMAND", "").strip()
+    if not value:
+        return None
+    try:
+        parts = tuple(float(part.strip()) for part in value.split(","))
+    except ValueError as exc:
+        raise ValueError(
+            "PARALLELISM_PLAY_DEBUG_COMMAND must be three comma-separated numbers, "
+            "for example 0.5,0,0"
+        ) from exc
+    if len(parts) != 3:
+        raise ValueError(
+            "PARALLELISM_PLAY_DEBUG_COMMAND must be three comma-separated numbers, "
+            "for example 0.5,0,0"
+        )
+    return parts
+
+
 def _panel_command_tensor(state: ParallelismPlayPanelState, command: torch.Tensor) -> torch.Tensor:
     """Return one clamped body-frame command in the command tensor's dtype/device."""
 
@@ -158,7 +179,9 @@ def _parallelism_contact_debug_data(base_env, *, env_id: int = 0) -> dict[str, o
 def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timestep: int) -> None:
     """Print the state boundaries needed to diagnose play-only alignment/reset issues."""
 
-    if timestep > 5 and not bool(torch.as_tensor(dones).any().item()):
+    phase = int(torch.as_tensor(manager.phase)[0].item())
+    plan_count = int(torch.as_tensor(manager.plan_count)[0].item())
+    if timestep > 5 and phase != 0 and not bool(torch.as_tensor(dones).any().item()) and timestep % 5 != 0:
         return
     frame = _parallelism_visual_frame(manager)
     policy_robot = base_env.scene["robot"]
@@ -178,12 +201,39 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
     effective_terminated = bool(torch.as_tensor(base_env.termination_manager._terminated_buf)[0].item())
     effective_truncated = bool(torch.as_tensor(base_env.termination_manager._truncated_buf)[0].item())
     episode_length = int(torch.as_tensor(base_env.episode_length_buf)[0].item())
+    command_manager = getattr(base_env, "command_manager", None)
+    command = None
+    if command_manager is not None and hasattr(command_manager, "get_command"):
+        command_value = command_manager.get_command("base_velocity")
+        if command_value is not None:
+            command = torch.as_tensor(command_value)[0].detach().cpu().tolist()
+    manager_start = torch.as_tensor(manager.root_pos_w[0, 0]).detach().cpu()
+    manager_delta = manager_root - manager_start
+    next_phase = min(phase + 1, int(manager.root_pos_w.shape[1]) - 1)
+    manager_step_delta = (
+        torch.as_tensor(manager.root_pos_w[0, next_phase]).detach().cpu()
+        - manager_root
+    )
+    plan_valid = bool(torch.as_tensor(manager.plan_valid)[0].item())
+    plan_valid_count = int(torch.as_tensor(manager.plan_valid_count)[0].item())
+    plan_reject_counts = torch.as_tensor(manager.plan_reject_counts)[0].detach().cpu().tolist()
+    plan_collision_count = int(torch.as_tensor(manager.plan_collision_counts)[0].item())
+    plan_per_leg_valid_count = torch.as_tensor(manager.plan_per_leg_valid_count)[0].detach().cpu().tolist()
+    plan_per_leg_collision_count = torch.as_tensor(manager.plan_per_leg_collision_count)[0].detach().cpu().tolist()
     print(
         "[Parallelism][debug] "
-        f"step={timestep} phase={int(torch.as_tensor(manager.phase)[0].item())} "
+        f"step={timestep} phase={phase} plan_count={plan_count} "
         f"episode_length={episode_length} "
+        f"command={command} "
         f"policy_root={policy_root.tolist()} manager_ref={manager_root.tolist()} "
         f"reference_data={reference_root.tolist()} env_origin={origin.tolist()} "
+        f"manager_delta_from_frame0={manager_delta.tolist()} "
+        f"manager_next_delta={manager_step_delta.tolist()} "
+        f"plan_valid={plan_valid} valid_candidates={plan_valid_count}/200 "
+        f"reject(valid_map,joint,landing,collision,candidate_semantic,fk_semantic)={plan_reject_counts} "
+        f"collision_candidates={plan_collision_count} "
+        f"per_leg_valid={plan_per_leg_valid_count} "
+        f"per_leg_collision={plan_per_leg_collision_count} "
         f"policy-ref={torch.linalg.vector_norm(policy_root - manager_root).item():.6f} "
         f"reference-ref={torch.linalg.vector_norm(reference_root - manager_root).item():.6f} "
         f"dones={torch.as_tensor(dones).detach().cpu().tolist()} "
@@ -1384,6 +1434,16 @@ def main() -> int:
         from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
 
         parallelism_panel_state = ParallelismPlayPanelState()
+        debug_command = _parallelism_debug_command_from_env()
+        if debug_command is not None:
+            parallelism_panel_state.vx, parallelism_panel_state.vy, parallelism_panel_state.vyaw = debug_command
+            print(
+                "[Parallelism][debug] fixed panel command enabled: "
+                f"vx={parallelism_panel_state.vx:+.3f} "
+                f"vy={parallelism_panel_state.vy:+.3f} "
+                f"vyaw={parallelism_panel_state.vyaw:+.3f}",
+                flush=True,
+            )
         if os.environ.get("PARALLELISM_PLAY_ALLOW_BASE_CONTACT_RESET", "").strip() == "1":
             parallelism_panel_state.suppress_termination["base_contact"] = False
         parallelism_manager = get_parallelism_reference_manager(base_env)

@@ -146,6 +146,12 @@ class ParallelismReferenceManager:
         self._cached_cycle = torch.full((self.num_envs,), -1, dtype=torch.long, device=self.device)
         self._initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.plan_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.plan_valid_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.plan_reject_counts = torch.zeros(self.num_envs, 6, dtype=torch.long, device=self.device)
+        self.plan_collision_counts = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.plan_per_leg_valid_count = torch.zeros(self.num_envs, 4, dtype=torch.long, device=self.device)
+        self.plan_per_leg_collision_count = torch.zeros(self.num_envs, 4, dtype=torch.long, device=self.device)
         self._manual_episode_length = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._step_reference_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
@@ -511,6 +517,12 @@ class ParallelismReferenceManager:
             if state.foot_pos_w is not None:
                 self.foot_pos_w[subset, 0] = state.foot_pos_w
             self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)
+            self.plan_valid[subset] = trajectory.valid
+            self.plan_valid_count[subset] = trajectory.diagnostics.candidate_valid.sum(dim=(1, 2)).to(dtype=torch.long)
+            self.plan_reject_counts[subset] = trajectory.diagnostics.candidate_reject_bits.sum(dim=(1, 2)).to(dtype=torch.long)
+            self.plan_collision_counts[subset] = trajectory.diagnostics.candidate_collision_bits.any(dim=-1).sum(dim=(1, 2)).to(dtype=torch.long)
+            self.plan_per_leg_valid_count[subset] = trajectory.diagnostics.candidate_valid.sum(dim=2).to(dtype=torch.long)
+            self.plan_per_leg_collision_count[subset] = trajectory.diagnostics.candidate_collision_bits.any(dim=-1).sum(dim=2).to(dtype=torch.long)
             self._cached_cycle[subset] = subset_cycle
             self._initialized[subset] = True
             self.plan_count[subset] += 1
