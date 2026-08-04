@@ -6,13 +6,15 @@ from tracking.mdp.curriculums import parallelism_velocity_curriculum
 from tracking.mdp.observations import (
     parallelism_ref_joint_pos_rel_t,
     parallelism_ref_joint_vel_t,
-    parallelism_ref_root_lin_vel_b_t,
+    parallelism_ref_root_pos_b_t,
+    parallelism_ref_root_rot_b_t,
 )
 from tracking.mdp.rewards import (
     parallelism_tracking_errors,
     reference_foot_pos_reward,
     reference_joint_pos_reward,
-    reference_root_lin_vel_reward,
+    reference_root_pos_reward,
+    reference_root_rot_reward,
 )
 from tracking.mdp.terminations import parallelism_ref_joint_pos_too_far
 
@@ -28,10 +30,8 @@ def _fake_env():
         step_joint_pos=torch.zeros(2, 12),
         current_joint_vel=torch.ones(2, 12),
         step_joint_vel=torch.ones(2, 12),
-        current_root_lin_vel_b_policy=torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.3, 0.0]]),
-        current_root_ang_vel_b_policy=torch.zeros(2, 3),
-        step_root_lin_vel_b_policy=torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.3, 0.0]]),
-        step_root_ang_vel_b_policy=torch.zeros(2, 3),
+        current_root_pos_b_policy=torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.3, 0.0]]),
+        current_root_rot_b_policy=torch.tensor([[0.0, 0.0, 0.1], [0.0, 0.2, 0.0]]),
         current_foot_pos_w=torch.tensor(
             [
                 [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
@@ -53,8 +53,6 @@ def _fake_env():
             joint_pos=torch.zeros(2, 12),
             joint_vel=torch.zeros(2, 12),
             default_joint_pos=torch.zeros(2, 12),
-            root_lin_vel_b=torch.zeros(2, 3),
-            root_ang_vel_b=torch.zeros(2, 3),
             root_pos_w=torch.zeros(2, 3),
             root_quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]),
             body_pos_w=torch.tensor(
@@ -81,10 +79,12 @@ def test_reference_position_observation_uses_next_frame():
     assert torch.allclose(parallelism_ref_joint_pos_rel_t(env), torch.full((2, 12), 0.25))
 
 
-def test_reference_root_velocity_observation_uses_policy_frame():
+def test_reference_root_pose_observations_use_policy_frame():
     env = _fake_env()
-    obs = parallelism_ref_root_lin_vel_b_t(env)
-    assert torch.equal(obs, env.parallelism_reference_manager.current_root_lin_vel_b_policy)
+    pos_obs = parallelism_ref_root_pos_b_t(env)
+    rot_obs = parallelism_ref_root_rot_b_t(env)
+    assert torch.equal(pos_obs, env.parallelism_reference_manager.current_root_pos_b_policy)
+    assert torch.equal(rot_obs, env.parallelism_reference_manager.current_root_rot_b_policy)
 
 
 def test_joint_reward_is_one_when_error_is_zero():
@@ -125,14 +125,12 @@ def test_joint_reward_tolerance_ignores_small_errors():
     assert torch.allclose(reward[0], expected)
 
 
-def test_reference_root_velocity_reward_tracks_reference_not_command():
+def test_reference_root_pose_rewards_track_relative_reference():
     env = _fake_env()
-    env.scene["robot"].data.root_lin_vel_b[:] = env.parallelism_reference_manager.current_root_lin_vel_b_policy
-    env.command_manager = SimpleNamespace(get_command=lambda name: torch.ones(2, 3) * 9.0)
-
-    reward = reference_root_lin_vel_reward(env)
-
-    assert torch.allclose(reward, torch.ones(2))
+    pos_reward = reference_root_pos_reward(env)
+    rot_reward = reference_root_rot_reward(env)
+    assert torch.allclose(pos_reward, torch.tensor([torch.exp(torch.tensor(-0.2**2 / 0.12**2)), torch.exp(torch.tensor(-0.3**2 / 0.12**2))]))
+    assert torch.allclose(rot_reward, torch.tensor([torch.exp(torch.tensor(-0.1**2 / 0.30**2)), torch.exp(torch.tensor(-0.2**2 / 0.30**2))]))
 
 
 def test_reference_foot_position_reward_is_one_when_feet_match():
@@ -157,17 +155,25 @@ def test_joint_pos_too_far_triggers_on_max_joint_error():
     assert done.tolist() == [False, True]
 
 
-def test_tracking_errors_use_episode_joint_mean_max_and_reference_velocity():
+def test_tracking_errors_use_episode_joint_mean_max_and_reference_pose():
     env = _fake_env()
-    env.scene["robot"].data.root_lin_vel_b[:] = env.parallelism_reference_manager.current_root_lin_vel_b_policy
     env.scene["robot"].data.joint_pos[0, 0] = 0.1
     env.scene["robot"].data.joint_pos[1, 0] = 0.6
 
     errors = parallelism_tracking_errors(env)
 
-    assert torch.allclose(errors["lin_vel_error"], torch.zeros(2))
+    assert torch.allclose(errors["root_pos_error"], torch.tensor([0.2, 0.3]))
     assert errors["joint_mean_error"][0] < 0.2
     assert errors["joint_max_error"][1] > 0.45
+
+
+def test_tracking_errors_report_relative_root_pose_metrics():
+    env = _fake_env()
+    errors = parallelism_tracking_errors(env)
+    assert torch.allclose(errors["root_pos_error"], torch.tensor([0.2, 0.3]))
+    assert torch.allclose(errors["root_rot_error"], torch.tensor([0.1, 0.2]))
+    assert torch.allclose(errors["episode_root_pos_error"], torch.tensor([0.2, 0.3]))
+    assert torch.allclose(errors["episode_root_rot_error"], torch.tensor([0.1, 0.2]))
 
 
 def test_tracking_error_cache_reuses_current_step_errors():
@@ -194,8 +200,8 @@ def test_velocity_curriculum_blocks_upgrade_when_episode_joint_max_is_high():
     env._parallelism_tracking_error_frames = torch.ones(2)
     env._parallelism_tracking_joint_mean_sum = torch.tensor([0.01, 0.01])
     env._parallelism_tracking_joint_max = torch.tensor([0.1, 0.7])
-    env._parallelism_tracking_lin_vel_sum = torch.zeros(2)
-    env._parallelism_tracking_ang_vel_sum = torch.zeros(2)
+    env._parallelism_tracking_root_pos_sum = torch.tensor([0.01, 0.02])
+    env._parallelism_tracking_root_rot_sum = torch.tensor([0.01, 0.02])
     ranges = SimpleNamespace(lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.05, 0.05), ang_vel_z=(-0.2, 0.2))
     limit_ranges = SimpleNamespace(lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-1.0, 1.0))
     env.command_manager = SimpleNamespace(get_term=lambda name: SimpleNamespace(cfg=SimpleNamespace(ranges=ranges, limit_ranges=limit_ranges)))
@@ -203,6 +209,8 @@ def test_velocity_curriculum_blocks_upgrade_when_episode_joint_max_is_high():
     level = parallelism_velocity_curriculum(
         env,
         torch.tensor([0, 1]),
+        root_pos_threshold=0.12,
+        root_rot_threshold=0.30,
         joint_mean_threshold=0.2,
         joint_max_threshold=0.45,
     )

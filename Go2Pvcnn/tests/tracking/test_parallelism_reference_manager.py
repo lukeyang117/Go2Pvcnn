@@ -178,6 +178,44 @@ def test_reference_root_velocity_uses_live_policy_root_frame(monkeypatch):
     assert torch.allclose(rotated, torch.tensor([[0.0, -1.0, 0.0]]), atol=1.0e-5)
 
 
+def test_reference_root_pose_uses_next_frame_in_live_policy_frame(monkeypatch):
+    env = _fake_env(num_envs=1)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+        manager.root_pos_w[env_ids] = 0.0
+        manager.root_rpy_w[env_ids] = 0.0
+        manager.root_pos_w[env_ids, 1, 0] = 1.0
+        manager.root_rpy_w[env_ids, 1, 2] = torch.pi / 2.0
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+
+    pos_b = manager.current_root_pos_b_policy
+    rot_b = manager.current_root_rot_b_policy
+    assert torch.allclose(pos_b, torch.tensor([[1.0, 0.0, 0.0]]), atol=1.0e-5)
+    assert torch.allclose(rot_b[:, 2], torch.tensor([torch.pi / 2.0]), atol=1.0e-5)
+
+
+def test_reference_root_pose_clamps_to_last_frame(monkeypatch):
+    env = _fake_env(num_envs=1)
+    env.episode_length_buf = torch.tensor([22])
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.root_pos_w[env_ids] = 0.0
+        manager.root_pos_w[env_ids, -1, 1] = 0.4
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+    assert torch.allclose(manager.current_root_pos_b_policy, torch.tensor([[0.0, 0.4, 0.0]]), atol=1.0e-5)
+
+
 def test_repeated_refresh_at_reset_does_not_replan(monkeypatch):
     env = _fake_env()
     env.episode_length_buf = torch.zeros(2, dtype=torch.long)

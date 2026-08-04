@@ -29,6 +29,8 @@ def test_parallelism_tracking_env_logs_episode_reference_metrics() -> None:
     assert "class ParallelismTrackingEnv" in source
     assert 'Episode_Tracking/episode_joint_mean_error' in source
     assert 'Episode_Tracking/episode_joint_max_error' in source
-    assert 'Episode_Tracking/episode_reference_root_lin_vel_error' in source
-    assert 'Episode_Tracking/episode_reference_root_ang_vel_error' in source
+    assert 'Episode_Tracking/episode_reference_root_pos_error' in source
+    assert 'Episode_Tracking/episode_reference_root_rot_error' in source
+    assert 'Episode_Tracking/episode_reference_root_lin_vel_error' not in source
+    assert 'Episode_Tracking/episode_reference_root_ang_vel_error' not in source
     assert 'entry_point="tracking.env:ParallelismTrackingEnv"' in registration

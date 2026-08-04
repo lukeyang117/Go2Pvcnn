@@ -4,7 +4,7 @@
 
 **Goal:** 将 Parallelism RL 的 root reference 改为当前 policy root 坐标系下的下一帧相对位置和相对姿态，并同步 root tracking metric。
 
-**Architecture:** `ParallelismReferenceManager` 继续维护规划轨迹和 `t -> t+1` 时间对齐，新增相对 root pose 的缓存访问器。`tracking.mdp.observations` 只读取 manager 的相对 pose；`tracking.mdp.rewards` 继续保留速度 reward/curriculum 所需的速度误差，同时新增位置和 axis-angle 姿态误差统计。配置和环境日志注册使用新的 observation 与 metric 名称。
+**Architecture:** `ParallelismReferenceManager` 继续维护规划轨迹和 `t -> t+1` 时间对齐，新增相对 root pose 的缓存访问器。`tracking.mdp.observations` 只读取 manager 的相对 pose；`tracking.mdp.rewards` 将 root position/root rotation 作为主 tracking reward，删除原 root velocity reward，并累计 position/axis-angle 姿态误差。curriculum 使用 root pose episode error 与 joint mean/max error 升级。配置和环境日志注册使用新的 observation、reward 与 metric 名称。
 
 **Tech Stack:** Python 3.10, PyTorch, IsaacLab manager-based RL, pytest。
 
@@ -14,7 +14,9 @@
 - policy 在真实状态 `t` 执行动作，reference 输入使用 `t+1`；末帧使用 `min(t+1, horizon-1)`。
 - root 相对位置使用当前 policy root frame；相对姿态使用 `q_policy^-1 * q_reference` 的 3 维 axis-angle。
 - actor/critic root reference 维度保持 6 维。
-- reward、termination、curriculum 的具体计算公式不修改；内部速度误差保留给现有 curriculum。
+- root pose reward 替代并删除原 root velocity reward。
+- curriculum 升级使用 `episode_root_pos_error`、`episode_root_rot_error`、`episode_joint_mean_error` 和 `episode_joint_max_error`。
+- termination 逻辑不修改。
 - 所有修改提交到当前 `Parallelism-flat-rl` 分支。
 
 ---
@@ -135,10 +137,12 @@
   git commit -m "feat: use relative root pose observations"
   ```
 
-### Task 3: Change root tracking metrics without changing velocity reward/curriculum
+### Task 3: Align root rewards, curriculum, and tracking metrics
 
 **Files:**
 - Modify: `Go2Pvcnn/tracking/mdp/rewards.py`
+- Modify: `Go2Pvcnn/tracking/mdp/curriculums.py`
+- Modify: `Go2Pvcnn/tracking/parallelism_tracking_env_cfg.py`
 - Modify: `Go2Pvcnn/tracking/env.py`
 - Modify: `Go2Pvcnn/tests/tracking/test_parallelism_tracking_mdp.py`
 - Modify: `Go2Pvcnn/tests/tracking/test_parallelism_tracking_registration_static.py`
@@ -146,7 +150,8 @@
 **Interfaces:**
 - Adds per-step `root_pos_error` and `root_rot_error`.
 - Adds episode `episode_root_pos_error` and `episode_root_rot_error`.
-- Keeps `lin_vel_error` and `ang_vel_error` internally for existing velocity curriculum and reward behavior.
+- Removes root velocity reward terms and their tracking-stat outputs.
+- Curriculum gates upgrades with root pose errors and joint mean/max errors.
 - Logs `Episode_Tracking/episode_reference_root_pos_error` and `Episode_Tracking/episode_reference_root_rot_error`.
 
 - [ ] **Step 1: Add failing metric tests.**
@@ -159,7 +164,11 @@
   pytest Go2Pvcnn/tests/tracking/test_parallelism_tracking_mdp.py -q
   ```
 
-- [ ] **Step 3: Accumulate pose metrics.**
+- [ ] **Step 3: Add root pose rewards.**
+
+  Add `reference_root_pos_reward` and `reference_root_rot_reward`. Both compare the post-action live root to the manager's next-frame target, use the existing Gaussian reward convention, and call the tracking-stat update. Delete the old root velocity reward functions and exports.
+
+- [ ] **Step 4: Accumulate pose metrics.**
 
   In `_current_parallelism_tracking_errors`, read the manager's relative root pose and compute:
 
@@ -170,17 +179,21 @@
 
   Add sum buffers, reset them with the other episode buffers, and return averaged episode values. Do not delete the existing velocity buffers because curriculum still consumes them.
 
-- [ ] **Step 4: Update environment metric names.**
+- [ ] **Step 5: Switch reward configuration and curriculum gates.**
+
+  Set inherited `track_lin_vel_xy` and `track_ang_vel_z` terms to `None`, add `track_root_pos` and `track_root_rot` as the primary terms. Update `parallelism_velocity_curriculum` to use `root_pos_threshold` and `root_rot_threshold` in place of velocity thresholds.
+
+- [ ] **Step 6: Update environment metric names.**
 
   Change the metric mapping in `tracking/env.py` to the new position/rotation names. Update static tests to require the new names and reject the old public root velocity metric names.
 
-- [ ] **Step 5: Run tracking tests.**
+- [ ] **Step 7: Run tracking tests.**
 
   ```bash
   pytest Go2Pvcnn/tests/tracking -q
   ```
 
-- [ ] **Step 6: Commit metric changes.**
+- [ ] **Step 8: Commit reward, curriculum, and metric changes.**
 
   ```bash
   git add Go2Pvcnn/tracking/mdp/rewards.py Go2Pvcnn/tracking/env.py Go2Pvcnn/tests/tracking/test_parallelism_tracking_mdp.py Go2Pvcnn/tests/tracking/test_parallelism_tracking_registration_static.py

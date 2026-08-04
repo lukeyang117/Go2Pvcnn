@@ -17,7 +17,8 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert '"threshold": 1.50' in source
     assert '"threshold": 0.30' in source
     assert '"threshold": 2.00' in source
-    assert '"ang_vel_threshold": 1.0' in source
+    assert '"root_pos_threshold": 0.12' in source
+    assert '"root_rot_threshold": 0.30' in source
     assert '"joint_max_threshold": 1.0' in source
 
 

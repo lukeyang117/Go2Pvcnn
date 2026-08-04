@@ -78,7 +78,7 @@ ref_root_rot_b = axis_angle_from_quat(q_relative)</code></pre>
     <li>不改变 Parallelism planner 的 root 预测方式。</li>
     <li>不把 root position 规划改成新的轨迹。</li>
     <li>不修改 joint reference、foot reference 或地图 observation。</li>
-    <li>不擅自修改 root velocity reward；速度 reward 仍按现有 Parallelism reference 速度计算。</li>
+    <li>删除原 root velocity reward；Parallelism manager 内部速度差分接口不在本次删除范围内。</li>
     <li>不修改 termination 和 curriculum 的阈值及公式。</li>
   </ul>
 
@@ -88,7 +88,7 @@ ref_root_rot_b = axis_angle_from_quat(q_relative)</code></pre>
     <li><code>Episode_Tracking/episode_reference_root_pos_error</code>：当前 policy root 与下一帧 reference root 的相对位置误差范数，单位为米。</li>
     <li><code>Episode_Tracking/episode_reference_root_rot_error</code>：当前 policy root 与下一帧 reference root 的相对姿态 axis-angle 范数，单位为弧度。</li>
   </ul>
-  <p>内部速度误差仍保留给现有 velocity reward 和 curriculum 使用，但不再作为 root reference tracking 的对外 metric。</p>
+  <p>RL 中删除原 root velocity reward；manager 内部速度差分仅保留给 Parallelism reference 接口使用。课程升级改用 root position/root rotation episode error 和 joint mean/max error，不再用速度误差作为升级条件。</p>
 
   <h2>8. 验证要求</h2>
   <ul>

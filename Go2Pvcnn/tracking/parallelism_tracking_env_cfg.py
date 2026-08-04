@@ -109,16 +109,16 @@ class ParallelismTrackingObservationsCfg(TeacherElevationTrajectoryMpcSemanticOb
         velocity_commands = None
         parallelism_ref_joint_pos = ObsTerm(func=tracking_mdp.parallelism_ref_joint_pos_rel_t)
         parallelism_ref_joint_vel = ObsTerm(func=tracking_mdp.parallelism_ref_joint_vel_t)
-        parallelism_ref_root_lin_vel = ObsTerm(func=tracking_mdp.parallelism_ref_root_lin_vel_b_t)
-        parallelism_ref_root_ang_vel = ObsTerm(func=tracking_mdp.parallelism_ref_root_ang_vel_b_t)
+        parallelism_ref_root_pos = ObsTerm(func=tracking_mdp.parallelism_ref_root_pos_b_t)
+        parallelism_ref_root_rot = ObsTerm(func=tracking_mdp.parallelism_ref_root_rot_b_t)
 
     @configclass
     class CriticStateCfg(TeacherElevationTrajectoryMpcSemanticObservationsCfg.CriticStateCfg):
         velocity_commands = None
         parallelism_ref_joint_pos = ObsTerm(func=tracking_mdp.parallelism_ref_joint_pos_rel_t)
         parallelism_ref_joint_vel = ObsTerm(func=tracking_mdp.parallelism_ref_joint_vel_t)
-        parallelism_ref_root_lin_vel = ObsTerm(func=tracking_mdp.parallelism_ref_root_lin_vel_b_t)
-        parallelism_ref_root_ang_vel = ObsTerm(func=tracking_mdp.parallelism_ref_root_ang_vel_b_t)
+        parallelism_ref_root_pos = ObsTerm(func=tracking_mdp.parallelism_ref_root_pos_b_t)
+        parallelism_ref_root_rot = ObsTerm(func=tracking_mdp.parallelism_ref_root_rot_b_t)
 
     @configclass
     class PolicyElevationSemanticMapCfg(TeacherElevationTrajectoryMpcSemanticObservationsCfg.PolicyElevationSemanticMapCfg):
@@ -146,15 +146,17 @@ class ParallelismTrackingObservationsCfg(TeacherElevationTrajectoryMpcSemanticOb
 
 @configclass
 class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewardsCfg):
-    track_lin_vel_xy = RewTerm(
-        func=tracking_mdp.reference_root_lin_vel_reward,
+    track_lin_vel_xy = None
+    track_ang_vel_z = None
+    track_root_pos = RewTerm(
+        func=tracking_mdp.reference_root_pos_reward,
         weight=1.5,
-        params={"std": math.sqrt(0.25)},
+        params={"std": 0.12},
     )
-    track_ang_vel_z = RewTerm(
-        func=tracking_mdp.reference_root_ang_vel_reward,
+    track_root_rot = RewTerm(
+        func=tracking_mdp.reference_root_rot_reward,
         weight=0.75,
-        params={"std": math.sqrt(0.25)},
+        params={"std": 0.30},
     )
     reference_joint_pos = RewTerm(
         func=tracking_mdp.reference_joint_pos_reward,
@@ -219,8 +221,8 @@ class ParallelismTrackingCurriculumCfg:
         params={
             "command_name": "base_velocity",
             "max_level": 10,
-            "lin_vel_threshold": 0.30,
-            "ang_vel_threshold": 1.0,
+            "root_pos_threshold": 0.12,
+            "root_rot_threshold": 0.30,
             "joint_mean_threshold": 0.22,
             "joint_max_threshold": 1.0,
         },

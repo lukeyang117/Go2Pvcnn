@@ -24,8 +24,8 @@ def parallelism_velocity_curriculum(
     env_ids: Sequence[int],
     command_name: str = "base_velocity",
     max_level: int = 10,
-    lin_vel_threshold: float = 0.25,
-    ang_vel_threshold: float = 0.35,
+    root_pos_threshold: float = 0.12,
+    root_rot_threshold: float = 0.30,
     joint_mean_threshold: float = 0.20,
     joint_max_threshold: float = 0.45,
 ) -> torch.Tensor:
@@ -48,8 +48,8 @@ def parallelism_velocity_curriculum(
     success = (
         torch.as_tensor(time_out, dtype=torch.bool, device=device)[ids]
         & ~torch.as_tensor(terminated, dtype=torch.bool, device=device)[ids]
-        & (errors["episode_lin_vel_error"][ids] < float(lin_vel_threshold))
-        & (errors["episode_ang_vel_error"][ids] < float(ang_vel_threshold))
+        & (errors["episode_root_pos_error"][ids] < float(root_pos_threshold))
+        & (errors["episode_root_rot_error"][ids] < float(root_rot_threshold))
         & (errors["episode_joint_mean_error"][ids] < float(joint_mean_threshold))
         & (errors["episode_joint_max_error"][ids] < float(joint_max_threshold))
     )

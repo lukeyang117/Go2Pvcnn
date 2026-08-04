@@ -119,6 +119,68 @@ def _rpy_to_matrix_wxyz(rpy: Tensor) -> Tensor:
     return matrix
 
 
+def _rpy_to_quat_wxyz(rpy: Tensor) -> Tensor:
+    """Convert batched XYZ roll-pitch-yaw values to wxyz quaternions."""
+
+    roll, pitch, yaw = torch.as_tensor(rpy).unbind(dim=-1)
+    half = rpy.new_tensor(0.5)
+    cr, sr = torch.cos(roll * half), torch.sin(roll * half)
+    cp, sp = torch.cos(pitch * half), torch.sin(pitch * half)
+    cy, sy = torch.cos(yaw * half), torch.sin(yaw * half)
+    return torch.stack(
+        (
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+        ),
+        dim=-1,
+    )
+
+
+def _quat_inverse_wxyz(quat: Tensor) -> Tensor:
+    q = torch.as_tensor(quat)
+    norm_sq = torch.sum(torch.square(q), dim=-1, keepdim=True).clamp_min(1.0e-12)
+    conjugate = q * q.new_tensor([1.0, -1.0, -1.0, -1.0])
+    return conjugate / norm_sq
+
+
+def _quat_mul_wxyz(lhs: Tensor, rhs: Tensor) -> Tensor:
+    lw, lx, ly, lz = lhs.unbind(dim=-1)
+    rw, rx, ry, rz = rhs.unbind(dim=-1)
+    return torch.stack(
+        (
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+        ),
+        dim=-1,
+    )
+
+
+def _axis_angle_from_quat_wxyz(quat: Tensor) -> Tensor:
+    """Convert normalized-or-nearly-normalized wxyz quaternions to axis-angle."""
+
+    q = torch.as_tensor(quat)
+    q = q / torch.linalg.vector_norm(q, dim=-1, keepdim=True).clamp_min(1.0e-12)
+    q = torch.where(q[..., :1] < 0.0, -q, q)
+    w = q[..., :1].clamp(-1.0, 1.0)
+    xyz = q[..., 1:]
+    angle = 2.0 * torch.acos(w)
+    sin_half = torch.sqrt(torch.clamp(1.0 - torch.square(w), min=1.0e-12))
+    regular = xyz / sin_half * angle
+    small = torch.abs(angle) < 1.0e-5
+    return torch.where(small, 2.0 * xyz, regular)
+
+
+def _rotate_inverse_wxyz(quat: Tensor, vectors: Tensor) -> Tensor:
+    """Rotate world-frame vectors into the inverse of a wxyz quaternion frame."""
+
+    matrix_w = _quat_to_matrix_wxyz(quat)
+    return torch.matmul(matrix_w.transpose(-1, -2), vectors.unsqueeze(-1)).squeeze(-1)
+
+
 class ParallelismReferenceManager:
     """Owns 24-frame parallelism references and exposes the current phase frame."""
 
@@ -296,6 +358,31 @@ class ParallelismReferenceManager:
         if not bool(torch.all(self._step_reference_valid)):
             self.prepare_step_reference()
         return self._step_root_ang_vel_b_policy
+
+    @property
+    def current_root_pos_b_policy(self) -> Tensor:
+        """Next reference root position relative to the live policy root frame."""
+
+        self.refresh()
+        target_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
+        reference_pos_w = self._take(self.root_pos_w, target_phase)
+        robot = self._robot()
+        policy_pos_w = torch.as_tensor(robot.data.root_pos_w, dtype=reference_pos_w.dtype, device=reference_pos_w.device)
+        policy_quat_w = torch.as_tensor(robot.data.root_quat_w, dtype=reference_pos_w.dtype, device=reference_pos_w.device)
+        return _rotate_inverse_wxyz(policy_quat_w, reference_pos_w - policy_pos_w)
+
+    @property
+    def current_root_rot_b_policy(self) -> Tensor:
+        """Next reference root orientation relative to the live policy root frame."""
+
+        self.refresh()
+        target_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
+        reference_rpy_w = self._take(self.root_rpy_w, target_phase)
+        reference_quat_w = _rpy_to_quat_wxyz(reference_rpy_w)
+        robot = self._robot()
+        policy_quat_w = torch.as_tensor(robot.data.root_quat_w, dtype=reference_quat_w.dtype, device=reference_quat_w.device)
+        relative_quat = _quat_mul_wxyz(_quat_inverse_wxyz(policy_quat_w), reference_quat_w)
+        return _axis_angle_from_quat_wxyz(relative_quat)
 
     @property
     def current_joint_pos(self) -> Tensor:
