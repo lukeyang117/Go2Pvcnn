@@ -11,7 +11,9 @@ from tracking.mdp.observations import (
 )
 from tracking.mdp.rewards import (
     parallelism_tracking_errors,
+    reference_active_swing_foot_max_reward,
     reference_foot_pos_reward,
+    reference_joint_max_reward,
     reference_joint_pos_reward,
     reference_root_pos_reward,
     reference_root_rot_reward,
@@ -146,6 +148,45 @@ def test_reference_foot_position_reward_is_one_when_feet_match():
     reward = reference_foot_pos_reward(env)
 
     assert torch.allclose(reward, torch.ones(2))
+
+
+def test_active_swing_worst_foot_reward_uses_only_worst_active_leg():
+    env = _fake_env()
+    env.parallelism_reference_manager.current_contact_state[:] = torch.tensor([False, True, True, False])
+    env.scene["robot"].data.body_pos_w[:, 0, 0] += 0.05
+    env.scene["robot"].data.body_pos_w[:, 3, 0] += 0.10
+
+    reward = reference_active_swing_foot_max_reward(env, std=0.12)
+
+    expected = torch.exp(torch.tensor(-(0.10 / 0.12) ** 2))
+    assert torch.allclose(reward, torch.full((2,), expected))
+
+
+def test_active_swing_worst_foot_reward_ignores_stance_error():
+    env = _fake_env()
+    env.parallelism_reference_manager.current_contact_state[:] = torch.tensor([False, True, True, False])
+    env.scene["robot"].data.body_pos_w[:, 1, 0] += 1.0
+
+    reward = reference_active_swing_foot_max_reward(env)
+
+    assert torch.allclose(reward, torch.ones(2))
+
+
+def test_active_swing_worst_foot_reward_is_zero_without_swing_legs():
+    env = _fake_env()
+
+    reward = reference_active_swing_foot_max_reward(env)
+
+    assert torch.allclose(reward, torch.zeros(2))
+
+
+def test_joint_max_reward_uses_worst_of_all_twelve_joints():
+    env = _fake_env()
+    env.scene["robot"].data.joint_pos[:, 7] = 0.8
+
+    reward = reference_joint_max_reward(env, std=0.8)
+
+    assert torch.allclose(reward, torch.full((2,), torch.exp(torch.tensor(-1.0))))
 
 
 def test_joint_pos_too_far_triggers_on_max_joint_error():

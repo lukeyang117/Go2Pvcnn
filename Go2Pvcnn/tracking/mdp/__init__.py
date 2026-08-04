@@ -8,9 +8,11 @@ from tracking.mdp.observations import (
     parallelism_ref_root_rot_b_t,
 )
 from tracking.mdp.rewards import (
+    reference_active_swing_foot_max_reward,
     reference_joint_pos_reward,
     reference_joint_vel_reward,
     reference_foot_pos_reward,
+    reference_joint_max_reward,
     reference_root_pos_reward,
     reference_root_rot_reward,
 )
@@ -31,9 +33,11 @@ __all__ = [
     "parallelism_ref_root_rot_b_t",
     "parallelism_ref_root_z_too_far",
     "parallelism_velocity_curriculum",
+    "reference_active_swing_foot_max_reward",
     "reference_joint_pos_reward",
     "reference_joint_vel_reward",
     "reference_foot_pos_reward",
+    "reference_joint_max_reward",
     "reference_root_pos_reward",
     "reference_root_rot_reward",
 ]

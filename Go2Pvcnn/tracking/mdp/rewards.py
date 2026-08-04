@@ -248,6 +248,18 @@ def reference_joint_vel_reward(
     return _gaussian_error_reward(error, std)
 
 
+def reference_joint_max_reward(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    std: float = 0.8,
+) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    ref = get_parallelism_reference_manager(env).step_joint_pos
+    actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
+    worst_error = torch.abs(actual - ref).amax(dim=-1)
+    return torch.exp(-torch.square(worst_error / float(std)))
+
+
 def reference_root_pos_reward(env, std: float = 0.12) -> torch.Tensor:
     """Primary reward for tracking the next Parallelism root position."""
 
@@ -291,6 +303,29 @@ def reference_foot_pos_reward(
     squared_error = torch.sum(torch.square(actual_b - ref_b), dim=-1)
     normalized_error = torch.sum(weight * squared_error, dim=-1) / torch.clamp_min(torch.sum(weight, dim=-1), 1.0e-6)
     return torch.exp(-normalized_error / (float(std) * float(std)))
+
+
+def reference_active_swing_foot_max_reward(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*_foot"),
+    std: float = 0.12,
+) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    manager = get_parallelism_reference_manager(env)
+    ref_w = manager.step_foot_pos_w
+    actual_w = _actual_foot_pos_w(asset, asset_cfg, ref_w)
+    root_pos = torch.as_tensor(asset.data.root_pos_w, dtype=ref_w.dtype, device=ref_w.device)
+    root_quat = torch.as_tensor(asset.data.root_quat_w, dtype=ref_w.dtype, device=ref_w.device)
+    foot_error = torch.linalg.vector_norm(
+        _points_to_root_frame(actual_w, root_pos, root_quat)
+        - _points_to_root_frame(ref_w, root_pos, root_quat),
+        dim=-1,
+    )
+    swing = ~torch.as_tensor(manager.current_contact_state, dtype=torch.bool, device=ref_w.device)
+    has_swing = swing.any(dim=-1)
+    worst_error = torch.where(swing, foot_error, torch.full_like(foot_error, -torch.inf)).amax(dim=-1)
+    reward = torch.exp(-torch.square(worst_error / float(std)))
+    return torch.where(has_swing, reward, torch.zeros_like(reward))
 
 
 def parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> dict[str, torch.Tensor]:
