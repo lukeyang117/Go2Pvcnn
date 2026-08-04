@@ -47,7 +47,7 @@ def parallelism_ref_root_z_too_far(
     threshold: float = 0.25,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref_z = get_parallelism_reference_manager(env).current_root_pos_w[:, 2]
+    ref_z = get_parallelism_reference_manager(env).step_root_pos_w[:, 2]
     return torch.abs(asset.data.root_pos_w[:, 2].to(device=ref_z.device, dtype=ref_z.dtype) - ref_z) > float(threshold)
 
 
@@ -57,7 +57,7 @@ def parallelism_ref_joint_pos_too_far(
     threshold: float = 0.8,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref = get_parallelism_reference_manager(env).current_joint_pos
+    ref = get_parallelism_reference_manager(env).step_joint_pos
     actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
     error = torch.max(torch.abs(actual - ref), dim=-1).values
     return error > float(threshold)
@@ -69,7 +69,7 @@ def parallelism_ref_foot_z_too_far(
     threshold: float = 0.25,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref = get_parallelism_reference_manager(env).current_foot_pos_w[..., 2]
+    ref = get_parallelism_reference_manager(env).step_foot_pos_w[..., 2]
     if getattr(asset_cfg, "body_ids", None) is not None:
         body_pos = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
     else:
@@ -87,7 +87,7 @@ def parallelism_ref_projected_gravity_too_far(
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     manager = get_parallelism_reference_manager(env)
-    ref_rpy = manager.current_root_rpy_w
+    ref_rpy = manager.step_root_rpy_w
     ref_quat = euler_to_quat_batch(ref_rpy[:, 0], ref_rpy[:, 1], ref_rpy[:, 2])
     root_quat = torch.as_tensor(asset.data.root_quat_w, dtype=ref_quat.dtype, device=ref_quat.device)
     gravity = getattr(asset.data, "GRAVITY_VEC_W", None)

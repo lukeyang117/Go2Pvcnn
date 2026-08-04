@@ -24,15 +24,28 @@ class _Scene(dict):
 def _fake_env():
     manager = SimpleNamespace(
         current_joint_pos=torch.zeros(2, 12),
+        next_joint_pos=torch.zeros(2, 12),
+        step_joint_pos=torch.zeros(2, 12),
         current_joint_vel=torch.ones(2, 12),
+        step_joint_vel=torch.ones(2, 12),
         current_root_lin_vel_b_policy=torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.3, 0.0]]),
         current_root_ang_vel_b_policy=torch.zeros(2, 3),
+        step_root_lin_vel_b_policy=torch.tensor([[0.2, 0.0, 0.0], [0.0, 0.3, 0.0]]),
+        step_root_ang_vel_b_policy=torch.zeros(2, 3),
         current_foot_pos_w=torch.tensor(
             [
                 [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
                 [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
             ]
         ),
+        step_foot_pos_w=torch.tensor(
+            [
+                [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
+                [[0.2, 0.1, 0.0], [0.2, -0.1, 0.0], [-0.2, 0.1, 0.0], [-0.2, -0.1, 0.0]],
+            ]
+        ),
+        step_root_pos_w=torch.zeros(2, 3),
+        step_root_rpy_w=torch.zeros(2, 3),
         current_contact_state=torch.ones(2, 4, dtype=torch.bool),
     )
     robot = SimpleNamespace(
@@ -62,6 +75,12 @@ def test_reference_observation_shapes():
     assert parallelism_ref_joint_vel_t(env).shape == (2, 12)
 
 
+def test_reference_position_observation_uses_next_frame():
+    env = _fake_env()
+    env.parallelism_reference_manager.next_joint_pos[:] = 0.25
+    assert torch.allclose(parallelism_ref_joint_pos_rel_t(env), torch.full((2, 12), 0.25))
+
+
 def test_reference_root_velocity_observation_uses_policy_frame():
     env = _fake_env()
     obs = parallelism_ref_root_lin_vel_b_t(env)
@@ -72,6 +91,16 @@ def test_joint_reward_is_one_when_error_is_zero():
     env = _fake_env()
     reward = reference_joint_pos_reward(env)
     assert torch.allclose(reward, torch.ones(2))
+
+
+def test_joint_reward_uses_step_target_not_current_reference():
+    env = _fake_env()
+    env.parallelism_reference_manager.step_joint_pos[:] = 0.1
+
+    reward = reference_joint_pos_reward(env, std=0.5)
+
+    expected = torch.exp(torch.tensor(-(12.0 * 0.1**2) / (0.5**2)))
+    assert torch.allclose(reward, torch.full((2,), expected))
 
 
 def test_joint_reward_uses_instinctlab_sum_square_gaussian():

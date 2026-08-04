@@ -20,6 +20,7 @@ Usage:
 import argparse
 import math
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -62,6 +63,51 @@ def build_run_log_dir(
     if mkdir:
         os.makedirs(out, exist_ok=True)
     return out
+
+
+def get_git_short_hash(repo_root: str | os.PathLike[str]) -> str:
+    """Return the short HEAD hash used to version a training run directory."""
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", os.fspath(repo_root), "rev-parse", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"Unable to resolve Git HEAD for training output: {repo_root}") from exc
+    git_hash = result.stdout.strip()
+    if not git_hash:
+        raise RuntimeError(f"Git returned an empty HEAD hash for training output: {repo_root}")
+    return git_hash
+
+
+def find_latest_run_dir(log_root_path: str | os.PathLike[str]) -> str | None:
+    """Find the newest old-style or date/hash-style run directory."""
+
+    root = os.path.abspath(os.fspath(log_root_path))
+    if not os.path.isdir(root):
+        return None
+    candidates: list[str] = []
+    for entry in os.scandir(root):
+        if not entry.is_dir():
+            continue
+        date_dir = entry.path
+        if any(child.name.startswith("model_") and child.name.endswith(".pt") for child in os.scandir(date_dir)):
+            candidates.append(date_dir)
+            continue
+        for hash_entry in os.scandir(date_dir):
+            if not hash_entry.is_dir():
+                continue
+            if any(
+                child.name.startswith("model_") and child.name.endswith(".pt")
+                for child in os.scandir(hash_entry.path)
+            ):
+                candidates.append(hash_entry.path)
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -549,8 +595,9 @@ def main() -> int:
     log_root_path = os.path.abspath(log_root_path)
     
     if rank == 0:
-        log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_dir = os.path.join(log_root_path, log_dir)
+        date_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        git_hash = get_git_short_hash(GO2PVCNN_ROOT)
+        log_dir = os.path.join(log_root_path, date_dir, git_hash)
         os.makedirs(log_dir, exist_ok=True)
         print(f"[Logging] Directory: {log_dir}")
         
@@ -763,9 +810,7 @@ def main() -> int:
             resume_path = os.path.join(log_root_path, args_cli.load_run)
         else:
             # Find latest run
-            runs = [d for d in os.listdir(log_root_path) if os.path.isdir(os.path.join(log_root_path, d))]
-            runs.sort()
-            resume_path = os.path.join(log_root_path, runs[-1]) if runs else None
+            resume_path = find_latest_run_dir(log_root_path)
         
         if resume_path is None:
             raise ValueError("No run found to resume from!")

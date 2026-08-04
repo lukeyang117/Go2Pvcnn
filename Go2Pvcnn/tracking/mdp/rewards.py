@@ -61,15 +61,15 @@ def _actual_foot_pos_w(asset, asset_cfg: SceneEntityCfg, ref: torch.Tensor) -> t
 def _current_parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg) -> dict[str, torch.Tensor]:
     asset = env.scene[asset_cfg.name]
     manager = get_parallelism_reference_manager(env)
-    ref_lin = manager.current_root_lin_vel_b_policy
-    ref_ang = manager.current_root_ang_vel_b_policy
+    ref_lin = manager.step_root_lin_vel_b_policy
+    ref_ang = manager.step_root_ang_vel_b_policy
     actual_lin = torch.as_tensor(asset.data.root_lin_vel_b, dtype=ref_lin.dtype, device=ref_lin.device)
     actual_ang = torch.as_tensor(asset.data.root_ang_vel_b, dtype=ref_ang.dtype, device=ref_ang.device)
-    ref_joint = manager.current_joint_pos
+    ref_joint = manager.step_joint_pos
     actual_joint = torch.as_tensor(asset.data.joint_pos, dtype=ref_joint.dtype, device=ref_joint.device)
     joint_abs_error = torch.abs(actual_joint - ref_joint)
     if hasattr(asset.data, "body_pos_w"):
-        ref_foot = manager.current_foot_pos_w
+        ref_foot = manager.step_foot_pos_w
         actual_foot = _actual_foot_pos_w(
             asset,
             SceneEntityCfg(asset_cfg.name, body_names=".*_foot"),
@@ -229,7 +229,7 @@ def reference_joint_pos_reward(
     tracking_tolerance: float = 0.0,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref = get_parallelism_reference_manager(env).current_joint_pos
+    ref = get_parallelism_reference_manager(env).step_joint_pos
     actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
     update_parallelism_tracking_error_stats(env, asset_cfg)
     error = _tolerance(actual - ref, tracking_tolerance)
@@ -243,7 +243,7 @@ def reference_joint_vel_reward(
     tracking_tolerance: float = 0.0,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref = get_parallelism_reference_manager(env).current_joint_vel
+    ref = get_parallelism_reference_manager(env).step_joint_vel
     actual = torch.as_tensor(asset.data.joint_vel, dtype=ref.dtype, device=ref.device)
     update_parallelism_tracking_error_stats(env, asset_cfg)
     error = _tolerance(actual - ref, tracking_tolerance)
@@ -256,7 +256,7 @@ def reference_root_lin_vel_reward(
     std: float = 0.5,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref = get_parallelism_reference_manager(env).current_root_lin_vel_b_policy
+    ref = get_parallelism_reference_manager(env).step_root_lin_vel_b_policy
     actual = torch.as_tensor(asset.data.root_lin_vel_b, dtype=ref.dtype, device=ref.device)
     update_parallelism_tracking_error_stats(env, asset_cfg)
     return _gaussian_error_reward(actual - ref, std)
@@ -268,7 +268,7 @@ def reference_root_ang_vel_reward(
     std: float = 0.5,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
-    ref = get_parallelism_reference_manager(env).current_root_ang_vel_b_policy
+    ref = get_parallelism_reference_manager(env).step_root_ang_vel_b_policy
     actual = torch.as_tensor(asset.data.root_ang_vel_b, dtype=ref.dtype, device=ref.device)
     update_parallelism_tracking_error_stats(env, asset_cfg)
     return _gaussian_error_reward(actual - ref, std)
@@ -283,7 +283,7 @@ def reference_foot_pos_reward(
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     manager = get_parallelism_reference_manager(env)
-    ref_w = manager.current_foot_pos_w
+    ref_w = manager.step_foot_pos_w
     actual_w = _actual_foot_pos_w(asset, asset_cfg, ref_w)
     root_pos = torch.as_tensor(asset.data.root_pos_w, dtype=ref_w.dtype, device=ref_w.device)
     root_quat = torch.as_tensor(asset.data.root_quat_w, dtype=ref_w.dtype, device=ref_w.device)

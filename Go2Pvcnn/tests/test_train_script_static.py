@@ -42,3 +42,12 @@ def test_train_exposes_mpc_num_envs_cli_override() -> None:
     assert source.index("env_cfg.scene.num_envs = args_cli.num_envs") < source.index(
         "env_cfg.mpc_planner_cfg.runtime.parallel_plan_batch_size = int(args_cli.mpc_num_envs)"
     )
+
+
+def test_train_versions_run_directory_by_git_short_hash_without_tag_file() -> None:
+    source = _source()
+    assert "get_git_short_hash" in source
+    assert "date_dir" in source
+    assert "git_hash" in source
+    assert "os.path.join(log_root_path, date_dir, git_hash)" in source
+    assert '"tag.txt"' not in source

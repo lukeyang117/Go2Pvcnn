@@ -60,7 +60,7 @@ def _fake_env_with_scanner(num_envs: int = 2):
     return env, ray_hits[..., 2].reshape(num_envs, side, side), semantic, valid
 
 
-def test_manager_replans_on_reset_and_after_horizon(monkeypatch):
+def test_manager_replans_after_the_phase_22_to_23_transition(monkeypatch):
     env = _fake_env()
     manager = ParallelismReferenceManager(env, autostart=False)
 
@@ -75,7 +75,7 @@ def test_manager_replans_on_reset_and_after_horizon(monkeypatch):
     manager.reset(torch.tensor([0, 1]))
     assert torch.all(manager.phase == 0)
     first_plan_count = manager.plan_count.clone()
-    for _ in range(23):
+    for _ in range(22):
         manager.step()
     assert torch.equal(manager.plan_count, first_plan_count)
     manager.step()
@@ -98,6 +98,59 @@ def test_current_joint_velocity_uses_finite_difference(monkeypatch):
     manager.reset()
     vel = manager.current_joint_vel
     assert torch.allclose(vel, torch.full((2, 12), 1.0 / manager.dt))
+
+
+def test_next_joint_position_is_the_target_for_the_current_action(monkeypatch):
+    env = _fake_env(num_envs=1)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+        manager.joint_pos[env_ids] = torch.arange(manager.horizon, dtype=torch.float32).view(1, -1, 1).repeat(
+            int(env_ids.numel()), 1, 12
+        )
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+
+    assert torch.allclose(manager.current_joint_pos, torch.zeros(1, 12))
+    assert torch.allclose(manager.next_joint_pos, torch.ones(1, 12))
+
+    env.episode_length_buf = torch.tensor([5])
+    assert torch.allclose(manager.next_joint_pos, torch.full((1, 12), 6.0))
+
+
+def test_phase_22_snapshot_uses_frame_23_then_refreshes_to_new_phase_zero(monkeypatch):
+    env = _fake_env(num_envs=1)
+    env.episode_length_buf = torch.tensor([22])
+    manager = ParallelismReferenceManager(env, autostart=False)
+    plan_cycles = []
+
+    def fake_plan(env_ids, cycle):
+        plan_cycles.append(int(cycle[0]))
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+        values = torch.arange(manager.horizon, dtype=torch.float32).view(1, -1, 1).repeat(
+            int(env_ids.numel()), 1, 12
+        )
+        manager.joint_pos[env_ids] = values
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+    plan_cycles.clear()
+
+    manager.prepare_step_reference()
+    assert manager.phase.item() == 22
+    assert torch.allclose(manager.step_joint_pos, torch.full((1, 12), 23.0))
+    assert torch.allclose(manager.step_joint_vel, torch.full((1, 12), 1.0 / manager.dt))
+
+    env.episode_length_buf[:] = 23
+    manager.refresh()
+    assert manager.phase.item() == 0
+    assert plan_cycles == [1]
 
 
 def test_reference_root_velocity_uses_live_policy_root_frame(monkeypatch):

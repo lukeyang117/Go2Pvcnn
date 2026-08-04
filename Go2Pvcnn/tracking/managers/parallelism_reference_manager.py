@@ -147,6 +147,7 @@ class ParallelismReferenceManager:
         self._initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._manual_episode_length = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._step_reference_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.root_pos_w = torch.zeros(self.num_envs, self.horizon, 3, dtype=torch.float32, device=self.device)
         self.root_rpy_w = torch.zeros_like(self.root_pos_w)
@@ -154,6 +155,13 @@ class ParallelismReferenceManager:
         self.foot_pos_w = torch.zeros(self.num_envs, self.horizon, 4, 3, dtype=torch.float32, device=self.device)
         self.contact_state = torch.ones(self.num_envs, self.horizon, 4, dtype=torch.bool, device=self.device)
         self.valid = torch.zeros(self.num_envs, self.horizon, dtype=torch.bool, device=self.device)
+        self._step_joint_pos = torch.zeros(self.num_envs, 12, dtype=torch.float32, device=self.device)
+        self._step_joint_vel = torch.zeros_like(self._step_joint_pos)
+        self._step_foot_pos_w = torch.zeros(self.num_envs, 4, 3, dtype=torch.float32, device=self.device)
+        self._step_root_pos_w = torch.zeros(self.num_envs, 3, dtype=torch.float32, device=self.device)
+        self._step_root_rpy_w = torch.zeros_like(self._step_root_pos_w)
+        self._step_root_lin_vel_b_policy = torch.zeros_like(self._step_root_pos_w)
+        self._step_root_ang_vel_b_policy = torch.zeros_like(self._step_root_pos_w)
         self._install_env_reset_hook()
 
         if autostart:
@@ -161,8 +169,9 @@ class ParallelismReferenceManager:
 
     def refresh(self) -> None:
         episode_length = self._episode_length()
-        cycle = torch.div(episode_length, self.horizon, rounding_mode="floor")
-        phase = torch.remainder(episode_length, self.horizon)
+        planning_stride = max(self.horizon - 1, 1)
+        cycle = torch.div(episode_length, planning_stride, rounding_mode="floor")
+        phase = torch.remainder(episode_length, planning_stride)
         reset_mask = (episode_length == 0) & ((~self._initialized) | (self._cached_cycle != 0))
         needs_plan = (~self._initialized) | reset_mask | (cycle != self._cached_cycle)
         env_ids = needs_plan.nonzero(as_tuple=False).flatten()
@@ -177,6 +186,7 @@ class ParallelismReferenceManager:
         cycle = torch.zeros_like(ids, dtype=torch.long, device=self.device)
         self._manual_episode_length[ids] = 0
         self.phase[ids] = 0
+        self._step_reference_valid[ids] = False
         self._plan(ids, cycle)
 
     def _install_env_reset_hook(self) -> None:
@@ -199,6 +209,75 @@ class ParallelismReferenceManager:
     def step(self) -> None:
         self._manual_episode_length += 1
         self.refresh()
+
+    def prepare_step_reference(self) -> None:
+        """Cache the target frame and current-to-next velocities before physics."""
+
+        self.refresh()
+        start_phase = self.phase
+        target_phase = torch.clamp(start_phase + 1, max=self.horizon - 1)
+        self._step_joint_pos.copy_(self._take(self.joint_pos, target_phase))
+        start_joint = self._take(self.joint_pos, start_phase)
+        target_joint = self._take(self.joint_pos, target_phase)
+        self._step_joint_vel.copy_((target_joint - start_joint) / max(self.dt, 1.0e-6))
+        self._step_foot_pos_w.copy_(self._take(self.foot_pos_w, target_phase))
+        self._step_root_pos_w.copy_(self._take(self.root_pos_w, target_phase))
+        self._step_root_rpy_w.copy_(self._take(self.root_rpy_w, target_phase))
+        self._step_root_lin_vel_b_policy.copy_(
+            self._root_velocity_b_policy(self.root_pos_w, self.root_rpy_w, start_phase, target_phase)
+        )
+        self._step_root_ang_vel_b_policy.copy_(
+            self._angular_velocity_b_policy(self.root_rpy_w, start_phase, target_phase)
+        )
+        self._step_reference_valid[:] = True
+
+    @property
+    def next_joint_pos(self) -> Tensor:
+        self.refresh()
+        next_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
+        return self._take(self.joint_pos, next_phase)
+
+    @property
+    def step_joint_pos(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_joint_pos
+
+    @property
+    def step_joint_vel(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_joint_vel
+
+    @property
+    def step_foot_pos_w(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_foot_pos_w
+
+    @property
+    def step_root_pos_w(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_root_pos_w
+
+    @property
+    def step_root_rpy_w(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_root_rpy_w
+
+    @property
+    def step_root_lin_vel_b_policy(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_root_lin_vel_b_policy
+
+    @property
+    def step_root_ang_vel_b_policy(self) -> Tensor:
+        if not bool(torch.all(self._step_reference_valid)):
+            self.prepare_step_reference()
+        return self._step_root_ang_vel_b_policy
 
     @property
     def current_joint_pos(self) -> Tensor:
@@ -245,20 +324,7 @@ class ParallelismReferenceManager:
 
         self.refresh()
         next_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
-        pos = self._take(self.root_pos_w, self.phase)
-        nxt = self._take(self.root_pos_w, next_phase)
-        vel_w = (nxt - pos) / max(self.dt, 1.0e-6)
-        ref_rpy = self._take(self.root_rpy_w, self.phase)
-        ref_matrix_w = _rpy_to_matrix_wxyz(ref_rpy)
-        ref_vel_b = torch.matmul(ref_matrix_w.transpose(-1, -2), vel_w.unsqueeze(-1)).squeeze(-1)
-        ref_vel_w = torch.matmul(ref_matrix_w, ref_vel_b.unsqueeze(-1)).squeeze(-1)
-        policy_quat_w = torch.as_tensor(
-            self._robot().data.root_quat_w,
-            dtype=ref_vel_w.dtype,
-            device=ref_vel_w.device,
-        )
-        policy_matrix_w = _quat_to_matrix_wxyz(policy_quat_w)
-        return torch.matmul(policy_matrix_w.transpose(-1, -2), ref_vel_w.unsqueeze(-1)).squeeze(-1)
+        return self._root_velocity_b_policy(self.root_pos_w, self.root_rpy_w, self.phase, next_phase)
 
     @property
     def current_root_ang_vel_b(self) -> Tensor:
@@ -272,18 +338,7 @@ class ParallelismReferenceManager:
 
         self.refresh()
         next_phase = torch.clamp(self.phase + 1, max=self.horizon - 1)
-        rpy = self._take(self.root_rpy_w, self.phase)
-        nxt = self._take(self.root_rpy_w, next_phase)
-        ref_rpy_rate = (nxt - rpy) / max(self.dt, 1.0e-6)
-        ref_matrix_w = _rpy_to_matrix_wxyz(rpy)
-        ref_ang_vel_w = torch.matmul(ref_matrix_w, ref_rpy_rate.unsqueeze(-1)).squeeze(-1)
-        policy_quat_w = torch.as_tensor(
-            self._robot().data.root_quat_w,
-            dtype=ref_ang_vel_w.dtype,
-            device=ref_ang_vel_w.device,
-        )
-        policy_matrix_w = _quat_to_matrix_wxyz(policy_quat_w)
-        return torch.matmul(policy_matrix_w.transpose(-1, -2), ref_ang_vel_w.unsqueeze(-1)).squeeze(-1)
+        return self._angular_velocity_b_policy(self.root_rpy_w, self.phase, next_phase)
 
     def _episode_length(self) -> Tensor:
         value = getattr(self.env, "episode_length_buf", None)
@@ -482,6 +537,47 @@ class ParallelismReferenceManager:
 
     def _current_take(self, values: Tensor) -> Tensor:
         return self._take(values, self.phase)
+
+    def _root_velocity_b_policy(
+        self,
+        root_pos_w: Tensor,
+        root_rpy_w: Tensor,
+        start_phase: Tensor,
+        target_phase: Tensor,
+    ) -> Tensor:
+        start_pos = self._take(root_pos_w, start_phase)
+        target_pos = self._take(root_pos_w, target_phase)
+        vel_w = (target_pos - start_pos) / max(self.dt, 1.0e-6)
+        ref_rpy = self._take(root_rpy_w, start_phase)
+        ref_matrix_w = _rpy_to_matrix_wxyz(ref_rpy)
+        ref_vel_b = torch.matmul(ref_matrix_w.transpose(-1, -2), vel_w.unsqueeze(-1)).squeeze(-1)
+        ref_vel_w = torch.matmul(ref_matrix_w, ref_vel_b.unsqueeze(-1)).squeeze(-1)
+        policy_quat_w = torch.as_tensor(
+            self._robot().data.root_quat_w,
+            dtype=ref_vel_w.dtype,
+            device=ref_vel_w.device,
+        )
+        policy_matrix_w = _quat_to_matrix_wxyz(policy_quat_w)
+        return torch.matmul(policy_matrix_w.transpose(-1, -2), ref_vel_w.unsqueeze(-1)).squeeze(-1)
+
+    def _angular_velocity_b_policy(
+        self,
+        root_rpy_w: Tensor,
+        start_phase: Tensor,
+        target_phase: Tensor,
+    ) -> Tensor:
+        rpy = self._take(root_rpy_w, start_phase)
+        target_rpy = self._take(root_rpy_w, target_phase)
+        ref_rpy_rate = (target_rpy - rpy) / max(self.dt, 1.0e-6)
+        ref_matrix_w = _rpy_to_matrix_wxyz(rpy)
+        ref_ang_vel_w = torch.matmul(ref_matrix_w, ref_rpy_rate.unsqueeze(-1)).squeeze(-1)
+        policy_quat_w = torch.as_tensor(
+            self._robot().data.root_quat_w,
+            dtype=ref_ang_vel_w.dtype,
+            device=ref_ang_vel_w.device,
+        )
+        policy_matrix_w = _quat_to_matrix_wxyz(policy_quat_w)
+        return torch.matmul(policy_matrix_w.transpose(-1, -2), ref_ang_vel_w.unsqueeze(-1)).squeeze(-1)
 
 
 def get_parallelism_reference_manager(env) -> ParallelismReferenceManager:

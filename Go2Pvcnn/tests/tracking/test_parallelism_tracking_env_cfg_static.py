@@ -13,6 +13,12 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert "ParallelismTrackingFlatEnvCfg" in source
     assert "parallelism_plan_batch_size: int = 64" in source
     assert "self.scene.robot.init_state.pos = (0.0, 0.0, 0.3)" in source
+    assert '"threshold": 0.50' in source
+    assert '"threshold": 1.50' in source
+    assert '"threshold": 0.30' in source
+    assert '"threshold": 2.00' in source
+    assert '"ang_vel_threshold": 1.0' in source
+    assert '"joint_max_threshold": 1.0' in source
 
 
 def test_train_script_contains_parallelism_tracking_experiment() -> None:

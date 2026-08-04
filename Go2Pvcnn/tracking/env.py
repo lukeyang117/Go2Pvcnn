@@ -7,11 +7,16 @@ from collections.abc import Sequence
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
 
+from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
 from tracking.mdp.rewards import parallelism_tracking_episode_errors
 
 
 class ParallelismTrackingEnv(ManagerBasedRLEnv):
     """ManagerBasedRLEnv with episode-level Parallelism tracking diagnostics."""
+
+    def step(self, action):
+        get_parallelism_reference_manager(self).prepare_step_reference()
+        return super().step(action)
 
     def _reset_idx(self, env_ids: Sequence[int]) -> None:
         tracking_log: dict[str, torch.Tensor] = {}

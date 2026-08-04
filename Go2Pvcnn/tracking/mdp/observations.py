@@ -17,7 +17,7 @@ def _default_joint_pos(env) -> torch.Tensor:
 
 def parallelism_ref_joint_pos_rel_t(env) -> torch.Tensor:
     manager = get_parallelism_reference_manager(env)
-    ref = manager.current_joint_pos
+    ref = manager.next_joint_pos
     default = _default_joint_pos(env).to(dtype=ref.dtype, device=ref.device)
     return ref - default
 
