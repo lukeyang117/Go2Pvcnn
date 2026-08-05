@@ -197,8 +197,22 @@ def _write_failure_snapshot(
 ) -> Path:
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     command = report["command"]
-    command_tag = "_".join(f"{float(value):+.2f}".replace("+", "p").replace("-", "m") for value in command)
-    output_path = snapshot_dir / f"{scene.name}__{command_tag}.yaml"
+    obstacle = scene.obstacle
+    root_yaw = scene.root.rpy_w[2]
+    tags = (
+        f"vx{float(command[0]):+.2f}",
+        f"vy{float(command[1]):+.2f}",
+        f"yaw{float(command[2]):+.2f}",
+        f"ox{obstacle.center_w[0]:+.2f}",
+        f"oy{obstacle.center_w[1]:+.2f}",
+        f"or{obstacle.radius_m:.2f}",
+        f"oh{obstacle.height_m:.2f}",
+        f"ry{root_yaw:+.2f}",
+    )
+    filename = "__".join(
+        (scene.name, *tags)
+    ).replace("+", "p").replace("-", "m").replace(".", "d") + ".yaml"
+    output_path = snapshot_dir / filename
     payload = {
         "captured_from": scene.name,
         "failure": {

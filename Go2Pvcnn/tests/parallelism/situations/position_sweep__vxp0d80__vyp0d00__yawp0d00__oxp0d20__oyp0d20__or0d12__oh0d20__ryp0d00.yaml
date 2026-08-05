@@ -1,0 +1,88 @@
+captured_from: position_sweep
+failure:
+  standstill: true
+  valid: false
+  per_leg_valid:
+  - 0
+  - 0
+  - 0
+  - 40
+  valid_count: 40
+  reject_counts:
+    valid_map: 0
+    joint: 111
+    landing: 22
+    collision: 68
+    candidate_semantic: 21
+    fk_touchdown_semantic: 21
+  collision_counts:
+    thigh_box: 38
+    fl_calf_upper_cylinder: 40
+    calf_upper_cylinder: 18
+    calf_mid_cylinder: 51
+    calf_lower_cylinder: 0
+    foot_sphere: 0
+terrain:
+  resolution_m: 0.01
+  size: 151
+  origin_w:
+  - -0.75
+  - -0.75
+  - 0.0
+  yaw_w: 0.0
+obstacle:
+  shape: circle
+  center_w:
+  - 0.2
+  - 0.2
+  radius_m: 0.12
+  height_m: 0.2
+  semantic_id: 1
+  geometry:
+    center_w:
+    - 0.20000000298023224
+    - 0.20000000298023224
+    - 0.10000000149011612
+    min_w:
+    - 0.08000000000000002
+    - 0.08000000000000002
+    - 0.0
+    max_w:
+    - 0.32
+    - 0.32
+    - 0.2
+    center_root:
+    - 0.20000000298023224
+    - 0.20000000298023224
+    - -0.4000000059604645
+root:
+  position_w:
+  - 0.0
+  - 0.0
+  - 0.5
+  rpy_w:
+  - 0.0
+  - 0.0
+  - 0.0
+joint_pos:
+- 0.0
+- 0.8
+- -1.6
+- 0.0
+- 0.8
+- -1.6
+- 0.0
+- 0.8
+- -1.6
+- 0.0
+- 0.8
+- -1.6
+commands:
+- - 0.8
+  - 0.0
+  - 0.0
+planner:
+  candidate_radius_m: 0.24
+  candidates_per_leg: 50
+  swing_clearance_m: 0.05
+  semantic_touchdown_margin_m: 0.0
