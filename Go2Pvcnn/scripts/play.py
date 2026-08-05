@@ -249,7 +249,61 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
     if actual_foot is not None:
         actual_foot = torch.as_tensor(actual_foot[0]).detach().cpu()
         reference_foot = torch.as_tensor(frame.foot_pos_w).detach().cpu()
-        foot_error = torch.linalg.vector_norm(actual_foot - reference_foot, dim=-1)
+        next_reference_foot = torch.as_tensor(
+            manager.foot_pos_w[0, next_phase],
+        ).detach().cpu()
+        current_error_vec = actual_foot - reference_foot
+        next_error_vec = actual_foot - next_reference_foot
+        current_error_xy = torch.linalg.vector_norm(current_error_vec[..., :2], dim=-1)
+        next_error_xy = torch.linalg.vector_norm(next_error_vec[..., :2], dim=-1)
+        current_error_z = torch.abs(current_error_vec[..., 2])
+        next_error_z = torch.abs(next_error_vec[..., 2])
+        current_error_3d = torch.linalg.vector_norm(current_error_vec, dim=-1)
+        next_error_3d = torch.linalg.vector_norm(next_error_vec, dim=-1)
+        from extension.parallelism.kinematics import fk_go2
+        from tracking.managers.parallelism_reference_manager import _reorder_joint_to_planner
+
+        robot_joint_names = getattr(policy_robot, "joint_names", None)
+        current_joint_planner = _reorder_joint_to_planner(
+            torch.as_tensor(manager.joint_pos[0, phase]).detach().cpu().unsqueeze(0),
+            robot_joint_names,
+        )[0]
+        next_joint_planner = _reorder_joint_to_planner(
+            torch.as_tensor(manager.joint_pos[0, next_phase]).detach().cpu().unsqueeze(0),
+            robot_joint_names,
+        )[0]
+
+        ref_current_fk = fk_go2(
+            torch.as_tensor(manager.root_pos_w[0, phase]).detach().cpu().unsqueeze(0),
+            torch.as_tensor(manager.root_rpy_w[0, phase]).detach().cpu().unsqueeze(0),
+            current_joint_planner.unsqueeze(0),
+        ).foot_pos_w[0]
+        ref_next_fk = fk_go2(
+            torch.as_tensor(manager.root_pos_w[0, next_phase]).detach().cpu().unsqueeze(0),
+            torch.as_tensor(manager.root_rpy_w[0, next_phase]).detach().cpu().unsqueeze(0),
+            next_joint_planner.unsqueeze(0),
+        ).foot_pos_w[0]
+        current_reference_fk_gap = torch.linalg.vector_norm(reference_foot - ref_current_fk, dim=-1)
+        next_reference_fk_gap = torch.linalg.vector_norm(next_reference_foot - ref_next_fk, dim=-1)
+        reference_robot_foot = manager._measured_foot_pos_w(
+            reference_robot,
+            torch.tensor([0], dtype=torch.long, device=manager.device),
+        )
+        reference_robot_foot = (
+            torch.as_tensor(reference_robot_foot[0]).detach().cpu()
+            if reference_robot_foot is not None
+            else None
+        )
+        if reference_robot_foot is not None:
+            planner_to_usd_foot_vec = reference_robot_foot - reference_foot
+            policy_to_usd_reference_vec = actual_foot - reference_robot_foot
+            planner_to_usd_foot_z = torch.abs(planner_to_usd_foot_vec[..., 2])
+            planner_to_usd_foot_3d = torch.linalg.vector_norm(planner_to_usd_foot_vec, dim=-1)
+            policy_to_usd_reference_3d = torch.linalg.vector_norm(policy_to_usd_reference_vec, dim=-1)
+        else:
+            planner_to_usd_foot_z = torch.zeros(4)
+            planner_to_usd_foot_3d = torch.zeros(4)
+            policy_to_usd_reference_3d = torch.zeros(4)
         trajectory_foot = torch.as_tensor(manager.foot_pos_w[0]).detach().cpu()
         trajectory_lift = trajectory_foot[..., 2].amax(dim=0) - trajectory_foot[0, :, 2]
         contact = torch.as_tensor(frame.contact_state).detach().cpu()
@@ -268,7 +322,17 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
             f"contact={contact.tolist()} "
             f"reference_z={reference_foot[:, 2].tolist()} "
             f"actual_z={actual_foot[:, 2].tolist()} "
-            f"foot_error={foot_error.tolist()} "
+            f"current_error_xy={current_error_xy.tolist()} "
+            f"current_error_z={current_error_z.tolist()} "
+            f"current_error_3d={current_error_3d.tolist()} "
+            f"next_error_xy={next_error_xy.tolist()} "
+            f"next_error_z={next_error_z.tolist()} "
+            f"next_error_3d={next_error_3d.tolist()} "
+            f"reference_fk_gap_current={current_reference_fk_gap.tolist()} "
+            f"reference_fk_gap_next={next_reference_fk_gap.tolist()} "
+            f"planner_to_usd_foot_z={planner_to_usd_foot_z.tolist()} "
+            f"planner_to_usd_foot_3d={planner_to_usd_foot_3d.tolist()} "
+            f"policy_to_usd_reference_3d={policy_to_usd_reference_3d.tolist()} "
             f"trajectory_apex_lift={trajectory_lift.tolist()} "
             f"joint_abs_error_by_leg={joint_error_by_leg}",
             flush=True,
