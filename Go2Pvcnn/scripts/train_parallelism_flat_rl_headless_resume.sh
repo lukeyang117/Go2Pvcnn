@@ -15,8 +15,8 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment parallelism_tracking_flat \
   --num_envs 4096 \
   --headless \
-  --max_iterations 2000 \
+  --max_iterations 1500 \
   --keep_std \
   --resume \
-  --load_run 2026-08-04_20-54-41/12a70c9 \
-  --load_checkpoint model_400.pt
+  --load_run 2026-08-04_23-46-42/dc491d9 \
+  --load_checkpoint model_2399.pt

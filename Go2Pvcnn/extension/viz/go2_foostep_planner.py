@@ -118,7 +118,7 @@ class ViewerTestTerminalState:
     vy: float = 0.0
     vyaw: float = 0.0
     swing_clearance_m: float = 0.05
-    semantic_touchdown_margin_m: float = 0.0
+    semantic_touchdown_margin_m: float = 0.12
     candidate_radius_m: float = 0.24
     standstill_fallback_enabled: bool = True
     show_mesh: bool = True
