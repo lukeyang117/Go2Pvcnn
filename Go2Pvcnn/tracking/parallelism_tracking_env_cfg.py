@@ -163,7 +163,7 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
         weight=2.0,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "std": 0.7,
+            "std": 0.50,
             "tracking_tolerance": 0.0,
         },
     )
@@ -199,7 +199,7 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
         weight=0.75,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "std": 0.8,
+            "std": 0.50,
         },
     )
 
@@ -214,19 +214,23 @@ class ParallelismTrackingTerminationsCfg:
     bad_orientation = DoneTerm(func=go2_mdp.bad_orientation, params={"limit_angle": 0.8})
     parallelism_ref_root_z_too_far = DoneTerm(
         func=tracking_mdp.parallelism_ref_root_z_too_far,
-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.50},
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
     )
     parallelism_ref_projected_gravity_too_far = DoneTerm(
         func=tracking_mdp.parallelism_ref_projected_gravity_too_far,
-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 1.50, "z_only": False},
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.8, "z_only": False},
     )
     parallelism_ref_foot_z_too_far = DoneTerm(
         func=tracking_mdp.parallelism_ref_foot_z_too_far,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"), "threshold": 0.30},
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"), "threshold": 0.25},
     )
     parallelism_ref_joint_pos_too_far = DoneTerm(
         func=tracking_mdp.parallelism_ref_joint_pos_too_far,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*"), "threshold": 2.00},
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "threshold": 0.8,
+            "consecutive_steps": 3,
+        },
     )
 
 
@@ -240,7 +244,7 @@ class ParallelismTrackingCurriculumCfg:
             "root_pos_threshold": 0.12,
             "root_rot_threshold": 0.30,
             "joint_mean_threshold": 0.22,
-            "joint_max_threshold": 1.0,
+            "joint_max_threshold": 0.8,
         },
     )
 

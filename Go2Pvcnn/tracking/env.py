@@ -23,11 +23,14 @@ class ParallelismTrackingEnv(ManagerBasedRLEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]) -> None:
         tracking_log: dict[str, torch.Tensor] = {}
+        if isinstance(env_ids, slice):
+            ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        else:
+            ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long).reshape(-1)
+        violation_count = getattr(self, "_parallelism_joint_violation_count", None)
+        if violation_count is not None:
+            violation_count[ids] = 0
         if hasattr(self, "_parallelism_tracking_joint_mean_sum"):
-            if isinstance(env_ids, slice):
-                ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
-            else:
-                ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long).reshape(-1)
             stats = parallelism_tracking_episode_errors(self)
             metric_names = (
                 ("episode_joint_mean_error", "Episode_Tracking/episode_joint_mean_error"),

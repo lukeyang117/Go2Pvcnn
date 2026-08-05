@@ -55,12 +55,24 @@ def parallelism_ref_joint_pos_too_far(
     env,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     threshold: float = 0.8,
+    consecutive_steps: int = 3,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     ref = get_parallelism_reference_manager(env).step_joint_pos
     actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
     error = torch.max(torch.abs(actual - ref), dim=-1).values
-    return error > float(threshold)
+    violation = error > float(threshold)
+    count = getattr(env, "_parallelism_joint_violation_count", None)
+    if count is None or count.shape[0] != violation.shape[0]:
+        count = torch.zeros(violation.shape[0], dtype=torch.long, device=violation.device)
+        env._parallelism_joint_violation_count = count
+    required_steps = max(int(consecutive_steps), 1)
+    env._parallelism_joint_violation_count = torch.where(
+        violation,
+        torch.clamp(count + 1, max=required_steps),
+        torch.zeros_like(count),
+    )
+    return env._parallelism_joint_violation_count >= required_steps
 
 
 def parallelism_ref_foot_z_too_far(
