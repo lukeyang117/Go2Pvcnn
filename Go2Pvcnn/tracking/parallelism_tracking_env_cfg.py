@@ -151,19 +151,19 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
     track_root_pos = RewTerm(
         func=tracking_mdp.reference_root_pos_reward,
         weight=1.5,
-        params={"std": 0.08},
+        params={"std": 0.10},
     )
     track_root_rot = RewTerm(
         func=tracking_mdp.reference_root_rot_reward,
         weight=0.75,
-        params={"std": 0.20},
+        params={"std": 0.25},
     )
     reference_joint_pos = RewTerm(
         func=tracking_mdp.reference_joint_pos_reward,
         weight=2.0,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "std": 0.35,
+            "std": 0.50,
             "tracking_tolerance": 0.0,
         },
     )
@@ -172,7 +172,7 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
         weight=0.25,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "std": 1.0,
+            "std": 1.50,
             "tracking_tolerance": 0.0,
         },
     )
@@ -181,7 +181,7 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
         weight=1.75,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-            "std": 0.06,
+            "std": 0.10,
             "stance_weight": 1.0,
             "swing_weight": 2.0,
         },
@@ -191,7 +191,7 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
         weight=1.5,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-            "std": 0.04,
+            "std": 0.08,
         },
     )
     reference_joint_max = RewTerm(
@@ -199,7 +199,7 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
         weight=0.75,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "std": 0.10,
+            "std": 0.30,
         },
     )
 
