@@ -63,6 +63,7 @@ DEFAULT_VIEWER_REPRESENTATIVE_STAGE = SemanticCourseStage.S4
 class SemanticCourseLayoutCfg:
     tile_margin_m: float = DEFAULT_TILE_MARGIN_M
     center_safety_half_extent_m: float = DEFAULT_CENTER_SAFETY_HALF_EXTENT_M
+    center_safety_radius_m: float | None = None
     min_spacing_clearance_m: float = DEFAULT_MIN_SPACING_CLEARANCE_M
     max_layout_attempts: int = DEFAULT_MAX_LAYOUT_ATTEMPTS
 
@@ -222,6 +223,7 @@ def layout_cfg_for_row(
     return SemanticCourseLayoutCfg(
         tile_margin_m=float(tile_margin),
         center_safety_half_extent_m=float(center_safety),
+        center_safety_radius_m=base_layout_cfg.center_safety_radius_m,
         min_spacing_clearance_m=float(min_spacing),
         max_layout_attempts=int(base_layout_cfg.max_layout_attempts),
     )
@@ -464,6 +466,8 @@ def _candidate_local_xy(
 
 
 def _outside_center_safety(local_xy: tuple[float, float], layout_cfg: SemanticCourseLayoutCfg) -> bool:
+    if layout_cfg.center_safety_radius_m is not None:
+        return math.hypot(local_xy[0], local_xy[1]) > float(layout_cfg.center_safety_radius_m)
     return (
         abs(local_xy[0]) > layout_cfg.center_safety_half_extent_m
         or abs(local_xy[1]) > layout_cfg.center_safety_half_extent_m
