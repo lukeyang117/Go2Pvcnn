@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Small Obstacles RL 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20242a;
+      --muted: #5b6674;
+      --line: #d9e1ea;
+      --panel: #f7f9fc;
+      --accent: #126e82;
+      --accent-soft: #e4f3f5;
+      --warn-soft: #fff5df;
+      --code: #17202a;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #ffffff;
+      line-height: 1.65;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 40px 28px 72px;
+    }
+    h1, h2, h3 {
+      line-height: 1.25;
+      margin: 0;
+    }
+    h1 {
+      font-size: 32px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin-top: 36px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 23px;
+    }
+    h3 {
+      margin-top: 24px;
+      font-size: 18px;
+    }
+    p {
+      margin: 10px 0;
+    }
+    ul {
+      margin: 10px 0 10px 24px;
+      padding: 0;
+    }
+    li {
+      margin: 6px 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--code);
+      background: #eef2f6;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      margin: 12px 0;
+      padding: 14px 16px;
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: 8px;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+    pre code {
+      padding: 0;
+      color: inherit;
+      background: transparent;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 22px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--panel);
+      font-weight: 650;
+    }
+    .lead {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .meta {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .meta div, .note, .decision {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: var(--panel);
+    }
+    .decision {
+      border-color: #b8dbe2;
+      background: var(--accent-soft);
+    }
+    .note {
+      background: var(--warn-soft);
+    }
+    .diagram {
+      white-space: pre;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-x: auto;
+    }
+    .tag {
+      display: inline-block;
+      margin-right: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 650;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Parallelism Small Obstacles RL 设计</h1>
+  <p class="lead">
+    本设计用于在当前 <code>parallelism-small-obstacles-rl</code> 分支上新增一个
+    <code>parallelism_tracking_small_obstacles</code> 强化学习任务。第一版目标是复用当前
+    Parallelism planner 和平地 RL tracking 配置，在固定局部小障碍场景中训练 Go2 学会全向跨越 small obstacles。
+  </p>
+
+  <section class="meta">
+    <div><strong>日期</strong><br>2026-08-06</div>
+    <div><strong>基础任务</strong><br><code>parallelism_tracking_flat</code></div>
+    <div><strong>新任务</strong><br><code>parallelism_tracking_small_obstacles</code></div>
+    <div><strong>核心边界</strong><br>不大改 planner；新建配置文件继承 flat。</div>
+  </section>
+
+  <h2>1. 目标和非目标</h2>
+  <h3>目标</h3>
+  <ul>
+    <li>训练 policy 在一个固定的局部 small-obstacle 场景中，跟随 Parallelism reference 持续跨越小障碍物。</li>
+    <li>速度指令保留当前平地任务的课程学习，从低速逐步扩展到 viewer 的完整速度范围。</li>
+    <li>障碍物场景不做难度课程，第一版只验证固定难度下是否能学会 crossing。</li>
+    <li>新增 obstacle 相关 reward 和 metric，帮助判断足端是否安全踩到 small obstacle，以及几何碰撞是否降低。</li>
+    <li>训练和 play 都使用独立 experiment 名，日志独立保存，避免污染平地任务。</li>
+  </ul>
+
+  <h3>非目标</h3>
+  <ul>
+    <li>不修改 Parallelism planner 的 touchdown 采样、IK、FK、standstill 核心逻辑。</li>
+    <li>不做 10 个不同 layout，也不做 area-center 引导速度。</li>
+    <li>不使用 Isaac Sim 真实 contact sensor 作为小障碍碰撞 reward 的主要依据。</li>
+    <li>不因为 Parallelism 几何碰撞立即 reset。</li>
+    <li>不引入 large obstacles。</li>
+  </ul>
+
+  <h2>2. 任务文件结构</h2>
+  <p>新增一个独立配置文件，继承当前 flat RL 配置：</p>
+  <pre><code>Go2Pvcnn/tracking/parallelism_small_obstacles_env_cfg.py</code></pre>
+
+  <p>建议包含以下配置类：</p>
+  <ul>
+    <li><code>ParallelismSmallObstaclesCommandsCfg</code>：继承或复用 flat command，保留速度课程范围。</li>
+    <li><code>ParallelismSmallObstaclesRewardsCfg</code>：继承 flat rewards，新增 obstacle reward。</li>
+    <li><code>ParallelismTrackingSmallObstaclesEnvCfg</code>：训练配置。</li>
+    <li><code>ParallelismTrackingSmallObstaclesEnvCfg_PLAY</code>：可视化配置，继承 flat play 的 reference Go2 和面板逻辑。</li>
+  </ul>
+
+  <p>需要注册的新 experiment：</p>
+  <pre><code>parallelism_tracking_small_obstacles</code></pre>
+
+  <p>注册入口：</p>
+  <ul>
+    <li><code>Go2Pvcnn/scripts/train.py</code></li>
+    <li><code>Go2Pvcnn/scripts/play.py</code></li>
+    <li><code>Go2Pvcnn/tracking/register_envs.py</code></li>
+    <li>训练配置 map 如果有 experiment 列表，也同步添加。</li>
+  </ul>
+
+  <h2>3. 小障碍场景设计</h2>
+  <p>
+    terrain tile 仍然使用平地底面，small obstacles 只放在 reset 中心附近的一个局部正方形区域。
+    这个区域中间挖掉一个圆形安全区，保证机器人 reset 后初始 root 和四足站姿不会直接被障碍物干扰。
+  </p>
+
+  <pre class="diagram"><code>俯视图：
+
+  obstacle patch: 2.0m x 2.0m
+
+  +-----------------------------+
+  |  x    x    x    x    x      |
+  |     x    x    x    x    x   |
+  |  x    x           x    x    |
+  |     x       O       x       |
+  |  x    x           x    x    |
+  |     x    x    x    x    x   |
+  |  x    x    x    x    x      |
+  +-----------------------------+
+
+  x = small obstacle
+  O = reset 圆形安全区</code></pre>
+
+  <h3>第一版场景参数</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>参数</th>
+        <th>建议值</th>
+        <th>含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>obstacle_patch_size_m</code></td>
+        <td><code>2.0</code></td>
+        <td>局部小障碍正方形区域边长，区域中心与 robot reset 中心对齐。</td>
+      </tr>
+      <tr>
+        <td><code>reset_clear_radius_m</code></td>
+        <td><code>0.25</code></td>
+        <td>语义上的 reset 安全圆半径，希望这个圆内保持无障碍。</td>
+      </tr>
+      <tr>
+        <td><code>obstacle_center_exclusion_radius_m</code></td>
+        <td><code>0.30</code></td>
+        <td>生成障碍物中心点时的排除半径，约等于安全圆半径加障碍物半宽。</td>
+      </tr>
+      <tr>
+        <td><code>small_obstacle_count</code></td>
+        <td><code>24</code></td>
+        <td>第一版小障碍物数量。若 planner standstill 高，可降到 16 或 20；若太稀，可升到 32 或 40。</td>
+      </tr>
+      <tr>
+        <td><code>small_obstacle_jitter_m</code></td>
+        <td><code>0.03</code></td>
+        <td>均匀网格点上的轻微扰动，避免过于机械的排列。</td>
+      </tr>
+      <tr>
+        <td><code>small_obstacle_min_spacing_m</code></td>
+        <td><code>0.18</code></td>
+        <td>障碍物中心之间的最小间距，防止局部完全堵死。</td>
+      </tr>
+      <tr>
+        <td><code>large_obstacle_count</code></td>
+        <td><code>0</code></td>
+        <td>第一版不加入 large obstacles。</td>
+      </tr>
+      <tr>
+        <td><code>semantic_touchdown_margin_m</code></td>
+        <td><code>0.12</code></td>
+        <td>沿用当前 Parallelism 默认值，用于 touchdown 语义外扩过滤。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>reset_clear_radius_m 与 obstacle_center_exclusion_radius_m 的区别：</strong>
+    <code>reset_clear_radius_m</code> 表示最终想空出来的真实安全圆；
+    <code>obstacle_center_exclusion_radius_m</code> 表示撒障碍物中心时的禁区。因为障碍物有宽度，中心点排除半径需要比安全圆略大。
+  </div>
+
+  <h3>障碍物分布方法</h3>
+  <ul>
+    <li>在 <code>2.0m x 2.0m</code> patch 内生成均匀网格。</li>
+    <li>删除落入中心圆排除半径 <code>0.30m</code> 的网格点。</li>
+    <li>从剩余点中选择 <code>24</code> 个中心点。</li>
+    <li>对每个中心点加入 <code>±0.03m</code> 的小扰动。</li>
+    <li>检查障碍物中心间距不小于 <code>0.18m</code>。</li>
+    <li>shape 可以轮换或固定随机种子生成，但场景初始化后不刷新。</li>
+  </ul>
+
+  <h2>4. 速度指令设计</h2>
+  <p>
+    速度指令不再根据 obstacle area center 引导，而是保持平地任务的 root 坐标系随机速度课程。
+    这样 policy 会在同一个局部小障碍场景中学习前进、后退、横移、斜向和转向 crossing。
+  </p>
+
+  <h3>采样范围</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>阶段</th>
+        <th><code>vx</code></th>
+        <th><code>vy</code></th>
+        <th><code>vyaw</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>初始课程</td>
+        <td><code>[-0.1, 0.1]</code></td>
+        <td><code>[-0.05, 0.05]</code></td>
+        <td><code>[-0.2, 0.2]</code></td>
+      </tr>
+      <tr>
+        <td>最终范围</td>
+        <td><code>[-1.0, 1.0]</code></td>
+        <td><code>[-0.5, 0.5]</code></td>
+        <td><code>[-1.0, 1.0]</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <ul>
+    <li>不增加最小平移速度过滤，不要求 <code>sqrt(vx^2 + vy^2) &gt; v_min</code>。</li>
+    <li>速度重采样周期保持 <code>0.48s</code>，对齐 Parallelism 24 帧轨迹。</li>
+    <li>课程只放宽升级阈值，不改变采样逻辑。</li>
+    <li><code>rel_standing_envs</code> 第一版可沿用 flat 默认值，除非训练中出现 standing 样本过多。</li>
+  </ul>
+
+  <h3>课程阈值</h3>
+  <p>
+    课程仍然使用当前 Parallelism tracking 的 velocity curriculum，但 small-obstacles 任务需要放宽升级条件，
+    避免固定障碍场景导致课程长期停在低速。
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>flat 当前参考</th>
+        <th>small obstacles 第一版建议</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>root_pos_threshold</code></td>
+        <td><code>0.12</code></td>
+        <td><code>0.18</code></td>
+      </tr>
+      <tr>
+        <td><code>root_rot_threshold</code></td>
+        <td><code>0.30</code></td>
+        <td><code>0.45</code></td>
+      </tr>
+      <tr>
+        <td><code>joint_mean_threshold</code></td>
+        <td><code>0.22</code></td>
+        <td><code>0.32</code></td>
+      </tr>
+      <tr>
+        <td><code>joint_max_threshold</code></td>
+        <td><code>0.8</code></td>
+        <td><code>1.0</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>5. Reward 设计</h2>
+  <p>新任务继承 flat 的 reference tracking reward，并新增两个小障碍相关 reward。</p>
+
+  <h3>保留的 tracking reward</h3>
+  <ul>
+    <li><code>track_root_pos</code></li>
+    <li><code>track_root_rot</code></li>
+    <li><code>reference_joint_pos</code></li>
+    <li><code>reference_joint_vel</code></li>
+    <li><code>reference_foot_pos</code></li>
+    <li><code>reference_active_swing_foot_max</code></li>
+    <li><code>reference_joint_max</code></li>
+    <li>现有 locomotion regularization，例如 action rate、joint velocity、torque、orientation 等。</li>
+  </ul>
+
+  <h3>新增 reward 1：Parallelism 几何碰撞惩罚</h3>
+  <p>
+    <span class="tag">Penalty</span>
+    <code>parallelism_geometry_collision_penalty</code>
+  </p>
+  <ul>
+    <li>使用 Parallelism planner 的几何碰撞检测逻辑，而不是 Isaac Sim 真实接触传感器。</li>
+    <li>基于当前 policy 的关节状态、足端状态、semantic/elevation map，检测 active swing leg 的 thigh、calf、foot 几何点是否进入高程障碍物。</li>
+    <li>输出每个 env 的 collision mask 或 collision count。</li>
+    <li>发生碰撞只扣 reward，不触发 reset。</li>
+    <li>实现必须使用 Torch 张量条件判断，保持 GPU 并行。</li>
+  </ul>
+
+  <h3>新增 reward 2：active swing 足端踩 small obstacle 奖励</h3>
+  <p>
+    <span class="tag">Reward</span>
+    <code>active_swing_foot_on_small_obstacle_reward</code>
+  </p>
+  <ul>
+    <li>只看当前 active swing 足端，不奖励所有 stance 足端。</li>
+    <li>查询 active swing foot 当前世界坐标对应的 semantic map。</li>
+    <li>如果 semantic id 是 small obstacle，并且该腿没有 Parallelism 几何碰撞，则给正奖励。</li>
+    <li>这个 reward 鼓励“安全踩上 small obstacle”，不是鼓励真实物理碰撞。</li>
+  </ul>
+
+  <h3>第一版建议权重</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Reward</th>
+        <th>建议权重</th>
+        <th>备注</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>parallelism_geometry_collision_penalty</code></td>
+        <td><code>-1.0</code></td>
+        <td>先中等强度惩罚，避免一碰就完全压制探索。</td>
+      </tr>
+      <tr>
+        <td><code>active_swing_foot_on_small_obstacle_reward</code></td>
+        <td><code>0.5</code></td>
+        <td>辅助奖励，不能大到超过 tracking 主目标。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>6. Termination 设计</h2>
+  <p>不新增小障碍几何碰撞 reset。保留 flat 当前 termination：</p>
+  <ul>
+    <li><code>time_out</code></li>
+    <li><code>base_contact</code></li>
+    <li><code>bad_orientation</code></li>
+    <li><code>parallelism_ref_root_z_too_far</code></li>
+    <li><code>parallelism_ref_projected_gravity_too_far</code></li>
+    <li><code>parallelism_ref_foot_z_too_far</code></li>
+    <li><code>parallelism_ref_joint_pos_too_far</code></li>
+  </ul>
+
+  <div class="decision">
+    第一版碰撞策略：Parallelism 几何碰撞只作为 reward penalty，不作为 termination。
+    这样 policy 即使出现不完美跨越，也有机会继续恢复和学习。
+  </div>
+
+  <h2>7. Metric 设计</h2>
+  <p>新增 obstacle 相关 episode 指标，方便从 TensorBoard 判断训练是否真正学到了跨障碍。</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>Episode_Obstacle/geometry_collision_ratio</code></td>
+        <td>Parallelism 几何碰撞发生比例。</td>
+      </tr>
+      <tr>
+        <td><code>Episode_Obstacle/active_swing_foot_on_small_ratio</code></td>
+        <td>active swing 足端踩到 small obstacle 的比例。</td>
+      </tr>
+      <tr>
+        <td><code>Episode_Obstacle/active_swing_foot_on_small_no_collision_ratio</code></td>
+        <td>active swing 足端踩到 small obstacle 且无几何碰撞的比例。</td>
+      </tr>
+      <tr>
+        <td><code>Episode_Obstacle/standstill_ratio</code></td>
+        <td>Parallelism reference 进入 standstill 的比例。</td>
+      </tr>
+      <tr>
+        <td><code>Episode_Obstacle/reference_valid_ratio</code></td>
+        <td>Parallelism 规划出有效 reference 的比例。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>继续保留现有 tracking 指标，例如：</p>
+  <ul>
+    <li><code>Episode_Tracking/episode_joint_mean_error</code></li>
+    <li><code>Episode_Tracking/episode_joint_max_error</code></li>
+    <li><code>Episode_Tracking/episode_reference_root_pos_error</code></li>
+    <li><code>Episode_Tracking/episode_reference_root_rot_error</code></li>
+    <li><code>Episode_Tracking/episode_reference_foot_mean_error</code></li>
+    <li><code>Episode_Tracking/episode_reference_active_foot_max_error</code></li>
+  </ul>
+
+  <h2>8. Play 和训练入口</h2>
+  <h3>训练</h3>
+  <pre><code>Go2Pvcnn/scripts/train.py \
+  --experiment parallelism_tracking_small_obstacles \
+  --num_envs 1024 \
+  --device cuda:0 \
+  --headless</code></pre>
+
+  <p>日志目录：</p>
+  <pre><code>logs/rsl_rl/parallelism_tracking_small_obstacles/</code></pre>
+
+  <h3>Play</h3>
+  <pre><code>Go2Pvcnn/scripts/play.py \
+  --experiment parallelism_tracking_small_obstacles \
+  --run_dir &lt;date/hash&gt; \
+  --checkpoint &lt;checkpoint&gt; \
+  --num_envs 1 \
+  --device cuda:0</code></pre>
+
+  <p>PLAY 配置继承 flat 的可视化能力：</p>
+  <ul>
+    <li>淡蓝 reference Go2。</li>
+    <li>policy Go2。</li>
+    <li>速度调试面板。</li>
+    <li>termination 勾选控制。</li>
+    <li>小障碍固定场景。</li>
+  </ul>
+
+  <h2>9. 验证要求</h2>
+  <ul>
+    <li>配置导入测试：新 experiment 可以被 <code>train.py</code> 和 <code>play.py</code> 识别。</li>
+    <li>短训练 smoke test：1024 env，至少 4 iteration，确认 epoch 计数增加且无崩溃。</li>
+    <li>场景验证：semantic/elevation map 中出现中心局部 small obstacles，中心 reset 安全区无障碍。</li>
+    <li>Planner 验证：Parallelism reference 能在该场景中持续输出，不应大量 standstill。</li>
+    <li>Reward 验证：新增 obstacle reward 和 metric 在 TensorBoard 中有非零输出。</li>
+    <li>Play 验证：加载 checkpoint 后，reference 和 policy 能在固定小障碍场景中可视化。</li>
+  </ul>
+
+  <h2>10. 第一版调参判断</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>现象</th>
+        <th>优先调整</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>standstill_ratio</code> 高</td>
+        <td>降低 <code>small_obstacle_count</code> 到 16 或 20，或放宽 planner touchdown 过滤。</td>
+      </tr>
+      <tr>
+        <td><code>geometry_collision_ratio</code> 高</td>
+        <td>提高 <code>parallelism_geometry_collision_penalty</code> 权重，或降低障碍物密度。</td>
+      </tr>
+      <tr>
+        <td><code>active_swing_foot_on_small_ratio</code> 很低</td>
+        <td>提高 <code>active_swing_foot_on_small_obstacle_reward</code> 权重，或增加障碍物密度。</td>
+      </tr>
+      <tr>
+        <td>tracking 明显变差</td>
+        <td>提高 reference foot/joint reward，或先降低速度课程升级速度。</td>
+      </tr>
+      <tr>
+        <td>训练长期停在低速课程</td>
+        <td>继续放宽课程阈值，尤其 <code>joint_mean_threshold</code> 和 <code>joint_max_threshold</code>。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>11. 最终决策</h2>
+  <div class="decision">
+    第一版采用一个固定小型场景：中心 <code>2.0m x 2.0m</code> small-obstacle patch，
+    中间 <code>0.25m</code> reset 安全圆，障碍物中心排除半径 <code>0.30m</code>，
+    默认 <code>24</code> 个 small obstacles，速度保持 flat 的课程随机采样。
+    新任务单独建文件并注册为 <code>parallelism_tracking_small_obstacles</code>。
+  </div>
+</main>
+</body>
+</html>
