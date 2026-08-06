@@ -47,7 +47,7 @@ def _active_small_obstacle_safe_mask(
 def _active_collision_penalty(collision: torch.Tensor, contact: torch.Tensor) -> torch.Tensor:
     """Return one penalty event when any active leg has a geometry collision."""
 
-    return (collision & (~contact)).any(dim=-1).to(dtype=collision.dtype)
+    return (collision & (~contact)).any(dim=-1).to(dtype=torch.float32)
 
 
 def _ensure_obstacle_stats(env, *, device: torch.device, dtype: torch.dtype) -> None:
@@ -68,7 +68,6 @@ def _policy_parallelism_collision_by_leg(env) -> torch.Tensor:
     """Run the planner's official geometry collision test on the live policy pose."""
 
     manager = get_parallelism_reference_manager(env)
-    robot = env.scene["robot"]
     state = manager._state(torch.arange(manager.num_envs, device=manager.device, dtype=torch.long))
     geometry = fk_go2(
         state.root_pos_w,
@@ -76,20 +75,29 @@ def _policy_parallelism_collision_by_leg(env) -> torch.Tensor:
         state.joint_pos,
         capsule_samples=int(manager.cfg.capsule_samples),
     )
+    batch = int(state.root_pos_w.shape[0])
+    leg_count = int(geometry.foot_pos_w.shape[-2])
+    candidate_count = 1
+
+    def _expand_pose(value: torch.Tensor) -> torch.Tensor:
+        return value[:, None, None].expand(batch, leg_count, candidate_count, *value.shape[1:])
+
+    def _expand_samples(value: torch.Tensor) -> torch.Tensor:
+        return value[:, None, None].expand(batch, leg_count, candidate_count, *value.shape[1:])
+
     geometry = type(geometry)(
-        hip_pos_w=geometry.hip_pos_w.unsqueeze(2),
-        foot_pos_w=geometry.foot_pos_w.unsqueeze(2),
-        knee_pos_w=geometry.knee_pos_w.unsqueeze(2),
-        calf_samples_w=geometry.calf_samples_w.unsqueeze(2),
-        thigh_samples_w=geometry.thigh_samples_w.unsqueeze(2),
-        thigh_pos_w=geometry.thigh_pos_w.unsqueeze(2),
-        thigh_rot_w=geometry.thigh_rot_w.unsqueeze(2),
-        calf_pos_w=geometry.calf_pos_w.unsqueeze(2),
-        calf_rot_w=geometry.calf_rot_w.unsqueeze(2),
-        foot_rot_w=geometry.foot_rot_w.unsqueeze(2),
+        hip_pos_w=_expand_pose(geometry.hip_pos_w),
+        foot_pos_w=_expand_pose(geometry.foot_pos_w),
+        knee_pos_w=_expand_pose(geometry.knee_pos_w),
+        calf_samples_w=_expand_samples(geometry.calf_samples_w),
+        thigh_samples_w=_expand_samples(geometry.thigh_samples_w),
+        thigh_pos_w=_expand_pose(geometry.thigh_pos_w),
+        thigh_rot_w=_expand_pose(geometry.thigh_rot_w),
+        calf_pos_w=_expand_pose(geometry.calf_pos_w),
+        calf_rot_w=_expand_pose(geometry.calf_rot_w),
+        foot_rot_w=_expand_pose(geometry.foot_rot_w),
     )
     _, collision_bits = official_collision_mask(manager._terrain(state.root_pos_w), geometry, manager.cfg)
-    _ = robot
     return collision_bits.any(dim=-1).squeeze(-1)
 
 

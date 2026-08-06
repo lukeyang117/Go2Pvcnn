@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import field
 
-from isaaclab.managers import RewTerm, SceneEntityCfg
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
 from extension.semantic_course import SemanticCourseLayoutCfg, SemanticCourseTerrainImporter

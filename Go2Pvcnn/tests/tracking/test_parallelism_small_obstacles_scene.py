@@ -23,6 +23,8 @@ def test_fixed_scene_has_one_subterrain_and_circular_reset_hole(monkeypatch) -> 
         __import__("sys").modules,
         "isaaclab.terrains",
         types.SimpleNamespace(
+            TerrainGeneratorCfg=TerrainGeneratorCfg,
+            MeshPlaneTerrainCfg=MeshPlaneTerrainCfg,
             terrain_gen=types.SimpleNamespace(
                 TerrainGeneratorCfg=TerrainGeneratorCfg,
                 MeshPlaneTerrainCfg=MeshPlaneTerrainCfg,

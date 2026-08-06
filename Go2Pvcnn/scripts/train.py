@@ -152,6 +152,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "teacher_elevation_trajectory_mpc_semantic",
             "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
             "parallelism_tracking_flat",
+            "parallelism_tracking_small_obstacles",
         ],
         help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
     )

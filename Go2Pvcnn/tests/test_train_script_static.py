@@ -58,3 +58,4 @@ def test_train_registers_parallelism_small_obstacles_experiment() -> None:
     assert '"parallelism_tracking_small_obstacles"' in source
     assert "ParallelismTrackingSmallObstaclesEnvCfg" in source
     assert "Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0" in source
+    assert '"parallelism_tracking_small_obstacles",' in source

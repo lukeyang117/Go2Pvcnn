@@ -85,7 +85,7 @@ def build_small_obstacle_local_xy(
 def small_obstacles_terrain_cfg(cfg: ParallelismSmallObstacleSceneCfg):
     """Return exactly one flat subterrain for the fixed semantic course."""
 
-    from isaaclab.terrains import terrain_gen
+    import isaaclab.terrains as terrain_gen
 
     return terrain_gen.TerrainGeneratorCfg(
         size=cfg.terrain_size_m,

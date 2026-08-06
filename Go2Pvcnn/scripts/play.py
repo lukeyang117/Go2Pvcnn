@@ -683,6 +683,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "teacher_elevation_trajectory_mpc_semantic",
             "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
             "parallelism_tracking_flat",
+            "parallelism_tracking_small_obstacles",
         ],
         help="Experiment/task to play.",
     )
@@ -1486,7 +1487,9 @@ def main() -> int:
         use_raw_reference_trajectory=bool(args_cli.use_raw_reference_trajectory),
     )
     env_cfg.planner_backend = (
-        "parallelism" if experiment_name == "parallelism_tracking_flat" else str(args_cli.planner_backend)
+        "parallelism"
+        if experiment_name in ("parallelism_tracking_flat", "parallelism_tracking_small_obstacles")
+        else str(args_cli.planner_backend)
     )
 
     render_mode = _resolve_render_mode(args_cli)
@@ -1525,7 +1528,7 @@ def main() -> int:
     _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     step_probe = _install_env_step_probes(base_env, enabled=bool(args_cli.debug_livestream))
 
-    is_parallelism_play = experiment_name == "parallelism_tracking_flat"
+    is_parallelism_play = experiment_name in ("parallelism_tracking_flat", "parallelism_tracking_small_obstacles")
     parallelism_panel_state = None
     parallelism_manager = None
     parallelism_diagnostics = None

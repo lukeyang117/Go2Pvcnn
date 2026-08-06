@@ -213,7 +213,7 @@ def test_joint_max_reward_uses_worst_of_all_twelve_joints():
 def test_joint_pos_too_far_triggers_on_max_joint_error():
     env = _fake_env()
     env.scene["robot"].data.joint_pos[1, 3] = 0.9
-    done = parallelism_ref_joint_pos_too_far(env, threshold=0.8)
+    done = parallelism_ref_joint_pos_too_far(env, threshold=0.8, consecutive_steps=1)
     assert done.tolist() == [False, True]
 
 
