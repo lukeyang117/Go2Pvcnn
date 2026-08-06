@@ -64,6 +64,7 @@ class SemanticCourseLayoutCfg:
     tile_margin_m: float = DEFAULT_TILE_MARGIN_M
     center_safety_half_extent_m: float = DEFAULT_CENTER_SAFETY_HALF_EXTENT_M
     center_safety_radius_m: float | None = None
+    fixed_small_obstacle_local_xy: tuple[tuple[float, float], ...] | None = None
     min_spacing_clearance_m: float = DEFAULT_MIN_SPACING_CLEARANCE_M
     max_layout_attempts: int = DEFAULT_MAX_LAYOUT_ATTEMPTS
 
@@ -526,7 +527,21 @@ def _stage_slots(
             scale_profile_overrides=scale_profile_overrides,
         )
         radius = target_diameter / 2.0
+        fixed_small_points = (
+            layout_cfg.fixed_small_obstacle_local_xy
+            if semantic_class == "small" and layout_cfg.fixed_small_obstacle_local_xy is not None
+            else ()
+        )
         for slot_index in range(stage_counts[semantic_class]):
+            if fixed_small_points:
+                if slot_index >= len(fixed_small_points):
+                    raise ValueError(
+                        f"Requested {stage_counts[semantic_class]} fixed small obstacles, "
+                        f"but only {len(fixed_small_points)} fixed points are available."
+                    )
+                selected_xy = fixed_small_points[slot_index]
+                slots.append(_LayoutSlot(semantic_class, slot_index, selected_xy, False))
+                continue
             selected_xy: tuple[float, float] | None = None
             for attempt_index in range(layout_cfg.max_layout_attempts):
                 candidate = _candidate_local_xy(

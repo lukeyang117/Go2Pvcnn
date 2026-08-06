@@ -14,10 +14,199 @@ except Exception:  # noqa: BLE001 - allows lightweight unit tests without an Isa
                 setattr(self, key, value)
 
 from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
+from extension.parallelism.collision import official_collision_mask
+from extension.parallelism.kinematics import fk_go2
+from extension.parallelism.terrain import query_height_semantic_valid
 
 
 _LEG_NAMES = ("FL", "FR", "RL", "RR")
 _FOOT_NAMES = tuple(f"{leg}_foot" for leg in _LEG_NAMES)
+
+
+def _active_small_obstacle_safe_mask(
+    semantic: torch.Tensor,
+    height: torch.Tensor,
+    foot_z: torch.Tensor,
+    valid: torch.Tensor,
+    collision: torch.Tensor,
+    contact: torch.Tensor,
+    *,
+    touchdown_tolerance_m: float,
+) -> torch.Tensor:
+    """Return active feet touching a small semantic obstacle without collision."""
+
+    return (
+        (~contact)
+        & valid
+        & semantic.eq(1)
+        & (torch.abs(foot_z - height) <= float(touchdown_tolerance_m))
+        & (~collision)
+    )
+
+
+def _active_collision_penalty(collision: torch.Tensor, contact: torch.Tensor) -> torch.Tensor:
+    """Return one penalty event when any active leg has a geometry collision."""
+
+    return (collision & (~contact)).any(dim=-1).to(dtype=collision.dtype)
+
+
+def _ensure_obstacle_stats(env, *, device: torch.device, dtype: torch.dtype) -> None:
+    count = int(env.scene["robot"].data.root_pos_w.shape[0])
+    if not hasattr(env, "_parallelism_obstacle_collision_sum"):
+        env._parallelism_obstacle_collision_sum = torch.zeros(count, dtype=dtype, device=device)
+        env._parallelism_obstacle_collision_count = torch.zeros(count, dtype=torch.long, device=device)
+        env._parallelism_obstacle_small_foot_sum = torch.zeros(count, dtype=dtype, device=device)
+        env._parallelism_obstacle_small_foot_count = torch.zeros(count, dtype=torch.long, device=device)
+        env._parallelism_obstacle_safe_foot_sum = torch.zeros(count, dtype=dtype, device=device)
+        env._parallelism_obstacle_safe_foot_count = torch.zeros(count, dtype=torch.long, device=device)
+        env._parallelism_obstacle_standstill_sum = torch.zeros(count, dtype=dtype, device=device)
+        env._parallelism_obstacle_valid_sum = torch.zeros(count, dtype=dtype, device=device)
+        env._parallelism_obstacle_step_count = torch.zeros(count, dtype=torch.long, device=device)
+
+
+def _policy_parallelism_collision_by_leg(env) -> torch.Tensor:
+    """Run the planner's official geometry collision test on the live policy pose."""
+
+    manager = get_parallelism_reference_manager(env)
+    robot = env.scene["robot"]
+    state = manager._state(torch.arange(manager.num_envs, device=manager.device, dtype=torch.long))
+    geometry = fk_go2(
+        state.root_pos_w,
+        state.root_rpy_w,
+        state.joint_pos,
+        capsule_samples=int(manager.cfg.capsule_samples),
+    )
+    geometry = type(geometry)(
+        hip_pos_w=geometry.hip_pos_w.unsqueeze(2),
+        foot_pos_w=geometry.foot_pos_w.unsqueeze(2),
+        knee_pos_w=geometry.knee_pos_w.unsqueeze(2),
+        calf_samples_w=geometry.calf_samples_w.unsqueeze(2),
+        thigh_samples_w=geometry.thigh_samples_w.unsqueeze(2),
+        thigh_pos_w=geometry.thigh_pos_w.unsqueeze(2),
+        thigh_rot_w=geometry.thigh_rot_w.unsqueeze(2),
+        calf_pos_w=geometry.calf_pos_w.unsqueeze(2),
+        calf_rot_w=geometry.calf_rot_w.unsqueeze(2),
+        foot_rot_w=geometry.foot_rot_w.unsqueeze(2),
+    )
+    _, collision_bits = official_collision_mask(manager._terrain(state.root_pos_w), geometry, manager.cfg)
+    _ = robot
+    return collision_bits.any(dim=-1).squeeze(-1)
+
+
+def _update_obstacle_stats(
+    env,
+    *,
+    collision_event: torch.Tensor,
+    small_foot_event: torch.Tensor | None = None,
+    safe_foot_event: torch.Tensor | None = None,
+) -> None:
+    manager = get_parallelism_reference_manager(env)
+    _ensure_obstacle_stats(
+        env,
+        device=collision_event.device,
+        dtype=collision_event.dtype,
+    )
+    env._parallelism_obstacle_collision_sum += collision_event
+    env._parallelism_obstacle_collision_count += 1
+    env._parallelism_obstacle_standstill_sum += manager.standstill_latched.to(dtype=collision_event.dtype)
+    env._parallelism_obstacle_valid_sum += manager.plan_valid.to(dtype=collision_event.dtype)
+    env._parallelism_obstacle_step_count += 1
+    if small_foot_event is not None:
+        env._parallelism_obstacle_small_foot_sum += small_foot_event
+        env._parallelism_obstacle_small_foot_count += 1
+    if safe_foot_event is not None:
+        env._parallelism_obstacle_safe_foot_sum += safe_foot_event
+        env._parallelism_obstacle_safe_foot_count += 1
+
+
+def parallelism_geometry_collision_penalty(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    scanner_cfg: SceneEntityCfg = SceneEntityCfg("semantic_height_scanner"),
+) -> torch.Tensor:
+    """Penalize active-leg collision using Parallelism official geometry and terrain query."""
+
+    _ = asset_cfg, scanner_cfg
+    manager = get_parallelism_reference_manager(env)
+    collision_by_leg = _policy_parallelism_collision_by_leg(env)
+    contact = torch.as_tensor(manager.current_contact_state, dtype=torch.bool, device=collision_by_leg.device)
+    event = _active_collision_penalty(collision_by_leg, contact)
+    _update_obstacle_stats(env, collision_event=event)
+    return -event
+
+
+def active_swing_foot_on_small_obstacle_reward(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    scanner_cfg: SceneEntityCfg = SceneEntityCfg("semantic_height_scanner"),
+    touchdown_tolerance_m: float = 0.04,
+) -> torch.Tensor:
+    """Reward an active swing foot that safely lands on a small obstacle."""
+
+    _ = asset_cfg, scanner_cfg
+    manager = get_parallelism_reference_manager(env)
+    state = manager._state(torch.arange(manager.num_envs, device=manager.device, dtype=torch.long))
+    terrain = manager._terrain(state.root_pos_w)
+    query = query_height_semantic_valid(terrain, state.foot_pos_w[..., :2])
+    collision_by_leg = _policy_parallelism_collision_by_leg(env)
+    contact = torch.as_tensor(manager.current_contact_state, dtype=torch.bool, device=query.semantic.device)
+    safe = _active_small_obstacle_safe_mask(
+        query.semantic,
+        query.height,
+        state.foot_pos_w[..., 2],
+        query.valid,
+        collision_by_leg,
+        contact,
+        touchdown_tolerance_m=touchdown_tolerance_m,
+    )
+    small_foot = ((~contact) & query.valid & query.semantic.eq(1)).any(dim=-1).to(dtype=query.height.dtype)
+    safe_event = safe.any(dim=-1).to(dtype=query.height.dtype)
+    _update_obstacle_stats(
+        env,
+        collision_event=torch.zeros_like(safe_event),
+        small_foot_event=small_foot,
+        safe_foot_event=safe_event,
+    )
+    return safe_event
+
+
+def parallelism_obstacle_episode_metrics(env) -> dict[str, torch.Tensor]:
+    """Return episode-normalized obstacle diagnostics for the tracking env hook."""
+
+    if not hasattr(env, "_parallelism_obstacle_step_count"):
+        return {}
+    steps = env._parallelism_obstacle_step_count.clamp_min(1).to(dtype=env._parallelism_obstacle_collision_sum.dtype)
+    collision_count = env._parallelism_obstacle_collision_count.clamp_min(1).to(dtype=steps.dtype)
+    small_count = env._parallelism_obstacle_small_foot_count.clamp_min(1).to(dtype=steps.dtype)
+    return {
+        "geometry_collision_ratio": env._parallelism_obstacle_collision_sum / collision_count,
+        "active_swing_foot_on_small_ratio": env._parallelism_obstacle_small_foot_sum / small_count,
+        "active_swing_foot_on_small_no_collision_ratio": env._parallelism_obstacle_safe_foot_sum / small_count,
+        "standstill_ratio": env._parallelism_obstacle_standstill_sum / steps,
+        "reference_valid_ratio": env._parallelism_obstacle_valid_sum / steps,
+    }
+
+
+def reset_parallelism_obstacle_stats(env, env_ids: torch.Tensor) -> None:
+    """Reset obstacle episode accumulators for selected environments."""
+
+    if not hasattr(env, "_parallelism_obstacle_step_count"):
+        return
+    for name in (
+        "_parallelism_obstacle_collision_sum",
+        "_parallelism_obstacle_small_foot_sum",
+        "_parallelism_obstacle_safe_foot_sum",
+        "_parallelism_obstacle_standstill_sum",
+        "_parallelism_obstacle_valid_sum",
+    ):
+        getattr(env, name)[env_ids] = 0
+    for name in (
+        "_parallelism_obstacle_collision_count",
+        "_parallelism_obstacle_small_foot_count",
+        "_parallelism_obstacle_safe_foot_count",
+        "_parallelism_obstacle_step_count",
+    ):
+        getattr(env, name)[env_ids] = 0
 
 
 def _gaussian_error_reward(error: torch.Tensor, std: float) -> torch.Tensor:

@@ -8,7 +8,12 @@ import torch
 from isaaclab.envs import ManagerBasedRLEnv
 
 from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
-from tracking.mdp.rewards import parallelism_tracking_episode_errors, reset_parallelism_tracking_error_stats
+from tracking.mdp.rewards import (
+    parallelism_obstacle_episode_metrics,
+    parallelism_tracking_episode_errors,
+    reset_parallelism_obstacle_stats,
+    reset_parallelism_tracking_error_stats,
+)
 
 
 _LEG_NAMES = ("FL", "FR", "RL", "RR")
@@ -80,8 +85,22 @@ class ParallelismTrackingEnv(ManagerBasedRLEnv):
                 values = stats[source_name].index_select(0, ids)
                 for leg_index, leg_name in enumerate(_LEG_NAMES):
                     tracking_log[log_name.format(leg_name=leg_name)] = values[:, leg_index].mean().detach()
+            obstacle_stats = parallelism_obstacle_episode_metrics(self)
+            for source_name, log_name in (
+                ("geometry_collision_ratio", "Episode_Obstacle/geometry_collision_ratio"),
+                ("active_swing_foot_on_small_ratio", "Episode_Obstacle/active_swing_foot_on_small_ratio"),
+                (
+                    "active_swing_foot_on_small_no_collision_ratio",
+                    "Episode_Obstacle/active_swing_foot_on_small_no_collision_ratio",
+                ),
+                ("standstill_ratio", "Episode_Obstacle/standstill_ratio"),
+                ("reference_valid_ratio", "Episode_Obstacle/reference_valid_ratio"),
+            ):
+                if source_name in obstacle_stats:
+                    tracking_log[log_name] = obstacle_stats[source_name].index_select(0, ids).mean().detach()
 
         super()._reset_idx(env_ids)
         if tracking_log:
             self.extras.setdefault("log", {}).update(tracking_log)
             reset_parallelism_tracking_error_stats(self, ids)
+            reset_parallelism_obstacle_stats(self, ids)

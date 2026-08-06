@@ -1426,6 +1426,7 @@ def main() -> int:
         TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY,
         TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
     )
+    from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg_PLAY
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
     from isaaclab.envs import ManagerBasedRLEnv
@@ -1448,6 +1449,10 @@ def main() -> int:
         "parallelism_tracking_flat": (
             ParallelismTrackingFlatEnvCfg_PLAY,
             "Isaac-Go2-Parallelism-Tracking-Flat-v0",
+        ),
+        "parallelism_tracking_small_obstacles": (
+            ParallelismTrackingSmallObstaclesEnvCfg_PLAY,
+            "Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0",
         ),
     }
 

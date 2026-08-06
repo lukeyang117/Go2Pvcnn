@@ -8,6 +8,10 @@ from tracking.mdp.observations import (
     parallelism_ref_root_rot_b_t,
 )
 from tracking.mdp.rewards import (
+    active_swing_foot_on_small_obstacle_reward,
+    parallelism_geometry_collision_penalty,
+    parallelism_obstacle_episode_metrics,
+    reset_parallelism_obstacle_stats,
     reference_active_swing_foot_max_reward,
     reference_joint_pos_reward,
     reference_joint_vel_reward,
@@ -33,6 +37,10 @@ __all__ = [
     "parallelism_ref_root_rot_b_t",
     "parallelism_ref_root_z_too_far",
     "parallelism_velocity_curriculum",
+    "active_swing_foot_on_small_obstacle_reward",
+    "parallelism_geometry_collision_penalty",
+    "parallelism_obstacle_episode_metrics",
+    "reset_parallelism_obstacle_stats",
     "reference_active_swing_foot_max_reward",
     "reference_joint_pos_reward",
     "reference_joint_vel_reward",

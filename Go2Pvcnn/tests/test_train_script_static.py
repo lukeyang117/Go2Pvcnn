@@ -51,3 +51,10 @@ def test_train_versions_run_directory_by_git_short_hash_without_tag_file() -> No
     assert "git_hash" in source
     assert "os.path.join(log_root_path, date_dir, git_hash)" in source
     assert '"tag.txt"' not in source
+
+
+def test_train_registers_parallelism_small_obstacles_experiment() -> None:
+    source = _source()
+    assert '"parallelism_tracking_small_obstacles"' in source
+    assert "ParallelismTrackingSmallObstaclesEnvCfg" in source
+    assert "Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0" in source
