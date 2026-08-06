@@ -62,3 +62,28 @@ def test_fixed_scene_layout_is_deterministic_and_respects_spacing() -> None:
     for index, (x0, y0) in enumerate(first):
         for x1, y1 in first[index + 1 :]:
             assert math.hypot(x0 - x1, y0 - y1) >= cfg.small_obstacle_min_spacing_m
+
+
+def test_fixed_scene_layout_is_denser_near_center_than_edges() -> None:
+    from tracking.parallelism_small_obstacles_scene import (
+        ParallelismSmallObstacleSceneCfg,
+        build_small_obstacle_local_xy,
+    )
+
+    cfg = ParallelismSmallObstacleSceneCfg(
+        small_obstacle_count=40,
+        inner_obstacle_radius_m=0.80,
+        inner_obstacle_ratio=0.75,
+        inner_obstacle_min_spacing_m=0.12,
+        outer_obstacle_min_spacing_m=0.20,
+    )
+    points = build_small_obstacle_local_xy(cfg)
+    inner_points = [(x, y) for x, y in points if math.hypot(x, y) <= cfg.inner_obstacle_radius_m]
+    outer_points = [(x, y) for x, y in points if math.hypot(x, y) > cfg.inner_obstacle_radius_m]
+
+    assert len(points) == 40
+    assert len(inner_points) == 30
+    assert len(outer_points) == 10
+    for index, (x0, y0) in enumerate(outer_points):
+        for x1, y1 in outer_points[index + 1 :]:
+            assert math.hypot(x0 - x1, y0 - y1) >= cfg.outer_obstacle_min_spacing_m

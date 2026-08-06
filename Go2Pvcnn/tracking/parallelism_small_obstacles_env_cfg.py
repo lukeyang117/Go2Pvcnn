@@ -48,6 +48,14 @@ class ParallelismTrackingSmallObstaclesEnvCfg(ParallelismTrackingFlatEnvCfg):
 
     experiment_name: str = "parallelism_tracking_small_obstacles"
     small_obstacle_count: int = 40
+    obstacle_patch_size_m: float = 2.0
+    reset_clear_radius_m: float = 0.25
+    obstacle_center_exclusion_radius_m: float = 0.30
+    inner_obstacle_radius_m: float = 0.80
+    inner_obstacle_ratio: float = 0.75
+    inner_obstacle_min_spacing_m: float = 0.12
+    outer_obstacle_min_spacing_m: float = 0.20
+    small_obstacle_jitter_m: float = 0.03
     rewards: ParallelismSmallObstaclesRewardsCfg = ParallelismSmallObstaclesRewardsCfg()
     small_obstacle_scene: ParallelismSmallObstacleSceneCfg = field(
         default_factory=ParallelismSmallObstacleSceneCfg
@@ -71,10 +79,21 @@ class ParallelismTrackingSmallObstaclesEnvCfg(ParallelismTrackingFlatEnvCfg):
         self.small_obstacle_scene = replace(
             self.small_obstacle_scene,
             small_obstacle_count=int(self.small_obstacle_count),
+            obstacle_patch_size_m=float(self.obstacle_patch_size_m),
+            reset_clear_radius_m=float(self.reset_clear_radius_m),
+            obstacle_center_exclusion_radius_m=float(self.obstacle_center_exclusion_radius_m),
+            inner_obstacle_radius_m=float(self.inner_obstacle_radius_m),
+            inner_obstacle_ratio=float(self.inner_obstacle_ratio),
+            small_obstacle_min_spacing_m=float(self.inner_obstacle_min_spacing_m),
+            inner_obstacle_min_spacing_m=float(self.inner_obstacle_min_spacing_m),
+            outer_obstacle_min_spacing_m=float(self.outer_obstacle_min_spacing_m),
+            small_obstacle_jitter_m=float(self.small_obstacle_jitter_m),
         )
         self.semantic_obstacle_curriculum.plane_counts = (
             SemanticObstacleCount(small=self.small_obstacle_count, large=0),
         )
+        self.semantic_obstacle_curriculum.center_safety_half_extent_m = (float(self.reset_clear_radius_m),)
+        self.semantic_obstacle_curriculum.min_spacing_clearance_m = (float(self.inner_obstacle_min_spacing_m),)
         self.scene.terrain.terrain_generator = small_obstacles_terrain_cfg(self.small_obstacle_scene)
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
         self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
