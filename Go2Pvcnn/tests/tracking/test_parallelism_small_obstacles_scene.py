@@ -36,7 +36,7 @@ def test_fixed_scene_has_one_subterrain_and_circular_reset_hole(monkeypatch) -> 
     points = build_small_obstacle_local_xy(cfg)
     terrain_cfg = small_obstacles_terrain_cfg(cfg)
 
-    assert len(points) == cfg.small_obstacle_count == 24
+    assert len(points) == cfg.small_obstacle_count
     assert terrain_cfg.num_rows == 1
     assert terrain_cfg.num_cols == 1
     assert tuple(terrain_cfg.sub_terrains) == ("small_obstacles",)

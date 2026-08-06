@@ -11,9 +11,10 @@ def test_small_obstacle_config_is_one_fixed_subterrain() -> None:
     assert "ParallelismTrackingFlatEnvCfg" in source
     assert "parallelism_tracking_small_obstacles" in source
     assert "small_obstacles_terrain_cfg" in source
+    assert "small_obstacle_count: int = 40" in source
+    assert "SemanticObstacleCount(small=self.small_obstacle_count, large=0)" in source
     assert "num_rows=1" in scene_source
     assert "num_cols=1" in scene_source
-    assert "small_obstacle_count: int = 24" in scene_source
     assert "reset_clear_radius_m: float = 0.25" in scene_source
     assert "obstacle_center_exclusion_radius_m: float = 0.30" in scene_source
     assert "semantic_contact_collision = None" not in source

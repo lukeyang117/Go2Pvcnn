@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from dataclasses import field
 
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -46,6 +47,7 @@ class ParallelismTrackingSmallObstaclesEnvCfg(ParallelismTrackingFlatEnvCfg):
     """One fixed small-obstacle subterrain with random all-direction commands."""
 
     experiment_name: str = "parallelism_tracking_small_obstacles"
+    small_obstacle_count: int = 40
     rewards: ParallelismSmallObstaclesRewardsCfg = ParallelismSmallObstaclesRewardsCfg()
     small_obstacle_scene: ParallelismSmallObstacleSceneCfg = field(
         default_factory=ParallelismSmallObstacleSceneCfg
@@ -66,6 +68,13 @@ class ParallelismTrackingSmallObstaclesEnvCfg(ParallelismTrackingFlatEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "parallelism_tracking_small_obstacles"
+        self.small_obstacle_scene = replace(
+            self.small_obstacle_scene,
+            small_obstacle_count=int(self.small_obstacle_count),
+        )
+        self.semantic_obstacle_curriculum.plane_counts = (
+            SemanticObstacleCount(small=self.small_obstacle_count, large=0),
+        )
         self.scene.terrain.terrain_generator = small_obstacles_terrain_cfg(self.small_obstacle_scene)
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
         self.scene.terrain.semantic_obstacle_curriculum = self.semantic_obstacle_curriculum
