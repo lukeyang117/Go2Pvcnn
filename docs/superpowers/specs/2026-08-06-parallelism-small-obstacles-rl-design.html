@@ -169,7 +169,43 @@
     <li>不引入 large obstacles。</li>
   </ul>
 
-  <h2>2. 任务文件结构</h2>
+  <h2>2. 任务文件结构和修改位置</h2>
+  <p>新任务放在现有 tracking 包中，但不修改 flat 任务的主体配置。每类修改的位置如下：</p>
+  <table>
+    <thead>
+      <tr>
+        <th>修改内容</th>
+        <th>文件路径</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>新任务配置、command、scene 参数、reward 配置、termination 和 curriculum 继承关系</td>
+        <td><code>Go2Pvcnn/tracking/parallelism_small_obstacles_env_cfg.py</code></td>
+      </tr>
+      <tr>
+        <td>唯一 small-obstacle subterrain 的生成配置、固定障碍物布局和 reset 圆形安全区</td>
+        <td><code>Go2Pvcnn/tracking/parallelism_small_obstacles_scene.py</code></td>
+      </tr>
+      <tr>
+        <td>Parallelism 几何碰撞惩罚、active swing 足端安全踩障碍物 reward，以及对应 metric 累积</td>
+        <td><code>Go2Pvcnn/tracking/mdp/rewards.py</code></td>
+      </tr>
+      <tr>
+        <td>训练 experiment 到环境配置的映射</td>
+        <td><code>Go2Pvcnn/scripts/train.py</code></td>
+      </tr>
+      <tr>
+        <td>play experiment、PLAY 配置和可视化环境映射</td>
+        <td><code>Go2Pvcnn/scripts/play.py</code></td>
+      </tr>
+      <tr>
+        <td>Isaac Lab task 注册入口</td>
+        <td><code>Go2Pvcnn/tracking/register_envs.py</code></td>
+      </tr>
+    </tbody>
+  </table>
+
   <p>新增一个独立配置文件，继承当前 flat RL 配置：</p>
   <pre><code>Go2Pvcnn/tracking/parallelism_small_obstacles_env_cfg.py</code></pre>
 
@@ -192,10 +228,29 @@
     <li>训练配置 map 如果有 experiment 列表，也同步添加。</li>
   </ul>
 
-  <h2>3. 小障碍场景设计</h2>
+  <h2>3. 唯一场景和唯一 subterrain 设计</h2>
   <p>
+    本任务不是定义一个场景后，再复制成多个不同的 subterrain，也不是创建多个难度场景。
+    第一版只有<strong>一个场景、一个 subterrain</strong>：<code>small_obstacles</code>。
+    所有训练环境共享这一个固定的 subterrain 布局。
     terrain tile 仍然使用平地底面，small obstacles 只放在 reset 中心附近的一个局部正方形区域。
     这个区域中间挖掉一个圆形安全区，保证机器人 reset 后初始 root 和四足站姿不会直接被障碍物干扰。
+  </p>
+
+  <pre><code>terrain_generator
+└── sub_terrains
+    └── small_obstacles   # 唯一 subterrain，唯一固定布局
+
+num_rows = 1
+num_cols = 1
+
+所有 env
+└── 共享同一个 small_obstacles 场景布局</code></pre>
+
+  <p>
+    这里的“一个场景”指一个固定的地形生成实例和一个固定的障碍物布局。
+    不使用 terrain curriculum，不创建多个 row/column 难度等级，不按 scene id 给环境分配不同布局。
+    1024 个环境只是复制物理环境来并行训练，它们面对的是同一个 subterrain 内容。
   </p>
 
   <pre class="diagram"><code>俯视图：
