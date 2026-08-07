@@ -21,6 +21,7 @@ from tracking.mdp.rewards import (
     reference_root_rot_reward,
 )
 from tracking.mdp.terminations import (
+    parallelism_consecutive_standstill,
     parallelism_ref_foot_z_too_far,
     parallelism_ref_joint_pos_too_far,
     parallelism_ref_projected_gravity_too_far,
@@ -28,6 +29,7 @@ from tracking.mdp.terminations import (
 )
 
 __all__ = [
+    "parallelism_consecutive_standstill",
     "parallelism_ref_foot_z_too_far",
     "parallelism_ref_joint_pos_rel_t",
     "parallelism_ref_joint_pos_too_far",

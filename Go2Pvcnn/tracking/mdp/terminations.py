@@ -17,6 +17,16 @@ from extension.convention import euler_to_quat_batch
 from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
 
 
+def parallelism_consecutive_standstill(env, threshold: int = 2) -> torch.Tensor:
+    """Terminate environments after the configured number of failed replans in a row."""
+
+    manager = get_parallelism_reference_manager(env)
+    count = getattr(manager, "standstill_count", None)
+    if count is None:
+        return torch.zeros(int(getattr(env, "num_envs", 0)), dtype=torch.bool, device=getattr(env, "device", "cpu"))
+    return torch.as_tensor(count).ge(max(int(threshold), 1))
+
+
 def _quat_apply_inverse(quat_wxyz: torch.Tensor, vec_w: torch.Tensor) -> torch.Tensor:
     q = torch.as_tensor(quat_wxyz)
     v = torch.as_tensor(vec_w, dtype=q.dtype, device=q.device)

@@ -100,6 +100,7 @@ class ParallelismTrackingEnv(ManagerBasedRLEnv):
                     tracking_log[log_name] = obstacle_stats[source_name].index_select(0, ids).mean().detach()
 
         super()._reset_idx(env_ids)
+        get_parallelism_reference_manager(self).on_environment_reset(ids)
         if tracking_log:
             self.extras.setdefault("log", {}).update(tracking_log)
             reset_parallelism_tracking_error_stats(self, ids)

@@ -211,6 +211,7 @@ class ParallelismReferenceManager:
         self._initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.standstill_latched = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.standstill_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.plan_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_valid_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.plan_reject_counts = torch.zeros(self.num_envs, 6, dtype=torch.long, device=self.device)
@@ -254,12 +255,22 @@ class ParallelismReferenceManager:
         ids = _as_env_ids(env_ids, num_envs=self.num_envs, device=self.device)
         if int(ids.numel()) == 0:
             return
-        cycle = torch.zeros_like(ids, dtype=torch.long, device=self.device)
+        self.on_environment_reset(ids)
+        self._plan(ids, torch.zeros_like(ids, dtype=torch.long, device=self.device))
+
+    def on_environment_reset(self, env_ids: Sequence[int] | Tensor | None = None) -> None:
+        """Invalidate references and clear episode state after an environment reset."""
+
+        ids = _as_env_ids(env_ids, num_envs=self.num_envs, device=self.device)
+        if int(ids.numel()) == 0:
+            return
         self._manual_episode_length[ids] = 0
         self.phase[ids] = 0
         self.standstill_latched[ids] = False
+        self.standstill_count[ids] = 0
+        self._cached_cycle[ids] = -1
+        self._initialized[ids] = False
         self._step_reference_valid[ids] = False
-        self._plan(ids, cycle)
 
     def mark_command_changed(self, env_mask: Sequence[int] | Tensor | None = None, *_, **__) -> None:
         ids = _as_env_ids(env_mask, num_envs=self.num_envs, device=self.device)
@@ -677,6 +688,7 @@ class ParallelismReferenceManager:
                 self.foot_pos_w[subset, 0] = state.foot_pos_w
             self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)
             self.standstill_latched[subset] = ~trajectory.valid
+            self._update_standstill_count(subset, trajectory.valid)
             self.plan_valid[subset] = trajectory.valid
             self.plan_valid_count[subset] = trajectory.diagnostics.candidate_valid.sum(dim=(1, 2)).to(dtype=torch.long)
             self.plan_reject_counts[subset] = trajectory.diagnostics.candidate_reject_bits.sum(dim=(1, 2)).to(dtype=torch.long)
@@ -686,6 +698,15 @@ class ParallelismReferenceManager:
             self._cached_cycle[subset] = subset_cycle
             self._initialized[subset] = True
             self.plan_count[subset] += 1
+
+    def _update_standstill_count(self, env_ids: Tensor, trajectory_valid: Tensor) -> None:
+        """Update consecutive failed-replan counts without changing command state."""
+
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device).reshape(-1)
+        valid = torch.as_tensor(trajectory_valid, dtype=torch.bool, device=self.device).reshape(-1)
+        current = self.standstill_count.index_select(0, ids)
+        updated = torch.where(valid, torch.zeros_like(current), current + 1)
+        self.standstill_count[ids] = updated
 
     def _semantic_height_scanner(self):
         scene = getattr(self.env, "scene", None)

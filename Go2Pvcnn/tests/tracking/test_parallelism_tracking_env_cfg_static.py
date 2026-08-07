@@ -8,6 +8,7 @@ def test_parallelism_tracking_env_cfg_contains_required_terms() -> None:
     assert "resampling_time_range=(0.48, 0.48)" in source
     assert "downsampled_elevation_semantic_scan" in source
     assert "parallelism_ref_joint_pos_too_far" in source
+    assert "parallelism_consecutive_standstill" in source
     assert "reference_foot_pos = RewTerm" in source
     assert "reference_active_swing_foot_max = RewTerm" in source
     assert "reference_joint_max = RewTerm" in source

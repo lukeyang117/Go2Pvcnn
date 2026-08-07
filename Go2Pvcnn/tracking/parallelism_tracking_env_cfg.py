@@ -232,6 +232,10 @@ class ParallelismTrackingTerminationsCfg:
             "consecutive_steps": 3,
         },
     )
+    parallelism_consecutive_standstill = DoneTerm(
+        func=tracking_mdp.parallelism_consecutive_standstill,
+        params={"threshold": 2},
+    )
 
 
 @configclass

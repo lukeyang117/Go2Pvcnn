@@ -351,3 +351,46 @@ def test_env_reset_hook_replans_after_reset():
     env.reset()
 
     assert int(manager.plan_count.sum().item()) == env.num_envs
+
+
+def test_standstill_count_tracks_only_consecutive_failed_replans():
+    env = _fake_env()
+    manager = ParallelismReferenceManager(env, autostart=False)
+    ids = torch.tensor([0, 1])
+
+    manager._update_standstill_count(ids, torch.tensor([False, True]))
+    assert manager.standstill_count.tolist() == [1, 0]
+
+    manager._update_standstill_count(ids, torch.tensor([False, False]))
+    assert manager.standstill_count.tolist() == [2, 1]
+
+    manager._update_standstill_count(ids, torch.tensor([True, False]))
+    assert manager.standstill_count.tolist() == [0, 2]
+
+
+def test_reset_clears_standstill_count_but_command_change_does_not():
+    env = _fake_env()
+    manager = ParallelismReferenceManager(env, autostart=False)
+    manager.standstill_count[:] = torch.tensor([2, 1])
+
+    manager.mark_command_changed(torch.tensor([True, False]))
+    assert manager.standstill_count.tolist() == [2, 1]
+
+    manager.reset(torch.tensor([0]))
+    assert manager.standstill_count.tolist() == [0, 1]
+
+
+def test_internal_environment_reset_invalidates_reference_without_planning():
+    env = _fake_env()
+    manager = ParallelismReferenceManager(env, autostart=False)
+    manager.standstill_count[:] = torch.tensor([2, 1])
+    manager.standstill_latched[:] = True
+    manager._initialized[:] = True
+    manager._cached_cycle[:] = 3
+
+    manager.on_environment_reset(torch.tensor([0]))
+
+    assert manager.standstill_count.tolist() == [0, 1]
+    assert manager.standstill_latched.tolist() == [False, True]
+    assert manager._initialized.tolist() == [False, True]
+    assert manager._cached_cycle.tolist() == [-1, 3]

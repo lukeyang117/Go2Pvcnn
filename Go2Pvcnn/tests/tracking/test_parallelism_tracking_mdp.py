@@ -20,7 +20,10 @@ from tracking.mdp.rewards import (
     reference_root_rot_reward,
     reset_parallelism_tracking_error_stats,
 )
-from tracking.mdp.terminations import parallelism_ref_joint_pos_too_far
+from tracking.mdp.terminations import (
+    parallelism_consecutive_standstill,
+    parallelism_ref_joint_pos_too_far,
+)
 
 
 class _Scene(dict):
@@ -51,6 +54,7 @@ def _fake_env():
         step_root_pos_w=torch.zeros(2, 3),
         step_root_rpy_w=torch.zeros(2, 3),
         current_contact_state=torch.ones(2, 4, dtype=torch.bool),
+        standstill_count=torch.zeros(2, dtype=torch.long),
     )
     robot = SimpleNamespace(
         joint_names=(
@@ -215,6 +219,15 @@ def test_joint_pos_too_far_triggers_on_max_joint_error():
     env.scene["robot"].data.joint_pos[1, 3] = 0.9
     done = parallelism_ref_joint_pos_too_far(env, threshold=0.8, consecutive_steps=1)
     assert done.tolist() == [False, True]
+
+
+def test_consecutive_standstill_termination_requires_two_failures():
+    env = _fake_env()
+    env.parallelism_reference_manager.standstill_count[:] = torch.tensor([0, 1])
+    assert parallelism_consecutive_standstill(env).tolist() == [False, False]
+
+    env.parallelism_reference_manager.standstill_count[:] = torch.tensor([2, 3])
+    assert parallelism_consecutive_standstill(env).tolist() == [True, True]
 
 
 def test_tracking_errors_use_episode_joint_mean_max_and_reference_pose():
