@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism 非平地 Root 多点采样与 Viewer 调试设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --paper: #ffffff;
+      --ink: #17202a;
+      --muted: #5c6975;
+      --line: #d9e0e7;
+      --accent: #1f6feb;
+      --accent-soft: #eaf2ff;
+      --code-bg: #f2f4f7;
+      --ok-bg: #ebf7ef;
+      --warn-bg: #fff7e6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+        "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.65;
+    }
+    main { max-width: 1000px; margin: 0 auto; padding: 32px 20px 56px; }
+    article {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 32px;
+      box-shadow: 0 12px 32px rgba(20, 32, 48, 0.06);
+    }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.25; }
+    h2 {
+      margin: 30px 0 10px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 21px;
+    }
+    h3 { margin: 20px 0 8px; font-size: 17px; }
+    p { margin: 10px 0; }
+    ul { margin: 8px 0 14px 22px; padding: 0; }
+    li { margin: 4px 0; }
+    code {
+      background: var(--code-bg);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      margin: 12px 0 18px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      line-height: 1.45;
+    }
+    pre code { padding: 0; background: transparent; }
+    .meta { margin: 0 0 22px; color: var(--muted); }
+    .callout {
+      margin: 16px 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--accent-soft);
+    }
+    .ok { background: var(--ok-bg); }
+    .warn { background: var(--warn-bg); }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 14px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f3f6fa; }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>Parallelism 非平地 Root 多点采样与 Viewer 调试设计</h1>
+      <p class="meta">日期：2026-08-09；分支：<code>parallelism-ladder-rl</code></p>
+
+      <section>
+        <h2>目标与边界</h2>
+        <p>在当前 Parallelism root terrain-following 逻辑上，增加前后、左右方向的多点均匀采样，使 root 的 roll/pitch 同时感知近处和远处地形。通过 viewer 调试面板调节采样范围、采样点数和已有 root 参数。</p>
+        <div class="callout ok">
+          本设计只修改 root 轨迹生成和 viewer 调试接口，不修改 touchdown 候选、swing 曲线、IK、FK、collision geometry、semantic filter、score 或 RL 接口。
+        </div>
+      </section>
+
+      <section>
+        <h2>Flat 与 Non-flat 分流</h2>
+        <pre><code>terrain_name == "flat"
+    -> 保留当前 cross-obstacles root 逻辑
+    -> roll/pitch 从真实初始姿态在 root_leveling_frames 内回正
+
+terrain_name != "flat"
+    -> 使用 terrain-following root
+    -> root_z 跟随地形
+    -> roll/pitch 根据局部地形拟合
+    -> 当局部坡度回到零附近时，roll/pitch 平滑回正</code></pre>
+        <p>非 flat 地形不强制每条轨迹都把 roll/pitch 设为零。持续斜坡需要保留相应倾角；楼梯平台或平地段的拟合坡度接近零时，才进入回正过程。</p>
+      </section>
+
+      <section>
+        <h2>多点 Pitch 采样</h2>
+        <p>不再使用单个 <code>pitch_sample_m</code>。新增一个对称采样范围和采样点数：</p>
+        <pre><code>R_pitch = terrain_following_pitch_sample_range_m
+N_pitch = terrain_following_pitch_sample_count
+s_i = linspace(-R_pitch, +R_pitch, N_pitch)
+
+q_i = root_xy + s_i * forward
+h_i = H(q_i)</code></pre>
+        <p>对 <code>(s_i, h_i)</code> 做最小二乘直线拟合：</p>
+        <pre><code>h(s) = k_pitch * s + b_pitch
+
+k_pitch =
+  sum((s_i - mean(s)) * (h_i - mean(h)))
+  / sum((s_i - mean(s))^2)
+
+pitch_raw = -atan(k_pitch)</code></pre>
+        <p>使用整条采样线拟合，而不是取某两个点，可以避免采样点恰好落在同一级台阶时 pitch 变成零。</p>
+      </section>
+
+      <section>
+        <h2>多点 Roll 采样</h2>
+        <pre><code>R_roll = terrain_following_roll_sample_range_m
+N_roll = terrain_following_roll_sample_count
+s_i = linspace(-R_roll, +R_roll, N_roll)
+
+q_i = root_xy + s_i * left
+h_i = H(q_i)
+
+h(s) = k_roll * s + b_roll
+roll_raw = atan(k_roll)</code></pre>
+        <p>roll 与 pitch 使用相同的拟合、限幅、平滑和限速流程。</p>
+      </section>
+
+      <section>
+        <h2>回正逻辑</h2>
+        <p>拟合后得到的目标姿态为 <code>roll_target</code> 和 <code>pitch_target</code>。当目标角度小于 deadband 时，将目标设置为零：</p>
+        <pre><code>if abs(roll_target) &lt; terrain_following_rpy_deadband_rad:
+    roll_target = 0
+
+if abs(pitch_target) &lt; terrain_following_rpy_deadband_rad:
+    pitch_target = 0</code></pre>
+        <p>然后沿现有的 smoothing 和 rate limit 逐帧跟踪。这样具有以下行为：</p>
+        <ul>
+          <li>flat 或楼梯平台：采样线拟合坡度接近零，roll/pitch 回正。</li>
+          <li>持续斜坡：拟合坡度非零，保留必要的地形倾角。</li>
+          <li>台阶边缘：采样范围覆盖边缘时产生短暂姿态调整，经过平台后重新回正。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>推荐默认参数</h2>
+        <table>
+          <thead>
+            <tr><th>参数</th><th>默认值</th><th>含义</th><th>建议调节范围</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>terrain_following_pitch_sample_range_m</code></td><td>0.35</td><td>前后总采样半径</td><td>0.25 ~ 0.70</td></tr>
+            <tr><td><code>terrain_following_pitch_sample_count</code></td><td>7</td><td>前后方向采样点数</td><td>3 ~ 9</td></tr>
+            <tr><td><code>terrain_following_roll_sample_range_m</code></td><td>0.35</td><td>左右总采样半径</td><td>0.20 ~ 0.50</td></tr>
+            <tr><td><code>terrain_following_roll_sample_count</code></td><td>5</td><td>左右方向采样点数</td><td>3 ~ 7</td></tr>
+            <tr><td><code>terrain_following_rpy_deadband_rad</code></td><td>0.02</td><td>小角度回正死区</td><td>0.00 ~ 0.06</td></tr>
+            <tr><td><code>terrain_following_rpy_smoothing</code></td><td>0.25</td><td>姿态平滑系数</td><td>0.10 ~ 0.60</td></tr>
+            <tr><td><code>terrain_following_rpy_rate_limit_rad</code></td><td>0.03</td><td>每帧姿态变化上限</td><td>0.01 ~ 0.08</td></tr>
+            <tr><td><code>terrain_following_pitch_limit_rad</code></td><td>0.35</td><td>pitch 最大角度</td><td>0.20 ~ 0.50</td></tr>
+            <tr><td><code>terrain_following_roll_limit_rad</code></td><td>0.25</td><td>roll 最大角度</td><td>0.15 ~ 0.40</td></tr>
+          </tbody>
+        </table>
+        <p>采样点数使用奇数，保证采样线中包含 root 中心点。初始推荐值为 <code>pitch: range=0.35,count=7</code>，<code>roll: range=0.35,count=5</code>。</p>
+      </section>
+
+      <section>
+        <h2>Viewer 调试面板</h2>
+        <p>在现有 Parallelism 调试面板中增加 Root Terrain 区域：</p>
+        <ul>
+          <li>root clearance、root z smoothing、root z rate limit</li>
+          <li>pitch sample range、pitch sample count</li>
+          <li>roll sample range、roll sample count</li>
+          <li>rpy smoothing、rpy rate limit、pitch limit、roll limit</li>
+          <li><code>Reset to terrain platform</code> 按钮</li>
+        </ul>
+        <p>每次重新规划读取当前面板值。修改 slider 不立即改变当前已播放轨迹，下一次 replan 时生效。</p>
+      </section>
+
+      <section>
+        <h2>Reset to Terrain Platform</h2>
+        <p>按钮使用当前 <code>terrain_row</code> 和 <code>terrain_col</code>，把机器人传送回该 subterrain 的 origin/platform 区域：</p>
+        <pre><code>1. 保持当前 terrain row/col
+2. root xy 传送到 selected terrain origin
+3. 通过 scanner 重新计算脚端贴地高度
+4. 清零 root 速度和当前 command
+5. 清除当前播放轨迹
+6. 立即触发一次 replan</code></pre>
+        <p>该按钮用于调参后快速恢复，不切换 terrain，不改变命令行选择的地形。</p>
+      </section>
+
+      <section>
+        <h2>显存与计算量</h2>
+        <p>多点采样只增加高度图查询，不增加 root 候选维度：</p>
+        <pre><code>pitch 查询量: batch * horizon * pitch_sample_count
+roll 查询量:  batch * horizon * roll_sample_count</code></pre>
+        <p>默认每帧增加 12 个高度查询，仍然是 Torch GPU 并行，不会像 root trajectory bank 那样复制整条 root、IK 和 collision 张量。</p>
+      </section>
+
+      <section>
+        <h2>基础地形泛化测试</h2>
+        <p>参数选择不只针对楼梯。测试覆盖：</p>
+        <table>
+          <thead><tr><th>地形</th><th>期望行为</th></tr></thead>
+          <tbody>
+            <tr><td>flat</td><td>roll/pitch 接近 0，并在回正帧数内稳定回正</td></tr>
+            <tr><td>random rough</td><td>姿态变化有限，不出现 NaN 或异常跳变</td></tr>
+            <tr><td>slope / inverse slope</td><td>能估计连续坡度，pitch 符号正确且受限幅保护</td></tr>
+            <tr><td>boxes</td><td>局部高度变化能被感知，但姿态不被单个尖点完全决定</td></tr>
+            <tr><td>pyramid stairs</td><td>台阶边缘有姿态调整，平台段重新回正</td></tr>
+          </tbody>
+        </table>
+        <p>验收指标：</p>
+        <ul>
+          <li>所有地形输出无 NaN/Inf。</li>
+          <li>flat 的最终 roll/pitch 小于 <code>0.02 rad</code>。</li>
+          <li>所有地形的 roll/pitch 不超过对应 limit。</li>
+          <li>相邻帧姿态变化不超过 rate limit。</li>
+          <li>stairs 平台段的 roll/pitch 能回到 deadband 内。</li>
+        </ul>
+        <div class="callout">
+          设计阶段的高度剖面测试显示，<code>pitch range=0.35,count=7</code> 在 <code>0.20</code> 坡度上可恢复约 <code>atan(0.20)=0.197 rad</code> 的 pitch；在 stair edge 上触发 pitch limit；在上方平台段回到 deadband；在 boxes 边缘产生中等姿态响应，避免单个 box 过度主导 root。
+        </div>
+      </section>
+
+      <section>
+        <h2>修改文件</h2>
+        <ul>
+          <li><code>Go2Pvcnn/extension/parallelism/config.py</code>：新增多点采样和回正参数。</li>
+          <li><code>Go2Pvcnn/extension/parallelism/root.py</code>：实现均匀采样、线性拟合和 deadband 回正。</li>
+          <li><code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code>：增加 root 参数面板和 terrain platform reset。</li>
+          <li><code>Go2Pvcnn/tests/parallelism/</code>：增加采样拟合、回正、面板传参和 reset 测试。</li>
+        </ul>
+      </section>
+    </article>
+  </main>
+</body>
+</html>
