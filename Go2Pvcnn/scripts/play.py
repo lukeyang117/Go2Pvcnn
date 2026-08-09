@@ -687,6 +687,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
             "parallelism_tracking_flat",
             "parallelism_tracking_small_obstacles",
+            "parallelism_tracking_ladder",
         ],
         help="Experiment/task to play.",
     )
@@ -1430,6 +1431,7 @@ def main() -> int:
         TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg_PLAY,
         TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
     )
+    from tracking.parallelism_ladder_env_cfg import ParallelismTrackingLadderEnvCfg_PLAY
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg_PLAY
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -1457,6 +1459,10 @@ def main() -> int:
         "parallelism_tracking_small_obstacles": (
             ParallelismTrackingSmallObstaclesEnvCfg_PLAY,
             "Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0",
+        ),
+        "parallelism_tracking_ladder": (
+            ParallelismTrackingLadderEnvCfg_PLAY,
+            "Isaac-Go2-Parallelism-Tracking-Ladder-v0",
         ),
     }
 
@@ -1491,7 +1497,7 @@ def main() -> int:
     )
     env_cfg.planner_backend = (
         "parallelism"
-        if experiment_name in ("parallelism_tracking_flat", "parallelism_tracking_small_obstacles")
+        if experiment_name in ("parallelism_tracking_flat", "parallelism_tracking_small_obstacles", "parallelism_tracking_ladder")
         else str(args_cli.planner_backend)
     )
 
@@ -1531,7 +1537,11 @@ def main() -> int:
     _attach_reference_manager_if_enabled(base_env, env_cfg, experiment_name)
     step_probe = _install_env_step_probes(base_env, enabled=bool(args_cli.debug_livestream))
 
-    is_parallelism_play = experiment_name in ("parallelism_tracking_flat", "parallelism_tracking_small_obstacles")
+    is_parallelism_play = experiment_name in (
+        "parallelism_tracking_flat",
+        "parallelism_tracking_small_obstacles",
+        "parallelism_tracking_ladder",
+    )
     parallelism_panel_state = None
     parallelism_manager = None
     parallelism_diagnostics = None

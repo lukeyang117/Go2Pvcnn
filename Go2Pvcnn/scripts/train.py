@@ -153,6 +153,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
             "parallelism_tracking_flat",
             "parallelism_tracking_small_obstacles",
+            "parallelism_tracking_ladder",
         ],
         help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
     )
@@ -491,6 +492,7 @@ def main() -> int:
         TeacherElevationTrajectoryMpcSemanticEnvCfg,
         TeacherElevationTrajectoryMpcSemanticFlatSmallAvoidanceEnvCfg,
     )
+    from tracking.parallelism_ladder_env_cfg import ParallelismTrackingLadderEnvCfg
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
@@ -573,6 +575,10 @@ def main() -> int:
         "parallelism_tracking_small_obstacles": (
             ParallelismTrackingSmallObstaclesEnvCfg,
             "Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0",
+        ),
+        "parallelism_tracking_ladder": (
+            ParallelismTrackingLadderEnvCfg,
+            "Isaac-Go2-Parallelism-Tracking-Ladder-v0",
         ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]

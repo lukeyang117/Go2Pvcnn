@@ -669,7 +669,13 @@ class ParallelismReferenceManager:
                 joint_pos=torch.where(latch_joint, standard_state.joint_pos, live_state.joint_pos),
                 foot_pos_w=torch.where(latch_foot, standard_state.foot_pos_w, live_state.foot_pos_w),
             )
-            trajectory = plan_trajectory(state, self._command(subset), terrain, self.cfg)
+            trajectory = plan_trajectory(
+                state,
+                self._command(subset),
+                terrain,
+                self.cfg,
+                terrain_following_mask=self._terrain_following_mask(subset),
+            )
             self.root_pos_w[subset] = trajectory.root_pos_w
             self.root_rpy_w[subset] = trajectory.root_rpy_w
             self.joint_pos[subset] = _reorder_joint_from_planner(trajectory.joint_pos, getattr(self._robot(), "joint_names", None))
@@ -724,6 +730,50 @@ class ParallelismReferenceManager:
             return scene["semantic_height_scanner"]
         except Exception:  # noqa: BLE001
             return getattr(scene, "semantic_height_scanner", None)
+
+    def _scene_terrain(self):
+        scene = getattr(self.env, "scene", None)
+        if scene is None:
+            return None
+        terrain = getattr(scene, "terrain", None)
+        if terrain is not None:
+            return terrain
+        try:
+            return scene["terrain"]
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _terrain_type_names(self) -> tuple[str, ...] | None:
+        terrain = self._scene_terrain()
+        generator = getattr(getattr(terrain, "cfg", None), "terrain_generator", None) if terrain is not None else None
+        if generator is None:
+            cfg = getattr(getattr(self.env, "cfg", None), "scene", None)
+            terrain_cfg = getattr(cfg, "terrain", None)
+            generator = getattr(terrain_cfg, "terrain_generator", None)
+        sub_terrains = getattr(generator, "sub_terrains", None)
+        if not isinstance(sub_terrains, dict):
+            return None
+        return tuple(str(name) for name in sub_terrains.keys())
+
+    def _terrain_following_mask(self, env_ids: Tensor) -> Tensor:
+        terrain = self._scene_terrain()
+        terrain_types = getattr(terrain, "terrain_types", None) if terrain is not None else None
+        names = self._terrain_type_names()
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device).reshape(-1)
+        if terrain_types is None or names is None:
+            return torch.zeros(int(ids.numel()), dtype=torch.bool, device=self.device)
+        type_tensor = torch.as_tensor(terrain_types, dtype=torch.long, device=self.device).reshape(-1)
+        if int(type_tensor.numel()) == self.num_envs:
+            type_tensor = type_tensor.index_select(0, ids)
+        elif int(type_tensor.numel()) != int(ids.numel()):
+            return torch.zeros(int(ids.numel()), dtype=torch.bool, device=self.device)
+        valid_type = (type_tensor >= 0) & (type_tensor < len(names))
+        flat_indices = [idx for idx, name in enumerate(names) if str(name).lower() == "flat"]
+        if not flat_indices:
+            return valid_type
+        flat_tensor = torch.tensor(flat_indices, dtype=torch.long, device=self.device)
+        is_flat = (type_tensor[:, None] == flat_tensor[None]).any(dim=1)
+        return valid_type & ~is_flat
 
     def _scanner_resolution(self, scanner, *, fallback: float) -> float:
         pattern_cfg = getattr(getattr(scanner, "cfg", None), "pattern_cfg", None)

@@ -247,10 +247,11 @@ def plan_trajectory(
     command_body: Tensor,
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg | None = None,
+    terrain_following_mask: Tensor | None = None,
 ) -> ParallelismTrajectory:
     cfg = cfg or ParallelismCfg()
     command = clamp_command(command_body, cfg)
-    root = rollout_root(state, command, terrain, cfg)
+    root = rollout_root(state, command, terrain, cfg, terrain_following_mask=terrain_following_mask)
     candidates = build_candidates(root, state, command, terrain, cfg)
     batch, leg_count, candidate_count, _ = candidates.candidate_w.shape
 

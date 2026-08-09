@@ -394,3 +394,33 @@ def test_internal_environment_reset_invalidates_reference_without_planning():
     assert manager.standstill_latched.tolist() == [False, True]
     assert manager._initialized.tolist() == [False, True]
     assert manager._cached_cycle.tolist() == [-1, 3]
+
+
+def test_terrain_following_mask_uses_non_flat_terrain_names():
+    env = _fake_env(num_envs=3)
+    env.scene.terrain = SimpleNamespace(
+        terrain_types=torch.tensor([0, 1, 2], dtype=torch.long),
+        cfg=SimpleNamespace(
+            terrain_generator=SimpleNamespace(
+                sub_terrains={
+                    "flat": object(),
+                    "random_rough": object(),
+                    "pyramid_stairs": object(),
+                }
+            )
+        ),
+    )
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    mask = manager._terrain_following_mask(torch.tensor([0, 1, 2]))
+
+    assert mask.tolist() == [False, True, True]
+
+
+def test_terrain_following_mask_defaults_to_flat_without_metadata():
+    env = _fake_env(num_envs=2)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    mask = manager._terrain_following_mask(torch.tensor([0, 1]))
+
+    assert mask.tolist() == [False, False]
