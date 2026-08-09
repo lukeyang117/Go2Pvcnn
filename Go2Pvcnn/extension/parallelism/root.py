@@ -59,6 +59,43 @@ def _half_profile(cfg: ParallelismCfg, *, dtype: torch.dtype, device: torch.devi
     return tau * tau * (3.0 - 2.0 * tau)
 
 
+def _uniform_symmetric_samples(
+    range_m: float,
+    count: int,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> Tensor:
+    count = max(int(count), 1)
+    extent = max(float(range_m), 0.0)
+    if count == 1:
+        return torch.zeros(1, dtype=dtype, device=device)
+    denom = torch.tensor(float(count - 1), dtype=dtype, device=device)
+    index = torch.arange(count, dtype=dtype, device=device)
+    return (index * 2.0 / denom - 1.0) * extent
+
+
+def _fit_height_slope(heights: Tensor, offsets: Tensor) -> Tensor:
+    heights = torch.as_tensor(heights)
+    offsets = torch.as_tensor(offsets, dtype=heights.dtype, device=heights.device)
+    if heights.ndim < 2 or offsets.ndim < 2:
+        raise ValueError("heights and offsets must include a sample dimension")
+    if heights.shape[-2] != offsets.shape[-2]:
+        raise ValueError("heights and offsets must have the same sample count")
+    x = offsets
+    if x.shape[0] == 1 and heights.shape[0] != 1:
+        x = x.expand(heights.shape[0], *x.shape[1:])
+    x = x.expand(*heights.shape[:-2], x.shape[-2], x.shape[-1])
+    y = heights
+    x_mean = x.mean(dim=-2, keepdim=True)
+    y_mean = y.mean(dim=-2, keepdim=True)
+    centered_x = x - x_mean
+    centered_y = y - y_mean
+    denominator = (centered_x.square()).sum(dim=-2).clamp_min(1.0e-8)
+    numerator = (centered_x * centered_y).sum(dim=-2)
+    return numerator / denominator
+
+
 def _smooth_rate_limit(
     target: Tensor,
     initial: Tensor,
@@ -150,27 +187,45 @@ def _terrain_following_rpy(root_xy: Tensor, yaw: Tensor, rpy0: Tensor, terrain: 
     sine = torch.sin(yaw)
     forward = torch.stack((cosine, sine), dim=-1)
     left = torch.stack((-sine, cosine), dim=-1)
-    pitch_offset = forward * float(cfg.terrain_following_pitch_sample_m)
-    roll_offset = left * float(cfg.terrain_following_roll_sample_m)
-    points = torch.cat(
-        (
-            root_xy + pitch_offset,
-            root_xy - pitch_offset,
-            root_xy + roll_offset,
-            root_xy - roll_offset,
-        ),
-        dim=1,
+    pitch_offsets = _uniform_symmetric_samples(
+        cfg.terrain_following_pitch_sample_range_m,
+        cfg.terrain_following_pitch_sample_count,
+        dtype=root_xy.dtype,
+        device=root_xy.device,
     )
-    height = query_height_semantic_valid(terrain, points).height.reshape(root_xy.shape[0], 4, int(cfg.horizon))
-    h_front, h_back, h_left, h_right = height[:, 0], height[:, 1], height[:, 2], height[:, 3]
-    pitch = -torch.atan2(
-        h_front - h_back,
-        torch.full_like(h_front, 2.0 * max(float(cfg.terrain_following_pitch_sample_m), 1.0e-6)),
+    roll_offsets = _uniform_symmetric_samples(
+        cfg.terrain_following_roll_sample_range_m,
+        cfg.terrain_following_roll_sample_count,
+        dtype=root_xy.dtype,
+        device=root_xy.device,
     )
-    roll = torch.atan2(
-        h_left - h_right,
-        torch.full_like(h_left, 2.0 * max(float(cfg.terrain_following_roll_sample_m), 1.0e-6)),
+    pitch_points = root_xy[:, None, :, :] + pitch_offsets[None, :, None, None] * forward[:, None, :, :]
+    roll_points = root_xy[:, None, :, :] + roll_offsets[None, :, None, None] * left[:, None, :, :]
+    batch = int(root_xy.shape[0])
+    horizon = int(root_xy.shape[1])
+    pitch_count = int(pitch_offsets.numel())
+    roll_count = int(roll_offsets.numel())
+    pitch_height = query_height_semantic_valid(
+        terrain,
+        pitch_points.reshape(batch, pitch_count * horizon, 2),
+    ).height.reshape(batch, pitch_count, horizon)
+    roll_height = query_height_semantic_valid(
+        terrain,
+        roll_points.reshape(batch, roll_count * horizon, 2),
+    ).height.reshape(batch, roll_count, horizon)
+    pitch_slope = _fit_height_slope(
+        pitch_height,
+        pitch_offsets.reshape(1, -1, 1),
     )
+    roll_slope = _fit_height_slope(
+        roll_height,
+        roll_offsets.reshape(1, -1, 1),
+    )
+    pitch = -torch.atan(pitch_slope)
+    roll = torch.atan(roll_slope)
+    deadband = float(max(cfg.terrain_following_rpy_deadband_rad, 0.0))
+    pitch = torch.where(pitch.abs() < deadband, torch.zeros_like(pitch), pitch)
+    roll = torch.where(roll.abs() < deadband, torch.zeros_like(roll), roll)
     roll = roll.clamp(min=-float(cfg.terrain_following_roll_limit_rad), max=float(cfg.terrain_following_roll_limit_rad))
     pitch = pitch.clamp(min=-float(cfg.terrain_following_pitch_limit_rad), max=float(cfg.terrain_following_pitch_limit_rad))
     roll = _smooth_rate_limit(

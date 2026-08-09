@@ -40,6 +40,12 @@ class ParallelismCfg:
     terrain_following_root_z_smoothing: float = 0.35
     terrain_following_root_z_rate_limit_m: float = 0.035
     terrain_following_root_height_deadband_m: float = 0.005
+    terrain_following_pitch_sample_range_m: float = 0.35
+    terrain_following_pitch_sample_count: int = 7
+    terrain_following_roll_sample_range_m: float = 0.35
+    terrain_following_roll_sample_count: int = 5
+    terrain_following_rpy_deadband_rad: float = 0.02
+    # Kept for compatibility with older configs; terrain following uses the multi-point fields above.
     terrain_following_pitch_sample_m: float = 0.20
     terrain_following_roll_sample_m: float = 0.16
     terrain_following_rpy_smoothing: float = 0.25

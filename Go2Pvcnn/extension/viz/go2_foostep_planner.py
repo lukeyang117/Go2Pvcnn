@@ -125,6 +125,19 @@ class ViewerTestTerminalState:
     show_collision_body: bool = False
     show_contact_points: bool = False
     enabled: bool = True
+    terrain_following_root_clearance_m: float = 0.30
+    terrain_following_root_z_smoothing: float = 0.35
+    terrain_following_root_z_rate_limit_m: float = 0.035
+    terrain_following_pitch_sample_range_m: float = 0.35
+    terrain_following_pitch_sample_count: int = 7
+    terrain_following_roll_sample_range_m: float = 0.35
+    terrain_following_roll_sample_count: int = 5
+    terrain_following_rpy_deadband_rad: float = 0.02
+    terrain_following_rpy_smoothing: float = 0.25
+    terrain_following_rpy_rate_limit_rad: float = 0.03
+    terrain_following_pitch_limit_rad: float = 0.35
+    terrain_following_roll_limit_rad: float = 0.25
+    platform_reset_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -242,11 +255,11 @@ def _create_viewer_test_terminal(state: ViewerTestTerminalState):
         print(f"[WARN][ViewerTestTerminal] omni.ui unavailable: {exc}", flush=True)
         return None
 
-    window = ui.Window("Parallelism Test Terminal", width=360, height=345)
+    window = ui.Window("Parallelism Test Terminal", width=430, height=690)
 
     def _slider(label: str, attr: str, minimum: float, maximum: float):
         with ui.HStack(height=28):
-            ui.Label(label, width=95)
+            ui.Label(label, width=160)
             model = ui.SimpleFloatModel(float(getattr(state, attr)))
             ui.FloatSlider(model=model, min=minimum, max=maximum, width=170)
             value_label = ui.Label(f"{float(getattr(state, attr)):.3f}", width=55)
@@ -269,6 +282,23 @@ def _create_viewer_test_terminal(state: ViewerTestTerminalState):
 
             model.add_value_changed_fn(_changed)
 
+    def _int_slider(label: str, attr: str, minimum: int, maximum: int):
+        with ui.HStack(height=28):
+            ui.Label(label, width=155)
+            model = ui.SimpleIntModel(int(getattr(state, attr)))
+            ui.IntSlider(model=model, min=minimum, max=maximum, width=130)
+            value_label = ui.Label(str(int(getattr(state, attr))), width=40)
+
+            def _changed(model=model, attr=attr, value_label=value_label):
+                value = int(model.get_value_as_int())
+                setattr(state, attr, value)
+                value_label.text = str(value)
+
+            model.add_value_changed_fn(_changed)
+
+    def _request_platform_reset():
+        state.platform_reset_requested = True
+
     with window.frame:
         with ui.VStack(spacing=6):
             ui.Label("Parallelism 调试面板", height=24)
@@ -278,6 +308,21 @@ def _create_viewer_test_terminal(state: ViewerTestTerminalState):
             _slider("swing_clearance_m", "swing_clearance_m", 0.0, 0.25)
             _slider("candidate_radius", "candidate_radius_m", 0.24, 0.50)
             _slider("semantic_margin", "semantic_touchdown_margin_m", 0.0, 0.12)
+            ui.Separator(height=4)
+            ui.Label("Terrain root trajectory", height=22)
+            _slider("root clearance", "terrain_following_root_clearance_m", 0.15, 0.60)
+            _slider("root z smoothing", "terrain_following_root_z_smoothing", 0.0, 1.0)
+            _slider("root z rate", "terrain_following_root_z_rate_limit_m", 0.0, 0.15)
+            _slider("pitch sample range", "terrain_following_pitch_sample_range_m", 0.05, 0.60)
+            _int_slider("pitch sample count", "terrain_following_pitch_sample_count", 1, 15)
+            _slider("roll sample range", "terrain_following_roll_sample_range_m", 0.05, 0.60)
+            _int_slider("roll sample count", "terrain_following_roll_sample_count", 1, 15)
+            _slider("rpy deadband", "terrain_following_rpy_deadband_rad", 0.0, 0.10)
+            _slider("rpy smoothing", "terrain_following_rpy_smoothing", 0.0, 1.0)
+            _slider("rpy rate", "terrain_following_rpy_rate_limit_rad", 0.0, 0.15)
+            _slider("pitch limit", "terrain_following_pitch_limit_rad", 0.05, 0.60)
+            _slider("roll limit", "terrain_following_roll_limit_rad", 0.05, 0.60)
+            ui.Button("Reset to terrain platform", clicked_fn=_request_platform_reset, height=28)
             _checkbox("standstill fallback", "standstill_fallback_enabled")
             _checkbox("show mesh", "show_mesh")
             _checkbox("show collision body", "show_collision_body")
@@ -1731,6 +1776,13 @@ def _reset_viewer_env(
     return selected_origin
 
 
+def _consume_platform_reset_request(state: ViewerTestTerminalState | None) -> bool:
+    if state is None or not bool(state.platform_reset_requested):
+        return False
+    state.platform_reset_requested = False
+    return True
+
+
 def _compute_stable_scan_ranges(scanner, *, env_id: int = 0) -> tuple[tuple[float, float], tuple[float, float]]:
     from extension.convention import extract_yaw_batch
 
@@ -2362,6 +2414,42 @@ def _parallelism_cfg_from_viewer_args(args_cli: argparse.Namespace, test_termina
         standstill_fallback_enabled=bool(test_terminal_state.standstill_fallback_enabled)
         if test_terminal_state is not None
         else True,
+        terrain_following_root_clearance_m=float(test_terminal_state.terrain_following_root_clearance_m)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_root_clearance_m,
+        terrain_following_root_z_smoothing=float(test_terminal_state.terrain_following_root_z_smoothing)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_root_z_smoothing,
+        terrain_following_root_z_rate_limit_m=float(test_terminal_state.terrain_following_root_z_rate_limit_m)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_root_z_rate_limit_m,
+        terrain_following_pitch_sample_range_m=float(test_terminal_state.terrain_following_pitch_sample_range_m)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_pitch_sample_range_m,
+        terrain_following_pitch_sample_count=int(test_terminal_state.terrain_following_pitch_sample_count)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_pitch_sample_count,
+        terrain_following_roll_sample_range_m=float(test_terminal_state.terrain_following_roll_sample_range_m)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_roll_sample_range_m,
+        terrain_following_roll_sample_count=int(test_terminal_state.terrain_following_roll_sample_count)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_roll_sample_count,
+        terrain_following_rpy_deadband_rad=float(test_terminal_state.terrain_following_rpy_deadband_rad)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_rpy_deadband_rad,
+        terrain_following_rpy_smoothing=float(test_terminal_state.terrain_following_rpy_smoothing)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_rpy_smoothing,
+        terrain_following_rpy_rate_limit_rad=float(test_terminal_state.terrain_following_rpy_rate_limit_rad)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_rpy_rate_limit_rad,
+        terrain_following_pitch_limit_rad=float(test_terminal_state.terrain_following_pitch_limit_rad)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_pitch_limit_rad,
+        terrain_following_roll_limit_rad=float(test_terminal_state.terrain_following_roll_limit_rad)
+        if test_terminal_state is not None
+        else ParallelismCfg.terrain_following_roll_limit_rad,
     )
 
 
@@ -2518,6 +2606,29 @@ def main() -> int:
                     if last_show_mesh is None or show_mesh != last_show_mesh:
                         _set_go2_mesh_visibility(base_env, show_mesh)
                         last_show_mesh = show_mesh
+
+                if parallel_backend and _consume_platform_reset_request(test_terminal_state):
+                    selected_origin = _reset_viewer_env(
+                        env,
+                        base_env=base_env,
+                        zero_actions=zero_actions,
+                        warmup_steps=int(args_cli.warmup_steps),
+                        terrain_row=int(args_cli.terrain_row),
+                        terrain_col=int(args_cli.terrain_col),
+                        scanner=scanner,
+                        foot_ids=foot_ids,
+                    )
+                    print(
+                        "[Viewer][PlatformReset] "
+                        f"row={int(args_cli.terrain_row)} "
+                        f"col={int(args_cli.terrain_col)} "
+                        f"origin={_format_xyz(selected_origin)}",
+                        flush=True,
+                    )
+                    result = None
+                    playback_frame = 0
+                    last_cmd = None
+                    plan_cycle = 0
 
                 if active_cmd.reset_requested:
                     selected_origin = _reset_viewer_env(

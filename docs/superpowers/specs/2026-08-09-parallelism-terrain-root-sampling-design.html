@@ -192,14 +192,30 @@ if abs(pitch_target) &lt; terrain_following_rpy_deadband_rad:
 
       <section>
         <h2>Reset to Terrain Platform</h2>
-        <p>按钮使用当前 <code>terrain_row</code> 和 <code>terrain_col</code>，把机器人传送回该 subterrain 的 origin/platform 区域：</p>
+        <p>面板按钮使用当前 <code>terrain_row</code> 和 <code>terrain_col</code>，把机器人传送回该 subterrain 的 origin/platform 区域。它与键盘 <code>R</code> 是两个独立动作：</p>
+        <table>
+          <thead><tr><th>触发方式</th><th>语义</th><th>适用范围</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>键盘 <code>R</code></td>
+              <td>保留当前 viewer 的普通 reset 流程</td>
+              <td>flat 和 small obstacles</td>
+            </tr>
+            <tr>
+              <td>面板 <code>Reset to terrain platform</code></td>
+              <td>独立的 platform teleport/reset 流程</td>
+              <td>楼梯、rough、slope、boxes 等当前选中的非 flat subterrain</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>面板按钮不能复用键盘 <code>R</code> 的 reset flag，也不能改变 <code>R</code> 的行为。</p>
         <pre><code>1. 保持当前 terrain row/col
-2. root xy 传送到 selected terrain origin
+2. root xy 传送到 selected terrain origin/platform
 3. 通过 scanner 重新计算脚端贴地高度
 4. 清零 root 速度和当前 command
 5. 清除当前播放轨迹
 6. 立即触发一次 replan</code></pre>
-        <p>该按钮用于调参后快速恢复，不切换 terrain，不改变命令行选择的地形。</p>
+        <p>该按钮用于调参后快速恢复，不切换 terrain，不改变命令行选择的地形；普通 <code>R</code> 仍按原逻辑处理。</p>
       </section>
 
       <section>

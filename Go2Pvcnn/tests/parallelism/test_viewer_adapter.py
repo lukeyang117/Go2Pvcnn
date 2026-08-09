@@ -133,6 +133,43 @@ def test_parallelism_cfg_from_viewer_uses_debug_panel_values():
     assert cfg.standstill_fallback_enabled is False
 
 
+def test_parallelism_cfg_from_viewer_uses_terrain_root_sampling_values():
+    from argparse import Namespace
+    from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _parallelism_cfg_from_viewer_args
+
+    cfg = _parallelism_cfg_from_viewer_args(
+        Namespace(plan_dt=0.02),
+        ViewerTestTerminalState(
+            terrain_following_pitch_sample_range_m=0.30,
+            terrain_following_pitch_sample_count=9,
+            terrain_following_roll_sample_range_m=0.25,
+            terrain_following_roll_sample_count=7,
+            terrain_following_rpy_deadband_rad=0.03,
+        ),
+    )
+
+    assert cfg.terrain_following_pitch_sample_range_m == 0.30
+    assert cfg.terrain_following_pitch_sample_count == 9
+    assert cfg.terrain_following_roll_sample_range_m == 0.25
+    assert cfg.terrain_following_roll_sample_count == 7
+    assert cfg.terrain_following_rpy_deadband_rad == 0.03
+
+
+def test_platform_reset_request_is_independent_from_keyboard_reset():
+    from extension.viz.go2_foostep_planner import (
+        TeleopCommand,
+        ViewerTestTerminalState,
+        _consume_platform_reset_request,
+    )
+
+    state = ViewerTestTerminalState(platform_reset_requested=True)
+    teleop_cmd = TeleopCommand(values=torch.zeros(1, 3), reset_requested=False)
+
+    assert _consume_platform_reset_request(state) is True
+    assert state.platform_reset_requested is False
+    assert teleop_cmd.reset_requested is False
+
+
 def test_parallelism_visualization_flags_preserve_values():
     from extension.viz.go2_foostep_planner import _parallelism_visualization_flags
 

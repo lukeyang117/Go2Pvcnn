@@ -65,6 +65,88 @@ def test_root_rollout_levels_tilted_root_before_second_half_cycle():
     )
 
 
+def test_terrain_root_sampling_is_symmetric_and_includes_center():
+    from extension.parallelism.root import _uniform_symmetric_samples
+
+    samples = _uniform_symmetric_samples(0.35, 7, dtype=torch.float32, device=torch.device("cpu"))
+
+    assert torch.allclose(samples, torch.linspace(-0.35, 0.35, 7))
+    assert torch.isclose(samples[3], torch.tensor(0.0))
+    assert torch.allclose(samples, -torch.flip(samples, dims=(0,)))
+
+
+def test_terrain_root_sampling_fits_linear_height_slope():
+    from extension.parallelism.root import _fit_height_slope
+
+    offsets = torch.linspace(-0.35, 0.35, 7).reshape(1, 7, 1)
+    heights = 0.2 * offsets + 0.43
+    slope = _fit_height_slope(heights, offsets)
+
+    assert slope.shape == (1, 1)
+    assert torch.allclose(slope, torch.full((1, 1), 0.2), atol=1e-5)
+
+
+def test_terrain_root_sampling_flat_profile_and_deadband_are_level():
+    from extension.parallelism.root import _fit_height_slope
+
+    offsets = torch.linspace(-0.35, 0.35, 7).reshape(1, 7, 1)
+    flat_slope = _fit_height_slope(torch.full_like(offsets, 0.43), offsets)
+    small_slope = _fit_height_slope(0.01 * offsets + 0.43, offsets)
+
+    assert torch.allclose(flat_slope, torch.zeros(1, 1), atol=1e-6)
+    assert torch.allclose(torch.atan(small_slope), torch.full((1, 1), 0.01).atan(), atol=1e-5)
+
+
+def test_terrain_root_sampling_slope_sign_convention():
+    from extension.parallelism.root import _fit_height_slope
+
+    offsets = torch.linspace(-0.35, 0.35, 7).reshape(1, 7, 1)
+    slope = _fit_height_slope(-0.2 * offsets + 0.43, offsets)
+
+    assert torch.allclose(slope, torch.full((1, 1), -0.2), atol=1e-5)
+
+
+def test_nonflat_root_rollout_uses_multi_point_pitch_fit_and_deadband():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import rollout_root
+
+    side = 81
+    x = (torch.arange(side, dtype=torch.float32) - 40.0) * 0.01
+    height = (0.2 * x).view(1, 1, side).expand(1, side, side).clone()
+    terrain = _terrain()
+    terrain = type(terrain)(
+        height_w=height,
+        semantic_id=torch.zeros_like(height, dtype=torch.long),
+        valid_mask=torch.ones_like(height, dtype=torch.bool),
+        origin_w=torch.tensor([[-0.40, -0.40, 0.0]], dtype=torch.float32),
+        yaw_w=torch.zeros(1),
+        resolution=0.01,
+    )
+    cfg = ParallelismCfg(
+        terrain_following_pitch_sample_range_m=0.35,
+        terrain_following_pitch_sample_count=7,
+        terrain_following_roll_sample_range_m=0.35,
+        terrain_following_roll_sample_count=5,
+        terrain_following_rpy_deadband_rad=0.02,
+        terrain_following_rpy_smoothing=1.0,
+        terrain_following_rpy_rate_limit_rad=10.0,
+        terrain_following_pitch_limit_rad=0.35,
+        terrain_following_roll_limit_rad=0.25,
+    )
+
+    root = rollout_root(
+        _state(),
+        torch.zeros(1, 3),
+        terrain,
+        cfg,
+        terrain_following_mask=torch.tensor([True]),
+    )
+
+    assert torch.allclose(root.root_rpy_w[0, 0, :2], torch.zeros(2), atol=1e-6)
+    assert torch.allclose(root.root_rpy_w[0, 1:, 1], torch.full((23,), -torch.atan(torch.tensor(0.2))), atol=0.02)
+    assert torch.allclose(root.root_rpy_w[0, 1:, 0], torch.zeros(23), atol=1e-6)
+
+
 def test_candidate_shape_and_reference_hips():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.candidates import build_candidates
