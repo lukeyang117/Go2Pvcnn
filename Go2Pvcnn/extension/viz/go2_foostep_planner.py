@@ -1570,6 +1570,63 @@ def _apply_viewer_terrain_selection(scene, *, env_id: int, terrain_row: int, ter
     return selected_origin
 
 
+def _viewer_scene_terrain(scene):
+    terrain = getattr(scene, "terrain", None)
+    if terrain is not None:
+        return terrain
+    try:
+        return scene["terrain"]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _viewer_selected_terrain_name(scene, *, terrain_col: int) -> str | None:
+    terrain = _viewer_scene_terrain(scene)
+    generator = getattr(getattr(terrain, "cfg", None), "terrain_generator", None) if terrain is not None else None
+    sub_terrains = getattr(generator, "sub_terrains", None)
+    if not isinstance(sub_terrains, dict) or not sub_terrains:
+        return None
+
+    num_cols = int(getattr(generator, "num_cols", 0) or 0)
+    if num_cols <= 0:
+        return None
+
+    col = int(terrain_col)
+    if col < 0 or col >= num_cols:
+        return None
+
+    total = 0.0
+    weighted_names: list[tuple[str, float]] = []
+    for name, cfg in sub_terrains.items():
+        proportion = float(getattr(cfg, "proportion", 0.0) or 0.0)
+        if proportion <= 0.0:
+            continue
+        weighted_names.append((str(name), proportion))
+        total += proportion
+    if total <= 0.0:
+        return None
+
+    cumulative = 0.0
+    for idx, (name, proportion) in enumerate(weighted_names):
+        start = int(round(num_cols * cumulative / total))
+        cumulative += proportion
+        end = int(round(num_cols * cumulative / total))
+        if idx == len(weighted_names) - 1:
+            end = num_cols
+        if start <= col < end:
+            return name
+    return None
+
+
+def _viewer_terrain_following_mask_from_selection(scene, *, terrain_col: int, device) -> torch.Tensor:
+    terrain_name = _viewer_selected_terrain_name(scene, terrain_col=terrain_col)
+    if terrain_name is None:
+        follow = int(terrain_col) != 0
+    else:
+        follow = terrain_name.lower() != "flat"
+    return torch.tensor([follow], dtype=torch.bool, device=device)
+
+
 def _viewer_scanner_refresh_steps(
     scanner,
     *,
@@ -2323,11 +2380,17 @@ def _plan_parallelism_viewer_trajectory(
     terrain, ray_hits = _compute_parallelism_terrain(scanner)
     state = _parallelism_state_from_env(base_env, foot_ids)
     cfg = _parallelism_cfg_from_viewer_args(args_cli, test_terminal_state)
+    terrain_following_mask = _viewer_terrain_following_mask_from_selection(
+        base_env.scene,
+        terrain_col=int(args_cli.terrain_col),
+        device=state.root_pos_w.device,
+    )
     trajectory = plan_trajectory(
         state,
         torch.as_tensor(command, dtype=state.root_pos_w.dtype, device=state.root_pos_w.device),
         terrain,
         cfg,
+        terrain_following_mask=terrain_following_mask,
     )
     return parallelism_trajectory_to_viewer_result(trajectory), ray_hits
 

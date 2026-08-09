@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
 
 
@@ -143,3 +145,31 @@ def test_parallelism_visualization_flags_preserve_values():
     assert flags.show_mesh is True
     assert flags.show_collision_body is False
     assert flags.show_contact_points is True
+
+
+def test_viewer_terrain_following_mask_uses_selected_column_proportions():
+    from extension.viz.go2_foostep_planner import _viewer_terrain_following_mask_from_selection
+
+    sub_terrains = {
+        "flat": SimpleNamespace(proportion=0.1),
+        "random_rough": SimpleNamespace(proportion=0.1),
+        "hf_pyramid_slope": SimpleNamespace(proportion=0.1),
+        "hf_pyramid_slope_inv": SimpleNamespace(proportion=0.1),
+        "boxes": SimpleNamespace(proportion=0.2),
+        "pyramid_stairs": SimpleNamespace(proportion=0.2),
+        "pyramid_stairs_inv": SimpleNamespace(proportion=0.2),
+    }
+    terrain = SimpleNamespace(
+        cfg=SimpleNamespace(
+            terrain_generator=SimpleNamespace(
+                num_cols=20,
+                sub_terrains=sub_terrains,
+            )
+        )
+    )
+    scene = SimpleNamespace(terrain=terrain)
+
+    assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=0, device="cpu").item() is False
+    assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=1, device="cpu").item() is False
+    assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=12, device="cpu").item() is True
+    assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=16, device="cpu").item() is True
