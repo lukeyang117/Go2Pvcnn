@@ -90,7 +90,8 @@ def build_candidates(
     height = query.height.reshape(batch, 4, int(cfg.candidates_per_leg))
     semantic = query.semantic.reshape(batch, 4, int(cfg.candidates_per_leg))
     valid = query.valid.reshape(batch, 4, int(cfg.candidates_per_leg))
-    candidate = torch.cat((candidate_xy, height[..., None]), dim=-1)
+    candidate_z = height + float(cfg.foot_contact_offset_m)
+    candidate = torch.cat((candidate_xy, candidate_z[..., None]), dim=-1)
     command = clamp_command(torch.as_tensor(command_body, dtype=root_pos.dtype, device=root_pos.device), cfg)
     period = float(cfg.half_cycle) * float(cfg.dt)
     dtheta = command[:, 2] * period

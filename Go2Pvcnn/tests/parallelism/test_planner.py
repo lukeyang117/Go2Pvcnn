@@ -92,6 +92,33 @@ def test_invalid_plan_holds_current_state():
     assert traj.contact_state.all()
 
 
+def test_assemble_foot_targets_clamps_low_current_foot_to_contact_offset():
+    from extension.parallelism import ParallelismCfg, ParallelismState
+    from extension.parallelism.planner import _assemble_foot_targets
+
+    cfg = ParallelismCfg(foot_contact_offset_m=0.022)
+    state = _state()
+    low_foot = torch.zeros(1, 4, 3, dtype=torch.float32)
+    low_foot[..., 2] = -0.05
+    state = ParallelismState(
+        root_pos_w=state.root_pos_w,
+        root_rpy_w=state.root_rpy_w,
+        joint_pos=state.joint_pos,
+        foot_pos_w=low_foot,
+    )
+    root_pos = state.root_pos_w[:, None].expand(-1, int(cfg.horizon), -1)
+    root_rpy = state.root_rpy_w[:, None].expand(-1, int(cfg.horizon), -1)
+    selected = low_foot.clone()
+    selected[..., 2] = 0.022
+
+    targets = _assemble_foot_targets(state, root_pos, root_rpy, selected, _terrain(), cfg)
+
+    torch.testing.assert_close(
+        targets[:, 0, :, 2],
+        torch.full((1, 4), 0.022, dtype=torch.float32),
+    )
+
+
 def test_invalid_plan_can_disable_standstill_fallback():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory

@@ -165,6 +165,32 @@ def test_candidate_shape_and_reference_hips():
     assert candidates.hip_ref_w.shape == (1, 4, 3)
 
 
+def test_candidates_place_foot_center_above_terrain_by_contact_offset():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.candidates import build_candidates
+    from extension.parallelism.root import rollout_root
+
+    cfg = ParallelismCfg(foot_contact_offset_m=0.022)
+    state = _state()
+    terrain = _terrain()
+    terrain = type(terrain)(
+        height_w=torch.full_like(terrain.height_w, 0.3),
+        semantic_id=terrain.semantic_id,
+        valid_mask=terrain.valid_mask,
+        origin_w=terrain.origin_w,
+        yaw_w=terrain.yaw_w,
+        resolution=terrain.resolution,
+    )
+    root = rollout_root(state, torch.zeros(1, 3), terrain, cfg)
+
+    candidates = build_candidates(root, state, torch.zeros(1, 3), terrain, cfg)
+
+    torch.testing.assert_close(
+        candidates.candidate_w[..., 2],
+        torch.full_like(candidates.candidate_w[..., 2], 0.322),
+    )
+
+
 def test_candidate_centers_are_laterally_biased_outward():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.candidates import build_candidates

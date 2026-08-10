@@ -40,10 +40,31 @@ def _selected_score_take(values: Tensor, selected_index: Tensor) -> Tensor:
     return values.gather(dim=2, index=selected_index[..., None]).squeeze(2)
 
 
-def _candidate_targets(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor, candidate_w: Tensor) -> Tensor:
+def _contact_safe_current_foot(
+    state: ParallelismState,
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+) -> Tensor:
+    foot = _current_foot_pos(state, root_pos, root_rpy)
+    query = query_height_semantic_valid(terrain, foot[..., :2])
+    safe_z = query.height + float(cfg.foot_contact_offset_m)
+    z = torch.where(query.valid, torch.maximum(foot[..., 2], safe_z), foot[..., 2])
+    return torch.cat((foot[..., :2], z[..., None]), dim=-1)
+
+
+def _candidate_targets(
+    state: ParallelismState,
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    candidate_w: Tensor,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+) -> Tensor:
     batch, leg_count, candidate_count, _ = candidate_w.shape
     joint = torch.as_tensor(state.joint_pos, dtype=root_pos.dtype, device=root_pos.device)
-    foot0 = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
+    foot0 = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg)
     base = foot0[:, None, None, :, :].expand(batch, leg_count, candidate_count, leg_count, 3)
     active_leg = torch.eye(leg_count, dtype=torch.bool, device=root_pos.device).view(1, leg_count, 1, leg_count, 1)
     return torch.where(active_leg, candidate_w[..., None, :], base)
@@ -92,7 +113,7 @@ def _swing_collision_mask(
 ) -> tuple[Tensor, Tensor]:
     batch, leg_count, candidate_count, _ = candidates.candidate_w.shape
     half_cycle = int(cfg.half_cycle)
-    current_foot = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
+    current_foot = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg)
     swing_ok = torch.ones(batch, leg_count, candidate_count, dtype=torch.bool, device=root_pos.device)
     swing_bits = torch.zeros(
         batch,
@@ -210,7 +231,7 @@ def _assemble_foot_targets(
     cfg: ParallelismCfg,
 ) -> Tensor:
     batch = root_pos.shape[0]
-    foot0 = _current_foot_pos(state, root_pos[:, 0], root_rpy[:, 0])
+    foot0 = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg)
     first = foot0[:, None].expand(-1, int(cfg.half_cycle), -1, -1).clone()
     second = first.clone()
     first_swing = terrain_aware_swing_curve(
@@ -258,7 +279,14 @@ def plan_trajectory(
     root_ref_pos, root_ref_rpy = _leg_reference_root(root.root_pos_w, root.root_rpy_w, cfg)
     root_eval_pos = root_ref_pos[:, :, None, :].expand(batch, leg_count, candidate_count, 3)
     root_eval_rpy = root_ref_rpy[:, :, None, :].expand(batch, leg_count, candidate_count, 3)
-    target = _candidate_targets(state, root.root_pos_w, root.root_rpy_w, candidates.candidate_w)
+    target = _candidate_targets(
+        state,
+        root.root_pos_w,
+        root.root_rpy_w,
+        candidates.candidate_w,
+        terrain,
+        cfg,
+    )
     joint_candidate, reachable = ik_go2(root_eval_pos, root_eval_rpy, target)
     geometry = fk_go2(
         root_eval_pos.reshape(batch * leg_count * candidate_count, 3),
@@ -287,8 +315,9 @@ def plan_trajectory(
     joint_ok = active_reachable & _joint_limit_mask(active_joint)
     landing_query = query_height_semantic_valid(terrain, fk_touchdown[..., :2].reshape(batch, leg_count * candidate_count, 2))
     landing_height = landing_query.height.reshape(batch, leg_count, candidate_count)
+    landing_target_height = landing_height + float(cfg.foot_contact_offset_m)
     landing_ok = landing_query.valid.reshape(batch, leg_count, candidate_count) & (
-        (fk_touchdown[..., 2] - landing_height).abs() <= float(cfg.landing_tolerance_m)
+        (fk_touchdown[..., 2] - landing_target_height).abs() <= float(cfg.landing_tolerance_m)
     )
     _touchdown_collision_ok, touchdown_collision_bits = _collision_mask(terrain, geometry, cfg)
     touchdown_collision_bits = _suppress_contact_tolerant(touchdown_collision_bits, cfg)

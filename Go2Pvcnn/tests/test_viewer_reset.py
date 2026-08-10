@@ -184,7 +184,7 @@ def test_reset_viewer_env_grounds_after_snapshot_restore(monkeypatch) -> None:
         order.append("ground")
         assert root_pos_xy is not None
         assert root_quat_w is not None
-        assert foot_contact_offset == 0.0
+        assert foot_contact_offset == pytest.approx(0.022)
         return 0.0
 
     def fake_refresh(*_args, **_kwargs):
@@ -684,6 +684,37 @@ def test_viewer_ground_robot_from_scanner_can_preserve_foot_contact_offset(monke
     assert scene.write_count == 1
     assert scene.update_count == 1
     assert sim.render_count == 1
+
+
+def test_parallelism_reset_uses_foot_contact_offset_for_grounding(monkeypatch) -> None:
+    offsets: list[float] = []
+    base_env, _robot, _scene, _sim = _fake_base_env()
+
+    monkeypatch.setattr(
+        viewer,
+        "_apply_viewer_terrain_selection",
+        lambda *_args, **_kwargs: torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32),
+    )
+    monkeypatch.setattr(viewer, "_refresh_viewer_scanner", lambda *_args, **_kwargs: 1)
+
+    def fake_ground(*_args, foot_contact_offset=0.0, **_kwargs):
+        offsets.append(float(foot_contact_offset))
+        return 0.0
+
+    monkeypatch.setattr(viewer, "_viewer_ground_robot_from_scanner", fake_ground)
+
+    viewer._reset_viewer_env(
+        SimpleNamespace(reset=lambda: None, step=lambda _actions: None),
+        base_env=base_env,
+        zero_actions=torch.zeros((1, 12), dtype=torch.float32),
+        warmup_steps=0,
+        terrain_row=0,
+        terrain_col=12,
+        scanner=object(),
+        foot_ids=[0, 1, 2, 3],
+    )
+
+    assert offsets == [pytest.approx(0.022)]
 
 
 def test_viewer_step_mode_defers_command_replan_until_current_trajectory_finishes() -> None:

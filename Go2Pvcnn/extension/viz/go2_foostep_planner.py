@@ -1752,13 +1752,15 @@ def _reset_viewer_env(
     if scanner is not None and foot_ids is not None:
         grounding_root_pos_xy = preserved_root_pos[:, :2] if preserved_root_pos is not None else None
         grounding_root_quat_w = preserved_root_quat if preserved_root_quat is not None else None
+        from extension.parallelism import ParallelismCfg
+
         _viewer_ground_robot_from_scanner(
             base_env,
             scanner,
             foot_ids,
             root_pos_xy=grounding_root_pos_xy,
             root_quat_w=grounding_root_quat_w,
-            foot_contact_offset=0.0,
+            foot_contact_offset=float(ParallelismCfg.foot_contact_offset_m),
         )
     if scanner is not None:
         _refresh_viewer_scanner(
