@@ -8,19 +8,7 @@ from extension.parallelism.collision import build_official_surface_points_l
 from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.kinematics import fk_go2
 from extension.parallelism.types import ParallelismTrajectory
-
-
-def _yaw_to_quat_wxyz(yaw: torch.Tensor) -> torch.Tensor:
-    half = yaw * 0.5
-    return torch.stack(
-        (
-            torch.cos(half),
-            torch.zeros_like(half),
-            torch.zeros_like(half),
-            torch.sin(half),
-        ),
-        dim=-1,
-    )
+from extension.convention import euler_to_quat_batch
 
 
 def _surface_points_for_viewer(trajectory: ParallelismTrajectory) -> tuple[torch.Tensor, torch.Tensor]:
@@ -60,7 +48,11 @@ def _surface_points_for_viewer(trajectory: ParallelismTrajectory) -> tuple[torch
 
 
 def parallelism_trajectory_to_viewer_result(trajectory: ParallelismTrajectory):
-    root_quat_w = _yaw_to_quat_wxyz(trajectory.root_rpy_w[..., 2])
+    root_quat_w = euler_to_quat_batch(
+        trajectory.root_rpy_w[..., 0],
+        trajectory.root_rpy_w[..., 1],
+        trajectory.root_rpy_w[..., 2],
+    )
     surface_points_w, collision_body_centers_w = _surface_points_for_viewer(trajectory)
     return SimpleNamespace(
         num_frames=int(trajectory.root_pos_w.shape[1]),

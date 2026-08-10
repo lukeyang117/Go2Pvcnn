@@ -43,6 +43,42 @@ def test_viewer_adapter_contract():
     assert result.parallelism_candidate_radius_m == 0.42
 
 
+def test_parallelism_viewer_adapter_preserves_root_roll_and_pitch():
+    from extension.convention import euler_to_quat_batch
+    from extension.parallelism import ParallelismCfg, ParallelismDiagnostics, ParallelismTrajectory
+    from extension.parallelism.viewer_adapter import parallelism_trajectory_to_viewer_result
+
+    root_rpy = torch.tensor([[[0.20, -0.30, 0.40]]], dtype=torch.float32).expand(1, 24, 3).clone()
+    trajectory = ParallelismTrajectory(
+        root_pos_w=torch.zeros(1, 24, 3),
+        root_rpy_w=root_rpy,
+        joint_pos=torch.zeros(1, 24, 12),
+        foot_pos_w=torch.zeros(1, 24, 4, 3),
+        contact_state=torch.ones(1, 24, 4, dtype=torch.bool),
+        valid=torch.ones(1, dtype=torch.bool),
+        selected_foothold_w=torch.zeros(1, 4, 3),
+        selected_score=torch.zeros(1, 4),
+        diagnostics=ParallelismDiagnostics(
+            candidate_center_w=torch.zeros(1, 4, 3),
+            candidate_w=torch.zeros(1, 4, 50, 3),
+            candidate_score=torch.zeros(1, 4, 50),
+            candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
+            candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
+            candidate_collision_bits=torch.zeros(1, 4, 50, len(ParallelismCfg().official_collision_shapes), dtype=torch.bool),
+            collision_shape_names=tuple(spec.name for spec in ParallelismCfg().official_collision_shapes),
+            collision_surface_point_count=6,
+            candidate_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
+            fk_touchdown_semantic=torch.zeros(1, 4, 50, dtype=torch.long),
+            selected_index=torch.zeros(1, 4, dtype=torch.long),
+        ),
+    )
+
+    result = parallelism_trajectory_to_viewer_result(trajectory)
+    expected = euler_to_quat_batch(root_rpy[..., 0], root_rpy[..., 1], root_rpy[..., 2])
+
+    torch.testing.assert_close(result.root_quat_w, expected)
+
+
 def test_viewer_adapter_exposes_overlay_optional_fields():
     from extension.parallelism import ParallelismDiagnostics, ParallelismTrajectory
     from extension.parallelism.viewer_adapter import parallelism_trajectory_to_viewer_result
