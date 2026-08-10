@@ -1749,30 +1749,23 @@ def _reset_viewer_env(
             root_pos_w=preserved_root_pos,
             root_quat_w=preserved_root_quat,
         )
+    if scanner is not None and foot_ids is not None:
+        grounding_root_pos_xy = preserved_root_pos[:, :2] if preserved_root_pos is not None else None
+        grounding_root_quat_w = preserved_root_quat if preserved_root_quat is not None else None
+        _viewer_ground_robot_from_scanner(
+            base_env,
+            scanner,
+            foot_ids,
+            root_pos_xy=grounding_root_pos_xy,
+            root_quat_w=grounding_root_quat_w,
+            foot_contact_offset=0.0,
+        )
     if scanner is not None:
         _refresh_viewer_scanner(
             base_env,
             scanner,
             minimum_steps=max(1, warmup_step_count),
         )
-        if (
-            reset_snapshot is not None
-            and foot_ids is not None
-            and preserved_root_pos is not None
-            and preserved_root_quat is not None
-        ):
-            _viewer_ground_robot_from_scanner(
-                base_env,
-                scanner,
-                foot_ids,
-                root_pos_xy=preserved_root_pos[:, :2],
-                root_quat_w=preserved_root_quat,
-            )
-            _refresh_viewer_scanner(
-                base_env,
-                scanner,
-                minimum_steps=1,
-            )
     return selected_origin
 
 

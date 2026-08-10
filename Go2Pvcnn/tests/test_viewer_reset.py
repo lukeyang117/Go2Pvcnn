@@ -161,6 +161,88 @@ def test_viewer_apply_reset_snapshot_restores_root_and_joint_state() -> None:
     assert sim.render_count == 1
 
 
+def test_reset_viewer_env_grounds_after_snapshot_restore(monkeypatch) -> None:
+    order: list[str] = []
+    base_env, _robot, _scene, _sim = _fake_base_env()
+    selected_origin = torch.tensor([1.0, 2.0, 0.0], dtype=torch.float32)
+
+    class FakeEnv:
+        def reset(self):
+            order.append("reset")
+
+        def step(self, _actions):
+            order.append("step")
+
+    def fake_apply_terrain_selection(*_args, **_kwargs):
+        order.append("select")
+        return selected_origin
+
+    def fake_apply_snapshot(*_args, **_kwargs):
+        order.append("restore")
+
+    def fake_ground(*_args, root_pos_xy=None, root_quat_w=None, foot_contact_offset=0.0, **_kwargs):
+        order.append("ground")
+        assert root_pos_xy is not None
+        assert root_quat_w is not None
+        assert foot_contact_offset == 0.0
+        return 0.0
+
+    def fake_refresh(*_args, **_kwargs):
+        order.append("refresh")
+        return 1
+
+    monkeypatch.setattr(viewer, "_apply_viewer_terrain_selection", fake_apply_terrain_selection)
+    monkeypatch.setattr(viewer, "_viewer_apply_joint_reset_snapshot", fake_apply_snapshot)
+    monkeypatch.setattr(viewer, "_viewer_ground_robot_from_scanner", fake_ground)
+    monkeypatch.setattr(viewer, "_refresh_viewer_scanner", fake_refresh)
+
+    snapshot = viewer.ViewerResetSnapshot(
+        joint_pos=torch.zeros((1, 12), dtype=torch.float32),
+        joint_vel=torch.zeros((1, 12), dtype=torch.float32),
+    )
+
+    actual_origin = viewer._reset_viewer_env(
+        FakeEnv(),
+        base_env=base_env,
+        zero_actions=torch.zeros((1, 12), dtype=torch.float32),
+        warmup_steps=2,
+        terrain_row=0,
+        terrain_col=12,
+        scanner=object(),
+        reset_snapshot=snapshot,
+        foot_ids=[0, 1, 2, 3],
+    )
+
+    torch.testing.assert_close(actual_origin, selected_origin)
+    assert order == ["select", "reset", "select", "step", "step", "restore", "ground", "refresh"]
+
+
+def test_reset_viewer_env_grounds_initial_reset_without_snapshot(monkeypatch) -> None:
+    order: list[str] = []
+    base_env, _robot, _scene, _sim = _fake_base_env()
+
+    monkeypatch.setattr(
+        viewer,
+        "_apply_viewer_terrain_selection",
+        lambda *_args, **_kwargs: torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32),
+    )
+    monkeypatch.setattr(viewer, "_viewer_ground_robot_from_scanner", lambda *_args, **_kwargs: order.append("ground") or 0.0)
+    monkeypatch.setattr(viewer, "_refresh_viewer_scanner", lambda *_args, **_kwargs: order.append("refresh") or 1)
+
+    viewer._reset_viewer_env(
+        SimpleNamespace(reset=lambda: order.append("reset"), step=lambda _actions: None),
+        base_env=base_env,
+        zero_actions=torch.zeros((1, 12), dtype=torch.float32),
+        warmup_steps=0,
+        terrain_row=0,
+        terrain_col=12,
+        scanner=object(),
+        foot_ids=[0, 1, 2, 3],
+    )
+
+    assert order == ["reset", "ground", "refresh"]
+
+
 def test_viewer_main_builds_only_selected_backend_planner_cfgs(monkeypatch) -> None:
     calls: list[str] = []
 
