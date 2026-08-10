@@ -37,9 +37,9 @@ class ParallelismCfg:
     vx_limit: float = 1.0
     vy_limit: float = 0.5
     vyaw_limit: float = 1.0
-    terrain_following_root_clearance_m: float = 0.30
-    terrain_following_root_z_smoothing: float = 0.35
-    terrain_following_root_z_rate_limit_m: float = 0.035
+    terrain_following_root_clearance_m: float = 0.34
+    terrain_following_root_z_smoothing: float = 0.75
+    terrain_following_root_z_rate_limit_m: float = 0.080
     terrain_following_root_height_deadband_m: float = 0.005
     terrain_following_pitch_sample_range_m: float = 0.35
     terrain_following_pitch_sample_count: int = 7
@@ -49,10 +49,10 @@ class ParallelismCfg:
     # Kept for compatibility with older configs; terrain following uses the multi-point fields above.
     terrain_following_pitch_sample_m: float = 0.20
     terrain_following_roll_sample_m: float = 0.16
-    terrain_following_rpy_smoothing: float = 0.25
+    terrain_following_rpy_smoothing: float = 0.80
     terrain_following_roll_limit_rad: float = 0.25
     terrain_following_pitch_limit_rad: float = 0.35
-    terrain_following_rpy_rate_limit_rad: float = 0.03
+    terrain_following_rpy_rate_limit_rad: float = 0.080
     terrain_following_vx_soft_limit: float = 0.5
     terrain_following_vy_soft_limit: float = 0.25
     terrain_following_vyaw_soft_limit: float = 0.5
