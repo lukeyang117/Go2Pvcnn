@@ -150,8 +150,8 @@ class ParallelismTrackingRewardsCfg(TeacherElevationTrajectoryMpcSemanticRewards
     track_ang_vel_z = None
     track_root_pos = RewTerm(
         func=tracking_mdp.reference_root_pos_reward,
-        weight=1.5,
-        params={"std": 0.10},
+        weight=2.5,
+        params={"std": 0.20},
     )
     track_root_rot = RewTerm(
         func=tracking_mdp.reference_root_rot_reward,
@@ -229,7 +229,7 @@ class ParallelismTrackingTerminationsCfg:
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
             "threshold": 0.8,
-            "consecutive_steps": 3,
+            "consecutive_steps": 24,
         },
     )
     parallelism_consecutive_standstill = DoneTerm(

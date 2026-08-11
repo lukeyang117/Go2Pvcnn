@@ -32,7 +32,7 @@ import tracking.mdp as tracking_mdp
 class ParallelismSmallObstaclesRewardsCfg(ParallelismTrackingRewardsCfg):
     parallelism_geometry_collision = RewTerm(
         func=tracking_mdp.parallelism_geometry_collision_penalty,
-        weight=-1.0,
+        weight=-2.0,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*"), "scanner_cfg": SceneEntityCfg("semantic_height_scanner")},
     )
     active_swing_foot_on_small_obstacle = RewTerm(
@@ -53,9 +53,9 @@ class ParallelismTrackingSmallObstaclesEnvCfg(ParallelismTrackingFlatEnvCfg):
     obstacle_center_exclusion_radius_m: float = 0.30
     inner_obstacle_radius_m: float = 0.80
     inner_obstacle_ratio: float = 0.75
-    inner_obstacle_min_spacing_m: float = 0.12
-    outer_obstacle_min_spacing_m: float = 0.20
-    small_obstacle_jitter_m: float = 0.03
+    inner_obstacle_min_spacing_m: float = 0.08
+    outer_obstacle_min_spacing_m: float = 0.12
+    small_obstacle_jitter_m: float = 0.00
     rewards: ParallelismSmallObstaclesRewardsCfg = ParallelismSmallObstaclesRewardsCfg()
     small_obstacle_scene: ParallelismSmallObstacleSceneCfg = field(
         default_factory=ParallelismSmallObstacleSceneCfg

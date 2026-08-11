@@ -17,8 +17,8 @@ def test_small_obstacle_config_is_one_fixed_subterrain() -> None:
     assert "obstacle_center_exclusion_radius_m: float = 0.30" in source
     assert "inner_obstacle_radius_m: float = 0.80" in source
     assert "inner_obstacle_ratio: float = 0.75" in source
-    assert "inner_obstacle_min_spacing_m: float = 0.12" in source
-    assert "outer_obstacle_min_spacing_m: float = 0.20" in source
+    assert "inner_obstacle_min_spacing_m: float = 0.08" in source
+    assert "outer_obstacle_min_spacing_m: float = 0.12" in source
     assert "SemanticObstacleCount(small=self.small_obstacle_count, large=0)" in source
     assert "obstacle_patch_size_m=float(self.obstacle_patch_size_m)" in source
     assert "inner_obstacle_ratio=float(self.inner_obstacle_ratio)" in source
