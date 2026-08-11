@@ -103,6 +103,14 @@
         <td>0.25m/s</td>
         <td>障碍物足够近时允许增加的最大横向速度。</td>
       </tr>
+      <tr>
+        <td><code>large_obstacle_default_side</code></td>
+        <td>+1</td>
+        <td>
+          左右对称或 <code>mean_L≈0</code> 时的默认方向。
+          <code>+1</code> 表示向左，<code>-1</code> 表示向右。
+        </td>
+      </tr>
     </tbody>
   </table>
 
@@ -263,7 +271,24 @@ abs(mean_L) &lt;= deadband -&gt; 使用 large_obstacle_default_side</pre>
     轨迹的输入速度。
   </p>
 
-  <h2>9. GPU 并行实现要求</h2>
+  <h2>9. 不同地形的适用范围</h2>
+  <p>
+    该速度偏移逻辑不绑定平地，也不根据 terrain type 分别复制一套算法。
+    平地、small obstacles、楼梯、乱石路、坡面和其他复杂地形统一执行同一套
+    semantic=2 检测和 root 速度修正。
+  </p>
+  <ul>
+    <li>地形高程只影响已有的 root Z、roll、pitch 和 swing 生成；</li>
+    <li>大障碍物绕行只使用语义地图和当前 root 速度方向；</li>
+    <li>横向速度加入后，继续由已有 terrain-following root 逻辑处理地形姿态；</li>
+    <li>不因为地形复杂而增加额外的环境循环或单独规划分支。</li>
+  </ul>
+  <p>
+    因此，平地和复杂地形的差异只体现在输入给 root 轨迹的高程图、地形跟随
+    姿态以及原有碰撞筛选结果，不改变大障碍物横向速度的数学定义。
+  </p>
+
+  <h2>10. GPU 并行实现要求</h2>
   <p>设环境数为 <code>B</code>，语义地图为 <code>H×W</code>：</p>
 
   <table>
@@ -292,7 +317,7 @@ abs(mean_L) &lt;= deadband -&gt; 使用 large_obstacle_default_side</pre>
     <code>S/L/weight/mask</code> 临时张量。计算结束后不保存历史障碍物状态。
   </p>
 
-  <h2>10. 参数汇总</h2>
+  <h2>11. 参数汇总</h2>
   <table>
     <thead><tr><th>参数</th><th>初始值</th><th>调大后的效果</th></tr></thead>
     <tbody>
@@ -313,13 +338,16 @@ abs(mean_L) &lt;= deadband -&gt; 使用 large_obstacle_default_side</pre>
       </tr>
       <tr>
         <td><code>large_obstacle_default_side</code></td>
-        <td>按现有配置</td>
-        <td>仅在左右对称或 <code>mean_L≈0</code> 时决定兜底方向。</td>
+        <td>+1</td>
+        <td>
+          可调方向参数：<code>+1</code> 表示向左，<code>-1</code> 表示向右。
+          仅在左右对称或 <code>mean_L≈0</code> 时决定兜底方向。
+        </td>
       </tr>
     </tbody>
   </table>
 
-  <h2>11. 边界情况</h2>
+  <h2>12. 边界情况</h2>
   <ul>
     <li>平移速度接近零：不构造速度方向，不触发横向绕行。</li>
     <li>矩形内没有 semantic=2：横向速度为零。</li>
@@ -330,7 +358,7 @@ abs(mean_L) &lt;= deadband -&gt; 使用 large_obstacle_default_side</pre>
     <li>障碍物点数量为零：分母使用 <code>clamp_min(ε)</code>，不会产生 NaN。</li>
   </ul>
 
-  <h2>12. 验证指标</h2>
+  <h2>13. 验证指标</h2>
   <p>测试时建议按环境并行记录以下指标：</p>
   <ul>
     <li><code>large_obstacle_triggered</code>：是否检测到前方大障碍物；</li>
