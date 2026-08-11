@@ -59,6 +59,10 @@ class ParallelismCfg:
     terrain_following_vx_excess_scale: float = 0.5
     terrain_following_vy_excess_scale: float = 0.5
     terrain_following_vyaw_excess_scale: float = 0.5
+    large_obstacle_rect_width_m: float = 0.70
+    large_obstacle_rect_length_m: float = 1.20
+    large_obstacle_lateral_speed_max_mps: float = 0.25
+    large_obstacle_default_side: int = 1  # +1=left, -1=right
     standstill_fallback_enabled: bool = True
     foot_radius_m: float = 0.022
     knee_radius_m: float = 0.030

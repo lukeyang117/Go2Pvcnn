@@ -50,7 +50,18 @@ def test_parallelism_cfg_exposes_semantic_touchdown_margin():
 
     cfg = ParallelismCfg()
 
-    assert cfg.semantic_touchdown_margin_m == 0.0
+    assert cfg.semantic_touchdown_margin_m == 0.12
+
+
+def test_parallelism_cfg_exposes_large_obstacle_avoidance_parameters():
+    from extension.parallelism.config import ParallelismCfg
+
+    cfg = ParallelismCfg()
+
+    assert cfg.large_obstacle_rect_width_m == 0.70
+    assert cfg.large_obstacle_rect_length_m == 1.20
+    assert cfg.large_obstacle_lateral_speed_max_mps == 0.25
+    assert cfg.large_obstacle_default_side == 1  # +1=left, -1=right
 
 
 def test_expanded_obstacle_mask_blocks_neighboring_touchdown():

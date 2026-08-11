@@ -26,6 +26,168 @@ def _state(batch: int = 1):
     )
 
 
+def _semantic_two_terrain(
+    *,
+    obstacle_cells: tuple[tuple[int, int], ...],
+    batch: int = 1,
+):
+    terrain = _terrain(batch)
+    semantic = terrain.semantic_id.clone()
+    for row, col in obstacle_cells:
+        semantic[:, row, col] = 2
+    return type(terrain)(
+        height_w=terrain.height_w,
+        semantic_id=semantic,
+        valid_mask=terrain.valid_mask,
+        origin_w=terrain.origin_w,
+        yaw_w=terrain.yaw_w,
+        resolution=terrain.resolution,
+    )
+
+
+def test_large_obstacle_avoidance_keeps_command_without_semantic_two():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import _large_obstacle_avoidance_command
+
+    command = torch.tensor([[0.6, 0.0, 0.0]])
+    result = _large_obstacle_avoidance_command(_state(), command, _terrain(), ParallelismCfg())
+
+    torch.testing.assert_close(result, command)
+
+
+def test_large_obstacle_avoidance_is_stronger_for_nearer_obstacle():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import _large_obstacle_avoidance_command
+
+    terrain = _semantic_two_terrain(
+        obstacle_cells=((22, 23),),
+        batch=2,
+    )
+    terrain = type(terrain)(
+        height_w=terrain.height_w,
+        semantic_id=terrain.semantic_id.clone(),
+        valid_mask=terrain.valid_mask,
+        origin_w=terrain.origin_w,
+        yaw_w=terrain.yaw_w,
+        resolution=terrain.resolution,
+    )
+    terrain.semantic_id[1].zero_()
+    terrain.semantic_id[1, 22, 29] = 2
+    result = _large_obstacle_avoidance_command(
+        _state(batch=2),
+        torch.tensor([[0.6, 0.0, 0.0], [0.6, 0.0, 0.0]]),
+        terrain,
+        ParallelismCfg(),
+    )
+
+    assert result[0, 1] < 0.0
+    assert result[1, 1] < 0.0
+    assert result[0, 1].abs() > result[1, 1].abs()
+
+
+def test_large_obstacle_mean_l_only_selects_left_or_right_direction():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import _large_obstacle_avoidance_command
+
+    left = _semantic_two_terrain(obstacle_cells=((22, 23),))
+    right = _semantic_two_terrain(obstacle_cells=((18, 23),))
+    states = _state(batch=2)
+    terrain = type(left)(
+        height_w=torch.cat((left.height_w, right.height_w), dim=0),
+        semantic_id=torch.cat((left.semantic_id, right.semantic_id), dim=0),
+        valid_mask=torch.cat((left.valid_mask, right.valid_mask), dim=0),
+        origin_w=torch.cat((left.origin_w, right.origin_w), dim=0),
+        yaw_w=torch.cat((left.yaw_w, right.yaw_w), dim=0),
+        resolution=left.resolution,
+    )
+    result = _large_obstacle_avoidance_command(
+        states,
+        torch.tensor([[0.6, 0.0, 0.0], [0.6, 0.0, 0.0]]),
+        terrain,
+        ParallelismCfg(),
+    )
+
+    assert result[0, 1] < 0.0
+    assert result[1, 1] > 0.0
+
+
+def test_large_obstacle_default_side_controls_symmetric_obstacle_direction():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import _large_obstacle_avoidance_command
+
+    terrain = _semantic_two_terrain(obstacle_cells=((19, 23), (21, 23)))
+    command = torch.tensor([[0.6, 0.0, 0.0]])
+
+    left_result = _large_obstacle_avoidance_command(
+        _state(),
+        command,
+        terrain,
+        ParallelismCfg(large_obstacle_default_side=1),
+    )
+    right_result = _large_obstacle_avoidance_command(
+        _state(),
+        command,
+        terrain,
+        ParallelismCfg(large_obstacle_default_side=-1),
+    )
+
+    assert left_result[0, 1] > 0.0
+    assert right_result[0, 1] < 0.0
+
+
+def test_rollout_root_applies_large_obstacle_avoidance_per_environment():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import rollout_root
+
+    obstacle_terrain = _semantic_two_terrain(obstacle_cells=((22, 23),))
+    empty_terrain = _terrain()
+    terrain = type(obstacle_terrain)(
+        height_w=torch.cat((obstacle_terrain.height_w, empty_terrain.height_w), dim=0),
+        semantic_id=torch.cat((obstacle_terrain.semantic_id, empty_terrain.semantic_id), dim=0),
+        valid_mask=torch.cat((obstacle_terrain.valid_mask, empty_terrain.valid_mask), dim=0),
+        origin_w=torch.cat((obstacle_terrain.origin_w, empty_terrain.origin_w), dim=0),
+        yaw_w=torch.cat((obstacle_terrain.yaw_w, empty_terrain.yaw_w), dim=0),
+        resolution=obstacle_terrain.resolution,
+    )
+    result = rollout_root(
+        _state(batch=2),
+        torch.tensor([[0.6, 0.0, 0.0], [0.6, 0.0, 0.0]]),
+        terrain,
+        ParallelismCfg(),
+    )
+
+    assert result.root_pos_w.shape == (2, 24, 3)
+    assert result.clamped_command_body[0, 1] < 0.0
+    assert torch.isclose(result.clamped_command_body[1, 1], torch.tensor(0.0))
+
+
+def test_large_obstacle_avoidance_applies_to_flat_and_terrain_following_rollouts():
+    from extension.parallelism import ParallelismCfg
+    from extension.parallelism.root import rollout_root
+
+    terrain = _semantic_two_terrain(obstacle_cells=((22, 23),), batch=2)
+    cfg = ParallelismCfg(
+        terrain_following_vx_soft_limit=1.0,
+        terrain_following_vy_soft_limit=1.0,
+        terrain_following_vyaw_soft_limit=1.0,
+        terrain_following_vx_excess_scale=1.0,
+        terrain_following_vy_excess_scale=1.0,
+        terrain_following_vyaw_excess_scale=1.0,
+    )
+    result = rollout_root(
+        _state(batch=2),
+        torch.tensor([[0.6, 0.0, 0.0], [0.6, 0.0, 0.0]]),
+        terrain,
+        cfg,
+        terrain_following_mask=torch.tensor([False, True]),
+    )
+
+    torch.testing.assert_close(result.clamped_command_body[0], result.clamped_command_body[1])
+    assert result.clamped_command_body[0, 1] < 0.0
+    assert torch.allclose(result.root_rpy_w[0, :, :2], torch.zeros(24, 2), atol=1e-6)
+    assert result.root_pos_w.shape == (2, 24, 3)
+
+
 def test_root_rollout_body_command_half_cycle_displacement():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.root import rollout_root

@@ -54,6 +54,103 @@ def soft_clamp_terrain_command(command_body: Tensor, cfg: ParallelismCfg) -> Ten
     return command.sign() * magnitude
 
 
+def _terrain_grid_world_xy(terrain: ParallelismTerrain, *, dtype: torch.dtype, device: torch.device) -> Tensor:
+    batch, height_count, width_count = terrain.height_w.shape
+    row = torch.arange(height_count, dtype=dtype, device=device)
+    col = torch.arange(width_count, dtype=dtype, device=device)
+    grid_row, grid_col = torch.meshgrid(row, col, indexing="ij")
+    local_x = grid_col * float(terrain.resolution)
+    local_y = grid_row * float(terrain.resolution)
+    yaw = terrain.yaw_w.to(dtype=dtype, device=device).reshape(batch, 1, 1)
+    cosine = torch.cos(yaw)
+    sine = torch.sin(yaw)
+    world_x = cosine * local_x[None] - sine * local_y[None] + terrain.origin_w[:, None, None, 0].to(
+        dtype=dtype,
+        device=device,
+    )
+    world_y = sine * local_x[None] + cosine * local_y[None] + terrain.origin_w[:, None, None, 1].to(
+        dtype=dtype,
+        device=device,
+    )
+    return torch.stack((world_x, world_y), dim=-1)
+
+
+def _large_obstacle_avoidance_command(
+    state: ParallelismState,
+    command_body: Tensor,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+) -> Tensor:
+    root0 = torch.as_tensor(state.root_pos_w)
+    command = torch.as_tensor(command_body, dtype=root0.dtype, device=root0.device)
+    if command.shape[-1] != 3:
+        raise ValueError("command_body must have shape [B, 3]")
+    batch = int(root0.shape[0])
+    if int(terrain.semantic_id.shape[0]) != batch:
+        raise ValueError("terrain batch size must match state root batch size")
+
+    eps = torch.tensor(1.0e-6, dtype=command.dtype, device=command.device)
+    rpy0 = torch.as_tensor(state.root_rpy_w, dtype=command.dtype, device=command.device)
+    yaw = rpy0[:, 2]
+    cosine = torch.cos(yaw)
+    sine = torch.sin(yaw)
+
+    vx_b = command[:, 0]
+    vy_b = command[:, 1]
+    vx_w = cosine * vx_b - sine * vy_b
+    vy_w = sine * vx_b + cosine * vy_b
+    speed_xy = torch.sqrt(vx_w.square() + vy_w.square())
+    moving = speed_xy > eps
+    forward = torch.stack((vx_w, vy_w), dim=-1) / speed_xy.clamp_min(eps)[:, None]
+    left = torch.stack((-forward[:, 1], forward[:, 0]), dim=-1)
+
+    grid_xy = _terrain_grid_world_xy(terrain, dtype=command.dtype, device=command.device)
+    delta = grid_xy - root0[:, None, None, :2].to(dtype=command.dtype, device=command.device)
+    forward_distance = (delta * forward[:, None, None, :]).sum(dim=-1)
+    lateral_position = (delta * left[:, None, None, :]).sum(dim=-1)
+
+    rect_half_width = 0.5 * float(cfg.large_obstacle_rect_width_m)
+    rect_length = max(float(cfg.large_obstacle_rect_length_m), 1.0e-6)
+    semantic = terrain.semantic_id.to(device=command.device)
+    valid = terrain.valid_mask.to(device=command.device)
+    front_large = (
+        (semantic == 2)
+        & valid
+        & moving[:, None, None]
+        & (forward_distance >= 0.0)
+        & (forward_distance <= rect_length)
+        & (lateral_position.abs() <= rect_half_width)
+    )
+    has_front_large = front_large.any(dim=(-1, -2))
+
+    sigma = max(rect_half_width, 1.0e-6)
+    lateral_weight = torch.exp(-lateral_position.square() / (2.0 * sigma * sigma))
+    mask_weight = front_large.to(dtype=command.dtype) * lateral_weight
+    weight_sum = mask_weight.sum(dim=(-1, -2))
+    mean_l = (mask_weight * lateral_position).sum(dim=(-1, -2)) / weight_sum.clamp_min(float(eps.item()))
+
+    infinity = torch.full_like(forward_distance, torch.inf)
+    nearest_s = torch.where(front_large, forward_distance, infinity).amin(dim=(-1, -2))
+    proximity = (1.0 - nearest_s / rect_length).clamp(0.0, 1.0)
+    lateral_speed = float(cfg.large_obstacle_lateral_speed_max_mps) * proximity
+    lateral_speed = torch.where(has_front_large, lateral_speed, torch.zeros_like(lateral_speed))
+
+    default_side = 1.0 if int(cfg.large_obstacle_default_side) >= 0 else -1.0
+    side = torch.where(
+        mean_l > eps,
+        torch.full_like(mean_l, -1.0),
+        torch.where(mean_l < -eps, torch.full_like(mean_l, 1.0), torch.full_like(mean_l, default_side)),
+    )
+    avoid_world = side[:, None] * lateral_speed[:, None] * left
+    avoid_body_x = cosine * avoid_world[:, 0] + sine * avoid_world[:, 1]
+    avoid_body_y = -sine * avoid_world[:, 0] + cosine * avoid_world[:, 1]
+
+    corrected = command.clone()
+    corrected[:, 0] = corrected[:, 0] + avoid_body_x
+    corrected[:, 1] = corrected[:, 1] + avoid_body_y
+    return clamp_command(corrected, cfg)
+
+
 def _half_profile(cfg: ParallelismCfg, *, dtype: torch.dtype, device: torch.device) -> Tensor:
     tau = torch.linspace(0.0, 1.0, int(cfg.half_cycle), dtype=dtype, device=device)
     return tau * tau * (3.0 - 2.0 * tau)
@@ -253,8 +350,9 @@ def rollout_root(
     root0 = torch.as_tensor(state.root_pos_w)
     rpy0 = torch.as_tensor(state.root_rpy_w, dtype=root0.dtype, device=root0.device)
     command_input = torch.as_tensor(command_body, dtype=root0.dtype, device=root0.device)
-    flat_command = clamp_command(command_input, cfg)
-    terrain_command = soft_clamp_terrain_command(command_input, cfg)
+    command_avoid = _large_obstacle_avoidance_command(state, command_input, terrain, cfg)
+    flat_command = clamp_command(command_avoid, cfg)
+    terrain_command = soft_clamp_terrain_command(command_avoid, cfg)
     if terrain_following_mask is None:
         mask = torch.zeros(root0.shape[0], dtype=torch.bool, device=root0.device)
     else:
