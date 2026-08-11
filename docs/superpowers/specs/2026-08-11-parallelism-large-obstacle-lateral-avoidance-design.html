@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism 大障碍物横向绕行设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d7dde5;
+      --accent: #1f5f8b;
+      --soft: #eef5fa;
+      --code: #f5f7f9;
+    }
+    body {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 36px 24px 64px;
+      color: var(--ink);
+      font: 16px/1.75 system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #fff;
+    }
+    h1, h2, h3 { line-height: 1.3; color: #163b59; }
+    h1 { margin-bottom: 8px; font-size: 2rem; }
+    h2 { margin-top: 38px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    h3 { margin-top: 26px; }
+    .meta { color: var(--muted); margin-bottom: 28px; }
+    .note {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid var(--accent);
+      background: var(--soft);
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    code { background: var(--code); padding: 1px 4px; }
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.55;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0 22px; }
+    th, td { border: 1px solid var(--line); padding: 9px 11px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    .formula { text-align: center; margin: 14px 0; font-family: Georgia, serif; font-size: 1.05rem; }
+    li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>Parallelism 大障碍物横向绕行设计</h1>
+  <div class="meta">日期：2026-08-11　分支：<code>parallelism-large-obstacles-rl</code></div>
+
+  <h2>1. 设计目标</h2>
+  <p>
+    在现有 Parallelism root 轨迹生成之前，根据当前速度方向上的
+    <code>semantic_id=2</code> 大障碍物，给 root 速度增加横向分量，使 root
+    在大障碍物前提前绕行。
+  </p>
+  <p>本设计只修改 root 轨迹生成前的速度命令，不修改以下逻辑：</p>
+  <ul>
+    <li>touchdown 候选采样；</li>
+    <li>swing 足端轨迹生成；</li>
+    <li>足端 IK；</li>
+    <li>官方碰撞点检测；</li>
+    <li>standstill、重规划周期和已有规划输出接口。</li>
+  </ul>
+
+  <div class="note">
+    整个绕行判断必须保持批量 GPU 并行。不能按环境、障碍物点或轨迹点使用
+    Python 循环逐个处理。
+  </div>
+
+  <h2>2. 大障碍物和检测矩形</h2>
+  <p>
+    当前 semantic course 中，大障碍物的基础尺寸为直径
+    <code>0.45m</code>、高度 <code>0.55m</code>。横向检测矩形参考该障碍物宽度，
+    并额外覆盖 Go2 的横向占用和安全余量。
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>参数</th><th>初始值</th><th>含义</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>large_obstacle_rect_width_m</code></td>
+        <td>0.70m</td>
+        <td>矩形总宽度，横向覆盖约 0.45m 大障碍物和 Go2 横向安全范围。</td>
+      </tr>
+      <tr>
+        <td><code>large_obstacle_rect_length_m</code></td>
+        <td>1.20m</td>
+        <td>矩形沿当前速度方向的长度，用于判断前方障碍物和距离衰减。</td>
+      </tr>
+      <tr>
+        <td><code>large_obstacle_lateral_speed_max_mps</code></td>
+        <td>0.25m/s</td>
+        <td>障碍物足够近时允许增加的最大横向速度。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    矩形起点为当前 root 的世界坐标，root 位于矩形后边的中点。矩形长边沿当前
+    平移速度方向，短边沿速度方向左侧。
+  </p>
+
+  <h2>3. 速度方向坐标系</h2>
+  <p>不使用 root 朝向作为检测前方，而使用当前平移速度方向。</p>
+
+  <p>当前 root 在自身坐标系下的平移速度为：</p>
+  <pre>v_b = [vx, vy]</pre>
+
+  <p>使用当前 root 的 yaw 将它转换到世界坐标：</p>
+  <div class="formula">v<sub>w</sub> = R<sub>yaw</sub> v<sub>b</sub></div>
+
+  <p>当速度足够大时，定义世界坐标中的前进单位向量：</p>
+  <div class="formula">f = v<sub>w</sub> / (||v<sub>w</sub>|| + ε)</div>
+
+  <p>定义速度方向左侧单位向量：</p>
+  <div class="formula">l = [-f<sub>y</sub>, f<sub>x</sub>]</div>
+
+  <p>
+    当平移速度接近零时，没有可靠的速度方向。此时不触发大障碍物横向绕行，
+    保持原有速度命令和原有 standstill 逻辑。
+  </p>
+
+  <h2>4. 语义体素投影</h2>
+  <p>
+    对当前 1.5m × 1.5m 地图内每个体素点计算相对于 root 的位置。设第
+    <code>i</code> 个体素世界坐标为 <code>p_i</code>，当前 root 世界坐标为
+    <code>p_r</code>：
+  </p>
+  <div class="formula">d<sub>i</sub> = p<sub>i</sub> - p<sub>r</sub></div>
+
+  <p>沿速度方向和横向方向的投影分别为：</p>
+  <div class="formula">S<sub>i</sub> = d<sub>i</sub> · f</div>
+  <div class="formula">L<sub>i</sub> = d<sub>i</sub> · l</div>
+
+  <p>其中：</p>
+  <ul>
+    <li><code>S_i</code> 是体素沿当前速度方向的前向距离；</li>
+    <li><code>L_i</code> 是体素相对速度中心线的横向位置；</li>
+    <li><code>L_i &gt; 0</code> 表示障碍物偏左；</li>
+    <li><code>L_i &lt; 0</code> 表示障碍物偏右。</li>
+  </ul>
+
+  <h2>5. 矩形触发条件</h2>
+  <p>只把同时满足以下条件的体素作为当前前方大障碍物：</p>
+  <pre>semantic_id == 2
+0 &lt;= S_i &lt;= large_obstacle_rect_length_m
+abs(L_i) &lt;= large_obstacle_rect_width_m / 2</pre>
+
+  <p>批量触发掩码为：</p>
+  <pre>front_large_i =
+    (semantic_i == 2)
+    &amp; (S_i &gt;= 0)
+    &amp; (S_i &lt;= rect_length)
+    &amp; (abs(L_i) &lt;= rect_half_width)</pre>
+
+  <p>每个环境是否触发：</p>
+  <pre>has_front_large = front_large_i.any(dim=(-1, -2))</pre>
+
+  <p>
+    如果没有满足条件的体素，则不增加横向速度。矩形外的大障碍物不会触发当前
+    root 的绕行。
+  </p>
+
+  <h2>6. 加权 mean_L：只决定方向</h2>
+  <p>
+    <code>mean_L</code> 不再决定横向速度大小，只决定向左还是向右。
+    对矩形内的大障碍物点，横向距离越远，权重越小。
+  </p>
+
+  <p>横向投影距离：</p>
+  <div class="formula">D<sub>i</sub> = |L<sub>i</sub>|</div>
+
+  <p>横向权重：</p>
+  <div class="formula">
+    w<sub>i</sub> = exp(-D<sub>i</sub><sup>2</sup> / (2σ<sub>L</sub><sup>2</sup>))
+  </div>
+
+  <p>其中：</p>
+  <div class="formula">σ<sub>L</sub> = large_obstacle_rect_width_m / 2</div>
+
+  <p>加权横向平均位置：</p>
+  <div class="formula">
+    mean_L =
+    (Σ front_large<sub>i</sub> w<sub>i</sub> L<sub>i</sub>) /
+    (Σ front_large<sub>i</sub> w<sub>i</sub> + ε)
+  </div>
+
+  <p>方向判定：</p>
+  <pre>mean_L &gt;  deadband  -&gt; 障碍物偏左，横向速度向右
+mean_L &lt; -deadband  -&gt; 障碍物偏右，横向速度向左
+abs(mean_L) &lt;= deadband -&gt; 使用 large_obstacle_default_side</pre>
+
+  <p>
+    当障碍物左右对称导致 <code>mean_L≈0</code> 时，方向使用固定的
+    <code>large_obstacle_default_side</code>。此时不会因为
+    <code>mean_L=0</code> 而关闭横向绕行。
+  </p>
+
+  <h2>7. 按障碍物距离生成横向速度</h2>
+  <p>
+    横向速度大小只由障碍物沿速度方向的最近距离决定。对当前矩形内的大障碍物点：
+  </p>
+  <div class="formula">S<sub>min</sub> = min {S<sub>i</sub> | front_large<sub>i</sub>}</div>
+
+  <p>定义接近程度：</p>
+  <div class="formula">
+    ρ = clamp(1 - S<sub>min</sub> / large_obstacle_rect_length_m, 0, 1)
+  </div>
+
+  <p>因此：</p>
+  <ul>
+    <li>障碍物在矩形远端时，<code>ρ</code> 较小，横向速度较小；</li>
+    <li>障碍物靠近 root 时，<code>ρ</code> 较大，横向速度较大；</li>
+    <li>障碍物接近 root 时，横向速度达到设定上限。</li>
+  </ul>
+
+  <p>最终横向速度大小：</p>
+  <div class="formula">
+    |v<sub>lat</sub>| =
+    large_obstacle_lateral_speed_max_mps · ρ<sup>γ</sup>
+  </div>
+
+  <p>
+    初始使用线性衰减，即 <code>γ=1</code>。不额外增加第四个必调参数；
+    指数可以作为后续固定实现参数，后续确有需要再暴露为配置项。
+  </p>
+
+  <p>最终横向速度带方向：</p>
+  <div class="formula">v<sub>lat</sub> = side · |v<sub>lat</sub>|</div>
+
+  <p>
+    其中 <code>side</code> 已经由 <code>mean_L</code> 和
+    <code>large_obstacle_default_side</code> 决定。横向速度最后限制在已有
+    <code>vy_limit</code> 内。
+  </p>
+
+  <h2>8. 速度合成和 root 轨迹</h2>
+  <p>横向绕行速度在世界坐标系中为：</p>
+  <div class="formula">v<sub>avoid,w</sub> = v<sub>lat</sub> l</div>
+
+  <p>将它转换到当前 root 坐标系后，与用户原始速度命令相加：</p>
+  <div class="formula">v<sub>cmd,new</sub> = v<sub>cmd,original</sub> + R<sub>yaw</sub><sup>T</sup> v<sub>avoid,w</sub></div>
+
+  <p>之后继续调用原有 root 轨迹生成逻辑：</p>
+  <pre>修正后的速度命令
+    → root XY / yaw 轨迹
+    → terrain-following root Z / roll / pitch
+    → 原有 touchdown、swing、IK、碰撞检测</pre>
+
+  <p>
+    大障碍物逻辑不直接修改足端轨迹，也不直接修改关节角，只改变 root
+    轨迹的输入速度。
+  </p>
+
+  <h2>9. GPU 并行实现要求</h2>
+  <p>设环境数为 <code>B</code>，语义地图为 <code>H×W</code>：</p>
+
+  <table>
+    <thead><tr><th>张量</th><th>形状</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>障碍物世界坐标</td><td><code>[B,H,W,2]</code></td><td>由地图原点、yaw、分辨率一次性生成。</td></tr>
+      <tr><td>语义 ID</td><td><code>[B,H,W]</code></td><td>只通过 Torch mask 过滤 ID=2。</td></tr>
+      <tr><td>前向投影 <code>S</code></td><td><code>[B,H,W]</code></td><td>与速度方向做批量点积。</td></tr>
+      <tr><td>横向投影 <code>L</code></td><td><code>[B,H,W]</code></td><td>与左侧方向做批量点积。</td></tr>
+      <tr><td>触发状态</td><td><code>[B]</code></td><td>使用 <code>any</code>。</td></tr>
+      <tr><td>最近距离</td><td><code>[B]</code></td><td>对无效点填充正无穷后使用 <code>amin</code>。</td></tr>
+      <tr><td><code>mean_L</code></td><td><code>[B]</code></td><td>使用加权 <code>sum</code> 和 <code>clamp_min</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <p>禁止使用以下实现方式：</p>
+  <ul>
+    <li>遍历每个环境；</li>
+    <li>遍历每个语义体素；</li>
+    <li>为左右方向分别执行 Python 级别的规划函数；</li>
+    <li>把地图体素复制为每个环境独立的 Python 对象。</li>
+  </ul>
+
+  <p>
+    计算复杂度为 <code>O(B×H×W)</code>，显存主要是现有语义地图和少量
+    <code>S/L/weight/mask</code> 临时张量。计算结束后不保存历史障碍物状态。
+  </p>
+
+  <h2>10. 参数汇总</h2>
+  <table>
+    <thead><tr><th>参数</th><th>初始值</th><th>调大后的效果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>large_obstacle_rect_width_m</code></td>
+        <td>0.70m</td>
+        <td>检测更宽，更多横向区域会被视为可能挡路。</td>
+      </tr>
+      <tr>
+        <td><code>large_obstacle_rect_length_m</code></td>
+        <td>1.20m</td>
+        <td>更早检测前方障碍物，距离衰减范围更长。</td>
+      </tr>
+      <tr>
+        <td><code>large_obstacle_lateral_speed_max_mps</code></td>
+        <td>0.25m/s</td>
+        <td>靠近障碍物时横移更快。</td>
+      </tr>
+      <tr>
+        <td><code>large_obstacle_default_side</code></td>
+        <td>按现有配置</td>
+        <td>仅在左右对称或 <code>mean_L≈0</code> 时决定兜底方向。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>11. 边界情况</h2>
+  <ul>
+    <li>平移速度接近零：不构造速度方向，不触发横向绕行。</li>
+    <li>矩形内没有 semantic=2：横向速度为零。</li>
+    <li><code>mean_L=0</code>：使用默认方向，但速度大小仍由最近障碍物距离计算。</li>
+    <li>最近障碍物在矩形远端：横向速度较小，提前开始绕行。</li>
+    <li>最近障碍物接近 root：横向速度接近最大值。</li>
+    <li>横向速度超过已有 <code>vy_limit</code>：使用已有速度限制裁剪。</li>
+    <li>障碍物点数量为零：分母使用 <code>clamp_min(ε)</code>，不会产生 NaN。</li>
+  </ul>
+
+  <h2>12. 验证指标</h2>
+  <p>测试时建议按环境并行记录以下指标：</p>
+  <ul>
+    <li><code>large_obstacle_triggered</code>：是否检测到前方大障碍物；</li>
+    <li><code>large_obstacle_mean_L</code>：加权横向平均位置；</li>
+    <li><code>large_obstacle_nearest_forward_m</code>：最近前向距离；</li>
+    <li><code>large_obstacle_proximity</code>：接近程度 <code>ρ</code>；</li>
+    <li><code>large_obstacle_lateral_velocity_mps</code>：实际增加的横向速度；</li>
+    <li><code>large_obstacle_avoid_side</code>：最终绕行方向；</li>
+    <li><code>large_obstacle_standstill_count</code>：绕行后触发 standstill 的次数。</li>
+  </ul>
+
+  <p>
+    验证重点是：障碍物距离 root 越近，横向速度绝对值是否增大；障碍物只在
+    左侧或右侧时，绕行方向是否正确；左右对称时是否仍能按默认方向产生横移；
+    以及 1024 个环境批量运行时是否保持无 Python 循环。
+  </p>
+</body>
+</html>
