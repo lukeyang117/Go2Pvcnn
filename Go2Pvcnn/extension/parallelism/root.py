@@ -54,7 +54,12 @@ def soft_clamp_terrain_command(command_body: Tensor, cfg: ParallelismCfg) -> Ten
     return command.sign() * magnitude
 
 
-def _terrain_grid_world_xy(terrain: ParallelismTerrain, *, dtype: torch.dtype, device: torch.device) -> Tensor:
+def _terrain_grid_world_xy_components(
+    terrain: ParallelismTerrain,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
     batch, height_count, width_count = terrain.height_w.shape
     row = torch.arange(height_count, dtype=dtype, device=device)
     col = torch.arange(width_count, dtype=dtype, device=device)
@@ -72,7 +77,7 @@ def _terrain_grid_world_xy(terrain: ParallelismTerrain, *, dtype: torch.dtype, d
         dtype=dtype,
         device=device,
     )
-    return torch.stack((world_x, world_y), dim=-1)
+    return world_x, world_y
 
 
 def _large_obstacle_avoidance_command(
@@ -104,10 +109,13 @@ def _large_obstacle_avoidance_command(
     forward = torch.stack((vx_w, vy_w), dim=-1) / speed_xy.clamp_min(eps)[:, None]
     left = torch.stack((-forward[:, 1], forward[:, 0]), dim=-1)
 
-    grid_xy = _terrain_grid_world_xy(terrain, dtype=command.dtype, device=command.device)
-    delta = grid_xy - root0[:, None, None, :2].to(dtype=command.dtype, device=command.device)
-    forward_distance = (delta * forward[:, None, None, :]).sum(dim=-1)
-    lateral_position = (delta * left[:, None, None, :]).sum(dim=-1)
+    world_x, world_y = _terrain_grid_world_xy_components(terrain, dtype=command.dtype, device=command.device)
+    root_x = root0[:, None, None, 0].to(dtype=command.dtype, device=command.device)
+    root_y = root0[:, None, None, 1].to(dtype=command.dtype, device=command.device)
+    delta_x = world_x - root_x
+    delta_y = world_y - root_y
+    forward_distance = delta_x * forward[:, None, None, 0] + delta_y * forward[:, None, None, 1]
+    lateral_position = delta_x * left[:, None, None, 0] + delta_y * left[:, None, None, 1]
 
     rect_half_width = 0.5 * float(cfg.large_obstacle_rect_width_m)
     rect_length = max(float(cfg.large_obstacle_rect_length_m), 1.0e-6)
