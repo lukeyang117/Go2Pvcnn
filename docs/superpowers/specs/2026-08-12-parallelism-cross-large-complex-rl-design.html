@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Small Cross Large Avoid Complex Terrain RL 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d7dde5;
+      --accent: #1f5f8b;
+      --soft: #eef5fa;
+      --code: #f5f7f9;
+    }
+    body {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 36px 24px 64px;
+      color: var(--ink);
+      background: #fff;
+      font: 16px/1.75 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    h1, h2, h3 { color: #163b59; line-height: 1.3; }
+    h1 { margin-bottom: 8px; font-size: 2rem; }
+    h2 { margin-top: 38px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    h3 { margin-top: 26px; }
+    .meta { color: var(--muted); margin-bottom: 28px; }
+    .note {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid var(--accent);
+      background: var(--soft);
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    code { padding: 1px 4px; background: var(--code); }
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.55;
+    }
+    table { width: 100%; margin: 14px 0 22px; border-collapse: collapse; }
+    th, td { padding: 9px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>Parallelism Small Cross + Large Avoidance + Complex Terrain RL 设计</h1>
+  <div class="meta">日期：2026-08-12　目标 experiment：<code>parallelism_tracking_cross_large_complex</code></div>
+
+  <h2>1. 目标</h2>
+  <p>
+    新建一个 RL 任务，使同一个 policy 同时学习平地 small obstacle cross、复杂地形行走、
+    复杂地形上的少量 small obstacle cross，以及 large obstacle 避让。
+  </p>
+  <p>
+    policy 仍然跟踪 Parallelism 生成的 root、foot 和 joint reference。规划器负责生成
+    地形相关的 reference，RL 负责在 IsaacLab 物理环境中复刻 reference 并保持稳定运动。
+  </p>
+
+  <div class="note">
+    新任务继承当前 small-obstacles RL 配置的速度课程、观测、reference tracking、
+    termination 和训练接口；不修改现有 flat、small-obstacles、ladder 任务。
+  </div>
+
+  <h2>2. 文件结构</h2>
+  <table>
+    <thead><tr><th>文件</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>tracking/parallelism_cross_large_complex_env_cfg.py</code></td>
+        <td>新 RL 配置；继承 small-obstacles 配置，定义混合 terrain、障碍物数量和 play 配置。</td>
+      </tr>
+      <tr>
+        <td><code>tracking/register_envs.py</code></td>
+        <td>注册新的训练环境和 play 环境。</td>
+      </tr>
+      <tr>
+        <td><code>scripts/train.py</code></td>
+        <td>增加新的 experiment 到配置映射。</td>
+      </tr>
+      <tr>
+        <td><code>extension/semantic_course.py</code></td>
+        <td>仅在现有接口不足以区分 dense flat 和普通 terrain 时补充 terrain type 识别或固定布局支持。</td>
+      </tr>
+      <tr>
+        <td><code>go2_pvcnn/mdp/curriculums.py</code></td>
+        <td>复用现有地形课程；仅在需要排除 dense flat 时增加排除逻辑。</td>
+      </tr>
+      <tr>
+        <td><code>tests/tracking/test_parallelism_cross_large_complex_env_cfg.py</code></td>
+        <td>验证 terrain 数量、障碍物数量、课程和 reward 配置。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. 配置继承关系</h2>
+  <pre>ParallelismTrackingFlatEnvCfg
+    ↓
+ParallelismTrackingSmallObstaclesEnvCfg
+    ↓
+ParallelismTrackingCrossLargeComplexEnvCfg
+    ↓
+ParallelismTrackingCrossLargeComplexEnvCfg_PLAY</pre>
+
+  <p>新配置直接继承 small-obstacles 配置，因此默认继承：</p>
+  <ul>
+    <li>Parallelism reference manager；</li>
+    <li>policy/critic 的高程图、语义图和 reference observation；</li>
+    <li>joint、root、foot reference tracking reward；</li>
+    <li>当前 termination 逻辑；</li>
+    <li>Parallelism 速度 curriculum；</li>
+    <li>small obstacle 的 active swing foot reward。</li>
+  </ul>
+
+  <h2>4. Terrain 子地形</h2>
+  <p>新 terrain generator 使用一个混合 terrain 配置，包含：</p>
+  <pre>flat_dense_small_obstacles
+flat
+random_rough
+hf_pyramid_slope
+hf_pyramid_slope_inv
+boxes
+pyramid_stairs
+pyramid_stairs_inv</pre>
+
+  <h3>4.1 Dense flat 子地形</h3>
+  <table>
+    <thead><tr><th>项目</th><th>设计</th></tr></thead>
+    <tbody>
+      <tr><td>terrain 名称</td><td><code>flat_dense_small_obstacles</code></td></tr>
+      <tr><td>small obstacle</td><td>40 个</td></tr>
+      <tr><td>large obstacle</td><td>0 个</td></tr>
+      <tr><td>用途</td><td>专门学习密集 small obstacle cross</td></tr>
+      <tr><td>terrain 数量</td><td>只配置一个 dense flat 子地形类型</td></tr>
+      <tr><td>环境比例</td><td>约 1/16，即 6.25%</td></tr>
+      <tr><td>障碍物生成</td><td>创建 terrain 时随机一次，之后固定</td></tr>
+      <tr><td>地形课程</td><td>不参与升级和降级</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    dense flat 不是把所有 flat tile 都设置成 40 个障碍物，而是单独定义一个 terrain type。
+    这样可以避免 1024 个环境大规模复制密集障碍物。
+  </p>
+
+  <h3>4.2 其他 terrain</h3>
+  <table>
+    <thead><tr><th>terrain 范围</th><th>small</th><th>large</th><th>地形课程</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>普通 flat、rough、slope、boxes、stairs 等</td>
+        <td>5</td>
+        <td>2</td>
+        <td>参与</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    其他 terrain 的 small/large obstacle 数量固定为 5 和 2，不随着 terrain level 变化。
+    terrain level 只改变 terrain generator 生成的地形难度。
+  </p>
+
+  <h2>5. 障碍物生成和 reset</h2>
+  <p>障碍物只在创建 terrain 时生成一次：</p>
+  <pre>创建 terrain
+  → 根据 terrain type 确定障碍物数量
+  → 使用固定 seed + 随机布局生成障碍物
+  → 根据地形高度放置障碍物
+  → 建立 semantic geometry 和 semantic map
+  → 初始化 semantic raycaster
+
+后续 reset
+  → 只重置机器人、reference 和 episode 状态
+  → 不重新随机障碍物
+  → 不重新创建 USD obstacle prim</pre>
+
+  <p>
+    dense flat 的 40 个 small obstacles 也只创建一次。这样 reset 不会反复生成障碍物，
+    避免启动卡顿和运行时开销。
+  </p>
+
+  <h2>6. Dense flat 的环境比例和课程排除</h2>
+  <p>
+    dense flat terrain type 的 proportion 设置为约 <code>0.0625</code>。terrain importer
+    根据 terrain type 分配环境 origin；不通过每个 reset 的 Python 随机逻辑重新分配。
+  </p>
+
+  <p>地形课程更新时：</p>
+  <pre>dense_flat_mask = terrain_name == "flat_dense_small_obstacles"
+normal_env_ids = env_ids[~dense_flat_mask[env_ids]]
+
+只对 normal_env_ids 执行 terrain_levels_vel_semantic_plane_gate</pre>
+
+  <p>dense flat 环境：</p>
+  <ul>
+    <li>不升级 terrain level；</li>
+    <li>不降低 terrain level；</li>
+    <li>reset 后保持 dense flat terrain type；</li>
+    <li>不因为 small obstacle cross 失败而切换到复杂 terrain。</li>
+  </ul>
+
+  <p>普通 terrain 环境继续使用现有 Go2Pvcnn terrain curriculum：</p>
+  <ul>
+    <li>移动距离足够且 episode 成功时升级；</li>
+    <li>移动距离不足、base contact 或 bad orientation 时降级；</li>
+    <li>terrain row/level 继续由 IsaacLab terrain importer 管理。</li>
+  </ul>
+
+  <h2>7. 速度课程</h2>
+  <p>速度课程完全继承：</p>
+  <pre>tracking/parallelism_small_obstacles_env_cfg.py</pre>
+
+  <p>保留当前阈值：</p>
+  <pre>root_pos_threshold   = 0.18
+root_rot_threshold   = 0.45
+joint_mean_threshold = 0.32
+joint_max_threshold  = 1.0</pre>
+
+  <p>
+    速度课程和地形课程相互独立。速度课程只根据 Parallelism reference tracking 误差
+    调整速度等级；地形课程只根据 terrain level 结果调整普通环境的 terrain 难度。
+  </p>
+
+  <h2>8. Small obstacle cross</h2>
+  <p>small obstacle 使用当前实现，不改变规划逻辑：</p>
+  <ul>
+    <li>semantic ID 为 <code>1</code>；</li>
+    <li>touchdown 候选采样和 semantic margin 保持不变；</li>
+    <li>swing 足端高度继续根据高程图生成；</li>
+    <li>official collision geometry 继续检查 thigh、calf、foot；</li>
+    <li>active swing foot 安全落在 small obstacle 上时保留奖励；</li>
+    <li>dense flat 主要学习密集 small obstacle cross。</li>
+  </ul>
+
+  <h2>9. Large obstacle avoidance</h2>
+  <p>large obstacle 使用 semantic ID <code>2</code>，复用当前 Parallelism root 横向避让：</p>
+  <pre>当前 root 平移速度
+  → 沿速度方向构造检测矩形
+  → 查询矩形内 semantic=2
+  → 加权 mean_L 只决定左绕/右绕
+  → 最近障碍物前向距离决定横向速度大小
+  → 修改 root command
+  → 原有 root Z/RPY、swing、IK 和 collision</pre>
+
+  <p>初始参数：</p>
+  <pre>large_obstacle_rect_width_m = 0.70
+large_obstacle_rect_length_m = 1.20
+large_obstacle_lateral_speed_max_mps = 0.25
+large_obstacle_default_side = +1  # +1=向左，-1=向右</pre>
+
+  <p>
+    这套避让逻辑对 flat、rough、slope、boxes、stairs 等所有 terrain type 统一生效，
+    不为每种复杂地形复制一套 planner。
+  </p>
+
+  <h2>10. Reward 设计</h2>
+  <p>不新增 large obstacle 专用 reward。只扩展和复用：</p>
+  <pre>parallelism_geometry_collision</pre>
+
+  <p>它调用 Parallelism official geometry collision：</p>
+  <pre>当前 policy Go2 姿态
+  → FK 得到 thigh/calf/foot 几何体
+  → official_collision_mask
+  → 查询 semantic/elevation terrain
+  → active swing leg 碰撞判断
+  → 产生 collision penalty</pre>
+
+  <p>
+    由于 Parallelism 的 obstacle semantic IDs 为 <code>(1, 2)</code>，该 reward 同时覆盖：
+  </p>
+  <ul>
+    <li>small obstacle：<code>semantic_id=1</code>；</li>
+    <li>large obstacle：<code>semantic_id=2</code>。</li>
+  </ul>
+
+  <p>保留当前 reward：</p>
+  <ul>
+    <li>reference joint position/velocity；</li>
+    <li>reference root position/rotation；</li>
+    <li>reference foot position；</li>
+    <li>active swing foot tracking；</li>
+    <li>active swing foot max error；</li>
+    <li>joint max tracking；</li>
+    <li>基础速度、姿态、能量和接触相关 reward；</li>
+    <li><code>active_swing_foot_on_small_obstacle</code>；</li>
+    <li><code>parallelism_geometry_collision</code>。</li>
+  </ul>
+
+  <p>
+    large obstacle 的学习信号来自两部分：Parallelism 生成的绕行 reference，以及
+    <code>parallelism_geometry_collision</code> 的碰撞惩罚。
+  </p>
+
+  <h2>11. Observation 设计</h2>
+  <p>沿用当前 small-obstacles RL observation，不新增 handcrafted large obstacle 输入：</p>
+  <ul>
+    <li>policy state；</li>
+    <li>elevation map；</li>
+    <li>semantic map；</li>
+    <li>reference root position/rotation/velocity；</li>
+    <li>reference foot position；</li>
+    <li>reference joint position/velocity。</li>
+  </ul>
+
+  <p>
+    高程图提供 terrain geometry，semantic map 区分 small 和 large obstacle，Parallelism
+    reference 提供 planner 已经做出的 root 横移和足端动作。
+  </p>
+
+  <h2>12. Termination</h2>
+  <p>第一版继承当前 small-obstacles tracking termination：</p>
+  <pre>time_out
+base_contact
+bad_orientation
+parallelism_ref_root_z_too_far
+parallelism_ref_projected_gravity_too_far
+parallelism_ref_foot_z_too_far
+parallelism_ref_joint_pos_too_far</pre>
+
+  <p>
+    不新增 large obstacle 专用 termination。large obstacle 初期主要通过 reference tracking
+    和 geometry collision penalty 学习，避免刚开始训练时因为 large obstacle 碰撞频繁 reset，
+    导致 terrain curriculum 和 velocity curriculum 无法提升。
+  </p>
+
+  <h2>13. GPU 并行和性能要求</h2>
+  <ul>
+    <li>terrain obstacle 创建只在初始化阶段执行，不在 reset 中创建。</li>
+    <li>terrain curriculum 使用 env ID mask 批量更新，不逐环境调用 Python planner。</li>
+    <li>semantic map、elevation map 和 collision reward 继续使用 Torch/GPU 批量计算。</li>
+    <li>large obstacle root avoidance 保持 <code>O(B×H×W)</code>，不遍历 Python 障碍物列表。</li>
+    <li>dense flat 只占约 1/16 环境，降低 40 个障碍物的总复制量。</li>
+    <li>普通 terrain 每个 tile 只放 5 个 small 和 2 个 large obstacle。</li>
+  </ul>
+
+  <h2>14. 注册和训练入口</h2>
+  <p>新增 experiment：</p>
+  <pre>parallelism_tracking_cross_large_complex</pre>
+
+  <p>训练配置映射：</p>
+  <pre>ParallelismTrackingCrossLargeComplexEnvCfg
+ParallelismTrackingCrossLargeComplexEnvCfg_PLAY</pre>
+
+  <p>新任务不修改以下已有 experiment：</p>
+  <pre>parallelism_tracking_flat
+parallelism_tracking_small_obstacles
+parallelism_tracking_ladder</pre>
+
+  <h2>15. 测试要求</h2>
+  <ul>
+    <li>验证新配置可以正常 import 和 instantiate。</li>
+    <li>验证 terrain generator 包含一个 dense flat terrain type。</li>
+    <li>验证 dense flat 的 obstacle count 为 small=40、large=0。</li>
+    <li>验证其他 terrain 的 obstacle count 为 small=5、large=2。</li>
+    <li>验证 dense flat 比例约为 1/16。</li>
+    <li>验证 obstacle geometry 只创建一次，reset 不重复创建。</li>
+    <li>验证 dense flat 不参与 terrain curriculum。</li>
+    <li>验证普通 terrain 继续使用 Go2Pvcnn terrain curriculum。</li>
+    <li>验证速度 curriculum 参数与 small-obstacles 配置一致。</li>
+    <li>验证 <code>parallelism_geometry_collision</code> 同时覆盖 semantic 1 和 semantic 2。</li>
+    <li>使用 1024 环境执行短训练启动测试，确认 reset、reference planner 和 reward 不报错。</li>
+  </ul>
+
+  <h2>16. 预期数据流</h2>
+  <pre>创建混合 terrain
+  → dense flat 约 1/16，40 个 small
+  → 其他 terrain，5 个 small + 2 个 large
+  → 创建时随机摆放并固定
+  → reset 不重新生成障碍物
+  → dense flat 不参与 terrain curriculum
+  → 其他 terrain 参与 terrain curriculum
+  → 速度 curriculum 继承 small-obstacles
+  → Parallelism 读取 elevation/semantic map
+  → small cross + large avoidance
+  → 生成 root/foot/joint reference
+  → policy tracking
+  → geometry collision 统一惩罚 semantic 1/2</pre>
+</body>
+</html>
