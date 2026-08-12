@@ -9,6 +9,20 @@ def test_parallelism_tracking_task_id_is_registered() -> None:
     assert "ParallelismTrackingFlatEnvCfg" in source
     assert "Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0" in source
     assert "ParallelismTrackingSmallObstaclesEnvCfg" in source
+    assert "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0" in source
+    assert "ParallelismTrackingCrossLargeComplexEnvCfg" in source
+
+
+def test_cross_large_complex_experiment_is_registered_in_all_entrypoints() -> None:
+    experiment = "parallelism_tracking_cross_large_complex"
+    train_source = (ROOT / "scripts/train.py").read_text()
+    play_source = (ROOT / "scripts/play.py").read_text()
+    registration_source = (ROOT / "tracking/register_envs.py").read_text()
+    train_cfg_source = (ROOT / "agent/train_cfg.py").read_text()
+    assert experiment in train_source
+    assert experiment in play_source
+    assert experiment in registration_source
+    assert experiment in train_cfg_source
 
 
 def test_main_task_registration_imports_tracking_registration() -> None:

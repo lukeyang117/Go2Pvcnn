@@ -10,6 +10,7 @@ def get_train_cfg(experiment_name: str) -> dict:
         "parallelism_tracking_flat",
         "parallelism_tracking_small_obstacles",
         "parallelism_tracking_ladder",
+        "parallelism_tracking_cross_large_complex",
     }
     if experiment_name not in supported:
         raise ValueError(f"Unknown experiment: {experiment_name}")

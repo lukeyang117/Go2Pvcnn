@@ -49,6 +49,7 @@ class SemanticObstacleCurriculumCfg:
     plane_terrain_names: tuple[str, ...] = ("flat",)
     plane_counts: tuple[SemanticObstacleCount, ...] = field(default_factory=lambda: DEFAULT_PLANE_COUNTS)
     non_plane_counts: tuple[SemanticObstacleCount, ...] = field(default_factory=lambda: DEFAULT_NON_PLANE_COUNTS)
+    terrain_obstacle_count_overrides: dict[str, SemanticObstacleCount] = field(default_factory=dict)
     center_safety_half_extent_m: tuple[float, ...] = field(
         default_factory=lambda: DEFAULT_CENTER_SAFETY_HALF_EXTENT_M
     )
@@ -90,6 +91,10 @@ def validate_semantic_obstacle_curriculum_cfg(cfg: SemanticObstacleCurriculumCfg
     _validate_float_sequence(cfg.tile_margin_m, name="tile_margin_m", allowed_len=row_count_len)
     if not all(str(name) for name in cfg.plane_terrain_names):
         raise ValueError("plane_terrain_names entries must be non-empty strings")
+    for terrain_name, count in cfg.terrain_obstacle_count_overrides.items():
+        if not str(terrain_name):
+            raise ValueError("terrain_obstacle_count_overrides keys must be non-empty strings")
+        _validate_count_sequence((count,), name=f"terrain_obstacle_count_overrides[{terrain_name!r}]")
     if float(cfg.collision_force_threshold) < 0.0 or not math.isfinite(float(cfg.collision_force_threshold)):
         raise ValueError("collision_force_threshold must be finite and non-negative")
 
@@ -106,6 +111,10 @@ def count_for_row(
     row: int,
     terrain_name: str | None,
 ) -> SemanticObstacleCount:
+    if terrain_name is not None:
+        override = cfg.terrain_obstacle_count_overrides.get(str(terrain_name))
+        if override is not None:
+            return override
     plane_names = {str(name) for name in cfg.plane_terrain_names}
     counts = cfg.plane_counts if terrain_name in plane_names else cfg.non_plane_counts
     return counts[clamp_row_index(row, len(counts))]

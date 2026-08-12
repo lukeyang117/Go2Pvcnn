@@ -317,19 +317,28 @@ large_obstacle_default_side = +1  # +1=向左，-1=向右</pre>
   </p>
 
   <h2>12. Termination</h2>
-  <p>第一版继承当前 small-obstacles tracking termination：</p>
+  <p>新任务完整继承当前 small-obstacles tracking termination，并保持现有阈值：</p>
   <pre>time_out
 base_contact
 bad_orientation
 parallelism_ref_root_z_too_far
 parallelism_ref_projected_gravity_too_far
 parallelism_ref_foot_z_too_far
-parallelism_ref_joint_pos_too_far</pre>
+parallelism_ref_joint_pos_too_far
+parallelism_consecutive_standstill</pre>
 
   <p>
+    <code>parallelism_consecutive_standstill</code> 继续使用当前连续两次规则：
+    同一个环境只有在连续两次规划结果都是 standstill 时才 reset；单次 standstill 不会
+    触发 termination。环境 reset、Parallelism 成功生成新轨迹、或新 episode 初始化时，
+    standstill 连续计数按现有 manager 逻辑清零。该 termination 不因 dense flat 的地形课程
+    排除而关闭。
+  </p>
+  <p>
     不新增 large obstacle 专用 termination。large obstacle 初期主要通过 reference tracking
-    和 geometry collision penalty 学习，避免刚开始训练时因为 large obstacle 碰撞频繁 reset，
-    导致 terrain curriculum 和 velocity curriculum 无法提升。
+    和 geometry collision penalty 学习，避免因为单次 large obstacle 碰撞频繁 reset，
+    导致 terrain curriculum 和 velocity curriculum 无法提升；但连续两次 standstill 仍然
+    保留为最终失败条件。
   </p>
 
   <h2>13. GPU 并行和性能要求</h2>
@@ -367,6 +376,7 @@ parallelism_tracking_ladder</pre>
     <li>验证普通 terrain 继续使用 Go2Pvcnn terrain curriculum。</li>
     <li>验证速度 curriculum 参数与 small-obstacles 配置一致。</li>
     <li>验证 <code>parallelism_geometry_collision</code> 同时覆盖 semantic 1 和 semantic 2。</li>
+    <li>验证新配置继承并启用 <code>parallelism_consecutive_standstill</code>，阈值为 2。</li>
     <li>使用 1024 环境执行短训练启动测试，确认 reset、reference planner 和 reward 不报错。</li>
   </ul>
 
@@ -379,6 +389,7 @@ parallelism_tracking_ladder</pre>
   → dense flat 不参与 terrain curriculum
   → 其他 terrain 参与 terrain curriculum
   → 速度 curriculum 继承 small-obstacles
+  → 连续两次 standstill 才触发 termination
   → Parallelism 读取 elevation/semantic map
   → small cross + large avoidance
   → 生成 root/foot/joint reference

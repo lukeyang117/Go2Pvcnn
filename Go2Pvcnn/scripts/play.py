@@ -688,6 +688,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "parallelism_tracking_flat",
             "parallelism_tracking_small_obstacles",
             "parallelism_tracking_ladder",
+            "parallelism_tracking_cross_large_complex",
         ],
         help="Experiment/task to play.",
     )
@@ -1432,6 +1433,9 @@ def main() -> int:
         TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY,
     )
     from tracking.parallelism_ladder_env_cfg import ParallelismTrackingLadderEnvCfg_PLAY
+    from tracking.parallelism_cross_large_complex_env_cfg import (
+        ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
+    )
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg_PLAY
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -1463,6 +1467,10 @@ def main() -> int:
         "parallelism_tracking_ladder": (
             ParallelismTrackingLadderEnvCfg_PLAY,
             "Isaac-Go2-Parallelism-Tracking-Ladder-v0",
+        ),
+        "parallelism_tracking_cross_large_complex": (
+            ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
+            "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0",
         ),
     }
 
@@ -1541,6 +1549,7 @@ def main() -> int:
         "parallelism_tracking_flat",
         "parallelism_tracking_small_obstacles",
         "parallelism_tracking_ladder",
+        "parallelism_tracking_cross_large_complex",
     )
     parallelism_panel_state = None
     parallelism_manager = None

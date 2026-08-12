@@ -70,6 +70,22 @@ def test_semantic_curriculum_counts_are_indexed_by_row_and_terrain_name() -> Non
     assert count_for_row(cfg, row=99, terrain_name="boxes") == SemanticObstacleCount(2, 1)
 
 
+def test_semantic_curriculum_named_terrain_override_wins_over_row_counts() -> None:
+    cfg = _cfg(
+        plane_counts=(SemanticObstacleCount(5, 2),),
+        non_plane_counts=(SemanticObstacleCount(5, 2),),
+        terrain_obstacle_count_overrides={
+            "flat_dense_small_obstacles": SemanticObstacleCount(40, 0),
+        },
+        center_safety_half_extent_m=(0.25,),
+        min_spacing_clearance_m=(0.08,),
+        tile_margin_m=(0.50,),
+    )
+
+    assert count_for_row(cfg, row=0, terrain_name="flat_dense_small_obstacles") == SemanticObstacleCount(40, 0)
+    assert count_for_row(cfg, row=0, terrain_name="boxes") == SemanticObstacleCount(5, 2)
+
+
 def test_semantic_curriculum_layout_values_can_be_scalar_or_row_indexed() -> None:
     scalar_cfg = _cfg(
         center_safety_half_extent_m=(0.7,),

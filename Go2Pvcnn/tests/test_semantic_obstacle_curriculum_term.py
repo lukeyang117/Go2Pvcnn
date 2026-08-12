@@ -313,6 +313,35 @@ def test_terrain_gate_accepts_slice_env_ids(monkeypatch) -> None:
     assert env.scene.terrain.terrain_levels.tolist() == [1, 1, 1, 1]
 
 
+def test_terrain_gate_excludes_named_terrain_from_level_updates(monkeypatch) -> None:
+    from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+
+    curriculums = _load_curriculums_module(monkeypatch)
+
+    cfg = SemanticObstacleCurriculumCfg(
+        plane_counts=(SemanticObstacleCount(0, 0), SemanticObstacleCount(1, 0)),
+        non_plane_counts=(SemanticObstacleCount(0, 0), SemanticObstacleCount(1, 0)),
+        center_safety_half_extent_m=(0.8, 0.4),
+        min_spacing_clearance_m=(0.2, 0.1),
+        tile_margin_m=(0.5, 0.4),
+    )
+    env = _Env(
+        terrain_types=torch.tensor([0, 1, 0, 1]),
+        small=_force(4),
+        large=_force(4),
+        cfg=_Cfg(cfg),
+    )
+
+    out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3], excluded_terrain_names=("flat",))
+
+    assert set(out) == {"mean_terrain_level"}
+    assert env.scene.terrain.terrain_levels.tolist() == [0, 1, 0, 1]
+    env_ids, move_up, move_down = env.scene.terrain.update_calls[-1]
+    assert env_ids.tolist() == [1, 3]
+    assert move_up.tolist() == [True, True]
+    assert move_down.tolist() == [False, False]
+
+
 def test_env_level_curriculum_base_contact_and_bad_orientation_force_flat_move_down(monkeypatch) -> None:
     from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
 

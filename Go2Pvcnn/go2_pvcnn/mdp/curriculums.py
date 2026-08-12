@@ -297,6 +297,7 @@ def terrain_levels_vel_semantic_plane_gate(
     env_ids: Sequence[int],
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     cfg_name: str = "semantic_obstacle_curriculum",
+    excluded_terrain_names: tuple[str, ...] = (),
 ) -> dict[str, torch.Tensor]:
     """Terrain curriculum with semantic collision gate applied only to flat env move-up."""
     device = torch.device(getattr(env, "device", "cpu"))
@@ -338,7 +339,20 @@ def terrain_levels_vel_semantic_plane_gate(
     flat_failure_move_down = torch.logical_or(base_contact, bad_orientation)
     move_down = torch.where(is_plane_env, torch.logical_or(terrain_move_down, flat_failure_move_down), terrain_move_down)
 
-    terrain.update_env_origins(env_ids_t, move_up, move_down)
+    if terrain_types is not None and len(terrain_names) > 0 and excluded_terrain_names:
+        active_all = torch.logical_not(
+            plane_env_mask_from_terrain(
+                torch.as_tensor(terrain_types, dtype=torch.long, device=device),
+                terrain_names,
+                tuple(str(name) for name in excluded_terrain_names),
+            ).to(device=device)
+        )
+        active = active_all[env_ids_t]
+        if bool(active.any().item()):
+            active_ids = env_ids_t[active]
+            terrain.update_env_origins(active_ids, move_up[active], move_down[active])
+    else:
+        terrain.update_env_origins(env_ids_t, move_up, move_down)
 
     return {
         "mean_terrain_level": torch.mean(terrain.terrain_levels.float()),
