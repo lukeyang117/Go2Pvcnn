@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Large Obstacles Distillation RL 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d7dde5;
+      --accent: #1f5f8b;
+      --soft: #eef5fa;
+      --code: #f5f7f9;
+      --warn: #fff7ed;
+      --warn-line: #d97706;
+    }
+    body {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 36px 24px 64px;
+      color: var(--ink);
+      background: #fff;
+      font: 16px/1.75 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    h1, h2, h3 { color: #163b59; line-height: 1.3; }
+    h1 { margin-bottom: 8px; font-size: 2rem; }
+    h2 { margin-top: 38px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    h3 { margin-top: 26px; }
+    .meta { color: var(--muted); margin-bottom: 28px; }
+    .note {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid var(--accent);
+      background: var(--soft);
+    }
+    .warn {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid var(--warn-line);
+      background: var(--warn);
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    code { padding: 1px 4px; background: var(--code); }
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.55;
+    }
+    table { width: 100%; margin: 14px 0 22px; border-collapse: collapse; }
+    th, td { padding: 9px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>Parallelism Large Obstacles Distillation RL 设计</h1>
+  <div class="meta">
+    日期：2026-08-14　
+    分支：<code>parallelism-large-obstacles-distillation-rl</code>　
+    目标 experiment：<code>parallelism_tracking_cross_large_complex_distillation</code>
+  </div>
+
+  <h2>1. 目标</h2>
+  <p>
+    在当前 <code>parallelism_tracking_cross_large_complex</code> teacher RL 任务基础上，
+    新建一个教师-学生蒸馏任务。teacher 网络使用完整 privileged 信息，包括 Parallelism
+    规划出的 reference trajectory；student 网络不输入 reference trajectory，只输入速度命令、
+    本体状态和高程/语义图，并学习 teacher 输出的 action。
+  </p>
+  <p>
+    训练完成后，部署或 play 时使用 student policy。student 不依赖
+    <code>parallelism_ref_joint_pos</code>、<code>parallelism_ref_joint_vel</code>、
+    <code>parallelism_ref_root_pos</code> 和 <code>parallelism_ref_root_rot</code> 作为策略输入。
+  </p>
+
+  <div class="note">
+    新任务只新增教师-学生配置和 student 网络；原来的
+    <code>parallelism_tracking_cross_large_complex</code> 继续作为 teacher/PPO 训练配置，不改变其行为。
+  </div>
+
+  <h2>2. RSL-RL 接口结论</h2>
+  <p>
+    当前环境中的 RSL-RL 已经有 <code>Distillation</code> 和 <code>StudentTeacher</code> 逻辑。
+    它的核心约定是：
+  </p>
+  <pre>student_obs = obs
+teacher_obs = extras["observations"]["teacher"]
+
+student_action = student(student_obs)
+teacher_action = teacher(teacher_obs)
+loss = MSE(student_action, teacher_action) 或 Huber(student_action, teacher_action)</pre>
+
+  <p>
+    但是当前 Go2Pvcnn teacher 使用的是项目内扩展的 <code>ActorCriticCNN</code>，而默认
+    <code>StudentTeacher</code> 是 MLP，不能直接加载现有 CNN teacher checkpoint。因此本设计不升级整套
+    RSL-RL，而是在项目内补齐 CNN 版本的 student-teacher 模块和 distillation 配置。
+  </p>
+
+  <div class="warn">
+    重要边界：不把 teacher 的 reference observation 暴露给 student。teacher 只在训练时产生监督 action；
+    环境执行的是 student action。
+  </div>
+
+  <h2>3. 文件结构</h2>
+  <table>
+    <thead><tr><th>文件</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td>
+        <td>新 RL 环境配置；继承 <code>ParallelismTrackingCrossLargeComplexEnvCfg</code>，只新增 student/teacher observation 分组。</td>
+      </tr>
+      <tr>
+        <td><code>rsl_rl/rsl_rl/modules/student_teacher_cnn.py</code></td>
+        <td>新增 CNN 版 student-teacher policy，支持 teacher 从现有 <code>ActorCriticCNN</code> actor 权重加载。</td>
+      </tr>
+      <tr>
+        <td><code>rsl_rl/rsl_rl/algorithms/distillation.py</code></td>
+        <td>如果项目内 RSL-RL 没有 distillation，则补齐与本地 site-packages 版本一致的轻量实现。</td>
+      </tr>
+      <tr>
+        <td><code>rsl_rl/rsl_rl/modules/__init__.py</code></td>
+        <td>导出 <code>StudentTeacherCNN</code>。</td>
+      </tr>
+      <tr>
+        <td><code>rsl_rl/rsl_rl/algorithms/__init__.py</code></td>
+        <td>导出 <code>Distillation</code>。</td>
+      </tr>
+      <tr>
+        <td><code>rsl_rl/rsl_rl/runners/on_policy_runner.py</code></td>
+        <td>如果当前项目内 runner 不支持 <code>algorithm.class_name = "Distillation"</code>，补齐 distillation 分支。</td>
+      </tr>
+      <tr>
+        <td><code>agent/train_cfg.py</code></td>
+        <td>新增 <code>parallelism_tracking_cross_large_complex_distillation</code> 训练配置。</td>
+      </tr>
+      <tr>
+        <td><code>scripts/train.py</code></td>
+        <td>新增 experiment 注册、teacher checkpoint 加载入口，以及 distillation observation flatten 逻辑。</td>
+      </tr>
+      <tr>
+        <td><code>scripts/play.py</code></td>
+        <td>支持加载 distillation checkpoint，并默认用 student 做 inference。</td>
+      </tr>
+      <tr>
+        <td><code>tracking/register_envs.py</code></td>
+        <td>注册 distillation 训练环境和 play 环境。</td>
+      </tr>
+      <tr>
+        <td><code>scripts/train_parallelism_large_obstacles_rl_headless_resume.sh</code></td>
+        <td>当前未跟踪的 resume 脚本纳入 git；它仍用于原 large/complex teacher RL，不改成 distillation。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. 配置继承关系</h2>
+  <pre>ParallelismTrackingFlatEnvCfg
+    ↓
+ParallelismTrackingSmallObstaclesEnvCfg
+    ↓
+ParallelismTrackingCrossLargeComplexEnvCfg
+    ↓
+ParallelismTrackingCrossLargeComplexDistillationEnvCfg
+    ↓
+ParallelismTrackingCrossLargeComplexDistillationEnvCfg_PLAY</pre>
+
+  <p>distillation 配置继承原 large/complex 配置，因此继续保留：</p>
+  <ul>
+    <li>small obstacle crossing terrain；</li>
+    <li>large obstacle lateral avoidance；</li>
+    <li>complex terrain，包括 rough、slope、boxes、stairs；</li>
+    <li>Parallelism reference manager；</li>
+    <li><code>parallelism_consecutive_standstill</code> termination；</li>
+    <li><code>parallelism_geometry_collision</code> reward/metric；</li>
+    <li>terrain curriculum 和 velocity curriculum。</li>
+  </ul>
+
+  <h2>5. Observation 分组</h2>
+  <h3>5.1 Teacher observation</h3>
+  <p>
+    teacher observation 等价于当前 large/complex PPO teacher 的 policy observation。
+    它包含 reference trajectory，用来让 teacher 产生高质量动作。
+  </p>
+  <table>
+    <thead><tr><th>组</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>teacher_elevation_semantic_map</code></td>
+        <td>高程/语义图，结构与当前 <code>policy_elevation_semantic_map</code> 一致。</td>
+      </tr>
+      <tr>
+        <td><code>teacher_state</code></td>
+        <td>本体状态、速度命令、历史 action，以及 <code>parallelism_ref_*</code> reference observation。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>5.2 Student observation</h3>
+  <p>
+    student observation 不能包含任何 reference trajectory。它保留 terrain 感知和机器人本体信息，
+    让学生能在没有 reference 的情况下根据速度和地形输出动作。
+  </p>
+  <table>
+    <thead><tr><th>组</th><th>保留</th><th>删除</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>student_elevation_semantic_map</code></td>
+        <td>高程/语义图</td>
+        <td>无</td>
+      </tr>
+      <tr>
+        <td><code>student_state</code></td>
+        <td>base velocity、projected gravity、joint pos、joint vel、previous actions、velocity command</td>
+        <td><code>parallelism_ref_joint_pos</code>、<code>parallelism_ref_joint_vel</code>、<code>parallelism_ref_root_pos</code>、<code>parallelism_ref_root_rot</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>6. 训练数据流</h2>
+  <pre>IsaacLab env observation
+  ↓
+flatten student groups
+  → obs
+  → 输入 student
+
+flatten teacher groups
+  → extras["observations"]["teacher"]
+  → 输入 frozen teacher
+
+student action
+  ↓
+env.step(student action)
+
+teacher action
+  ↓
+只用于 distillation loss，不直接控制机器人</pre>
+
+  <p>每个训练 step 的监督目标：</p>
+  <pre>teacher_action_t = Teacher(teacher_obs_t)
+student_action_t = Student(student_obs_t)
+loss_t = mean((student_action_t - teacher_action_t)^2)</pre>
+
+  <p>
+    初版采用 action-level behavior cloning，不引入 PPO reward 混合训练。这样可以明确判断学生是否能复刻 teacher。
+    后续若 student 已经接近 teacher，再考虑 PPO fine-tune。
+  </p>
+
+  <h2>7. StudentTeacherCNN 网络</h2>
+  <p><code>StudentTeacherCNN</code> 包含两个子网络：</p>
+  <ul>
+    <li><code>teacher</code>：CNN + MLP，输入完整 teacher obs，输出 12 维 action。</li>
+    <li><code>student</code>：CNN + MLP，输入去 reference 后的 student obs，输出 12 维 action。</li>
+  </ul>
+
+  <p>teacher 权重加载规则：</p>
+  <pre>如果 checkpoint 来自 PPO ActorCriticCNN:
+  读取 model_state_dict
+  取出 actor 相关权重
+  加载到 StudentTeacherCNN.teacher
+  不加载 critic
+  teacher.eval()
+  teacher.requires_grad_(False)
+
+如果 checkpoint 来自 distillation:
+  同时恢复 student 和 teacher
+  用于 resume distillation training</pre>
+
+  <p>student 初始化规则：</p>
+  <ul>
+    <li>新训练时随机初始化；</li>
+    <li>resume distillation 时从 checkpoint 恢复；</li>
+    <li>不从 teacher 强行拷贝前几层，因为 student 输入维度少于 teacher。</li>
+  </ul>
+
+  <h2>8. 训练配置</h2>
+  <p>新增 experiment：</p>
+  <pre>parallelism_tracking_cross_large_complex_distillation</pre>
+
+  <p>训练配置核心字段：</p>
+  <pre>{
+  "algorithm": {
+    "class_name": "Distillation",
+    "num_learning_epochs": 5,
+    "gradient_length": 15,
+    "learning_rate": 1e-3,
+    "loss_type": "mse"
+  },
+  "policy": {
+    "class_name": "StudentTeacherCNN",
+    "student_hidden_dims": [256, 128],
+    "teacher_hidden_dims": [256, 128],
+    "activation": "elu",
+    "cost_map_channels": 2,
+    "cost_map_size": 16
+  },
+  "obs_groups": {
+    "student": ["student_elevation_semantic_map", "student_state"],
+    "teacher": ["teacher_elevation_semantic_map", "teacher_state"]
+  }
+}</pre>
+
+  <p>
+    训练脚本新增显式参数 <code>--teacher_checkpoint</code>。它只用于加载 frozen teacher，不代表 resume student。
+    student 的 resume 仍然使用现有 <code>--resume</code>、<code>--load_run</code> 和
+    <code>--load_checkpoint</code>。
+  </p>
+
+  <h2>9. Play 设计</h2>
+  <p>play distillation checkpoint 时默认使用 student：</p>
+  <pre>load distillation checkpoint
+  ↓
+runner.get_inference_policy()
+  ↓
+返回 student.act_inference
+  ↓
+wrapper 只构造 student observation
+  ↓
+env.step(student action)</pre>
+
+  <p>
+    play 时可以继续创建 reference manager 和 reference robot 作为 debug 可视化，
+    但 reference trajectory 不进入 student policy 输入。
+  </p>
+
+  <h2>10. TensorBoard 指标</h2>
+  <table>
+    <thead><tr><th>指标</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>Loss/behavior</code></td><td>RSL-RL distillation 的平均行为克隆 loss。</td></tr>
+      <tr><td><code>Distillation/action_mse</code></td><td>student action 与 teacher action 的均方误差。</td></tr>
+      <tr><td><code>Distillation/action_l1</code></td><td>student action 与 teacher action 的平均绝对误差。</td></tr>
+      <tr><td><code>Distillation/action_error_max</code></td><td>单步最大 action 误差，用于发现局部动作崩坏。</td></tr>
+      <tr><td><code>Distillation/student_action_std</code></td><td>student 输出动作的 batch 标准差。</td></tr>
+      <tr><td><code>Distillation/teacher_action_std</code></td><td>teacher 输出动作的 batch 标准差。</td></tr>
+      <tr><td><code>Episode_Obstacle/reference_valid_ratio</code></td><td>Parallelism reference 有效率，判断 teacher 监督是否可靠。</td></tr>
+      <tr><td><code>Episode_Obstacle/standstill_ratio</code></td><td>规划器 standstill 占比，判断 teacher 数据质量。</td></tr>
+      <tr><td><code>Episode_Obstacle/geometry_collision_ratio</code></td><td>规划几何碰撞比例。</td></tr>
+      <tr><td><code>Curriculum/terrain_levels/mean_terrain_level</code></td><td>地形课程平均等级。</td></tr>
+      <tr><td><code>Curriculum/parallelism_velocity</code></td><td>速度课程等级。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>11. 错误处理</h2>
+  <ul>
+    <li>如果 <code>--teacher_checkpoint</code> 缺失，distillation 训练直接报错，不允许随机 teacher。</li>
+    <li>如果 teacher checkpoint 不是 PPO actor 或 distillation checkpoint，报错并打印缺失 key。</li>
+    <li>如果 teacher/student observation 维度为 0 或 action 维度不一致，初始化时报错。</li>
+    <li>如果 reference manager 生成 standstill，仍按当前环境逻辑处理；teacher 会对当前 observation 输出动作。</li>
+    <li>如果 student resume checkpoint 与当前 observation 维度不一致，报错，不自动跳过权重。</li>
+  </ul>
+
+  <h2>12. 测试要求</h2>
+  <table>
+    <thead><tr><th>测试</th><th>要求</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>静态配置测试</td>
+        <td>确认新 experiment 注册、继承 large/complex terrain、保留 termination/reward/curriculum。</td>
+      </tr>
+      <tr>
+        <td>observation 测试</td>
+        <td>确认 student obs 不含任何 <code>parallelism_ref_*</code>，teacher obs 含完整 reference。</td>
+      </tr>
+      <tr>
+        <td>checkpoint 加载测试</td>
+        <td>用已有 PPO <code>ActorCriticCNN</code> checkpoint 加载 teacher，确认 teacher loaded 且 frozen。</td>
+      </tr>
+      <tr>
+        <td>distillation smoke 测试</td>
+        <td>启动 1024 环境 headless，跑 4 iterations，确认 <code>Loss/behavior</code> 有输出且 iteration 增加。</td>
+      </tr>
+      <tr>
+        <td>play 测试</td>
+        <td>加载 distillation checkpoint，确认实际控制 action 来自 student，并且无需 reference observation 输入。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>13. 推荐执行顺序</h2>
+  <ol>
+    <li>补齐项目内 RSL-RL 的 distillation 支持。</li>
+    <li>新增 <code>StudentTeacherCNN</code>。</li>
+    <li>新增 distillation env cfg，继承 large/complex 配置。</li>
+    <li>修改 train wrapper，使 distillation 模式输出 student obs 和 teacher obs。</li>
+    <li>新增 teacher checkpoint 加载参数。</li>
+    <li>修改 play，使 distillation checkpoint 默认走 student inference。</li>
+    <li>补测试并运行 1024 环境 smoke。</li>
+  </ol>
+
+  <h2>14. 参考</h2>
+  <ul>
+    <li>本地 RSL-RL：<code>site-packages/rsl_rl/algorithms/distillation.py</code></li>
+    <li>本地 RSL-RL：<code>site-packages/rsl_rl/modules/student_teacher.py</code></li>
+    <li>当前项目 CNN policy：<code>Go2Pvcnn/rsl_rl/rsl_rl/modules/actor_critic_cnn.py</code></li>
+    <li>RSL-RL 官方仓库：<a href="https://github.com/leggedrobotics/rsl_rl">https://github.com/leggedrobotics/rsl_rl</a></li>
+    <li>RSL-RL 官方文档：<a href="https://leggedrobotics.github.io/rsl_rl/">https://leggedrobotics.github.io/rsl_rl/</a></li>
+  </ul>
+</body>
+</html>
