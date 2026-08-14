@@ -11,9 +11,9 @@ from collections import deque
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 import rsl_rl
-from rsl_rl.algorithms import PPO
+from rsl_rl.algorithms import PPO, Distillation
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticCNN, ActorCriticRecurrent, EmpiricalNormalization
+from rsl_rl.modules import ActorCritic, ActorCriticCNN, ActorCriticRecurrent, EmpiricalNormalization, StudentTeacherCNN
 from rsl_rl.utils import store_code_state
 
 
@@ -26,18 +26,32 @@ class OnPolicyRunner:
         self.policy_cfg = train_cfg["policy"]
         self.device = device
         self.env = env
+        if self.alg_cfg["class_name"] == "PPO":
+            self.training_type = "rl"
+        elif self.alg_cfg["class_name"] == "Distillation":
+            self.training_type = "distillation"
+        else:
+            raise ValueError(f"Unknown algorithm class: {self.alg_cfg['class_name']}")
+
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
-        if "critic" in extras["observations"]:
+        if self.training_type == "distillation":
+            if "teacher" not in extras["observations"]:
+                raise ValueError("Distillation training requires extras['observations']['teacher']")
+            num_critic_obs = extras["observations"]["teacher"].shape[1]
+            self.privileged_obs_type = "teacher"
+        elif "critic" in extras["observations"]:
             num_critic_obs = extras["observations"]["critic"].shape[1]
+            self.privileged_obs_type = "critic"
         else:
             num_critic_obs = num_obs
+            self.privileged_obs_type = None
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
         actor_critic: ActorCritic | ActorCriticRecurrent = actor_critic_class(
             num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+        self.alg: PPO | Distillation = alg_class(actor_critic, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"] #这个参数决定什么时候更新一次策略
         self.save_interval = self.cfg["save_interval"] #保存间隔的权重
         self.empirical_normalization = self.cfg["empirical_normalization"] #什么是经验归一化 ？维护Running Mean和Variance
@@ -48,13 +62,23 @@ class OnPolicyRunner:
             self.obs_normalizer = torch.nn.Identity()  # no normalization
             self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
         # init storage and model
-        self.alg.init_storage(
-            self.env.num_envs,
-            self.num_steps_per_env,
-            [num_obs],
-            [num_critic_obs],
-            [self.env.num_actions],
-        )
+        if self.training_type == "distillation":
+            self.alg.init_storage(
+                self.training_type,
+                self.env.num_envs,
+                self.num_steps_per_env,
+                [num_obs],
+                [num_critic_obs],
+                [self.env.num_actions],
+            )
+        else:
+            self.alg.init_storage(
+                self.env.num_envs,
+                self.num_steps_per_env,
+                [num_obs],
+                [num_critic_obs],
+                [self.env.num_actions],
+            )
 
         # Log
         self.log_dir = log_dir
@@ -111,7 +135,10 @@ class OnPolicyRunner:
         
         # 获取初始观测值
         obs, extras = self.env.get_observations()  # obs: (num_envs, obs_dim)
-        critic_obs = extras["observations"].get("critic", obs)  # critic观测（可能包含额外信息）
+        if self.training_type == "distillation":
+            critic_obs = extras["observations"].get("teacher", obs)
+        else:
+            critic_obs = extras["observations"].get("critic", obs)  # critic观测（可能包含额外信息）
         obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)  # 移动到GPU/CPU
         self.train_mode()  # 切换到训练模式（启用dropout、batchnorm训练行为等）
         
@@ -139,7 +166,10 @@ class OnPolicyRunner:
             with torch.inference_mode():  # 推理模式，不计算梯度（节省内存和计算）
                 for i in range(self.num_steps_per_env):  # 每个环境收集num_steps_per_env步数据
                     # 使用当前策略选择动作
-                    actions = self.alg.act(obs, critic_obs, env=self.env)  # (num_envs, action_dim)
+                    if self.training_type == "distillation":
+                        actions = self.alg.act(obs, critic_obs)
+                    else:
+                        actions = self.alg.act(obs, critic_obs, env=self.env)  # (num_envs, action_dim)
                     
                     # 执行动作，获取下一步观测、奖励、结束标志和额外信息
                     obs, rewards, dones, infos = self.env.step(actions)
@@ -148,7 +178,9 @@ class OnPolicyRunner:
                     obs = self.obs_normalizer(obs)
                     
                     # 获取critic观测值（可能包含特权信息，如真实状态）
-                    if "critic" in infos["observations"]:
+                    if self.training_type == "distillation" and "teacher" in infos["observations"]:
+                        critic_obs = self.critic_obs_normalizer(infos["observations"]["teacher"])
+                    elif "critic" in infos["observations"]:
                         critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
                     else:
                         critic_obs = obs  # 如果没有特权信息，使用普通观测
@@ -196,12 +228,19 @@ class OnPolicyRunner:
                 # 阶段2: 计算returns（优势函数和回报）
                 # ========================================
                 start = stop
-                self.alg.compute_returns(critic_obs)  # 使用GAE计算优势函数和回报值
+                if self.training_type == "rl":
+                    self.alg.compute_returns(critic_obs)  # 使用GAE计算优势函数和回报值
 
             # ========================================
             # 阶段3: 策略更新（PPO update）
             # ========================================
-            mean_value_loss, mean_surrogate_loss = self.alg.update()  # PPO策略更新
+            loss_dict = None
+            if self.training_type == "distillation":
+                loss_dict = self.alg.update()
+                mean_value_loss = 0.0
+                mean_surrogate_loss = float(loss_dict.get("behavior", 0.0))
+            else:
+                mean_value_loss, mean_surrogate_loss = self.alg.update()  # PPO策略更新
             stop = time.time()
             learn_time = stop - start  # 计算策略更新耗时
             
@@ -272,6 +311,9 @@ class OnPolicyRunner:
         self.writer.add_scalar("Loss/surrogate", locs["mean_surrogate_loss"], locs["it"])
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
+        if locs.get("loss_dict") is not None:
+            for key, value in locs["loss_dict"].items():
+                self.writer.add_scalar(f"Distillation/{key}", float(value), locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
@@ -371,6 +413,15 @@ class OnPolicyRunner:
         
         self.current_learning_iteration = loaded_dict["iter"]
         return loaded_dict["infos"]
+
+    def load_teacher(self, path, keep_std=True):
+        loaded_dict = torch.load(path)
+        state_dict = loaded_dict["model_state_dict"]
+        if not keep_std:
+            state_dict = dict(state_dict)
+            state_dict.pop("std", None)
+        self.alg.actor_critic.load_state_dict(state_dict, strict=False)
+        return loaded_dict.get("infos")
 
     def get_inference_policy(self, device=None):
         self.eval_mode()  # switch to evaluation mode (dropout for example)

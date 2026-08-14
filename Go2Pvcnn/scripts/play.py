@@ -689,6 +689,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "parallelism_tracking_small_obstacles",
             "parallelism_tracking_ladder",
             "parallelism_tracking_cross_large_complex",
+            "parallelism_tracking_cross_large_complex_distillation",
         ],
         help="Experiment/task to play.",
     )
@@ -1345,6 +1346,14 @@ def _make_env_wrapper(env, *, gym_module, vec_env_cls, tensor_dict_cls, clip_act
             return torch.cat(values, dim=-1)
 
         def _format_observations(self, obs_dict) -> tuple[torch.Tensor, dict]:
+            if "student_state" in obs_dict:
+                student_obs = self._flatten_group(
+                    obs_dict, ["student_elevation_semantic_map", "student_state"]
+                )
+                teacher_obs = self._flatten_group(
+                    obs_dict, ["teacher_elevation_semantic_map", "teacher_state"]
+                )
+                return student_obs, {"observations": {"teacher": teacher_obs}}
             policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
             critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
             return policy_obs, {"observations": {"critic": critic_obs}}
@@ -1436,6 +1445,9 @@ def main() -> int:
     from tracking.parallelism_cross_large_complex_env_cfg import (
         ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
     )
+    from tracking.parallelism_cross_large_complex_distillation_env_cfg import (
+        ParallelismTrackingCrossLargeComplexDistillationEnvCfg_PLAY,
+    )
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg_PLAY
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -1472,6 +1484,10 @@ def main() -> int:
             ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
             "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0",
         ),
+        "parallelism_tracking_cross_large_complex_distillation": (
+            ParallelismTrackingCrossLargeComplexDistillationEnvCfg_PLAY,
+            "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-Distillation-v0",
+        ),
     }
 
     experiment_name = args_cli.experiment
@@ -1505,7 +1521,13 @@ def main() -> int:
     )
     env_cfg.planner_backend = (
         "parallelism"
-        if experiment_name in ("parallelism_tracking_flat", "parallelism_tracking_small_obstacles", "parallelism_tracking_ladder")
+        if experiment_name in (
+            "parallelism_tracking_flat",
+            "parallelism_tracking_small_obstacles",
+            "parallelism_tracking_ladder",
+            "parallelism_tracking_cross_large_complex",
+            "parallelism_tracking_cross_large_complex_distillation",
+        )
         else str(args_cli.planner_backend)
     )
 
@@ -1550,6 +1572,7 @@ def main() -> int:
         "parallelism_tracking_small_obstacles",
         "parallelism_tracking_ladder",
         "parallelism_tracking_cross_large_complex",
+        "parallelism_tracking_cross_large_complex_distillation",
     )
     parallelism_panel_state = None
     parallelism_manager = None

@@ -133,6 +133,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--load_run", type=str, default=None, help="Name of run to load when resuming.")
     parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
     parser.add_argument(
+        "--teacher_checkpoint",
+        type=str,
+        default=None,
+        help="PPO teacher checkpoint used for distillation training.",
+    )
+    parser.add_argument(
         "--keep_std",
         action="store_true",
         default=False,
@@ -155,6 +161,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "parallelism_tracking_small_obstacles",
             "parallelism_tracking_ladder",
             "parallelism_tracking_cross_large_complex",
+            "parallelism_tracking_cross_large_complex_distillation",
         ],
         help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
     )
@@ -495,6 +502,9 @@ def main() -> int:
     )
     from tracking.parallelism_ladder_env_cfg import ParallelismTrackingLadderEnvCfg
     from tracking.parallelism_cross_large_complex_env_cfg import ParallelismTrackingCrossLargeComplexEnvCfg
+    from tracking.parallelism_cross_large_complex_distillation_env_cfg import (
+        ParallelismTrackingCrossLargeComplexDistillationEnvCfg,
+    )
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
@@ -585,6 +595,10 @@ def main() -> int:
         "parallelism_tracking_cross_large_complex": (
             ParallelismTrackingCrossLargeComplexEnvCfg,
             "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0",
+        ),
+        "parallelism_tracking_cross_large_complex_distillation": (
+            ParallelismTrackingCrossLargeComplexDistillationEnvCfg,
+            "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-Distillation-v0",
         ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]
@@ -712,6 +726,14 @@ def main() -> int:
             return torch.cat(values, dim=-1)
 
         def _format_observations(self, obs_dict) -> tuple[torch.Tensor, dict]:
+            if "student_state" in obs_dict:
+                student_obs = self._flatten_group(
+                    obs_dict, ["student_elevation_semantic_map", "student_state"]
+                )
+                teacher_obs = self._flatten_group(
+                    obs_dict, ["teacher_elevation_semantic_map", "teacher_state"]
+                )
+                return student_obs, {"observations": {"teacher": teacher_obs}}
             policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
             critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
             return policy_obs, {"observations": {"critic": critic_obs}}
@@ -821,7 +843,30 @@ def main() -> int:
     # ========================================
     # Resume from Checkpoint (if specified)
     # ========================================
-    if args_cli.resume:
+    if experiment_name == "parallelism_tracking_cross_large_complex_distillation":
+        if args_cli.resume:
+            print(f"\n[Resume] Loading distillation checkpoint...")
+            if args_cli.load_run is not None:
+                resume_path = os.path.join(log_root_path, args_cli.load_run)
+            else:
+                resume_path = find_latest_run_dir(log_root_path)
+            if resume_path is None:
+                raise ValueError("No distillation run found to resume from!")
+            checkpoint_file = args_cli.load_checkpoint if args_cli.load_checkpoint is not None else "model_最新.pt"
+            checkpoint_path = os.path.join(resume_path, checkpoint_file)
+            if not os.path.exists(checkpoint_path):
+                raise FileNotFoundError(f"Distillation checkpoint not found: {checkpoint_path}")
+            runner.load(checkpoint_path, keep_std=args_cli.keep_std)
+            print(f"[Resume] Distillation checkpoint loaded: {checkpoint_path}")
+        elif args_cli.teacher_checkpoint is None:
+            raise ValueError("Distillation training requires --teacher_checkpoint.")
+        else:
+            teacher_checkpoint = os.path.abspath(args_cli.teacher_checkpoint)
+            if not os.path.isfile(teacher_checkpoint):
+                raise FileNotFoundError(f"Teacher checkpoint not found: {teacher_checkpoint}")
+            runner.load_teacher(teacher_checkpoint, keep_std=True)
+            print(f"[Distillation] Loaded frozen teacher checkpoint: {teacher_checkpoint}")
+    elif args_cli.resume:
         print(f"\n[Resume] Loading checkpoint...")
         
         if args_cli.load_run is not None:

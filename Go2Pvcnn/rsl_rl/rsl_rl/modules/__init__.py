@@ -7,5 +7,6 @@ from .actor_critic import ActorCritic
 from .actor_critic_cnn import ActorCriticCNN
 from .actor_critic_recurrent import ActorCriticRecurrent
 from .normalizer import EmpiricalNormalization
+from .student_teacher_cnn import StudentTeacherCNN
 
-__all__ = ["ActorCritic", "ActorCriticCNN", "ActorCriticRecurrent"]
+__all__ = ["ActorCritic", "ActorCriticCNN", "ActorCriticRecurrent", "StudentTeacherCNN"]

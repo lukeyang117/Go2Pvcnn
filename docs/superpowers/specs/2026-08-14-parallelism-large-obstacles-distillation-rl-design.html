@@ -196,7 +196,7 @@ ParallelismTrackingCrossLargeComplexDistillationEnvCfg_PLAY</pre>
       </tr>
       <tr>
         <td><code>teacher_state</code></td>
-        <td>本体状态、速度命令、历史 action，以及 <code>parallelism_ref_*</code> reference observation。</td>
+        <td>本体状态、历史 action，以及 <code>parallelism_ref_*</code> reference observation；不额外加入 <code>velocity_commands</code>，以兼容已有 PPO teacher checkpoint 的输入维度。</td>
       </tr>
     </tbody>
   </table>

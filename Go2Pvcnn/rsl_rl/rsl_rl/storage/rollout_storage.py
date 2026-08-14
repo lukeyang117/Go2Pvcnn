@@ -22,6 +22,7 @@ class RolloutStorage:
             self.action_mean = None
             self.action_sigma = None
             self.hidden_states = None
+            self.privileged_actions = None
             # For PVCNN semantic supervision
             self.point_cloud = None
             self.semantic_labels = None
@@ -49,6 +50,9 @@ class RolloutStorage:
             self.privileged_observations = None
         self.rewards = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
+        self.privileged_actions = torch.zeros(
+            num_transitions_per_env, num_envs, *actions_shape, device=self.device
+        )
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
 
         # For PPO
@@ -78,14 +82,23 @@ class RolloutStorage:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
         if self.privileged_observations is not None:
-            self.privileged_observations[self.step].copy_(transition.critic_observations)
+            privileged_obs = transition.critic_observations
+            if privileged_obs is None:
+                privileged_obs = getattr(transition, "privileged_observations", None)
+            self.privileged_observations[self.step].copy_(privileged_obs)
         self.actions[self.step].copy_(transition.actions)
+        if transition.privileged_actions is not None:
+            self.privileged_actions[self.step].copy_(transition.privileged_actions)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
-        self.values[self.step].copy_(transition.values)
-        self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
-        self.mu[self.step].copy_(transition.action_mean)
-        self.sigma[self.step].copy_(transition.action_sigma)
+        if transition.values is not None:
+            self.values[self.step].copy_(transition.values)
+        if transition.actions_log_prob is not None:
+            self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
+        if transition.action_mean is not None:
+            self.mu[self.step].copy_(transition.action_mean)
+        if transition.action_sigma is not None:
+            self.sigma[self.step].copy_(transition.action_sigma)
         self._save_hidden_states(transition.hidden_states)
         
         # Store point cloud and semantic labels if available
@@ -216,6 +229,32 @@ class RolloutStorage:
                     None,
                     None,
                 ), None, point_cloud_batch, semantic_labels_batch
+
+    def distillation_generator(self, num_mini_batches, num_epochs=1):
+        observations = self.observations.flatten(0, 1)
+        if self.privileged_observations is not None:
+            privileged_observations = self.privileged_observations.flatten(0, 1)
+        else:
+            privileged_observations = observations
+        actions = self.actions.flatten(0, 1)
+        privileged_actions = self.privileged_actions.flatten(0, 1)
+        dones = self.dones.flatten(0, 1)
+        batch_size = observations.shape[0]
+        mini_batch_size = max(1, batch_size // num_mini_batches)
+        indices = torch.randperm(batch_size, requires_grad=False, device=self.device)
+
+        for _ in range(num_epochs):
+            for i in range(num_mini_batches):
+                start = i * mini_batch_size
+                end = min((i + 1) * mini_batch_size, batch_size)
+                batch_idx = indices[start:end]
+                yield (
+                    observations[batch_idx],
+                    privileged_observations[batch_idx],
+                    actions[batch_idx],
+                    privileged_actions[batch_idx],
+                    dones[batch_idx],
+                )
 
     # for RNNs only
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
