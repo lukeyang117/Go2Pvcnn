@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_distillation_env_cfg_static_contract():
-    source = Path("tracking/parallelism_cross_large_complex_distillation_env_cfg.py").read_text()
+    source = Path("Go2Pvcnn/tracking/parallelism_cross_large_complex_distillation_env_cfg.py").read_text()
 
     assert "ParallelismTrackingCrossLargeComplexEnvCfg" in source
     assert "parallelism_tracking_cross_large_complex_distillation" in source
@@ -20,17 +20,20 @@ def test_distillation_env_cfg_static_contract():
 def test_distillation_experiment_registered_static():
     expected = "parallelism_tracking_cross_large_complex_distillation"
 
-    assert expected in Path("tracking/register_envs.py").read_text()
-    assert expected in Path("scripts/train.py").read_text()
-    assert expected in Path("scripts/play.py").read_text()
-    assert expected in Path("agent/train_cfg.py").read_text()
+    assert expected in Path("Go2Pvcnn/tracking/register_envs.py").read_text()
+    assert expected in Path("Go2Pvcnn/scripts/train.py").read_text()
+    assert expected in Path("Go2Pvcnn/scripts/play.py").read_text()
+    assert expected in Path("Go2Pvcnn/agent/train_cfg.py").read_text()
 
 
 def test_distillation_train_cfg_static():
-    tree = ast.parse(Path("agent/train_cfg.py").read_text())
+    tree = ast.parse(Path("Go2Pvcnn/agent/train_cfg.py").read_text())
     source = ast.unparse(tree)
 
     assert "Distillation" in source
     assert "StudentTeacherCNN" in source
     assert "student_elevation_semantic_map" in source
     assert "teacher_elevation_semantic_map" in source
+    assert "teacher_ratio_warmup_pct" in source
+    assert "teacher_ratio_decay_end_pct" in source
+    assert "teacher_ratio_min" in source

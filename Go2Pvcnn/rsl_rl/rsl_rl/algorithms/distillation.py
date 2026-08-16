@@ -21,6 +21,9 @@ class Distillation:
         gradient_length=15,
         learning_rate=1e-3,
         loss_type="mse",
+        teacher_ratio_warmup_pct=0.10,
+        teacher_ratio_decay_end_pct=0.80,
+        teacher_ratio_min=0.0,
         device="cpu",
         multi_gpu_cfg: dict | None = None,
     ):
@@ -46,6 +49,13 @@ class Distillation:
         self.num_mini_batches = num_mini_batches
         self.gradient_length = gradient_length
         self.learning_rate = learning_rate
+        self.teacher_ratio_warmup_pct = float(teacher_ratio_warmup_pct)
+        self.teacher_ratio_decay_end_pct = float(teacher_ratio_decay_end_pct)
+        self.teacher_ratio_min = float(teacher_ratio_min)
+        self.current_iteration = 0
+        self.total_iterations = 1
+        self.last_teacher_ratio = 1.0
+        self.last_teacher_action_share = 1.0
 
         if loss_type == "mse":
             self.loss_fn = nn.functional.mse_loss
@@ -66,12 +76,37 @@ class Distillation:
             self.device,
         )
 
+    def set_iteration(self, iteration: int, total_iterations: int) -> None:
+        self.current_iteration = max(int(iteration), 0)
+        self.total_iterations = max(int(total_iterations), 1)
+
+    def _compute_teacher_ratio(self) -> float:
+        progress = float(self.current_iteration) / float(self.total_iterations)
+        progress = min(max(progress, 0.0), 1.0)
+        warmup = min(max(self.teacher_ratio_warmup_pct, 0.0), 1.0)
+        decay_end = min(max(self.teacher_ratio_decay_end_pct, warmup), 1.0)
+        min_ratio = min(max(self.teacher_ratio_min, 0.0), 1.0)
+        if progress < warmup:
+            return 1.0
+        if progress < decay_end:
+            span = max(decay_end - warmup, 1.0e-6)
+            ratio = 1.0 - (progress - warmup) / span
+            return max(min_ratio, min(1.0, ratio))
+        return min_ratio
+
     def act(self, obs, teacher_obs):
-        self.transition.actions = self.policy.act(obs).detach()
-        self.transition.privileged_actions = self.policy.evaluate(teacher_obs).detach()
+        student_action = self.policy.act_inference(obs).detach()
+        teacher_action = self.policy.evaluate(teacher_obs).detach()
+        teacher_ratio = self._compute_teacher_ratio()
+        mask = torch.rand((obs.shape[0], 1), device=obs.device) < teacher_ratio
+        env_action = torch.where(mask, teacher_action, student_action)
+        self.transition.actions = env_action.detach()
+        self.transition.privileged_actions = teacher_action
         self.transition.observations = obs
         self.transition.critic_observations = teacher_obs
-        return self.transition.actions
+        self.last_teacher_ratio = float(teacher_ratio)
+        self.last_teacher_action_share = float(mask.float().mean().item())
+        return env_action
 
     def process_env_step(self, rewards, dones, infos):
         self.transition.rewards = rewards
@@ -137,6 +172,8 @@ class Distillation:
             "action_mse": mean_behavior_loss,
             "action_l1": mean_action_l1,
             "action_error_max": mean_action_max,
+            "teacher_ratio": self.last_teacher_ratio,
+            "teacher_action_share": self.last_teacher_action_share,
         }
 
     def broadcast_parameters(self):

@@ -34,6 +34,9 @@ def _parallelism_distillation_train_cfg() -> dict:
             "gradient_length": 1,
             "learning_rate": 1e-3,
             "loss_type": "mse",
+            "teacher_ratio_warmup_pct": 0.10,
+            "teacher_ratio_decay_end_pct": 0.80,
+            "teacher_ratio_min": 0.0,
         },
         "policy": {
             "class_name": "StudentTeacherCNN",
