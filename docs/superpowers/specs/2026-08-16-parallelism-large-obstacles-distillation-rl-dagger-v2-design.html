@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Distillation DAgger V2 设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d7dde5;
+      --accent: #1f5f8b;
+      --soft: #eef5fa;
+      --code: #f5f7f9;
+      --warn: #fff7ed;
+      --warn-line: #d97706;
+    }
+    body {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 36px 24px 64px;
+      color: var(--ink);
+      background: #fff;
+      font: 16px/1.75 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    h1, h2, h3 { color: #163b59; line-height: 1.3; }
+    h1 { margin-bottom: 8px; font-size: 2rem; }
+    h2 { margin-top: 38px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    h3 { margin-top: 26px; }
+    .meta { color: var(--muted); margin-bottom: 28px; }
+    .note, .warn {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid var(--accent);
+      background: var(--soft);
+    }
+    .warn { border-left-color: var(--warn-line); background: var(--warn); }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { padding: 1px 4px; background: var(--code); }
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      line-height: 1.55;
+    }
+    table { width: 100%; margin: 14px 0 22px; border-collapse: collapse; }
+    th, td { padding: 9px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>Parallelism Distillation DAgger V2 设计</h1>
+  <div class="meta">
+    日期：2026-08-16　
+    分支：<code>parallelism-large-obstacles-distillation-rl</code>　
+    目标 experiment：<code>parallelism_tracking_cross_large_complex_distillation</code>
+  </div>
+
+  <h2>1. 目标</h2>
+  <p>
+    在不影响原 <code>parallelism_tracking_cross_large_complex</code> PPO 训练的前提下，
+    给蒸馏实验加一个更保守的 DAgger 风格 teacher ratio 课程。前期完全由 teacher 控制，
+    中期 teacher/student 混合，后期再切到 student。
+  </p>
+  <div class="note">
+    这是一版单独的新设计，不修改旧的 distillation spec。
+  </div>
+
+  <h2>2. 核心决策</h2>
+  <ul>
+    <li>不使用 action std。</li>
+    <li>不引入 PPO 梯度。</li>
+    <li>teacher 只提供监督标签。</li>
+    <li>环境执行 action 由 teacher/student 按比例切换。</li>
+    <li>teacher_ratio 只从命令行参数的 <code>max_iterations</code> 和当前 <code>iteration</code> 计算。</li>
+  </ul>
+
+  <h2>3. teacher_ratio 课程</h2>
+  <p>
+    这版比旧设计更保守，衰减更慢。推荐：
+  </p>
+  <pre>progress = iteration / max_iterations
+if progress < warmup_pct:
+    teacher_ratio = 1.0
+elif progress < decay_end_pct:
+    teacher_ratio = 1.0 - (progress - warmup_pct) / (decay_end_pct - warmup_pct)
+else:
+    teacher_ratio = teacher_ratio_min</pre>
+
+  <table>
+    <thead><tr><th>参数</th><th>值</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>warmup_pct</code></td><td>0.10</td><td>前 10% iteration 全 teacher。</td></tr>
+      <tr><td><code>decay_end_pct</code></td><td>0.80</td><td>从 10% 线性衰减到 80%，更慢让 student 接管。</td></tr>
+      <tr><td><code>teacher_ratio_min</code></td><td>0.0</td><td>80% 之后完全 student。</td></tr>
+    </tbody>
+  </table>
+
+  <p>环境执行策略：</p>
+  <pre>mask = rand(num_envs) < teacher_ratio
+env_action = where(mask, teacher_action, student_action)
+target_action = teacher_action</pre>
+
+  <p>
+    不采用 <code>teacher_action</code> 与 <code>student_action</code> 的数值线性平均，
+    因为那会破坏摆腿节奏和落脚时序。
+  </p>
+
+  <h2>4. 文件边界</h2>
+  <table>
+    <thead><tr><th>文件</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent/train_cfg.py</code></td><td>仅为 distillation experiment 增加 teacher_ratio schedule 配置。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/algorithms/distillation.py</code></td><td>读取 teacher_ratio，决定环境执行 teacher 还是 student action。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/modules/student_teacher_cnn.py</code></td><td>保留 CNN teacher/student 结构，不改 PPO 代码路径。</td></tr>
+      <tr><td><code>scripts/train.py</code></td><td>只在 distillation experiment 中读取 teacher checkpoint 和 schedule。</td></tr>
+      <tr><td><code>scripts/play.py</code></td><td>继续只用 student 做 inference。</td></tr>
+      <tr><td><code>tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>只承载蒸馏 observation 分组，不影响原 PPO 环境。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. 风险控制</h2>
+  <ul>
+    <li>teacher_ratio 衰减慢，可以减少学生过早接管导致的短 episode。</li>
+    <li>原 PPO 训练路径不读取 teacher_ratio，因此不会被污染。</li>
+    <li>若后续要接 PPO 梯度，可以在蒸馏 experiment 内单独扩展，不影响旧实验。</li>
+  </ul>
+
+  <h2>6. 测试要求</h2>
+  <ul>
+    <li>静态测试：确认新 schedule 字段出现在 distillation 配置中。</li>
+    <li>训练 smoke：1024 环境跑 4 iteration，确认 teacher_ratio 被写入 TensorBoard。</li>
+    <li>兼容性：原 PPO experiment 配置和命令行参数不变。</li>
+  </ul>
+</body>
+</html>
