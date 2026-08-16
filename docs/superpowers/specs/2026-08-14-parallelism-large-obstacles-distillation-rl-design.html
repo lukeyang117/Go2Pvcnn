@@ -251,46 +251,7 @@ loss_t = mean((student_action_t - teacher_action_t)^2)</pre>
     后续若 student 已经接近 teacher，再考虑 PPO fine-tune。
   </p>
 
-  <h2>7. teacher_ratio 课程</h2>
-  <p>
-    蒸馏训练不使用 action std，也不使用 PPO 梯度。环境中执行的 action 由
-    <code>teacher_action</code> 和 <code>student_action</code> 按 <code>teacher_ratio</code>
-    决定。<code>teacher_ratio</code> 只从命令行传入的 <code>max_iterations</code> 和当前
-    <code>iteration</code> 计算，不依赖 reward、loss 或 episode length。
-  </p>
-
-  <pre>progress = iteration / max_iterations
-if progress &lt; warmup_pct:
-    teacher_ratio = 1.0
-elif progress &lt; decay_end_pct:
-    teacher_ratio = 1.0 - (progress - warmup_pct) / (decay_end_pct - warmup_pct)
-else:
-    teacher_ratio = teacher_ratio_min</pre>
-
-  <p>推荐的默认 schedule：</p>
-  <ul>
-    <li><code>warmup_pct = 0.10</code>：前 10% iteration 全 teacher。</li>
-    <li><code>decay_end_pct = 0.40</code>：10% 到 40% 线性衰减到 student。</li>
-    <li><code>teacher_ratio_min = 0.0</code>：40% 之后完全 student。</li>
-  </ul>
-
-  <p>环境执行策略：</p>
-  <pre>mask = rand(num_envs) &lt; teacher_ratio
-env_action = where(mask, teacher_action, student_action)
-target_action = teacher_action</pre>
-
-  <p>
-    这样做的目的不是让动作做数值平均，而是让环境逐步从 teacher 分布平滑过渡到 student 分布。
-    由于关节动作直接线性混合可能破坏摆腿与落脚时序，所以不采用
-    <code>ratio * teacher + (1-ratio) * student</code>。
-  </p>
-
-  <div class="note">
-    <code>teacher_ratio</code> 只在 distillation experiment 生效；原 PPO 训练不读取这个参数，
-    也不修改 <code>parallelism_tracking_cross_large_complex</code> 的行为。
-  </div>
-
-  <h2>8. StudentTeacherCNN 网络</h2>
+  <h2>7. StudentTeacherCNN 网络</h2>
   <p><code>StudentTeacherCNN</code> 包含两个子网络：</p>
   <ul>
     <li><code>teacher</code>：CNN + MLP，输入完整 teacher obs，输出 12 维 action。</li>
@@ -317,7 +278,7 @@ target_action = teacher_action</pre>
     <li>不从 teacher 强行拷贝前几层，因为 student 输入维度少于 teacher。</li>
   </ul>
 
-  <h2>9. 训练配置</h2>
+  <h2>8. 训练配置</h2>
   <p>新增 experiment：</p>
   <pre>parallelism_tracking_cross_large_complex_distillation</pre>
 
@@ -341,11 +302,6 @@ target_action = teacher_action</pre>
   "obs_groups": {
     "student": ["student_elevation_semantic_map", "student_state"],
     "teacher": ["teacher_elevation_semantic_map", "teacher_state"]
-  },
-  "teacher_ratio_schedule": {
-    "warmup_pct": 0.10,
-    "decay_end_pct": 0.40,
-    "teacher_ratio_min": 0.0
   }
 }</pre>
 
@@ -355,7 +311,7 @@ target_action = teacher_action</pre>
     <code>--load_checkpoint</code>。
   </p>
 
-  <h2>10. Play 设计</h2>
+  <h2>9. Play 设计</h2>
   <p>play distillation checkpoint 时默认使用 student：</p>
   <pre>load distillation checkpoint
   ↓
@@ -372,7 +328,7 @@ env.step(student action)</pre>
     但 reference trajectory 不进入 student policy 输入。
   </p>
 
-  <h2>11. TensorBoard 指标</h2>
+  <h2>10. TensorBoard 指标</h2>
   <table>
     <thead><tr><th>指标</th><th>含义</th></tr></thead>
     <tbody>
@@ -380,8 +336,8 @@ env.step(student action)</pre>
       <tr><td><code>Distillation/action_mse</code></td><td>student action 与 teacher action 的均方误差。</td></tr>
       <tr><td><code>Distillation/action_l1</code></td><td>student action 与 teacher action 的平均绝对误差。</td></tr>
       <tr><td><code>Distillation/action_error_max</code></td><td>单步最大 action 误差，用于发现局部动作崩坏。</td></tr>
-      <tr><td><code>Distillation/teacher_ratio</code></td><td>当前 iteration 下 teacher action 在环境执行中的占比。</td></tr>
-      <tr><td><code>Distillation/teacher_action_share</code></td><td>实际被采样到的 teacher 动作比例，和 schedule 的随机结果一致。</td></tr>
+      <tr><td><code>Distillation/student_action_std</code></td><td>student 输出动作的 batch 标准差。</td></tr>
+      <tr><td><code>Distillation/teacher_action_std</code></td><td>teacher 输出动作的 batch 标准差。</td></tr>
       <tr><td><code>Episode_Obstacle/reference_valid_ratio</code></td><td>Parallelism reference 有效率，判断 teacher 监督是否可靠。</td></tr>
       <tr><td><code>Episode_Obstacle/standstill_ratio</code></td><td>规划器 standstill 占比，判断 teacher 数据质量。</td></tr>
       <tr><td><code>Episode_Obstacle/geometry_collision_ratio</code></td><td>规划几何碰撞比例。</td></tr>
@@ -390,7 +346,7 @@ env.step(student action)</pre>
     </tbody>
   </table>
 
-  <h2>12. 错误处理</h2>
+  <h2>11. 错误处理</h2>
   <ul>
     <li>如果 <code>--teacher_checkpoint</code> 缺失，distillation 训练直接报错，不允许随机 teacher。</li>
     <li>如果 teacher checkpoint 不是 PPO actor 或 distillation checkpoint，报错并打印缺失 key。</li>
@@ -399,7 +355,7 @@ env.step(student action)</pre>
     <li>如果 student resume checkpoint 与当前 observation 维度不一致，报错，不自动跳过权重。</li>
   </ul>
 
-  <h2>13. 测试要求</h2>
+  <h2>12. 测试要求</h2>
   <table>
     <thead><tr><th>测试</th><th>要求</th></tr></thead>
     <tbody>
@@ -426,7 +382,7 @@ env.step(student action)</pre>
     </tbody>
   </table>
 
-  <h2>14. 推荐执行顺序</h2>
+  <h2>13. 推荐执行顺序</h2>
   <ol>
     <li>补齐项目内 RSL-RL 的 distillation 支持。</li>
     <li>新增 <code>StudentTeacherCNN</code>。</li>
@@ -437,7 +393,7 @@ env.step(student action)</pre>
     <li>补测试并运行 1024 环境 smoke。</li>
   </ol>
 
-  <h2>15. 参考</h2>
+  <h2>14. 参考</h2>
   <ul>
     <li>本地 RSL-RL：<code>site-packages/rsl_rl/algorithms/distillation.py</code></li>
     <li>本地 RSL-RL：<code>site-packages/rsl_rl/modules/student_teacher.py</code></li>
