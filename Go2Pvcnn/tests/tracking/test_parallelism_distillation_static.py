@@ -80,7 +80,50 @@ def test_distillation_teacher_ratio_schedule():
     assert alg._compute_teacher_ratio() == 1.0
     alg.set_iteration(45, 100)
     assert alg._compute_teacher_ratio() == 0.5
+    assert alg._compute_env_teacher_ratio() == 0.5
     alg.set_iteration(80, 100)
     assert alg._compute_teacher_ratio() == 0.0
     alg.set_iteration(100, 100)
     assert alg._compute_teacher_ratio() == 0.0
+
+
+def test_distillation_student_action_waits_for_start_ratio():
+    from rsl_rl.algorithms import Distillation
+    from rsl_rl.modules import StudentTeacherCNN
+
+    policy = StudentTeacherCNN(
+        num_student_obs=560,
+        num_teacher_obs=620,
+        num_actions=12,
+        cost_map_channels=2,
+        cost_map_size=16,
+        actor_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        student_hidden_dims=[16],
+        teacher_hidden_dims=[16],
+        activation="elu",
+    )
+    alg = Distillation(
+        policy,
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        gradient_length=1,
+        learning_rate=1e-3,
+        loss_type="mse",
+        device="cpu",
+        teacher_ratio_warmup_pct=0.10,
+        teacher_ratio_decay_end_pct=0.80,
+        teacher_ratio_min=0.0,
+        student_action_start_ratio=0.30,
+    )
+
+    alg.set_iteration(20, 100)
+    assert alg._compute_teacher_ratio() > 0.70
+    assert alg._compute_env_teacher_ratio() == 1.0
+    alg.set_iteration(32, 100)
+    assert alg._compute_teacher_ratio() <= 0.70
+    assert alg._compute_env_teacher_ratio() == alg._compute_teacher_ratio()

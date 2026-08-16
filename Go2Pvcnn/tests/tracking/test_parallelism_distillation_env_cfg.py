@@ -9,6 +9,7 @@ def test_distillation_env_cfg_static_contract():
     assert "parallelism_tracking_cross_large_complex_distillation" in source
     assert "parallelism_consecutive_standstill" in source
     assert "parallelism_geometry_collision" in source
+    assert "ParallelismTrackingObservationsCfg.PolicyStateCfg" in source
     assert "student_state" in source
     assert "teacher_state" in source
     assert "parallelism_ref_joint_pos = None" in source
@@ -37,3 +38,4 @@ def test_distillation_train_cfg_static():
     assert "teacher_ratio_warmup_pct" in source
     assert "teacher_ratio_decay_end_pct" in source
     assert "teacher_ratio_min" in source
+    assert "student_action_start_ratio" in source

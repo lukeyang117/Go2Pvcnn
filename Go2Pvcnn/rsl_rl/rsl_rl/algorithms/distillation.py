@@ -24,6 +24,7 @@ class Distillation:
         teacher_ratio_warmup_pct=0.10,
         teacher_ratio_decay_end_pct=0.80,
         teacher_ratio_min=0.0,
+        student_action_start_ratio=0.30,
         device="cpu",
         multi_gpu_cfg: dict | None = None,
     ):
@@ -52,9 +53,11 @@ class Distillation:
         self.teacher_ratio_warmup_pct = float(teacher_ratio_warmup_pct)
         self.teacher_ratio_decay_end_pct = float(teacher_ratio_decay_end_pct)
         self.teacher_ratio_min = float(teacher_ratio_min)
+        self.student_action_start_ratio = float(student_action_start_ratio)
         self.current_iteration = 0
         self.total_iterations = 1
         self.last_teacher_ratio = 1.0
+        self.last_teacher_ratio_schedule = 1.0
         self.last_teacher_action_share = 1.0
 
         if loss_type == "mse":
@@ -94,17 +97,27 @@ class Distillation:
             return max(min_ratio, min(1.0, ratio))
         return min_ratio
 
+    def _compute_env_teacher_ratio(self) -> float:
+        scheduled_ratio = self._compute_teacher_ratio()
+        student_ratio = 1.0 - scheduled_ratio
+        start_ratio = min(max(self.student_action_start_ratio, 0.0), 1.0)
+        if student_ratio < start_ratio:
+            return 1.0
+        return scheduled_ratio
+
     def act(self, obs, teacher_obs):
         student_action = self.policy.act_inference(obs).detach()
         teacher_action = self.policy.evaluate(teacher_obs).detach()
-        teacher_ratio = self._compute_teacher_ratio()
-        mask = torch.rand((obs.shape[0], 1), device=obs.device) < teacher_ratio
+        scheduled_teacher_ratio = self._compute_teacher_ratio()
+        env_teacher_ratio = self._compute_env_teacher_ratio()
+        mask = torch.rand((obs.shape[0], 1), device=obs.device) < env_teacher_ratio
         env_action = torch.where(mask, teacher_action, student_action)
         self.transition.actions = env_action.detach()
         self.transition.privileged_actions = teacher_action
         self.transition.observations = obs
         self.transition.critic_observations = teacher_obs
-        self.last_teacher_ratio = float(teacher_ratio)
+        self.last_teacher_ratio = float(env_teacher_ratio)
+        self.last_teacher_ratio_schedule = float(scheduled_teacher_ratio)
         self.last_teacher_action_share = float(mask.float().mean().item())
         return env_action
 
@@ -173,6 +186,7 @@ class Distillation:
             "action_l1": mean_action_l1,
             "action_error_max": mean_action_max,
             "teacher_ratio": self.last_teacher_ratio,
+            "teacher_ratio_schedule": self.last_teacher_ratio_schedule,
             "teacher_action_share": self.last_teacher_action_share,
         }
 

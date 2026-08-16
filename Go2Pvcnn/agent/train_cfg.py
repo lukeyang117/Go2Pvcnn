@@ -37,6 +37,7 @@ def _parallelism_distillation_train_cfg() -> dict:
             "teacher_ratio_warmup_pct": 0.10,
             "teacher_ratio_decay_end_pct": 0.80,
             "teacher_ratio_min": 0.0,
+            "student_action_start_ratio": 0.30,
         },
         "policy": {
             "class_name": "StudentTeacherCNN",
