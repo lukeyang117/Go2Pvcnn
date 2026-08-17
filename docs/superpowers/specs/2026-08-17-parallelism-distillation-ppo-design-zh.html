@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism 学生模型 PPO 蒸馏设计</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --ink: #182230;
+      --muted: #5f6b7a;
+      --line: #d9e0e8;
+      --blue: #1d5fd1;
+      --blue-soft: #eaf2ff;
+      --green: #147a55;
+      --green-soft: #eaf8f1;
+      --orange: #a95c00;
+      --orange-soft: #fff4e5;
+      --code: #17212b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.75 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 42px 24px 72px; }
+    header {
+      background: var(--surface);
+      border-bottom: 4px solid var(--blue);
+      padding: 28px 32px;
+      margin-bottom: 24px;
+    }
+    h1, h2, h3 { line-height: 1.3; }
+    h1 { margin: 0 0 10px; font-size: 32px; }
+    h2 { margin: 36px 0 14px; font-size: 23px; border-left: 4px solid var(--blue); padding-left: 12px; }
+    h3 { margin: 24px 0 8px; font-size: 18px; }
+    p { margin: 8px 0 14px; }
+    .subtitle, .note { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px 20px;
+    }
+    .card h3 { margin-top: 0; }
+    .blue { background: var(--blue-soft); border-color: #c9dcff; }
+    .green { background: var(--green-soft); border-color: #bdebd5; }
+    .orange { background: var(--orange-soft); border-color: #f2d3a8; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    code { background: #eef1f5; padding: 2px 5px; border-radius: 4px; }
+    pre {
+      color: #edf3f8;
+      background: var(--code);
+      padding: 16px 18px;
+      overflow-x: auto;
+      border-radius: 6px;
+      line-height: 1.55;
+    }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #edf2f8; }
+    ul { margin-top: 8px; }
+    .flow {
+      display: grid;
+      gap: 8px;
+      margin: 14px 0;
+    }
+    .flow div {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      padding: 12px 16px;
+      border-radius: 6px;
+    }
+    .flow div:not(:last-child)::after {
+      content: "↓";
+      display: block;
+      color: var(--blue);
+      font-weight: 700;
+      text-align: center;
+      margin: 8px -16px -28px;
+      position: relative;
+      z-index: 1;
+    }
+    .small { font-size: 14px; color: var(--muted); }
+    @media (max-width: 720px) {
+      main { padding: 20px 14px 48px; }
+      header { padding: 22px 18px; }
+      h1 { font-size: 26px; }
+      .grid { grid-template-columns: 1fr; }
+      body { font-size: 15px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Parallelism 学生模型 PPO 蒸馏设计</h1>
+    <p class="subtitle">目标：让不输入 reference trajectory 的学生策略，在保留 teacher 动作先验的同时，通过环境奖励学习真实移动、速度跟踪和稳定步态。</p>
+    <p class="note">适用范围：当前 parallelism mixed-terrain distillation 任务。旧的普通 PPO 任务和 Parallelism planner 不修改。</p>
+  </header>
+
+  <h2>一、当前问题</h2>
+  <div class="card">
+    <p>当前学生模型主要依靠 teacher action 做 imitation。学生接管后，虽然仍然计算 teacher action，但学生动作误差会上升，导致足端跟踪和移动稳定性变差。</p>
+    <p>本次设计增加 PPO 梯度，让学生同时受到真实环境反馈。学生不需要获得 reference trajectory，teacher 只作为特权监督信号。</p>
+  </div>
+
+  <h2>二、输入与动作定义</h2>
+  <div class="grid">
+    <section class="card blue">
+      <h3>Student actor 输入</h3>
+      <ul>
+        <li>高程图和语义地图</li>
+        <li>base angular velocity</li>
+        <li>projected gravity</li>
+        <li>joint position</li>
+        <li>joint velocity</li>
+        <li>velocity command：<code>vx</code>、<code>vy</code>、<code>vyaw</code></li>
+        <li>previous action</li>
+      </ul>
+      <p class="small">不输入真实 root 线速度 <code>base_lin_vel</code>，但保留真实 root 角速度 <code>base_ang_vel</code>。同时不输入 reference joint、reference foot、reference root position 或 reference root rotation。</p>
+    </section>
+    <section class="card green">
+      <h3>Teacher 输入</h3>
+      <p>Teacher 继续使用当前特权观测，包括 Parallelism reference trajectory。Teacher 网络冻结，只提供确定性动作目标。</p>
+      <pre><code>teacher_action = teacher.act_inference(teacher_obs)</code></pre>
+      <p class="small">teacher action 不使用 std 采样。</p>
+    </section>
+  </div>
+
+  <div class="card blue">
+    <h3>Critic 输入：Parallelism 特权观测</h3>
+    <p>Critic 不与 student actor 共用输入。Critic 使用 teacher observation 估计当前状态价值，显式接收 Parallelism 的 reference 信息。</p>
+    <pre><code>critic_obs =
+    teacher_elevation_semantic_map
+    + teacher_state
+
+teacher_state =
+    base_ang_vel
+    + projected_gravity
+    + joint_pos
+    + joint_vel
+    + previous_action
+    + base_lin_vel
+    + parallelism_ref_joint_pos
+    + parallelism_ref_joint_vel
+    + parallelism_ref_root_pos
+    + parallelism_ref_root_rot</code></pre>
+    <p>reference 项只进入 critic，不进入 student actor，也不作为 play 部署输入。</p>
+    <p>Critic 可以看到真实 root 线速度和角速度；这些速度属于特权 critic 输入，不能回流到 student actor。</p>
+  </div>
+
+  <h2>三、std 和动作流</h2>
+  <div class="card">
+    <h3>训练时的 student</h3>
+    <pre><code>student_mean = student.actor(student_obs)
+student_std = exp(student.log_std)
+student_action ~ Normal(student_mean, student_std)</code></pre>
+    <p>带 std 的 student action 用于输入 IsaacSim、计算 PPO 的 log probability，并参与 rollout。std 保留为可学习参数，初始建议为 <code>0.3</code>。</p>
+
+    <h3>训练时的 teacher</h3>
+    <pre><code>teacher_action = teacher.act_inference(teacher_obs)</code></pre>
+    <p>teacher 使用确定性均值动作，不经过 teacher std 采样。</p>
+
+    <h3>Imitation loss</h3>
+    <pre><code>L_imitation = MSE(student_mean, teacher_action)</code></pre>
+    <p>imitation 比较 student 的均值动作和 teacher 的确定性动作，避免探索噪声污染蒸馏目标。</p>
+
+    <h3>训练时的环境动作混合</h3>
+    <p>Teacher 和 student 每个 iteration 都同时计算，但进入 IsaacSim 的动作按照训练进度在环境维度上混合。这里的“混合”是选择不同环境执行不同策略，不是对两个动作做数值加权平均。</p>
+    <pre><code>progress = iteration / max_iterations
+
+if progress &lt; 0.30:
+    teacher_ratio = 1.0
+elif progress &lt; 0.80:
+    teacher_ratio = 1.0 - (progress - 0.30) / (0.80 - 0.30)
+else:
+    teacher_ratio = 0.0
+
+student_ratio = 1.0 - teacher_ratio
+
+约 teacher_ratio * num_envs 个环境：
+    env_action = teacher_action
+
+约 student_ratio * num_envs 个环境：
+    env_action = student_action</code></pre>
+    <p>同一个 rollout 中所有环境使用同一个 <code>teacher_ratio</code>。具体环境通过批量 mask 分配给 teacher 或 student，使 teacher 环境数与 student 环境数之和等于总环境数。teacher action 不与 student action 做线性平均。</p>
+    <p>前 30% 完全由 teacher 带领环境，30%～80% 平滑增加 student 的真实环境经验，80% 后完全由 student 控制。</p>
+    <p>控制器分配以 episode 为单位保持不变：一个环境一旦被分配给 teacher，本 episode 剩余时间始终执行 teacher；被分配给 student 的环境始终执行 student。只有环境 reset 并开始新 episode 后，才按照当时的 <code>teacher_ratio</code> 重新分配。</p>
+
+    <h3>训练时的 loss 使用</h3>
+    <p>两种 loss 在整个训练期间都存在，不通过训练阶段硬开关。区别只根据当前 transition 实际由谁控制环境来处理 PPO actor 数据：</p>
+    <pre><code>所有样本：
+    imitation_loss = MSE(student_mean, teacher_action)
+
+teacher 控制的样本：
+    imitation loss：使用
+    PPO actor surrogate：不使用
+    critic value loss：使用
+
+student 控制的样本：
+    imitation loss：使用
+    PPO actor surrogate：使用
+    critic value loss：使用</code></pre>
+    <p>teacher 控制的动作不是 student policy 采样得到的动作，不能直接用于 student 的 PPO policy ratio。rollout 需要保存 <code>ppo_active_mask</code>；该 mask 只屏蔽 teacher 控制样本的 PPO actor surrogate，不屏蔽 imitation loss 和 critic value loss。</p>
+    <p>Teacher 和 student 的 critic 输入都通过 IsaacLab 的 <code>last_action</code> 观测项读取真实执行动作。因此 teacher episode 的 critic action 始终是 teacher action，student episode 的 critic action 始终是 student action。reset 后第一帧使用环境的初始 action 状态，之后从下一帧开始反映实际执行的控制器动作。</p>
+
+    <h3>Play 时</h3>
+    <pre><code>student_action = student.act_inference(student_obs)
+student_action -> IsaacSim</code></pre>
+    <p>play 永远使用 student mean，不采样 std，teacher 不参与学生动作输入，也不执行训练阶段的 teacher/student 环境比例。</p>
+  </div>
+
+  <h2>四、奖励设计</h2>
+  <div class="card orange">
+    <h3>新增速度奖励</h3>
+    <pre><code>track_lin_vel_xy:
+    func = track_lin_vel_xy_exp
+    command_name = "base_velocity"
+    weight = 1.0
+    std = 0.5
+
+track_ang_vel_z:
+    func = track_ang_vel_z_exp
+    command_name = "base_velocity"
+    weight = 0.5
+    std = 0.5</code></pre>
+    <p><code>track_lin_vel_xy</code> 直接比较当前 policy root 坐标系下的 <code>x/y</code> 线速度和输入命令的 <code>vx/vy</code>。</p>
+    <p><code>track_ang_vel_z</code> 直接比较当前 policy root 的 yaw 角速度和输入命令的 <code>vyaw</code>。</p>
+  </div>
+
+  <div class="card">
+    <h3>奖励与 imitation 的边界</h3>
+    <div class="flow">
+      <div><strong>IsaacSim 环境奖励：</strong>由速度、reference、足端、关节、碰撞等奖励项共同组成，进入 PPO 的 advantage、return 和 policy/value loss。</div>
+      <div><strong>Teacher action：</strong>不作为环境奖励，不改变 reward；只作为 <code>L_imitation</code> 的监督目标。</div>
+      <div><strong>最终更新：</strong><code>L_total = ppo_coef * L_PPO(ppo_active) + teacher_coef * L_imitation</code>。</div>
+    </div>
+    <p>因此学生会同时受到两种约束：PPO 要求 student 实际控制的环境获得高环境奖励，teacher imitation 要求所有环境中的 student 不要偏离 Parallelism 规划动作。</p>
+  </div>
+
+  <h3>原有奖励全部保留</h3>
+  <table>
+    <thead>
+      <tr><th>奖励类别</th><th>作用</th><th>是否保留</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>reference root position / rotation</td><td>跟踪 Parallelism root 轨迹</td><td>保留</td></tr>
+      <tr><td>reference joint position / velocity</td><td>跟踪规划关节动作</td><td>保留</td></tr>
+      <tr><td>reference foot position</td><td>跟踪规划足端轨迹</td><td>保留</td></tr>
+      <tr><td>geometry collision</td><td>惩罚规划几何碰撞</td><td>保留</td></tr>
+      <tr><td>track_lin_vel_xy</td><td>直接跟踪输入平移速度</td><td>新增</td></tr>
+      <tr><td>track_ang_vel_z</td><td>直接跟踪输入 yaw 速度</td><td>新增</td></tr>
+    </tbody>
+  </table>
+
+  <h2>五、PPO 与 teacher 的联合损失</h2>
+  <pre><code>L_total =
+    ppo_coef * L_PPO(ppo_active_mask)
+    + teacher_coef * L_imitation(all samples)</code></pre>
+  <p>其中：</p>
+  <pre><code>L_PPO =
+    policy_surrogate_loss
+    + value_loss_coef * value_loss
+    - entropy_coef * entropy</code></pre>
+  <div class="grid">
+    <section class="card blue">
+      <h3>PPO 权重</h3>
+      <p><code>ppo_coef = 1.0</code></p>
+      <p>PPO 负责根据速度奖励、reference 奖励、足端奖励和碰撞惩罚纠正学生动作。</p>
+    </section>
+    <section class="card green">
+      <h3>Teacher 权重</h3>
+      <p><code>teacher_coef = 0.5</code></p>
+      <p>Teacher 负责保持 Parallelism 规划动作先验，避免 PPO 初期把学生策略带偏。</p>
+    </section>
+  </div>
+
+  <h3>权重调度</h3>
+  <table>
+    <thead>
+      <tr><th>训练阶段</th><th>ppo_coef</th><th>teacher_coef</th><th>目的</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>前 30%</td><td>1.0</td><td>按 teacher_coef 调度</td><td>环境全由 teacher 控制，student 通过 imitation 学习</td></tr>
+      <tr><td>30%～80%</td><td>1.0</td><td>按 teacher_coef 调度</td><td>teacher/student 环境比例逐渐交接，student 开始获得 PPO 反馈</td></tr>
+      <tr><td>80% 以后</td><td>1.0</td><td>按 teacher_coef 调度</td><td>环境全由 student 控制，PPO 主导实际行为</td></tr>
+    </tbody>
+  </table>
+  <p class="small">环境动作的 teacher_ratio 调度与 imitation 的 teacher_coef 调度是两个独立参数。前者决定谁进入 IsaacSim，后者决定 teacher 监督信号的梯度权重；两者都复用之前设计中的 iteration 百分比机制。</p>
+
+  <h2>六、PPO 参数</h2>
+  <table>
+    <thead>
+      <tr><th>参数</th><th>建议值</th><th>作用</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>learning_rate</code></td><td>3e-4</td><td>学生 actor 和 critic 的更新步长</td></tr>
+      <tr><td><code>num_learning_epochs</code></td><td>3</td><td>每批 rollout 数据重复训练次数</td></tr>
+      <tr><td><code>num_mini_batches</code></td><td>4</td><td>每次更新切分的 mini-batch 数量</td></tr>
+      <tr><td><code>clip_param</code></td><td>0.2</td><td>限制 PPO 新旧策略变化幅度</td></tr>
+      <tr><td><code>gamma</code></td><td>0.99</td><td>未来奖励折扣</td></tr>
+      <tr><td><code>lam</code></td><td>0.95</td><td>GAE 优势估计的偏差和方差平衡</td></tr>
+      <tr><td><code>value_loss_coef</code></td><td>1.0</td><td>critic value loss 权重</td></tr>
+      <tr><td><code>entropy_coef</code></td><td>0.001</td><td>保留探索，避免 std 过快塌缩</td></tr>
+      <tr><td><code>max_grad_norm</code></td><td>1.0</td><td>梯度裁剪，防止动作发散</td></tr>
+      <tr><td><code>init_noise_std</code></td><td>0.3</td><td>student 初始动作探索 std</td></tr>
+      <tr><td><code>desired_kl</code></td><td>0.01</td><td>adaptive learning rate 的 KL 目标</td></tr>
+    </tbody>
+  </table>
+
+  <h2>七、Actor、Critic 和 Teacher</h2>
+  <div class="flow">
+    <div><strong>Student actor：</strong>只看 student observation，输出带 std 的动作分布。</div>
+    <div><strong>Student critic：</strong>输入 teacher observation，包含高程语义地图、本体状态和 Parallelism reference joint/root 观测，输出 PPO value。</div>
+    <div><strong>Teacher network：</strong>冻结，只输出确定性 teacher action，不参与 PPO 梯度。</div>
+    <div><strong>Optimizer：</strong>更新 student actor 和特权 critic；不更新 teacher。critic 的特权输入不会泄漏到 actor。</div>
+  </div>
+
+  <h2>八、代码修改位置</h2>
+  <table>
+    <thead>
+      <tr><th>文件</th><th>修改内容</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>新增两个速度奖励，只作用于当前蒸馏任务。</td></tr>
+      <tr><td><code>agent/train_cfg.py</code></td><td>加入 PPO 参数、<code>ppo_coef</code>、<code>teacher_coef</code> 和 std 配置。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/algorithms/hybrid_distillation_ppo.py</code></td><td>新增 PPO + imitation 联合优化算法。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/storage/rollout_storage.py</code></td><td>保存每条 transition 的 <code>ppo_active_mask</code>，区分 teacher 控制样本和 student 控制样本。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/modules/student_teacher_cnn.py</code></td><td>分别暴露 student actor、特权 critic 的 action/value 接口；保持 teacher 冻结。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/runners/on_policy_runner.py</code></td><td>支持 hybrid algorithm，并把 teacher observation 提供给 critic。</td></tr>
+      <tr><td><code>rsl_rl/rsl_rl/algorithms/__init__.py</code></td><td>注册新的 hybrid algorithm。</td></tr>
+      <tr><td><code>tests/tracking/</code></td><td>测试动作 std、teacher 确定性动作、联合 loss 和两个速度奖励。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>九、训练启动与测试策略</h2>
+  <div class="card orange">
+    <h3>测试时不使用 resume</h3>
+    <p>本蒸馏任务的对比测试默认从全新的 student 开始，不使用 <code>--resume</code>，也不加载旧的 student checkpoint。这样可以保证不同测试结果都从相同的 student 初始化状态开始，不受之前蒸馏进度、旧 optimizer 状态或旧 std 的影响。</p>
+    <pre><code>每次测试启动：
+    1. 新建日期/hash 训练目录
+    2. student actor 重新初始化
+    3. student critic 重新初始化
+    4. optimizer 重新初始化
+    5. 加载固定 teacher checkpoint
+    6. teacher.eval() 且 teacher.requires_grad_(False)
+    7. 从 iteration 0 开始训练</code></pre>
+    <p>启动命令只传入 <code>--teacher_checkpoint</code>，不传入 <code>--resume</code>、<code>--load_run</code> 或 <code>--load_checkpoint</code>。Teacher checkpoint 只用于生成特权 teacher action，不作为 student 的初始化权重。</p>
+  </div>
+
+  <div class="card">
+    <h3>训练启动形式</h3>
+    <pre><code>python Go2Pvcnn/scripts/train.py \
+    --experiment parallelism_tracking_cross_large_complex_distillation \
+    --num_envs 1024 \
+    --headless \
+    --max_iterations 2000 \
+    --teacher_checkpoint /path/to/teacher/model.pt</code></pre>
+    <p>其中 <code>max_iterations</code> 同时用于计算 teacher/student 环境比例调度。比如 <code>max_iterations=2000</code> 时：</p>
+    <ul>
+      <li>第 0～599 iteration：teacher_ratio = 1.0。</li>
+      <li>第 600～1599 iteration：teacher_ratio 从 1.0 线性下降到 0.0。</li>
+      <li>第 1600～2000 iteration：teacher_ratio = 0.0。</li>
+    </ul>
+  </div>
+
+  <div class="card green">
+    <strong>固定测试原则：</strong>
+    每次测试都使用同一个 teacher checkpoint、同一套环境数量和同一套百分比调度，但 student 从零开始训练；只有完成一次完整测试后，才根据指标决定是否另行进行 resume 实验。resume 不属于本设计的默认验收路径。
+  </div>
+
+  <h2>十、验证指标</h2>
+  <ul>
+    <li><code>Episode_Reward/track_lin_vel_xy</code>：输入平移速度跟踪奖励。</li>
+    <li><code>Episode_Reward/track_ang_vel_z</code>：输入 yaw 速度跟踪奖励。</li>
+    <li><code>Metrics/base_velocity/error_vel_xy</code>：实际 root 线速度误差。</li>
+    <li><code>Metrics/base_velocity/error_vel_yaw</code>：实际 yaw 角速度误差。</li>
+    <li><code>Distillation/action_mse</code>：student mean 与 teacher deterministic action 的误差。</li>
+    <li><code>Distillation/teacher_ratio</code>：当前 iteration 进入 IsaacSim 的 teacher 环境比例。</li>
+    <li><code>Distillation/student_ratio</code>：当前 iteration 进入 IsaacSim 的 student 环境比例。</li>
+    <li><code>Distillation/ppo_active_ratio</code>：rollout 中实际可用于 PPO actor surrogate 的 student 样本比例。</li>
+    <li><code>Train/value_function_loss</code>：student critic 的价值误差。</li>
+    <li><code>Train/surrogate_loss</code>：PPO actor 更新损失。</li>
+    <li><code>Train/mean_episode_length</code>：学生是否能持续行走。</li>
+  </ul>
+
+  <div class="card green">
+    <strong>最终动作原则：</strong>
+    训练时 teacher 和 student 都计算动作；前 30% 环境全执行 teacher，30%～80% 按统一比例分配 teacher/student 环境，80% 后全执行 student。teacher 使用确定性动作，student 控制环境时使用带 std 的动作；imitation 始终计算，PPO actor 只使用 student 实际控制的样本。play 时使用 student mean，不采样 std。
+  </div>
+</main>
+</body>
+</html>

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 
+import go2_pvcnn.mdp as go2_mdp
 from tracking.parallelism_cross_large_complex_env_cfg import (
     ParallelismTrackingCrossLargeComplexEnvCfg,
     ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
 )
+from tracking.parallelism_small_obstacles_env_cfg import ParallelismSmallObstaclesRewardsCfg
 from tracking.parallelism_tracking_env_cfg import (
     ParallelismTrackingObservationsCfg,
     ParallelismTrackingPlaySceneCfg,
@@ -32,6 +35,7 @@ class ParallelismTrackingDistillationObservationsCfg:
 
     @configclass
     class StudentStateCfg(TeacherStateCfg):
+        base_lin_vel = None
         velocity_commands = ObsTerm(
             func=isaac_mdp.generated_commands,
             params={"command_name": "base_velocity"},
@@ -48,6 +52,22 @@ class ParallelismTrackingDistillationObservationsCfg:
 
 
 @configclass
+class ParallelismDistillationRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
+    """Rewards used only by the PPO-distillation student task."""
+
+    track_lin_vel_xy = RewTerm(
+        func=go2_mdp.track_lin_vel_xy_exp,
+        weight=1.0,
+        params={"command_name": "base_velocity", "std": 0.5},
+    )
+    track_ang_vel_z = RewTerm(
+        func=go2_mdp.track_ang_vel_z_exp,
+        weight=0.5,
+        params={"command_name": "base_velocity", "std": 0.5},
+    )
+
+
+@configclass
 class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
     ParallelismTrackingCrossLargeComplexEnvCfg
 ):
@@ -57,6 +77,7 @@ class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
     observations: ParallelismTrackingDistillationObservationsCfg = (
         ParallelismTrackingDistillationObservationsCfg()
     )
+    rewards: ParallelismDistillationRewardsCfg = ParallelismDistillationRewardsCfg()
 
     def __post_init__(self):
         super().__post_init__()

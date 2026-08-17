@@ -16,6 +16,9 @@ def test_distillation_env_cfg_static_contract():
     assert "parallelism_ref_joint_vel = None" in source
     assert "parallelism_ref_root_pos = None" in source
     assert "parallelism_ref_root_rot = None" in source
+    assert "base_lin_vel = None" in source
+    assert "track_lin_vel_xy" in source
+    assert "track_ang_vel_z" in source
 
 
 def test_distillation_experiment_registered_static():
@@ -31,11 +34,11 @@ def test_distillation_train_cfg_static():
     tree = ast.parse(Path("Go2Pvcnn/agent/train_cfg.py").read_text())
     source = ast.unparse(tree)
 
-    assert "Distillation" in source
+    assert "HybridDistillationPPO" in source
     assert "StudentTeacherCNN" in source
     assert "student_elevation_semantic_map" in source
     assert "teacher_elevation_semantic_map" in source
-    assert "teacher_ratio_warmup_pct" in source
-    assert "teacher_ratio_decay_end_pct" in source
-    assert "teacher_ratio_min" in source
-    assert "student_action_start_ratio" in source
+    assert "ppo_coef" in source
+    assert "teacher_coef" in source
+    assert "entropy_coef" in source
+    assert "init_noise_std" in source

@@ -16,6 +16,7 @@ class StudentTeacherCNN(nn.Module):
         num_actions,
         student_hidden_dims=[256, 256, 128],
         teacher_hidden_dims=[256, 256, 128],
+        critic_hidden_dims=[256, 128],
         activation="elu",
         init_noise_std=1.0,
         cost_map_channels=2,
@@ -31,6 +32,7 @@ class StudentTeacherCNN(nn.Module):
             )
         super().__init__()
         self.loaded_teacher = False
+        self.student_proprio_dim = int(num_student_obs) - int(cost_map_channels * cost_map_size * cost_map_size)
         self.student = ActorCriticCNN(
             num_student_obs,
             num_student_obs,
@@ -39,6 +41,19 @@ class StudentTeacherCNN(nn.Module):
             cost_map_size=cost_map_size,
             actor_hidden_dims=student_hidden_dims,
             critic_hidden_dims=[1],
+            activation=activation,
+            init_noise_std=init_noise_std,
+            actor_cnn_cfg=actor_cnn_cfg,
+            critic_cnn_cfg=critic_cnn_cfg,
+        )
+        self.student_critic = ActorCriticCNN(
+            num_teacher_obs,
+            num_teacher_obs,
+            num_actions,
+            cost_map_channels=cost_map_channels,
+            cost_map_size=cost_map_size,
+            actor_hidden_dims=[1],
+            critic_hidden_dims=critic_hidden_dims,
             activation=activation,
             init_noise_std=init_noise_std,
             actor_cnn_cfg=actor_cnn_cfg,
@@ -76,8 +91,15 @@ class StudentTeacherCNN(nn.Module):
         return self.student.act_inference(observations)
 
     def evaluate(self, teacher_observations):
+        """Return the frozen teacher's deterministic action target."""
+
         with torch.no_grad():
             return self.teacher.act_inference(teacher_observations)
+
+    def evaluate_value(self, critic_observations):
+        """Evaluate the trainable privileged critic on Parallelism observations."""
+
+        return self.student_critic.evaluate(critic_observations)
 
     @property
     def action_mean(self):
@@ -96,6 +118,8 @@ class StudentTeacherCNN(nn.Module):
         return self.student.entropy
 
     def load_state_dict(self, state_dict, strict=True):
+        state_dict = dict(state_dict)
+        self._adapt_legacy_student_input_weights(state_dict)
         if any(key.startswith("student.") or key.startswith("teacher.") for key in state_dict.keys()):
             super().load_state_dict(state_dict, strict=strict)
             self.loaded_teacher = True
@@ -116,3 +140,21 @@ class StudentTeacherCNN(nn.Module):
         self.teacher.eval()
         self.teacher.requires_grad_(False)
         return False
+
+    def _adapt_legacy_student_input_weights(self, state_dict):
+        """Drop legacy base_lin_vel columns when loading pre-removal student checkpoints."""
+
+        for key in ("student.actor.0.weight", "student.critic.0.weight"):
+            weight = state_dict.get(key)
+            if weight is None or weight.ndim != 2:
+                continue
+            current_weight = dict(self.named_parameters()).get(key)
+            if current_weight is None:
+                continue
+            if weight.shape[1] != current_weight.shape[1] + 3:
+                continue
+            old_proprio_dim = self.student_proprio_dim + 3
+            state_dict[key] = torch.cat(
+                (weight[:, : self.student_proprio_dim], weight[:, old_proprio_dim:]),
+                dim=1,
+            )

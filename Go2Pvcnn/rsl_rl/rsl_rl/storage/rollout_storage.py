@@ -23,6 +23,7 @@ class RolloutStorage:
             self.action_sigma = None
             self.hidden_states = None
             self.privileged_actions = None
+            self.ppo_active = None
             # For PVCNN semantic supervision
             self.point_cloud = None
             self.semantic_labels = None
@@ -52,6 +53,11 @@ class RolloutStorage:
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.privileged_actions = torch.zeros(
             num_transitions_per_env, num_envs, *actions_shape, device=self.device
+        )
+        # Teacher-controlled samples are excluded from the student PPO actor loss.
+        # Default to active so legacy PPO callers keep their original behavior.
+        self.ppo_active_masks = torch.ones(
+            num_transitions_per_env, num_envs, 1, device=self.device
         )
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
 
@@ -89,6 +95,12 @@ class RolloutStorage:
         self.actions[self.step].copy_(transition.actions)
         if transition.privileged_actions is not None:
             self.privileged_actions[self.step].copy_(transition.privileged_actions)
+        if transition.ppo_active is not None:
+            self.ppo_active_masks[self.step].copy_(
+                transition.ppo_active.to(device=self.device).view(-1, 1)
+            )
+        else:
+            self.ppo_active_masks[self.step].fill_(1.0)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
         if transition.values is not None:
@@ -173,7 +185,13 @@ class RolloutStorage:
         trajectory_lengths = done_indices[1:] - done_indices[:-1]
         return trajectory_lengths.float().mean(), self.rewards.mean()
 
-    def mini_batch_generator(self, num_mini_batches, num_epochs=8):
+    def mini_batch_generator(
+        self,
+        num_mini_batches,
+        num_epochs=8,
+        include_privileged_actions=False,
+        include_ppo_mask=False,
+    ):
         batch_size = self.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
         indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
@@ -185,6 +203,8 @@ class RolloutStorage:
             critic_observations = observations
 
         actions = self.actions.flatten(0, 1)
+        privileged_actions = self.privileged_actions.flatten(0, 1)
+        ppo_active_masks = self.ppo_active_masks.flatten(0, 1)
         values = self.values.flatten(0, 1)
         if self.train_with_transitions:
             transitions = self.transitions.flatten(0, 1)
@@ -224,11 +244,18 @@ class RolloutStorage:
                 # Get point cloud and semantic labels batch
                 point_cloud_batch = point_clouds[batch_idx] if point_clouds is not None else None
                 semantic_labels_batch = semantic_labels[batch_idx] if semantic_labels is not None else None
-                
-                yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+
+                base_batch = (obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
                     None,
                     None,
-                ), None, point_cloud_batch, semantic_labels_batch
+                ), None, point_cloud_batch, semantic_labels_batch)
+                if include_privileged_actions:
+                    batch = base_batch + (privileged_actions[batch_idx],)
+                else:
+                    batch = base_batch
+                if include_ppo_mask:
+                    batch = batch + (ppo_active_masks[batch_idx],)
+                yield batch
 
     def distillation_generator(self, num_mini_batches, num_epochs=1):
         observations = self.observations.flatten(0, 1)

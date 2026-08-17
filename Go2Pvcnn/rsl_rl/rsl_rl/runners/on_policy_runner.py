@@ -11,7 +11,7 @@ from collections import deque
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 import rsl_rl
-from rsl_rl.algorithms import PPO, Distillation
+from rsl_rl.algorithms import HybridDistillationPPO, PPO, Distillation
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import ActorCritic, ActorCriticCNN, ActorCriticRecurrent, EmpiricalNormalization, StudentTeacherCNN
 from rsl_rl.utils import store_code_state
@@ -30,12 +30,14 @@ class OnPolicyRunner:
             self.training_type = "rl"
         elif self.alg_cfg["class_name"] == "Distillation":
             self.training_type = "distillation"
+        elif self.alg_cfg["class_name"] == "HybridDistillationPPO":
+            self.training_type = "hybrid_distillation"
         else:
             raise ValueError(f"Unknown algorithm class: {self.alg_cfg['class_name']}")
 
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
-        if self.training_type == "distillation":
+        if self.training_type in ("distillation", "hybrid_distillation"):
             if "teacher" not in extras["observations"]:
                 raise ValueError("Distillation training requires extras['observations']['teacher']")
             num_critic_obs = extras["observations"]["teacher"].shape[1]
@@ -51,7 +53,11 @@ class OnPolicyRunner:
             num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PPO | Distillation = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+        self.alg: PPO | Distillation | HybridDistillationPPO = alg_class(
+            actor_critic,
+            device=self.device,
+            **self.alg_cfg,
+        )
         self.num_steps_per_env = self.cfg["num_steps_per_env"] #这个参数决定什么时候更新一次策略
         self.save_interval = self.cfg["save_interval"] #保存间隔的权重
         self.empirical_normalization = self.cfg["empirical_normalization"] #什么是经验归一化 ？维护Running Mean和Variance
@@ -62,7 +68,7 @@ class OnPolicyRunner:
             self.obs_normalizer = torch.nn.Identity()  # no normalization
             self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
         # init storage and model
-        if self.training_type == "distillation":
+        if self.training_type in ("distillation", "hybrid_distillation"):
             self.alg.init_storage(
                 self.training_type,
                 self.env.num_envs,
@@ -158,7 +164,7 @@ class OnPolicyRunner:
         start_iter = self.current_learning_iteration  # 起始迭代次数（用于resume训练）
         tot_iter = start_iter + num_learning_iterations  # 总迭代次数 = 起始 + 新增迭代
         for it in range(start_iter, tot_iter):  # 迭代训练
-            if self.training_type == "distillation" and hasattr(self.alg, "set_iteration"):
+            if self.training_type in ("distillation", "hybrid_distillation") and hasattr(self.alg, "set_iteration"):
                 self.alg.set_iteration(it, tot_iter)
             start = time.time()  # 记录数据收集开始时间
             
@@ -168,7 +174,7 @@ class OnPolicyRunner:
             with torch.inference_mode():  # 推理模式，不计算梯度（节省内存和计算）
                 for i in range(self.num_steps_per_env):  # 每个环境收集num_steps_per_env步数据
                     # 使用当前策略选择动作
-                    if self.training_type == "distillation":
+                    if self.training_type in ("distillation", "hybrid_distillation"):
                         actions = self.alg.act(obs, critic_obs)
                     else:
                         actions = self.alg.act(obs, critic_obs, env=self.env)  # (num_envs, action_dim)
@@ -180,7 +186,7 @@ class OnPolicyRunner:
                     obs = self.obs_normalizer(obs)
                     
                     # 获取critic观测值（可能包含特权信息，如真实状态）
-                    if self.training_type == "distillation" and "teacher" in infos["observations"]:
+                    if self.training_type in ("distillation", "hybrid_distillation") and "teacher" in infos["observations"]:
                         critic_obs = self.critic_obs_normalizer(infos["observations"]["teacher"])
                     elif "critic" in infos["observations"]:
                         critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
@@ -230,17 +236,19 @@ class OnPolicyRunner:
                 # 阶段2: 计算returns（优势函数和回报）
                 # ========================================
                 start = stop
-                if self.training_type == "rl":
+                if self.training_type in ("rl", "hybrid_distillation"):
                     self.alg.compute_returns(critic_obs)  # 使用GAE计算优势函数和回报值
 
             # ========================================
             # 阶段3: 策略更新（PPO update）
             # ========================================
             loss_dict = None
-            if self.training_type == "distillation":
+            if self.training_type in ("distillation", "hybrid_distillation"):
                 loss_dict = self.alg.update()
-                mean_value_loss = 0.0
-                mean_surrogate_loss = float(loss_dict.get("behavior", 0.0))
+                mean_value_loss = float(loss_dict.get("value_loss", 0.0))
+                mean_surrogate_loss = float(
+                    loss_dict.get("surrogate_loss", loss_dict.get("behavior", 0.0))
+                )
             else:
                 mean_value_loss, mean_surrogate_loss = self.alg.update()  # PPO策略更新
             stop = time.time()
@@ -398,7 +406,13 @@ class OnPolicyRunner:
             self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
             self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_norm_state_dict"])
         if load_optimizer:
-            self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+            try:
+                self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+            except (RuntimeError, ValueError) as exc:
+                print(
+                    "[Checkpoint] Optimizer state is incompatible with the current "
+                    f"algorithm; keeping a fresh optimizer: {exc}"
+                )
         
         # 加载PVCNN模型和优化器 (如果存在)
         if "pvcnn_state_dict" in loaded_dict:

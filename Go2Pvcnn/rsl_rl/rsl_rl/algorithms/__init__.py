@@ -5,5 +5,6 @@
 
 from .ppo import PPO
 from .distillation import Distillation
+from .hybrid_distillation_ppo import HybridDistillationPPO
 
-__all__ = ["PPO", "Distillation"]
+__all__ = ["PPO", "Distillation", "HybridDistillationPPO"]
