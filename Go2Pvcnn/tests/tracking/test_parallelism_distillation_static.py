@@ -254,6 +254,7 @@ def test_runner_source_recognizes_distillation():
     source = Path("Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py").read_text()
 
     assert '"Distillation"' in source
+    assert '("distillation", "hybrid_distillation")' in source
     assert "load_teacher" in source
     assert 'extras["observations"].get("teacher"' in source
 

@@ -141,7 +141,7 @@ class OnPolicyRunner:
         
         # 获取初始观测值
         obs, extras = self.env.get_observations()  # obs: (num_envs, obs_dim)
-        if self.training_type == "distillation":
+        if self.training_type in ("distillation", "hybrid_distillation"):
             critic_obs = extras["observations"].get("teacher", obs)
         else:
             critic_obs = extras["observations"].get("critic", obs)  # critic观测（可能包含额外信息）
