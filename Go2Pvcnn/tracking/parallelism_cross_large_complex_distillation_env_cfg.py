@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from isaaclab.envs import mdp as isaac_mdp
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 
 import go2_pvcnn.mdp as go2_mdp
 from tracking.parallelism_cross_large_complex_env_cfg import (
+    ParallelismTrackingCrossLargeComplexCurriculumCfg,
     ParallelismTrackingCrossLargeComplexEnvCfg,
     ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
 )
@@ -57,14 +59,23 @@ class ParallelismDistillationRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
 
     track_lin_vel_xy = RewTerm(
         func=go2_mdp.track_lin_vel_xy_exp,
-        weight=1.0,
+        weight=2.0,
         params={"command_name": "base_velocity", "std": 0.5},
     )
     track_ang_vel_z = RewTerm(
         func=go2_mdp.track_ang_vel_z_exp,
-        weight=0.5,
+        weight=1.5,
         params={"command_name": "base_velocity", "std": 0.5},
     )
+
+
+@configclass
+class ParallelismTrackingCrossLargeComplexDistillationCurriculumCfg(
+    ParallelismTrackingCrossLargeComplexCurriculumCfg
+):
+    """Go2Pvcnn-style command curriculum for the distillation task."""
+
+    lin_vel_cmd_levels = CurrTerm(go2_mdp.lin_vel_cmd_levels)
 
 
 @configclass
@@ -78,10 +89,16 @@ class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
         ParallelismTrackingDistillationObservationsCfg()
     )
     rewards: ParallelismDistillationRewardsCfg = ParallelismDistillationRewardsCfg()
+    curriculum: ParallelismTrackingCrossLargeComplexDistillationCurriculumCfg = (
+        ParallelismTrackingCrossLargeComplexDistillationCurriculumCfg()
+    )
 
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "parallelism_tracking_cross_large_complex_distillation"
+        self.curriculum.parallelism_velocity = None
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.limit_ranges.ang_vel_z = (-1.0, 1.0)
         assert self.terminations.parallelism_consecutive_standstill is not None
         assert self.rewards.parallelism_geometry_collision is not None
 

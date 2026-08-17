@@ -473,7 +473,10 @@ class ParallelismReferenceManager:
             command = command_manager.get_command(self.command_name)
         else:
             command = getattr(command_manager, self.command_name)
-        return torch.as_tensor(command, dtype=torch.float32, device=self.device).index_select(0, env_ids)
+        command = torch.as_tensor(command, dtype=torch.float32, device=self.device)
+        if command.ndim != 2 or int(command.shape[-1]) < 3:
+            raise ValueError("Parallelism command must have shape [batch, 3 or more]")
+        return command[:, :3].index_select(0, env_ids).contiguous()
 
     def _state(self, env_ids: Tensor) -> ParallelismState:
         robot = self._robot()

@@ -57,7 +57,7 @@ git commit -m "docs: specify parallelism command curriculum interface"
 ### Task 2: Add failing tests for the new curriculum configuration
 
 **Files:**
-- Create: `tests/tracking/test_parallelism_official_velocity_curriculum.py`
+- Create: `Go2Pvcnn/tests/tracking/test_parallelism_official_velocity_curriculum.py`
 
 **Interfaces:**
 - Consumes: `tracking.parallelism_cross_large_complex_distillation_env_cfg.ParallelismTrackingCrossLargeComplexDistillationEnvCfg`.
@@ -101,7 +101,7 @@ Run:
 ```bash
 PYTHONPATH=Go2Pvcnn:Go2Pvcnn/rsl_rl \
   /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
-  -m pytest -q tests/tracking/test_parallelism_official_velocity_curriculum.py
+  -m pytest -q Go2Pvcnn/tests/tracking/test_parallelism_official_velocity_curriculum.py
 ```
 
 Expected: FAIL because the distillation curriculum does not yet register `lin_vel_cmd_levels` and the yaw range is not forced to `[-1.0, 1.0]`.
@@ -109,7 +109,7 @@ Expected: FAIL because the distillation curriculum does not yet register `lin_ve
 ### Task 3: Add failing tests for the command-to-planner interface
 
 **Files:**
-- Modify: `tests/tracking/test_parallelism_reference_manager.py`
+- Modify: `Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py`
 
 **Interfaces:**
 - Consumes: `ParallelismReferenceManager._command`.
@@ -153,7 +153,7 @@ Run:
 ```bash
 PYTHONPATH=Go2Pvcnn:Go2Pvcnn/rsl_rl \
   /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
-  -m pytest -q tests/tracking/test_parallelism_reference_manager.py \
+  -m pytest -q Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py \
     -k "command_to_planner_contract"
 ```
 
@@ -214,8 +214,8 @@ Run:
 PYTHONPATH=Go2Pvcnn:Go2Pvcnn/rsl_rl \
   /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
   -m pytest -q \
-  tests/tracking/test_parallelism_official_velocity_curriculum.py \
-  tests/tracking/test_parallelism_reference_manager.py \
+  Go2Pvcnn/tests/tracking/test_parallelism_official_velocity_curriculum.py \
+  Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py \
   -k "official_velocity or command_to_planner_contract or panel_speed_replan"
 ```
 
@@ -231,7 +231,7 @@ Expected: PASS.
 ```bash
 PYTHONPATH=Go2Pvcnn:Go2Pvcnn/rsl_rl \
   /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
-  -m pytest -q tests/tracking
+  -m pytest -q Go2Pvcnn/tests/tracking
 ```
 
 Expected: all tracking tests pass.
@@ -288,8 +288,7 @@ The run must:
 ```bash
 git add Go2Pvcnn/tracking/parallelism_cross_large_complex_distillation_env_cfg.py \
   Go2Pvcnn/tracking/managers/parallelism_reference_manager.py \
-  tests/tracking/test_parallelism_official_velocity_curriculum.py \
-  tests/tracking/test_parallelism_reference_manager.py
+  Go2Pvcnn/tests/tracking/test_parallelism_official_velocity_curriculum.py \
+  Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py
 git commit -m "feat: align parallelism command curriculum interface"
 ```
-

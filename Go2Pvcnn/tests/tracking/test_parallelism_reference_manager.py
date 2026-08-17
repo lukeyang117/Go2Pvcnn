@@ -277,6 +277,31 @@ def test_panel_speed_replan_changes_reference_root(monkeypatch):
     assert torch.allclose(manager.root_pos_w[:, :, 0], torch.full((1, manager.horizon), 0.5))
 
 
+def test_command_to_planner_contract_reads_latest_vx_vy_yaw():
+    env = _fake_env(num_envs=2)
+    command = torch.tensor([[0.35, -0.2, 0.8], [-0.4, 0.15, -0.6]])
+    env.command_manager = SimpleNamespace(get_command=lambda _name: command)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    result = manager._command(torch.tensor([1, 0]))
+
+    assert result.shape == (2, 3)
+    assert torch.allclose(result, command[[1, 0]])
+    assert result.is_contiguous()
+
+
+def test_command_to_planner_contract_truncates_extra_channels():
+    env = _fake_env(num_envs=1)
+    command = torch.tensor([[0.2, 0.1, -0.7, 99.0]])
+    env.command_manager = SimpleNamespace(get_command=lambda _name: command)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    result = manager._command(torch.tensor([0]))
+
+    assert result.shape == (1, 3)
+    assert torch.allclose(result, command[:, :3])
+
+
 def test_terrain_reads_semantic_height_scanner_maps():
     env, elevation, semantic, valid = _fake_env_with_scanner()
     env.scene["robot"].data.root_pos_w[:, 0] = torch.tensor([1.0, -2.0])
