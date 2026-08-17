@@ -15,7 +15,8 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment parallelism_tracking_cross_large_complex_distillation \
   --num_envs 1024 \
   --headless \
-  --max_iterations 1400 \
+  --max_iterations 3000 \
   --resume \
-  --load_run 2026-08-16_16-09-26/7ebd0be \
-  --load_checkpoint model_600.pt
+  --load_run 2026-08-17_18-15-07/82a2edc \
+  --load_checkpoint model_800.pt \
+  --keep_std
