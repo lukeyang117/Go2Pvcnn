@@ -347,12 +347,31 @@ def test_distillation_student_action_waits_for_start_ratio():
     assert alg._compute_env_teacher_ratio() == alg._compute_teacher_ratio()
 
 
+def test_hybrid_teacher_coef_is_fixed_across_iterations():
+    from rsl_rl.algorithms import HybridDistillationPPO
+
+    alg = HybridDistillationPPO(
+        _make_small_student_teacher_policy(),
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        learning_rate=1e-3,
+        device="cpu",
+        teacher_coef=0.7,
+        teacher_coef_min=0.1,
+        teacher_coef_decay_end_pct=0.2,
+    )
+
+    for iteration in (0, 10, 50, 100):
+        alg.set_iteration(iteration, 100)
+        assert alg._compute_teacher_coef() == 0.7
+
+
 def test_hybrid_schedule_config_and_fresh_launcher():
     from agent.train_cfg import get_train_cfg
 
     cfg = get_train_cfg("parallelism_tracking_cross_large_complex_distillation")
     algorithm = cfg["algorithm"]
-    assert algorithm["teacher_ratio_warmup_pct"] == 0.30
+    assert algorithm["teacher_ratio_warmup_pct"] == 0.10
     assert algorithm["teacher_ratio_decay_end_pct"] == 0.80
     assert algorithm["teacher_ratio_min"] == 0.0
 

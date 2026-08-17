@@ -43,11 +43,9 @@ def _parallelism_distillation_train_cfg() -> dict:
             "desired_kl": 0.01,
             "ppo_coef": 1.0,
             "teacher_coef": 0.5,
-            "teacher_coef_min": 0.1,
-            "teacher_ratio_warmup_pct": 0.30,
+            "teacher_ratio_warmup_pct": 0.10,
             "teacher_ratio_decay_end_pct": 0.80,
             "teacher_ratio_min": 0.0,
-            "teacher_coef_decay_end_pct": 0.80,
         },
         "policy": {
             "class_name": "StudentTeacherCNN",

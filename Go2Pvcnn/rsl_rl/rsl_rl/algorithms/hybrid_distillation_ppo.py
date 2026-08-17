@@ -118,17 +118,9 @@ class HybridDistillationPPO:
         self.total_iterations = max(int(total_iterations), 1)
 
     def _compute_teacher_coef(self) -> float:
-        progress = min(
-            max(float(self.current_iteration) / float(self.total_iterations), 0.0),
-            1.0,
-        )
-        end = min(max(self.teacher_coef_decay_end_pct, 0.0), 1.0)
-        if progress >= end:
-            value = self.teacher_coef_min
-        else:
-            ratio = progress / max(end, 1.0e-6)
-            value = self.teacher_coef + (self.teacher_coef_min - self.teacher_coef) * ratio
-        self.last_teacher_coef = float(value)
+        # Keep the imitation-loss weight fixed. Only teacher_ratio controls
+        # how many newly started episodes are assigned to the teacher.
+        self.last_teacher_coef = float(self.teacher_coef)
         return self.last_teacher_coef
 
     def _compute_teacher_ratio(self) -> float:

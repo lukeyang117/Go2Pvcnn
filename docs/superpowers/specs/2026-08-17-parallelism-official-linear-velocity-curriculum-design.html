@@ -335,7 +335,7 @@ reference root / foot / joint trajectory</pre>
     <li>不恢复 student 的 <code>base_lin_vel</code> observation。</li>
     <li>不把 reference root velocity 输入 student。</li>
     <li>不改变 teacher/student episode 级别接管。</li>
-    <li>不改变 PPO、imitation loss、teacher ratio 和 std 衰减逻辑。</li>
+    <li>teacher_coef 固定；只有 teacher_ratio 衰减并改变新 episode 的 teacher/student 分配。</li>
     <li>不改变现有 termination 和 terrain curriculum。</li>
   </ul>
 
@@ -368,6 +368,10 @@ yaw command:
 
 reference tracking:
   reward / metric / termination / distillation only</pre>
+    <p class="small">
+      蒸馏控制分配：前 10% iteration 保持全 teacher；10% 到 80% 线性降低
+      teacher episode 比例；80% 之后完全 student。teacher_coef 不参与该衰减。
+    </p>
   </section>
 </main>
 </body>
