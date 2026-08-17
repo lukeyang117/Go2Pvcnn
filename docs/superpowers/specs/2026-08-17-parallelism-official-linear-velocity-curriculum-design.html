@@ -258,7 +258,35 @@
     也避免 yaw 范围在训练中二次变化。
   </p>
 
-  <h2>九、预期训练行为</h2>
+  <h2>九、Command 到 Parallelism Planner 的接口</h2>
+  <p>
+    课程更新不能只修改 IsaacLab command 的范围，也必须保证最新 command
+    在下一次规划时进入 Parallelism。command 的唯一来源是环境的
+    <code>command_manager</code>。
+  </p>
+  <div class="flow">
+    <div><code>base_velocity</code> command manager 生成当前环境的三维命令</div>
+    <div>student observation 读取同一个 command tensor</div>
+    <div>ParallelismReferenceManager 在每次重规划时重新读取 <code>get_command("base_velocity")</code></div>
+    <div>截取前三维 <code>[vx, vy, yaw]</code>，保持环境 batch 维度</div>
+    <div>传入 <code>plan_trajectory(state, command, terrain, ...)</code></div>
+    <div>Parallelism 使用该 command 生成 root trajectory、touchdown 和 joint reference</div>
+  </div>
+  <pre>command = env.command_manager.get_command("base_velocity")[:, :3]
+ParallelismReferenceManager._command(env_ids)
+        ↓
+plan_trajectory(state, command, terrain, cfg)
+        ↓
+reference root / foot / joint trajectory</pre>
+  <ul>
+    <li>课程扩大 vx/vy 后，下一次重规划必须使用更新后的 vx/vy。</li>
+    <li>yaw 直接使用当前固定范围 <code>[-1, 1]</code> 的 command。</li>
+    <li>重规划不能缓存旧 command，除非该 cycle 明确要求保持同一 command。</li>
+    <li>teacher、student、reward 和 planner 必须读取同一个 command。</li>
+    <li>command tensor 必须保持 <code>[num_envs, 3]</code>，不能把线速度和 yaw 拆成不同接口。</li>
+  </ul>
+
+  <h2>十、预期训练行为</h2>
   <ul>
     <li>训练初期同时面对完整 yaw 范围，但平移速度从低范围开始。</li>
     <li>student 先学习低速下的前后、侧向和转向组合动作。</li>
@@ -267,7 +295,7 @@
     <li>teacher/student 混合逻辑不变，teacher 仍用于蒸馏稳定训练。</li>
   </ul>
 
-  <h2>十、涉及文件</h2>
+  <h2>十一、涉及文件</h2>
   <table>
     <thead>
       <tr><th>文件</th><th>修改内容</th></tr>
@@ -286,13 +314,21 @@
         <td>仅在基础配置需要同步时调整 curriculum 注册，不改变 reward。</td>
       </tr>
       <tr>
+        <td><code>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</code></td>
+        <td>明确并测试每次规划从 command manager 读取最新三维 command，再传给 planner。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/tests/tracking/</code></td>
+        <td>增加 command-to-planner 接口测试，以及 1024 环境真实 Isaac Sim 4 iteration 测试入口。</td>
+      </tr>
+      <tr>
         <td><code>Go2Pvcnn/tracking/parallelism_tracking_env_cfg.py</code></td>
         <td>保留作为旧任务兼容配置，不影响已有实验。</td>
       </tr>
     </tbody>
   </table>
 
-  <h2>十一、不修改的内容</h2>
+  <h2>十二、不修改的内容</h2>
   <ul>
     <li>不删除 yaw tracking reward。</li>
     <li>不改变最新 reward 权重和 std。</li>
@@ -303,8 +339,17 @@
     <li>不改变现有 termination 和 terrain curriculum。</li>
   </ul>
 
+  <h2>十三、验证要求</h2>
+  <ul>
+    <li>静态测试确认 planner 收到的 command 与 command manager 完全一致。</li>
+    <li>测试 command 更新后，下一次重规划使用新 vx/vy/yaw，而不是旧缓存。</li>
+    <li>使用 1024 个 Isaac Sim 环境运行 4 个 training iteration。</li>
+    <li>验证 teacher observation、student observation 和 critic observation 维度正常。</li>
+    <li>验证 collection、PPO update、curriculum 和 planner 均能完成。</li>
+  </ul>
+
   <section class="card blue">
-    <h2>十二、最终配置摘要</h2>
+    <h2>十四、最终配置摘要</h2>
     <pre>student observation:
   command = [vx, vy, yaw]
   base_lin_vel = disabled
