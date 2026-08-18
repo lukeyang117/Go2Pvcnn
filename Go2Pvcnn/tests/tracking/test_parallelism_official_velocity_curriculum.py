@@ -26,7 +26,7 @@ def test_distillation_keeps_latest_velocity_rewards():
 
     assert "weight=1.5" in source
     assert "weight=0.75" in source
-    assert "math.sqrt(0.25)" in source
+    assert source.count('"std": 0.2') == 2
 
 
 def test_distillation_keeps_commands_long_but_replans_parallelism_independently():

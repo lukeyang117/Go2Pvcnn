@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -62,12 +60,12 @@ class ParallelismDistillationRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
     track_lin_vel_xy = RewTerm(
         func=go2_mdp.track_lin_vel_xy_exp,
         weight=1.5,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+        params={"command_name": "base_velocity", "std": 0.2},
     )
     track_ang_vel_z = RewTerm(
         func=go2_mdp.track_ang_vel_z_exp,
         weight=0.75,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+        params={"command_name": "base_velocity", "std": 0.2},
     )
 
 
