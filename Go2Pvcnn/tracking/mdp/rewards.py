@@ -132,7 +132,12 @@ def parallelism_geometry_collision_penalty(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     scanner_cfg: SceneEntityCfg = SceneEntityCfg("semantic_height_scanner"),
 ) -> torch.Tensor:
-    """Penalize active-leg collision using Parallelism official geometry and terrain query."""
+    """Return the raw active-leg collision event.
+
+    The reward configuration supplies the negative penalty weight. Keeping the
+    function value positive avoids applying the penalty sign twice in Isaac
+    Lab's ``value = func(...) * weight * dt`` path.
+    """
 
     _ = asset_cfg, scanner_cfg
     manager = get_parallelism_reference_manager(env)
@@ -140,7 +145,7 @@ def parallelism_geometry_collision_penalty(
     contact = torch.as_tensor(manager.current_contact_state, dtype=torch.bool, device=collision_by_leg.device)
     event = _active_collision_penalty(collision_by_leg, contact)
     _update_obstacle_stats(env, collision_event=event)
-    return -event
+    return event
 
 
 def active_swing_foot_on_small_obstacle_reward(

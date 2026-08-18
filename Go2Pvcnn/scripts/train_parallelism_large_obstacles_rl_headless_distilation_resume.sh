@@ -15,7 +15,7 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment parallelism_tracking_cross_large_complex_distillation \
   --num_envs 1024 \
   --headless \
-  --max_iterations 4000 \
+  --max_iterations 2000 \
   --resume \
   --load_run 2026-08-17_18-15-07/82a2edc \
   --load_checkpoint model_800.pt \
@@ -23,4 +23,4 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --teacher-ratio-start 0.0 \
   --teacher-ratio-end 0.0 \
   --ppo-coef 1.0 \
-  --teacher-coef 0.5
+  --teacher-coef 0.01

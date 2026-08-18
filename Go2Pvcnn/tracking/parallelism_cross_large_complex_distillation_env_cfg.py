@@ -60,13 +60,26 @@ class ParallelismDistillationRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
     track_lin_vel_xy = RewTerm(
         func=go2_mdp.track_lin_vel_xy_exp,
         weight=1.5,
-        params={"command_name": "base_velocity", "std": 0.2},
+        params={"command_name": "base_velocity", "std": 0.5},
     )
     track_ang_vel_z = RewTerm(
         func=go2_mdp.track_ang_vel_z_exp,
         weight=0.75,
-        params={"command_name": "base_velocity", "std": 0.2},
+        params={"command_name": "base_velocity", "std": 0.5},
     )
+
+    # Reference tracking is learned through the frozen teacher action target,
+    # not through additional reward terms in this PPO task.
+    track_root_pos = None
+    track_root_rot = None
+    reference_joint_pos = None
+    reference_joint_vel = None
+    reference_joint_max = None
+    reference_foot_pos = None
+    reference_active_swing_foot_max = None
+    active_swing_foot_on_small_obstacle = None
+    undesired_contacts = None
+    semantic_contact_collision = None
 
 
 @configclass
@@ -103,6 +116,16 @@ class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
         self.commands.base_velocity.ranges.lin_vel_y = (-0.1, 0.1)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.base_velocity.limit_ranges.ang_vel_z = (-1.0, 1.0)
+        # Restore the official locomotion reward parameters overridden by the
+        # inherited Parallelism flat configuration.
+        self.rewards.action_rate.weight = -0.1
+        self.rewards.air_time_variance.weight = -1.0
+        self.rewards.feet_air_time.weight = 0.1
+        self.rewards.feet_air_time.params["threshold"] = 0.5
+        self.rewards.feet_slide.weight = -0.1
+        self.rewards.joint_pos.weight = -0.7
+        self.rewards.joint_pos.params["stand_still_scale"] = 5.0
+        self.rewards.joint_pos.params["velocity_threshold"] = 0.3
         self.terminations.parallelism_ref_foot_z_too_far = None
         self.terminations.parallelism_consecutive_standstill = None
         assert self.rewards.parallelism_geometry_collision is not None

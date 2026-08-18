@@ -22,6 +22,21 @@ _LEG_NAMES = ("FL", "FR", "RL", "RR")
 class ParallelismTrackingEnv(ManagerBasedRLEnv):
     """ManagerBasedRLEnv with episode-level Parallelism tracking diagnostics."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Tracking metrics used to be updated as a side effect of reference
+        # rewards. Keep that diagnostic stream when the distillation task
+        # removes those rewards from the optimization objective.
+        original_compute = self.reward_manager.compute
+
+        def compute_with_tracking(*compute_args, **compute_kwargs):
+            reward = original_compute(*compute_args, **compute_kwargs)
+            update_parallelism_tracking_error_stats(self)
+            return reward
+
+        self.reward_manager.compute = compute_with_tracking
+
     def step(self, action):
         get_parallelism_reference_manager(self).prepare_step_reference()
         return super().step(action)
