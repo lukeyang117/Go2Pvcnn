@@ -173,6 +173,9 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
         # Keep the sampled command stable while Parallelism independently
         # replans on reset, command changes, or every 23 control steps.
         self.commands.base_velocity.resampling_time_range = (100.0, 100.0)
+        # Start training directly at the full command limits; the velocity
+        # curriculum is disabled for this experiment.
+        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
         # Test terrain progression without the Parallelism velocity curriculum.
         self.curriculum.parallelism_velocity = None
         # Foot-height tracking remains a reward/metric, but no longer ends
