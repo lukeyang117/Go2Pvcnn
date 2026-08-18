@@ -49,7 +49,7 @@ def _parallelism_distillation_train_cfg() -> dict:
         },
         "policy": {
             "class_name": "StudentTeacherCNN",
-            "init_noise_std": 0.3,
+            "init_noise_std": 1.0,
             "cost_map_channels": 2,
             "cost_map_size": 16,
             "actor_cnn_cfg": {
