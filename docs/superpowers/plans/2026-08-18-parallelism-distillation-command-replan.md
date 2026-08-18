@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (&#96;- [ ]&#96;) syntax for tracking.
 
-**Goal:** Align the distillation task's velocity rewards and linear-velocity curriculum with Go2Pvcnn while making Parallelism replan independently every 24 IsaacLab control steps.
+**Goal:** Align the distillation task's velocity rewards and linear-velocity curriculum with Go2Pvcnn while making Parallelism replan independently after the 23 future control frames in its 24-frame reference.
 
-**Architecture:** Keep command resampling at 100 seconds and reuse Go2Pvcnn's velocity reward/curriculum functions. Add an explicit per-environment Parallelism control-step counter in the reference manager; reset, command changes, and the 24-step timer each invalidate and refresh only the affected environments.
+**Architecture:** Keep command resampling at 100 seconds and reuse Go2Pvcnn's velocity reward/curriculum functions. Add an explicit per-environment Parallelism control-step counter in the reference manager; reset, command changes, and the 23-step timer each invalidate and refresh only the affected environments. Reference frame 0 is the measured state and frames 1 through 23 are the 23 control targets.
 
 **Tech Stack:** Python, PyTorch, Isaac Lab configuration classes, pytest, headless Isaac Sim smoke test.
 
@@ -12,7 +12,7 @@
 
 - Angular velocity starts at [-1.0, 1.0] and never participates in curriculum expansion.
 - Command resampling is (100.0, 100.0) and is independent from Parallelism replanning.
-- Parallelism replans after reset, command change, or 24 control steps.
+- Parallelism replans after reset, command change, or 23 completed control steps.
 - Every new trajectory writes the measured state to frame 0; policy-facing references use frame 1.
 - Existing user changes in Go2Pvcnn/scripts/train_parallelism_large_obstacles_rl_headless_distilation_resume.sh must be preserved.
 - Do not modify shared Go2Pvcnn reward or curriculum functions.
@@ -36,7 +36,7 @@ Assert source/config values for weights 1.5, 0.75, and numeric std 0.5; assert c
 
 - [ ] Step 2: Add explicit 24-step timer tests
 
-Add tests showing that unchanged command does not replan for 23 completed control steps and does replan on the 24th. Add tests for command-change immediate replan, reset replan, combined trigger deduplication, and independent per-environment counters.
+Add tests showing that unchanged command does not replan for 22 completed control steps and does replan on the 23rd. Add tests for command-change immediate replan, reset replan, combined trigger deduplication, and independent per-environment counters.
 
 - [ ] Step 3: Run the focused tests before implementation
 
@@ -47,7 +47,7 @@ pytest -q tests/tracking/test_parallelism_official_velocity_curriculum.py \
   tests/tracking/test_parallelism_reference_manager.py
 ~~~
 
-Expected: FAIL because the current config still has old reward/command values and the manager still derives timing from horizon - 1 and episode length.
+Expected: FAIL because the current config still has old reward/command values and the manager has no independent counter.
 
 - [ ] Step 4: Commit the red tests
 
@@ -107,7 +107,7 @@ Run the focused config tests and expect PASS.
 - Test: Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py
 
 **Interfaces:**
-- ParallelismCfg.replan_interval_steps: int = 24.
+- ParallelismCfg.replan_interval_steps: int = 23.
 - ParallelismReferenceManager.parallelism_step_count: Tensor[int64] is per environment.
 - Existing reset, mark_command_changed, refresh, and prepare_step_reference APIs remain compatible.
 
@@ -117,7 +117,7 @@ Use the existing fake environment and monkeypatched _plan to assert plan counts 
 
 - [ ] Step 2: Add the interval field
 
-Add replan_interval_steps next to horizon and dt, with default value 24.
+Add replan_interval_steps next to horizon and dt, with default value 23. This is horizon - 1 because frame 0 is the measured state and is not a control target.
 
 - [ ] Step 3: Replace episode-derived cycle timing
 
@@ -137,7 +137,7 @@ mark_command_changed() must invalidate only the selected environments and reset 
 
 - [ ] Step 5: Advance the counter once per control action
 
-At the end of prepare_step_reference(), increment the selected per-environment counter exactly once for the prepared control step. Do not advance it from reward/observation property reads. A command-change or timer-triggered refresh before target-frame selection must plan first, then the next policy target remains frame 1.
+At the end of prepare_step_reference(), increment the selected per-environment counter exactly once for the prepared control step. Do not advance it from reward/observation property reads. A command-change or timer-triggered refresh before target-frame selection must plan first, then the next policy target remains frame 1. The 24th cached frame is not an additional action: frame 0 is state-only, and frames 1 through 23 are the control sequence.
 
 - [ ] Step 6: Prevent duplicate plans for combined triggers
 
@@ -181,11 +181,11 @@ bash -n scripts/train_parallelism_large_obstacles_rl_headless_distilation_resume
 
 - [ ] Step 3: Run the 1024-environment four-iteration smoke test
 
-Use the existing headless distillation training entrypoint with --num_envs 1024 and --max_iterations 4, preserving the current script's teacher/student and std arguments. Verify startup, reset, command initialization, reference frame shapes, and at least one timer-driven replanning event without a tensor-shape error.
+Use the existing headless distillation training entrypoint with --num_envs 1024 and --max_iterations 4, preserving the current script's teacher/student and std arguments. Verify startup, reset, command initialization, reference frame shapes, and at least one timer-driven replanning event after 23 control steps without a tensor-shape error.
 
 - [ ] Step 4: Record timer evidence
 
-The smoke test must report or expose plan counts showing that an unchanged command produces a replan at the 24-control-step boundary while the command itself remains unchanged.
+The smoke test must report or expose plan counts showing that an unchanged command produces a replan after 23 control steps while the command itself remains unchanged.
 
 ### Task 5: Commit the implementation
 
@@ -219,4 +219,3 @@ git commit -m "feat: decouple parallelism replanning from command sampling"
 git status --short --branch
 git log -2 --oneline
 ~~~
-

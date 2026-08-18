@@ -58,7 +58,7 @@
   <header>
     <h1>Parallelism 蒸馏训练：速度命令与独立重规划设计</h1>
     <p class="meta">日期：2026-08-18　分支：parallelism-large-obstacles-distillation-rl</p>
-    <p>本设计对齐 Go2Pvcnn 的速度奖励和线速度课程，同时保留 Parallelism reference 的独立 24 控制步重规划机制。速度命令保持时间与 reference 重规划时间明确解耦。</p>
+    <p>本设计对齐 Go2Pvcnn 的速度奖励和线速度课程，同时保留 Parallelism reference 的 24 帧轨迹与独立 23 控制步重规划机制。速度命令保持时间与 reference 重规划时间明确解耦。</p>
   </header>
 
   <section>
@@ -67,8 +67,8 @@
       <li>速度奖励使用 teacher_elevation_trajectory_mpc_semantic_env_cfg.py 的权重和误差尺度。</li>
       <li>线速度课程复用 Go2Pvcnn 的 lin_vel_cmd_levels，不再使用 Parallelism 自定义速度误差课程。</li>
       <li>角速度从第一个 episode 就使用完整范围 [-1, 1]，不参与课程扩大。</li>
-      <li>速度命令保持约 100 秒，不因 24 个控制步自动换命令。</li>
-      <li>Parallelism 每个环境独立计数，每 24 个控制步重新规划一次。</li>
+      <li>速度命令保持约 100 秒，不因 reference 轨迹结束自动换命令。</li>
+      <li>Parallelism 每个环境独立计数，每 23 个已执行控制步重新规划一次。</li>
     </ul>
     <p class="note">本设计不增加额外的 root 位移课程门槛，也不修改 Parallelism 的运动学规划逻辑。奖励、课程、command 和 reference 重规划分别负责自己的时间尺度。</p>
   </section>
@@ -101,7 +101,7 @@ track_ang_vel_z:
         <tr><td>角速度上限</td><td><code>yaw=(-1.0, 1.0)</code></td><td>与初始角速度范围相同，因此不进行 yaw 课程。</td></tr>
       </tbody>
     </table>
-    <p class="good">速度 command 可以 100 秒不变，但 Parallelism 仍会每 24 个控制步根据当前真实状态重新规划。</p>
+    <p class="good">速度 command 可以 100 秒不变，但 Parallelism 仍会每 23 个已执行控制步根据当前真实状态重新规划。</p>
   </section>
 
   <section>
@@ -114,7 +114,7 @@ track_ang_vel_z:
     &gt; track_lin_vel_xy.weight * 0.8
     = 1.5 * 0.8
     = 1.2</pre>
-    <p>课程只扩展 lin_vel_x 和 lin_vel_y，不扩展 ang_vel_z。课程在 episode 级别计算，不与每 24 步的 reference 重规划绑定。</p>
+    <p>课程只扩展 lin_vel_x 和 lin_vel_y，不扩展 ang_vel_z。课程在 episode 级别计算，不与每 23 步的 reference 重规划绑定。</p>
     <h3>4.2 其他课程</h3>
     <ul>
       <li>保留当前复杂地形的 terrain_levels 课程。</li>
@@ -131,7 +131,7 @@ track_ang_vel_z:
       <tbody>
         <tr><td>环境 reset</td><td>清除旧 reference 和计数状态，读取 reset 后真实状态，立即规划。</td></tr>
         <tr><td>速度 command 变化</td><td>比较当前 command 与上一条 command；发生变化时立即规划，并清零计数器。</td></tr>
-        <tr><td>Parallelism 计数达到 24</td><td>即使 command 没变，也读取当前真实状态重新规划，并清零计数器。</td></tr>
+        <tr><td>Parallelism 计数达到 23</td><td>即使 command 没变，也读取当前真实状态重新规划，并清零计数器。</td></tr>
       </tbody>
     </table>
     <p>同一个控制步同时满足多个条件时只执行一次规划。速度比较使用小的浮点容差，避免数值噪声反复触发。command 的 100 秒采样周期不再作为 Parallelism 的计时依据。</p>
@@ -139,13 +139,17 @@ track_ang_vel_z:
           = 0.005 * 4
           = 0.02 s
 
-Parallelism 周期 = 24 * 0.02
-                 = 0.48 s</pre>
+reference 帧数 = 24
+frame 0 = 当前真实状态，不执行控制、不参与奖励
+frame 1~23 = 23 个未来控制步
+
+Parallelism 重规划周期 = 23 * 0.02
+                      = 0.46 s</pre>
   </section>
 
   <section>
     <h2>六、reference 时间对齐</h2>
-    <p>每次 reset、command 变化或 24 步到达后，统一执行同一套 reference 刷新流程：</p>
+    <p>每次 reset、command 变化或 23 步到达后，统一执行同一套 reference 刷新流程：</p>
     <pre>读取当前 IsaacLab 真实 root、姿态、关节状态
         ↓
 Parallelism 生成新轨迹
@@ -155,7 +159,7 @@ reference_new[1] = 当前状态之后的第一帧
         ↓
 下一次 policy observation 使用 reference_new[1]</pre>
     <p>旧 reference 不跨越重规划边界继续作为新轨迹的起点。reset 后也不提前显示一个与真实机器人不一致的 reference 第 0 帧。</p>
-    <p class="note">当前轨迹缓存的 frame 0 是真实状态；重规划计数是独立的 24 控制步计数。实现时必须明确计数器清零和新轨迹刷新发生在同一个 per-env 边界上，避免环境之间互相影响。</p>
+    <p class="note">当前轨迹缓存的 frame 0 是真实状态，不参与 teacher 输入、policy 动作和奖励；frame 1~23 才是未来控制帧。重规划计数是独立的 23 个已执行控制步计数。实现时必须明确计数器清零和新轨迹刷新发生在同一个 per-env 边界上，避免环境之间互相影响。</p>
   </section>
 
   <section>
@@ -164,7 +168,7 @@ reference_new[1] = 当前状态之后的第一帧
       <thead><tr><th>文件</th><th>修改内容</th></tr></thead>
       <tbody>
         <tr><td><code>Go2Pvcnn/tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>速度奖励、蒸馏专用 command、速度课程绑定、角速度初始范围。</td></tr>
-        <tr><td><code>Go2Pvcnn/extension/parallelism/config.py</code></td><td>增加独立的 replan_interval_steps=24 配置。</td></tr>
+        <tr><td><code>Go2Pvcnn/extension/parallelism/config.py</code></td><td>增加独立的 replan_interval_steps=23 配置，明确 24 帧包含 frame 0。</td></tr>
         <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</code></td><td>实现 per-env 计数和 reset、command change、timer 三类触发。</td></tr>
         <tr><td><code>Go2Pvcnn/go2_pvcnn/mdp/rewards.py</code></td><td>不修改，继续复用速度奖励函数。</td></tr>
         <tr><td><code>Go2Pvcnn/go2_pvcnn/mdp/curriculums.py</code></td><td>不修改，继续复用 Go2Pvcnn 线速度课程函数。</td></tr>
@@ -184,9 +188,9 @@ reference_new[1] = 当前状态之后的第一帧
     <h3>8.2 无 IsaacSim 的 manager 单元测试</h3>
     <ul>
       <li>reset 后立即规划，计数器清零。</li>
-      <li>command 不变时，第 24 个控制步触发一次规划。</li>
-      <li>command 变化时立即规划，不等待 24 步。</li>
-      <li>command 变化和 24 步同时到达时只规划一次。</li>
+      <li>command 不变时，第 23 个已执行控制步触发一次规划。</li>
+      <li>command 变化时立即规划，不等待 23 步。</li>
+      <li>command 变化和 23 步同时到达时只规划一次。</li>
       <li>多个环境分别 reset、改 command、到达计时点时互不影响。</li>
       <li>每次规划后 frame 0 是真实状态，下一次 policy 读取 frame 1。</li>
     </ul>
@@ -195,14 +199,14 @@ reference_new[1] = 当前状态之后的第一帧
       <li>确认 flat、small obstacles 和旧 complex 配置未被改动。</li>
       <li>执行 Python 编译检查、pytest 和两个训练脚本的 shell 语法检查。</li>
       <li>启动 1024 环境 headless 训练，运行 4 个 iteration。</li>
-      <li>检查启动、reset、24 步重规划和 command 保持期间没有 shape error 或 reference 越界。</li>
+      <li>检查启动、reset、23 步重规划和 command 保持期间没有 shape error 或 reference 越界。</li>
     </ul>
   </section>
 
   <section>
     <h2>九、验收标准</h2>
     <ul>
-      <li>command 在 24 步内不自动变化，Parallelism 仍能按 24 步重规划。</li>
+      <li>command 在 reference 周期内不自动变化，Parallelism 仍能按 23 个已执行控制步重规划。</li>
       <li>command 变化时对应环境立即刷新 reference。</li>
       <li>reset 后 reference 第 0 帧与真实 policy Go2 对齐。</li>
       <li>yaw 从训练开始就是完整范围，课程不会扩大 yaw。</li>
