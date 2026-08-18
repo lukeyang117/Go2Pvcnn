@@ -13,6 +13,7 @@ from tracking.mdp.rewards import (
     parallelism_tracking_episode_errors,
     reset_parallelism_obstacle_stats,
     reset_parallelism_tracking_error_stats,
+    update_parallelism_tracking_error_stats,
 )
 
 
