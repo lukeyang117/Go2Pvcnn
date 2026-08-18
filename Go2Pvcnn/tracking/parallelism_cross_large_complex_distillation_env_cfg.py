@@ -99,7 +99,8 @@ class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
         self.curriculum.parallelism_velocity = None
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.base_velocity.limit_ranges.ang_vel_z = (-1.0, 1.0)
-        assert self.terminations.parallelism_consecutive_standstill is not None
+        self.terminations.parallelism_ref_foot_z_too_far = None
+        self.terminations.parallelism_consecutive_standstill = None
         assert self.rewards.parallelism_geometry_collision is not None
 
 
