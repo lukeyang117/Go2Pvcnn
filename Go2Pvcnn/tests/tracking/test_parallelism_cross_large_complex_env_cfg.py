@@ -32,3 +32,28 @@ def test_cross_large_complex_config_excludes_only_dense_flat_from_terrain_curric
     source = (ROOT / "tracking/parallelism_cross_large_complex_env_cfg.py").read_text()
     assert "flat_dense_small_obstacles" in source
     assert "excluded_terrain_names" in source
+
+
+def test_cross_large_teacher_tracks_command_and_removes_foot_z_termination() -> None:
+    source = (ROOT / "tracking/parallelism_cross_large_complex_env_cfg.py").read_text()
+    assert "ParallelismCrossLargeTeacherObservationsCfg" in source
+    assert "isaac_mdp.generated_commands" in source
+    assert '"command_name": "base_velocity"' in source
+    assert "ParallelismCrossLargeTeacherRewardsCfg" in source
+    assert "track_lin_vel_xy_exp" in source
+    assert "track_ang_vel_z_exp" in source
+    assert "weight=1.5" in source
+    assert "weight=0.75" in source
+    assert '"std": math.sqrt(0.25)' in source
+    assert "self.terminations.parallelism_ref_foot_z_too_far = None" in source
+
+
+def test_cross_large_teacher_training_script_is_fresh() -> None:
+    source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_teacher.sh").read_text()
+    assert "parallelism_tracking_cross_large_complex" in source
+    assert "--headless" in source
+    assert "--max_iterations 20000" in source
+    assert "--resume" not in source
+    assert "--load_run" not in source
+    assert "--load_checkpoint" not in source
+    assert "--teacher_checkpoint" not in source

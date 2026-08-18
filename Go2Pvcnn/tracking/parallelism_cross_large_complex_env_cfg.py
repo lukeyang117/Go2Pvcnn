@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import field
+import math
 
 import isaaclab.terrains as terrain_gen
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 
 from extension.semantic_course import SemanticCourseLayoutCfg, SemanticCourseTerrainImporter
@@ -13,12 +17,52 @@ from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacl
 from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import SEMANTIC_TERRAIN_CFG
 import go2_pvcnn.mdp as go2_mdp
 from tracking.parallelism_small_obstacles_env_cfg import (
+    ParallelismSmallObstaclesRewardsCfg,
     ParallelismTrackingSmallObstaclesEnvCfg,
 )
 from tracking.parallelism_tracking_env_cfg import (
     ParallelismTrackingCurriculumCfg,
+    ParallelismTrackingObservationsCfg,
     ParallelismTrackingPlaySceneCfg,
 )
+
+
+@configclass
+class ParallelismCrossLargeTeacherObservationsCfg(ParallelismTrackingObservationsCfg):
+    """Privileged teacher observations with the command made explicit."""
+
+    @configclass
+    class PolicyStateCfg(ParallelismTrackingObservationsCfg.PolicyStateCfg):
+        velocity_commands = ObsTerm(
+            func=isaac_mdp.generated_commands,
+            params={"command_name": "base_velocity"},
+        )
+
+    @configclass
+    class CriticStateCfg(ParallelismTrackingObservationsCfg.CriticStateCfg):
+        velocity_commands = ObsTerm(
+            func=isaac_mdp.generated_commands,
+            params={"command_name": "base_velocity"},
+        )
+
+    policy_state: PolicyStateCfg = PolicyStateCfg()
+    critic_state: CriticStateCfg = CriticStateCfg()
+
+
+@configclass
+class ParallelismCrossLargeTeacherRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
+    """Large-terrain teacher rewards with explicit command tracking."""
+
+    track_lin_vel_xy = RewTerm(
+        func=go2_mdp.track_lin_vel_xy_exp,
+        weight=1.5,
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+    )
+    track_ang_vel_z = RewTerm(
+        func=go2_mdp.track_ang_vel_z_exp,
+        weight=0.75,
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+    )
 
 
 def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
@@ -97,6 +141,10 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
     """Mixed terrain task with dense flat small-obstacle crossing."""
 
     experiment_name: str = "parallelism_tracking_cross_large_complex"
+    observations: ParallelismCrossLargeTeacherObservationsCfg = (
+        ParallelismCrossLargeTeacherObservationsCfg()
+    )
+    rewards: ParallelismCrossLargeTeacherRewardsCfg = ParallelismCrossLargeTeacherRewardsCfg()
     dense_small_obstacle_count: int = 40
     normal_small_obstacle_count: int = 5
     normal_large_obstacle_count: int = 2
@@ -125,6 +173,9 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
         # Keep the sampled command stable while Parallelism independently
         # replans on reset, command changes, or every 23 control steps.
         self.commands.base_velocity.resampling_time_range = (100.0, 100.0)
+        # Foot-height tracking remains a reward/metric, but no longer ends
+        # the large-terrain teacher episode by itself.
+        self.terminations.parallelism_ref_foot_z_too_far = None
         self.scene.terrain.terrain_generator = _cross_large_complex_terrain_cfg()
         self.scene.terrain.terrain_generator.curriculum = True
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
