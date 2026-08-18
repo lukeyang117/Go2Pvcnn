@@ -36,7 +36,7 @@ def _parallelism_distillation_train_cfg() -> dict:
             "gamma": 0.99,
             "lam": 0.95,
             "value_loss_coef": 1.0,
-            "entropy_coef": 0.001,
+            "entropy_coef": 0.01,
             "max_grad_norm": 1.0,
             "use_clipped_value_loss": True,
             "schedule": "fixed",
