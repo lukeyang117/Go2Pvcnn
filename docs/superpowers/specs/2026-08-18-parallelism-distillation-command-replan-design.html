@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism 蒸馏训练：速度命令与独立重规划设计</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #566573;
+      --line: #d5dce3;
+      --paper: #ffffff;
+      --wash: #f4f7f9;
+      --blue: #145da0;
+      --green: #16734a;
+      --amber: #9a6700;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--wash);
+      font: 16px/1.7 system-ui, -apple-system, "Noto Sans SC", sans-serif;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 40px 24px 72px; }
+    header, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 24px 28px;
+      margin-bottom: 18px;
+    }
+    header { border-top: 5px solid var(--blue); }
+    h1, h2, h3 { line-height: 1.3; margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { color: var(--blue); font-size: 22px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    h3 { font-size: 18px; margin-top: 22px; }
+    .meta, .note { color: var(--muted); }
+    .note { border-left: 4px solid var(--amber); background: #fff8e6; padding: 10px 14px; }
+    .good { border-left: 4px solid var(--green); background: #edf8f2; padding: 10px 14px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    code { background: #eef2f5; padding: 1px 4px; border-radius: 3px; }
+    pre { overflow-x: auto; background: #1f2933; color: #f4f7f9; padding: 14px 16px; border-radius: 6px; line-height: 1.5; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: 9px 10px; }
+    th { background: #eaf1f7; }
+    ul { padding-left: 24px; }
+    @media (max-width: 680px) {
+      main { padding: 20px 12px 44px; }
+      header, section { padding: 18px; }
+      h1 { font-size: 25px; }
+      table { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Parallelism 蒸馏训练：速度命令与独立重规划设计</h1>
+    <p class="meta">日期：2026-08-18　分支：parallelism-large-obstacles-distillation-rl</p>
+    <p>本设计对齐 Go2Pvcnn 的速度奖励和线速度课程，同时保留 Parallelism reference 的独立 24 控制步重规划机制。速度命令保持时间与 reference 重规划时间明确解耦。</p>
+  </header>
+
+  <section>
+    <h2>一、设计目标</h2>
+    <ul>
+      <li>速度奖励使用 teacher_elevation_trajectory_mpc_semantic_env_cfg.py 的权重和误差尺度。</li>
+      <li>线速度课程复用 Go2Pvcnn 的 lin_vel_cmd_levels，不再使用 Parallelism 自定义速度误差课程。</li>
+      <li>角速度从第一个 episode 就使用完整范围 [-1, 1]，不参与课程扩大。</li>
+      <li>速度命令保持约 100 秒，不因 24 个控制步自动换命令。</li>
+      <li>Parallelism 每个环境独立计数，每 24 个控制步重新规划一次。</li>
+    </ul>
+    <p class="note">本设计不增加额外的 root 位移课程门槛，也不修改 Parallelism 的运动学规划逻辑。奖励、课程、command 和 reference 重规划分别负责自己的时间尺度。</p>
+  </section>
+
+  <section>
+    <h2>二、速度奖励</h2>
+    <p>蒸馏任务继续使用当前实际 policy Go2 的 root 速度与 command 比较。奖励不直接比较 Parallelism reference 速度。</p>
+    <pre>track_lin_vel_xy:
+  function: go2_mdp.track_lin_vel_xy_exp
+  weight: 1.5
+  std: sqrt(0.25) = 0.5
+
+track_ang_vel_z:
+  function: go2_mdp.track_ang_vel_z_exp
+  weight: 0.75
+  std: sqrt(0.25) = 0.5</pre>
+    <p>两个奖励每个 IsaacLab 控制步计算一次。其他 root、joint、foot、碰撞、能耗和稳定性奖励全部保留，不因本设计删除。</p>
+  </section>
+
+  <section>
+    <h2>三、command 配置</h2>
+    <table>
+      <thead><tr><th>参数</th><th>最终值</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><code>resampling_time_range</code></td><td><code>(100.0, 100.0)</code></td><td>速度命令保持约 100 秒；不负责触发 Parallelism 周期重规划。</td></tr>
+        <tr><td><code>rel_standing_envs</code></td><td><code>0.1</code></td><td>按照 Go2Pvcnn 配置保留 standing command 比例。</td></tr>
+        <tr><td>初始线速度</td><td><code>vx=(-0.1, 0.1)</code><br><code>vy=(-0.1, 0.1)</code></td><td>由线速度课程逐步扩展。</td></tr>
+        <tr><td>初始角速度</td><td><code>yaw=(-1.0, 1.0)</code></td><td>从训练开始就是完整范围。</td></tr>
+        <tr><td>线速度上限</td><td><code>vx=(-1.0, 1.0)</code><br><code>vy=(-0.5, 0.5)</code></td><td>线速度课程的目标范围。</td></tr>
+        <tr><td>角速度上限</td><td><code>yaw=(-1.0, 1.0)</code></td><td>与初始角速度范围相同，因此不进行 yaw 课程。</td></tr>
+      </tbody>
+    </table>
+    <p class="good">速度 command 可以 100 秒不变，但 Parallelism 仍会每 24 个控制步根据当前真实状态重新规划。</p>
+  </section>
+
+  <section>
+    <h2>四、课程设计</h2>
+    <h3>4.1 线速度课程</h3>
+    <p>蒸馏配置绑定 Go2Pvcnn 的：</p>
+    <pre>lin_vel_cmd_levels = CurrTerm(go2_mdp.lin_vel_cmd_levels)</pre>
+    <p>升级条件保持参考实现：</p>
+    <pre>episode_mean(track_lin_vel_xy)
+    &gt; track_lin_vel_xy.weight * 0.8
+    = 1.5 * 0.8
+    = 1.2</pre>
+    <p>课程只扩展 lin_vel_x 和 lin_vel_y，不扩展 ang_vel_z。课程在 episode 级别计算，不与每 24 步的 reference 重规划绑定。</p>
+    <h3>4.2 其他课程</h3>
+    <ul>
+      <li>保留当前复杂地形的 terrain_levels 课程。</li>
+      <li>关闭当前配置中的 parallelism_velocity 自定义 joint/root 误差课程。</li>
+      <li>不修改旧的 Go2Pvcnn 任务和旧的 Parallelism 训练配置。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>五、Parallelism 三种重规划触发条件</h2>
+    <p>每个环境独立保存一个 parallelism_step_count 和上一条 command。重规划只由以下三种事件触发：</p>
+    <table>
+      <thead><tr><th>触发条件</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td>环境 reset</td><td>清除旧 reference 和计数状态，读取 reset 后真实状态，立即规划。</td></tr>
+        <tr><td>速度 command 变化</td><td>比较当前 command 与上一条 command；发生变化时立即规划，并清零计数器。</td></tr>
+        <tr><td>Parallelism 计数达到 24</td><td>即使 command 没变，也读取当前真实状态重新规划，并清零计数器。</td></tr>
+      </tbody>
+    </table>
+    <p>同一个控制步同时满足多个条件时只执行一次规划。速度比较使用小的浮点容差，避免数值噪声反复触发。command 的 100 秒采样周期不再作为 Parallelism 的计时依据。</p>
+    <pre>控制周期 = sim.dt * decimation
+          = 0.005 * 4
+          = 0.02 s
+
+Parallelism 周期 = 24 * 0.02
+                 = 0.48 s</pre>
+  </section>
+
+  <section>
+    <h2>六、reference 时间对齐</h2>
+    <p>每次 reset、command 变化或 24 步到达后，统一执行同一套 reference 刷新流程：</p>
+    <pre>读取当前 IsaacLab 真实 root、姿态、关节状态
+        ↓
+Parallelism 生成新轨迹
+        ↓
+reference_new[0] = 当前真实状态
+reference_new[1] = 当前状态之后的第一帧
+        ↓
+下一次 policy observation 使用 reference_new[1]</pre>
+    <p>旧 reference 不跨越重规划边界继续作为新轨迹的起点。reset 后也不提前显示一个与真实机器人不一致的 reference 第 0 帧。</p>
+    <p class="note">当前轨迹缓存的 frame 0 是真实状态；重规划计数是独立的 24 控制步计数。实现时必须明确计数器清零和新轨迹刷新发生在同一个 per-env 边界上，避免环境之间互相影响。</p>
+  </section>
+
+  <section>
+    <h2>七、修改文件</h2>
+    <table>
+      <thead><tr><th>文件</th><th>修改内容</th></tr></thead>
+      <tbody>
+        <tr><td><code>Go2Pvcnn/tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>速度奖励、蒸馏专用 command、速度课程绑定、角速度初始范围。</td></tr>
+        <tr><td><code>Go2Pvcnn/extension/parallelism/config.py</code></td><td>增加独立的 replan_interval_steps=24 配置。</td></tr>
+        <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</code></td><td>实现 per-env 计数和 reset、command change、timer 三类触发。</td></tr>
+        <tr><td><code>Go2Pvcnn/go2_pvcnn/mdp/rewards.py</code></td><td>不修改，继续复用速度奖励函数。</td></tr>
+        <tr><td><code>Go2Pvcnn/go2_pvcnn/mdp/curriculums.py</code></td><td>不修改，继续复用 Go2Pvcnn 线速度课程函数。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>八、测试方案</h2>
+    <h3>8.1 配置测试</h3>
+    <ul>
+      <li>验证速度奖励权重为 1.5 和 0.75，两个 std 为 0.5。</li>
+      <li>验证 command 保持时间为 100.0 秒。</li>
+      <li>验证 yaw 初始范围和上限始终为 [-1, 1]。</li>
+      <li>验证课程使用 go2_mdp.lin_vel_cmd_levels，Parallelism 自定义速度课程关闭。</li>
+    </ul>
+    <h3>8.2 无 IsaacSim 的 manager 单元测试</h3>
+    <ul>
+      <li>reset 后立即规划，计数器清零。</li>
+      <li>command 不变时，第 24 个控制步触发一次规划。</li>
+      <li>command 变化时立即规划，不等待 24 步。</li>
+      <li>command 变化和 24 步同时到达时只规划一次。</li>
+      <li>多个环境分别 reset、改 command、到达计时点时互不影响。</li>
+      <li>每次规划后 frame 0 是真实状态，下一次 policy 读取 frame 1。</li>
+    </ul>
+    <h3>8.3 回归与运行测试</h3>
+    <ul>
+      <li>确认 flat、small obstacles 和旧 complex 配置未被改动。</li>
+      <li>执行 Python 编译检查、pytest 和两个训练脚本的 shell 语法检查。</li>
+      <li>启动 1024 环境 headless 训练，运行 4 个 iteration。</li>
+      <li>检查启动、reset、24 步重规划和 command 保持期间没有 shape error 或 reference 越界。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>九、验收标准</h2>
+    <ul>
+      <li>command 在 24 步内不自动变化，Parallelism 仍能按 24 步重规划。</li>
+      <li>command 变化时对应环境立即刷新 reference。</li>
+      <li>reset 后 reference 第 0 帧与真实 policy Go2 对齐。</li>
+      <li>yaw 从训练开始就是完整范围，课程不会扩大 yaw。</li>
+      <li>速度奖励和线速度课程的数值、函数与 Go2Pvcnn 参考配置一致。</li>
+      <li>1024 环境 4 iteration 冒烟测试通过。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
