@@ -133,6 +133,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--load_run", type=str, default=None, help="Name of run to load when resuming.")
     parser.add_argument("--load_checkpoint", type=str, default=None, help="Checkpoint file to load.")
     parser.add_argument(
+        "--teacher-ratio-start",
+        type=float,
+        default=None,
+        help="Teacher action takeover ratio at the start of this training segment (0..1).",
+    )
+    parser.add_argument(
+        "--teacher-ratio-end",
+        type=float,
+        default=None,
+        help="Teacher action takeover ratio at the end of this training segment (0..1).",
+    )
+    parser.add_argument(
+        "--ppo-coef",
+        type=float,
+        default=None,
+        help="Override PPO loss coefficient for hybrid distillation.",
+    )
+    parser.add_argument(
+        "--teacher-coef",
+        type=float,
+        default=None,
+        help="Override teacher imitation loss coefficient for hybrid distillation.",
+    )
+    parser.add_argument(
         "--teacher_checkpoint",
         type=str,
         default=None,
@@ -799,6 +823,33 @@ def main() -> int:
 
     # Training configuration from agent module
     train_cfg = get_train_cfg(experiment_name)
+    algorithm_cfg = train_cfg.get("algorithm", {})
+    if experiment_name == "parallelism_tracking_cross_large_complex_distillation":
+        ratio_start = args_cli.teacher_ratio_start
+        ratio_end = args_cli.teacher_ratio_end
+        if (ratio_start is None) != (ratio_end is None):
+            raise ValueError("--teacher-ratio-start and --teacher-ratio-end must be provided together")
+        if ratio_start is not None:
+            if not 0.0 <= ratio_start <= 1.0 or not 0.0 <= ratio_end <= 1.0:
+                raise ValueError("teacher action ratios must be in [0, 1]")
+            algorithm_cfg["teacher_ratio_start"] = ratio_start
+            algorithm_cfg["teacher_ratio_end"] = ratio_end
+        if args_cli.ppo_coef is not None:
+            if args_cli.ppo_coef < 0.0:
+                raise ValueError("--ppo-coef must be non-negative")
+            algorithm_cfg["ppo_coef"] = args_cli.ppo_coef
+        if args_cli.teacher_coef is not None:
+            if args_cli.teacher_coef < 0.0:
+                raise ValueError("--teacher-coef must be non-negative")
+            algorithm_cfg["teacher_coef"] = args_cli.teacher_coef
+        if any(value is not None for value in (ratio_start, ratio_end, args_cli.ppo_coef, args_cli.teacher_coef)):
+            print(
+                "[Distillation] CLI overrides: "
+                f"teacher_ratio=({algorithm_cfg.get('teacher_ratio_start', 'legacy')}, "
+                f"{algorithm_cfg.get('teacher_ratio_end', 'legacy')}), "
+                f"ppo_coef={algorithm_cfg.get('ppo_coef')}, "
+                f"teacher_coef={algorithm_cfg.get('teacher_coef')}"
+            )
     # 4096-env semantic MPC runs with CNN maps can exceed 24GB cards when rollout
     # horizon/minibatch are too large. Keep the CLI unchanged and apply a runtime
     # memory guardrail on the trainer config.
@@ -810,7 +861,6 @@ def main() -> int:
             f"[Runner][MemGuard] {experiment_name} @ 4096 envs: "
             f"num_steps_per_env {old_steps} -> {train_cfg['num_steps_per_env']}"
         )
-    algorithm_cfg = train_cfg.get("algorithm", {})
     if num_envs >= 4096 and isinstance(algorithm_cfg, dict):
         total_batch = int(num_envs * int(train_cfg.get("num_steps_per_env", 24)))
         target_mini_batch = 12_288

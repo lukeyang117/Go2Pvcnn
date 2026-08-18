@@ -41,6 +41,8 @@ class HybridDistillationPPO:
         teacher_coef_decay_end_pct=0.80,
         teacher_ratio_decay_end_pct=0.80,
         teacher_ratio_min=0.0,
+        teacher_ratio_start=None,
+        teacher_ratio_end=None,
         device="cpu",
         clip_min_std=1.0e-6,
         multi_gpu_cfg: dict | None = None,
@@ -76,6 +78,12 @@ class HybridDistillationPPO:
         self.teacher_coef_decay_end_pct = float(teacher_coef_decay_end_pct)
         self.teacher_ratio_decay_end_pct = float(teacher_ratio_decay_end_pct)
         self.teacher_ratio_min = float(teacher_ratio_min)
+        self.teacher_ratio_start = (
+            None if teacher_ratio_start is None else float(teacher_ratio_start)
+        )
+        self.teacher_ratio_end = (
+            None if teacher_ratio_end is None else float(teacher_ratio_end)
+        )
         self.clip_min_std = clip_min_std
 
         trainable_parameters = list(self.policy.student.parameters()) + list(
@@ -86,6 +94,7 @@ class HybridDistillationPPO:
         self.transition = RolloutStorage.Transition()
         self.current_iteration = 0
         self.total_iterations = 1
+        self.schedule_start_iteration = 0
         self.last_teacher_coef = self.teacher_coef
         self.last_teacher_ratio = 1.0
         self.last_student_ratio = 0.0
@@ -113,9 +122,16 @@ class HybridDistillationPPO:
             self.device,
         )
 
-    def set_iteration(self, iteration: int, total_iterations: int) -> None:
+    def set_iteration(
+        self,
+        iteration: int,
+        total_iterations: int,
+        schedule_start_iteration: int | None = None,
+    ) -> None:
         self.current_iteration = max(int(iteration), 0)
         self.total_iterations = max(int(total_iterations), 1)
+        if schedule_start_iteration is not None:
+            self.schedule_start_iteration = max(int(schedule_start_iteration), 0)
 
     def _compute_teacher_coef(self) -> float:
         # Keep the imitation-loss weight fixed. Only teacher_ratio controls
@@ -124,6 +140,25 @@ class HybridDistillationPPO:
         return self.last_teacher_coef
 
     def _compute_teacher_ratio(self) -> float:
+        if self.teacher_ratio_start is not None or self.teacher_ratio_end is not None:
+            if self.teacher_ratio_start is None or self.teacher_ratio_end is None:
+                raise ValueError(
+                    "teacher_ratio_start and teacher_ratio_end must be provided together"
+                )
+            start = min(max(self.teacher_ratio_start, 0.0), 1.0)
+            end = min(max(self.teacher_ratio_end, 0.0), 1.0)
+            segment_start = min(self.schedule_start_iteration, self.total_iterations)
+            segment_length = max(self.total_iterations - segment_start, 1)
+            progress = min(
+                max(
+                    (float(self.current_iteration) - float(segment_start))
+                    / float(segment_length),
+                    0.0,
+                ),
+                1.0,
+            )
+            return start + (end - start) * progress
+
         progress = min(
             max(float(self.current_iteration) / float(self.total_iterations), 0.0),
             1.0,

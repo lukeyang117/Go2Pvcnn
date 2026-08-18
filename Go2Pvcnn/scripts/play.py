@@ -42,6 +42,9 @@ class ParallelismPlayPanelState:
     suppress_termination: dict[str, bool] = field(
         default_factory=lambda: dict.fromkeys(PARALLELISM_TERMINATION_NAMES, True)
     )
+    debug_command_after_step: int | None = None
+    debug_command_after_value: tuple[float, float, float] | None = None
+    debug_command_after_applied: bool = False
 
 
 def _parallelism_debug_command_from_env() -> tuple[float, float, float] | None:
@@ -63,6 +66,34 @@ def _parallelism_debug_command_from_env() -> tuple[float, float, float] | None:
             "for example 0.5,0,0"
         )
     return parts
+
+
+def _parallelism_debug_command_after_from_env() -> tuple[int, tuple[float, float, float]] | None:
+    """Read an optional scheduled command used to reproduce panel changes."""
+
+    value = os.environ.get("PARALLELISM_PLAY_DEBUG_COMMAND_AFTER", "").strip()
+    if not value:
+        return None
+    if ":" not in value:
+        raise ValueError(
+            "PARALLELISM_PLAY_DEBUG_COMMAND_AFTER must use step:vx,vy,yaw, "
+            "for example 20:0.5,0,0"
+        )
+    step_text, command_text = value.split(":", 1)
+    step = int(step_text.strip())
+    try:
+        command = tuple(float(part.strip()) for part in command_text.split(","))
+    except ValueError as exc:
+        raise ValueError(
+            "PARALLELISM_PLAY_DEBUG_COMMAND_AFTER must use step:vx,vy,yaw, "
+            "for example 20:0.5,0,0"
+        ) from exc
+    if len(command) != 3:
+        raise ValueError(
+            "PARALLELISM_PLAY_DEBUG_COMMAND_AFTER must use step:vx,vy,yaw, "
+            "for example 20:0.5,0,0"
+        )
+    return step, command
 
 
 def _panel_command_tensor(state: ParallelismPlayPanelState, command: torch.Tensor) -> torch.Tensor:
@@ -177,7 +208,7 @@ def _parallelism_contact_debug_data(base_env, *, env_id: int = 0) -> dict[str, o
     return result
 
 
-def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timestep: int) -> None:
+def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timestep: int, actions=None) -> None:
     """Print the state boundaries needed to diagnose play-only alignment/reset issues."""
 
     phase = int(torch.as_tensor(manager.phase)[0].item())
@@ -223,6 +254,15 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
     plan_collision_count = int(torch.as_tensor(manager.plan_collision_counts)[0].item())
     plan_per_leg_valid_count = torch.as_tensor(manager.plan_per_leg_valid_count)[0].detach().cpu().tolist()
     plan_per_leg_collision_count = torch.as_tensor(manager.plan_per_leg_collision_count)[0].detach().cpu().tolist()
+    action_stats = ""
+    if actions is not None:
+        action_tensor = torch.as_tensor(actions).detach().float()
+        action_env = action_tensor[0] if action_tensor.ndim > 1 else action_tensor
+        action_stats = (
+            f" action_mean={float(action_env.mean().item()):+.5f}"
+            f" action_absmax={float(action_env.abs().max().item()):.5f}"
+            f" action_norm={float(torch.linalg.vector_norm(action_env).item()):.5f}"
+        )
     print(
         "[Parallelism][debug] "
         f"step={timestep} phase={phase} plan_count={plan_count} "
@@ -238,6 +278,7 @@ def _parallelism_debug_snapshot(base_env, manager, diagnostics, dones, *, timest
         f"collision_candidates={plan_collision_count} "
         f"per_leg_valid={plan_per_leg_valid_count} "
         f"per_leg_collision={plan_per_leg_collision_count} "
+        f"{action_stats} "
         f"policy-ref={torch.linalg.vector_norm(policy_root - manager_root).item():.6f} "
         f"reference-ref={torch.linalg.vector_norm(reference_root - manager_root).item():.6f} "
         f"dones={torch.as_tensor(dones).detach().cpu().tolist()} "
@@ -1593,6 +1634,18 @@ def main() -> int:
                 f"vyaw={parallelism_panel_state.vyaw:+.3f}",
                 flush=True,
             )
+        debug_command_after = _parallelism_debug_command_after_from_env()
+        if debug_command_after is not None:
+            (
+                parallelism_panel_state.debug_command_after_step,
+                parallelism_panel_state.debug_command_after_value,
+            ) = debug_command_after
+            print(
+                "[Parallelism][debug] scheduled panel command enabled: "
+                f"after_step={parallelism_panel_state.debug_command_after_step} "
+                f"command={parallelism_panel_state.debug_command_after_value}",
+                flush=True,
+            )
         if os.environ.get("PARALLELISM_PLAY_ALLOW_BASE_CONTACT_RESET", "").strip() == "1":
             parallelism_panel_state.suppress_termination["base_contact"] = False
         parallelism_manager = get_parallelism_reference_manager(base_env)
@@ -1701,6 +1754,23 @@ def main() -> int:
                 step_start = perf_counter()
                 with torch.inference_mode():
                     if parallelism_panel_state is not None:
+                        if (
+                            parallelism_panel_state.debug_command_after_step is not None
+                            and parallelism_panel_state.debug_command_after_value is not None
+                            and not parallelism_panel_state.debug_command_after_applied
+                            and timestep >= parallelism_panel_state.debug_command_after_step
+                        ):
+                            (
+                                parallelism_panel_state.vx,
+                                parallelism_panel_state.vy,
+                                parallelism_panel_state.vyaw,
+                            ) = parallelism_panel_state.debug_command_after_value
+                            parallelism_panel_state.debug_command_after_applied = True
+                            print(
+                                "[Parallelism][debug] scheduled panel command applied: "
+                                f"timestep={timestep} command={parallelism_panel_state.debug_command_after_value}",
+                                flush=True,
+                            )
                         _apply_panel_velocity_command(base_env, parallelism_panel_state)
                     else:
                         _apply_keyboard_velocity_command(base_env, keyboard_controller)
@@ -1767,6 +1837,7 @@ def main() -> int:
                         parallelism_diagnostics,
                         dones,
                         timestep=timestep,
+                        actions=actions,
                     )
 
                 if parallelism_visualizer is not None and parallelism_manager is not None:

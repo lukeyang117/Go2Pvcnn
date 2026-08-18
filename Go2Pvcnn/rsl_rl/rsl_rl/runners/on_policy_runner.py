@@ -165,7 +165,11 @@ class OnPolicyRunner:
         tot_iter = start_iter + num_learning_iterations  # 总迭代次数 = 起始 + 新增迭代
         for it in range(start_iter, tot_iter):  # 迭代训练
             if self.training_type in ("distillation", "hybrid_distillation") and hasattr(self.alg, "set_iteration"):
-                self.alg.set_iteration(it, tot_iter)
+                self.alg.set_iteration(
+                    it,
+                    tot_iter,
+                    schedule_start_iteration=start_iter,
+                )
             start = time.time()  # 记录数据收集开始时间
             
             # ========================================
