@@ -29,7 +29,7 @@ def _parallelism_distillation_train_cfg() -> dict:
         "cost_map_size": 16,
         "algorithm": {
             "class_name": "HybridDistillationPPO",
-            "num_learning_epochs": 3,
+            "num_learning_epochs": 5,
             "num_mini_batches": 4,
             "learning_rate": 3e-4,
             "clip_param": 0.2,
