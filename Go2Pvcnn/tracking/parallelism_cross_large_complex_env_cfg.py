@@ -122,6 +122,9 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "parallelism_tracking_cross_large_complex"
+        # Keep the sampled command stable while Parallelism independently
+        # replans on reset, command changes, or every 23 control steps.
+        self.commands.base_velocity.resampling_time_range = (100.0, 100.0)
         self.scene.terrain.terrain_generator = _cross_large_complex_terrain_cfg()
         self.scene.terrain.terrain_generator.curriculum = True
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
