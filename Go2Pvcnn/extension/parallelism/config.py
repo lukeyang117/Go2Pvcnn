@@ -21,6 +21,8 @@ class OfficialCollisionShapeSpec:
 class ParallelismCfg:
     horizon: int = 24
     dt: float = 0.02
+    # Frame 0 is the measured state; frames 1..23 are the control targets.
+    replan_interval_steps: int = 23
     half_cycle: int = 12
     root_leveling_frames: int = 12
     candidate_radius_m: float = 0.24

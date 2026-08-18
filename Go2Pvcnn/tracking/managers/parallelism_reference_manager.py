@@ -203,12 +203,19 @@ class ParallelismReferenceManager:
         self.num_envs = int(getattr(self.env, "num_envs"))
         self.horizon = int(self.cfg.horizon)
         self.dt = float(self.cfg.dt)
+        self.replan_interval_steps = max(
+            int(getattr(self.cfg, "replan_interval_steps", self.horizon - 1)),
+            1,
+        )
         self.terrain_grid_size = int(terrain_grid_size)
         self.terrain_resolution = float(terrain_resolution)
 
         self.phase = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._cached_cycle = torch.full((self.num_envs,), -1, dtype=torch.long, device=self.device)
         self._initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.parallelism_step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._last_command = torch.zeros(self.num_envs, 3, dtype=torch.float32, device=self.device)
+        self._last_command_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.plan_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.standstill_latched = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.standstill_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -240,15 +247,29 @@ class ParallelismReferenceManager:
             self.reset()
 
     def refresh(self) -> None:
-        episode_length = self._episode_length()
-        planning_stride = max(self.horizon - 1, 1)
-        cycle = torch.div(episode_length, planning_stride, rounding_mode="floor")
-        phase = torch.remainder(episode_length, planning_stride)
-        reset_mask = (episode_length == 0) & ((~self._initialized) | (self._cached_cycle != 0))
-        needs_plan = (~self._initialized) | reset_mask | (cycle != self._cached_cycle)
+        all_env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+        command = self._command(all_env_ids)
+        command_changed = self._initialized & self._last_command_valid & ~torch.isclose(
+            command,
+            self._last_command,
+            atol=1.0e-5,
+            rtol=0.0,
+        ).all(dim=-1)
+        timer_due = self.parallelism_step_count >= self.replan_interval_steps
+        needs_plan = (~self._initialized) | command_changed | timer_due
+        phase = torch.clamp(self.parallelism_step_count, max=self.horizon - 1)
         env_ids = needs_plan.nonzero(as_tuple=False).flatten()
         if int(env_ids.numel()) > 0:
-            self._plan(env_ids, cycle.index_select(0, env_ids))
+            cycle = torch.where(
+                self._cached_cycle.index_select(0, env_ids) >= 0,
+                self._cached_cycle.index_select(0, env_ids) + 1,
+                torch.zeros(int(env_ids.numel()), dtype=torch.long, device=self.device),
+            )
+            self._plan(env_ids, cycle)
+            self.parallelism_step_count[env_ids] = 0
+            phase[env_ids] = 0
+            self._last_command[env_ids] = command.index_select(0, env_ids)
+            self._last_command_valid[env_ids] = True
         self.phase.copy_(phase.to(dtype=torch.long))
 
     def reset(self, env_ids: Sequence[int] | Tensor | None = None) -> None:
@@ -257,6 +278,8 @@ class ParallelismReferenceManager:
             return
         self.on_environment_reset(ids)
         self._plan(ids, torch.zeros_like(ids, dtype=torch.long, device=self.device))
+        self._last_command[ids] = self._command(ids)
+        self._last_command_valid[ids] = True
 
     def on_environment_reset(self, env_ids: Sequence[int] | Tensor | None = None) -> None:
         """Invalidate references and clear episode state after an environment reset."""
@@ -266,18 +289,23 @@ class ParallelismReferenceManager:
             return
         self._manual_episode_length[ids] = 0
         self.phase[ids] = 0
+        self.parallelism_step_count[ids] = 0
         self.standstill_latched[ids] = False
         self.standstill_count[ids] = 0
         self._cached_cycle[ids] = -1
         self._initialized[ids] = False
+        self._last_command_valid[ids] = False
         self._step_reference_valid[ids] = False
 
     def mark_command_changed(self, env_mask: Sequence[int] | Tensor | None = None, *_, **__) -> None:
         ids = _as_env_ids(env_mask, num_envs=self.num_envs, device=self.device)
         if int(ids.numel()) == 0:
             return
+        self.parallelism_step_count[ids] = 0
+        self.phase[ids] = 0
         self._cached_cycle[ids] = -1
         self._initialized[ids] = False
+        self._last_command_valid[ids] = False
         self._step_reference_valid[ids] = False
 
     def _install_env_reset_hook(self) -> None:
@@ -299,6 +327,7 @@ class ParallelismReferenceManager:
 
     def step(self) -> None:
         self._manual_episode_length += 1
+        self.parallelism_step_count += 1
         self.refresh()
 
     def prepare_step_reference(self) -> None:
@@ -321,6 +350,7 @@ class ParallelismReferenceManager:
             self._angular_velocity_b_policy(self.root_rpy_w, start_phase, target_phase)
         )
         self._step_reference_valid[:] = True
+        self.parallelism_step_count += 1
 
     @property
     def next_joint_pos(self) -> Tensor:

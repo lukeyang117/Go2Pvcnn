@@ -83,6 +83,119 @@ def test_manager_replans_after_the_phase_22_to_23_transition(monkeypatch):
     assert torch.all(manager.plan_count == first_plan_count + 1)
 
 
+def test_manager_timer_is_independent_of_episode_length_buffer(monkeypatch):
+    env = _fake_env()
+    env.episode_length_buf = torch.tensor([100, 100], dtype=torch.long)
+    manager = ParallelismReferenceManager(env, autostart=False)
+    first_plan_count = torch.zeros(2, dtype=torch.long)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+    first_plan_count.copy_(manager.plan_count)
+
+    for _ in range(22):
+        manager.step()
+    assert torch.equal(manager.plan_count, first_plan_count)
+
+    manager.step()
+    assert torch.all(manager.plan_count == first_plan_count + 1)
+    assert torch.all(manager.parallelism_step_count == 0)
+
+
+def test_manager_command_change_and_timer_are_deduplicated(monkeypatch):
+    env = _fake_env(num_envs=1)
+    manager = ParallelismReferenceManager(env, autostart=False)
+    plan_count = []
+
+    def fake_plan(env_ids, cycle):
+        plan_count.append(env_ids.tolist())
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+    plan_count.clear()
+    manager.parallelism_step_count[:] = 23
+    manager.mark_command_changed(torch.tensor([True]))
+    manager.refresh()
+
+    assert plan_count == [[0]]
+    assert manager.plan_count.tolist() == [2]
+    assert manager.parallelism_step_count.tolist() == [0]
+
+
+def test_manager_detects_direct_command_value_change(monkeypatch):
+    env = _fake_env(num_envs=1)
+    command = torch.zeros(1, 3)
+    env.command_manager = SimpleNamespace(get_command=lambda _name: command)
+    manager = ParallelismReferenceManager(env, autostart=False)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.refresh()
+    command[:, 0] = 0.5
+    manager.refresh()
+
+    assert manager.plan_count.tolist() == [2]
+    assert manager.parallelism_step_count.tolist() == [0]
+
+
+def test_prepare_step_reference_replans_after_23_completed_controls(monkeypatch):
+    env = _fake_env(num_envs=1)
+    manager = ParallelismReferenceManager(env, autostart=False)
+    first_plan_count = torch.zeros(1, dtype=torch.long)
+
+    def fake_plan(env_ids, cycle):
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+    first_plan_count.copy_(manager.plan_count)
+
+    for _ in range(23):
+        manager.prepare_step_reference()
+
+    assert torch.equal(manager.plan_count, first_plan_count)
+    assert manager.parallelism_step_count.tolist() == [23]
+
+    manager.prepare_step_reference()
+    assert manager.plan_count.tolist() == [2]
+    assert manager.parallelism_step_count.tolist() == [1]
+
+
+def test_manager_timer_is_per_environment(monkeypatch):
+    env = _fake_env()
+    manager = ParallelismReferenceManager(env, autostart=False)
+    planned_env_ids = []
+
+    def fake_plan(env_ids, cycle):
+        planned_env_ids.append(env_ids.tolist())
+        manager._cached_cycle[env_ids] = cycle
+        manager._initialized[env_ids] = True
+        manager.plan_count[env_ids] += 1
+
+    monkeypatch.setattr(manager, "_plan", fake_plan)
+    manager.reset()
+    planned_env_ids.clear()
+    manager.parallelism_step_count[:] = torch.tensor([23, 7])
+    manager.refresh()
+
+    assert planned_env_ids == [[0]]
+    assert manager.parallelism_step_count.tolist() == [0, 7]
+
+
 def test_current_joint_velocity_uses_finite_difference(monkeypatch):
     env = _fake_env()
     manager = ParallelismReferenceManager(env, autostart=False)
@@ -118,13 +231,13 @@ def test_next_joint_position_is_the_target_for_the_current_action(monkeypatch):
     assert torch.allclose(manager.current_joint_pos, torch.zeros(1, 12))
     assert torch.allclose(manager.next_joint_pos, torch.ones(1, 12))
 
-    env.episode_length_buf = torch.tensor([5])
+    manager.parallelism_step_count[:] = 5
+    manager.refresh()
     assert torch.allclose(manager.next_joint_pos, torch.full((1, 12), 6.0))
 
 
 def test_phase_22_snapshot_uses_frame_23_then_refreshes_to_new_phase_zero(monkeypatch):
     env = _fake_env(num_envs=1)
-    env.episode_length_buf = torch.tensor([22])
     manager = ParallelismReferenceManager(env, autostart=False)
     plan_cycles = []
 
@@ -142,12 +255,14 @@ def test_phase_22_snapshot_uses_frame_23_then_refreshes_to_new_phase_zero(monkey
     manager.reset()
     plan_cycles.clear()
 
+    manager.parallelism_step_count[:] = 22
+    manager.refresh()
     manager.prepare_step_reference()
     assert manager.phase.item() == 22
     assert torch.allclose(manager.step_joint_pos, torch.full((1, 12), 23.0))
     assert torch.allclose(manager.step_joint_vel, torch.full((1, 12), 1.0 / manager.dt))
 
-    env.episode_length_buf[:] = 23
+    manager.parallelism_step_count[:] = 23
     manager.refresh()
     assert manager.phase.item() == 0
     assert plan_cycles == [1]
@@ -202,7 +317,6 @@ def test_reference_root_pose_uses_next_frame_in_live_policy_frame(monkeypatch):
 
 def test_reference_root_pose_clamps_to_last_frame(monkeypatch):
     env = _fake_env(num_envs=1)
-    env.episode_length_buf = torch.tensor([22])
     manager = ParallelismReferenceManager(env, autostart=False)
 
     def fake_plan(env_ids, cycle):
@@ -213,6 +327,8 @@ def test_reference_root_pose_clamps_to_last_frame(monkeypatch):
 
     monkeypatch.setattr(manager, "_plan", fake_plan)
     manager.reset()
+    manager.parallelism_step_count[:] = 22
+    manager.refresh()
     assert torch.allclose(manager.current_root_pos_b_policy, torch.tensor([[0.0, 0.4, 0.0]]), atol=1.0e-5)
 
 

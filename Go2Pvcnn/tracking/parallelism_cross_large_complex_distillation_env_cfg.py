@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -59,13 +61,13 @@ class ParallelismDistillationRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
 
     track_lin_vel_xy = RewTerm(
         func=go2_mdp.track_lin_vel_xy_exp,
-        weight=2.0,
-        params={"command_name": "base_velocity", "std": 0.5},
+        weight=1.5,
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
     track_ang_vel_z = RewTerm(
         func=go2_mdp.track_ang_vel_z_exp,
-        weight=1.5,
-        params={"command_name": "base_velocity", "std": 0.5},
+        weight=0.75,
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
 
@@ -97,6 +99,10 @@ class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
         super().__post_init__()
         self.experiment_name = "parallelism_tracking_cross_large_complex_distillation"
         self.curriculum.parallelism_velocity = None
+        self.commands.base_velocity.resampling_time_range = (100.0, 100.0)
+        self.commands.base_velocity.rel_standing_envs = 0.1
+        self.commands.base_velocity.ranges.lin_vel_x = (-0.1, 0.1)
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.1, 0.1)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.base_velocity.limit_ranges.ang_vel_z = (-1.0, 1.0)
         self.terminations.parallelism_ref_foot_z_too_far = None
