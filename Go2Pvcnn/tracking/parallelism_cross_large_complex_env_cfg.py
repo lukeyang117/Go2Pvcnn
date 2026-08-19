@@ -55,12 +55,12 @@ class ParallelismCrossLargeTeacherRewardsCfg(ParallelismSmallObstaclesRewardsCfg
 
     track_lin_vel_xy = RewTerm(
         func=go2_mdp.track_lin_vel_xy_exp,
-        weight=1.5,
+        weight=4.5,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
     track_ang_vel_z = RewTerm(
         func=go2_mdp.track_ang_vel_z_exp,
-        weight=0.75,
+        weight=2.25,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
@@ -176,6 +176,7 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
         # Foot-height tracking remains a reward/metric, but no longer ends
         # the large-terrain teacher episode by itself.
         self.terminations.parallelism_ref_foot_z_too_far = None
+        self.terminations.parallelism_consecutive_standstill = None
         self.scene.terrain.terrain_generator = _cross_large_complex_terrain_cfg()
         self.scene.terrain.terrain_generator.curriculum = True
         self.scene.terrain.class_type = SemanticCourseTerrainImporter
@@ -186,9 +187,8 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
             center_safety_radius_m=self.obstacle_center_exclusion_radius_m,
             min_spacing_clearance_m=self.inner_obstacle_min_spacing_m,
         )
-        # These inherited terms are intentionally kept active for the new task.
-        assert self.terminations.parallelism_consecutive_standstill is not None
-        assert self.terminations.parallelism_consecutive_standstill.params["threshold"] == 2
+        # Keep the geometry collision reward active while allowing a failed
+        # planner cycle to continue without resetting the environment.
         assert self.rewards.parallelism_geometry_collision is not None
 
 

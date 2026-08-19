@@ -14,10 +14,10 @@ def test_cross_large_complex_config_declares_mixed_terrain_and_counts() -> None:
     assert "proportion=0.0625" in source
 
 
-def test_cross_large_complex_config_keeps_standstill_termination() -> None:
+def test_cross_large_complex_config_disables_standstill_termination() -> None:
     source = (ROOT / "tracking/parallelism_cross_large_complex_env_cfg.py").read_text()
     assert "parallelism_consecutive_standstill" in source
-    assert 'params["threshold"] == 2' in source
+    assert "self.terminations.parallelism_consecutive_standstill = None" in source
 
 
 def test_cross_large_complex_config_keeps_geometry_collision_reward() -> None:
@@ -42,8 +42,8 @@ def test_cross_large_teacher_tracks_command_and_removes_foot_z_termination() -> 
     assert "ParallelismCrossLargeTeacherRewardsCfg" in source
     assert "track_lin_vel_xy_exp" in source
     assert "track_ang_vel_z_exp" in source
-    assert "weight=1.5" in source
-    assert "weight=0.75" in source
+    assert "weight=4.5" in source
+    assert "weight=2.25" in source
     assert '"std": math.sqrt(0.25)' in source
     assert "self.terminations.parallelism_ref_foot_z_too_far = None" in source
 
@@ -57,3 +57,11 @@ def test_cross_large_teacher_training_script_is_fresh() -> None:
     assert "--load_run" not in source
     assert "--load_checkpoint" not in source
     assert "--teacher_checkpoint" in source
+
+
+def test_cross_large_resume_script_loads_latest_requested_checkpoint() -> None:
+    source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_resume.sh").read_text()
+    assert "--resume" in source
+    assert "--keep_std" in source
+    assert "--load_run 2026-08-18_20-30-59/6def073" in source
+    assert "--load_checkpoint model_4999.pt" in source
