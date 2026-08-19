@@ -50,6 +50,6 @@ def test_distillation_reward_contract_removes_reference_rewards() -> None:
 
 def test_distillation_script_uses_requested_teacher_and_ppo_dominance() -> None:
     source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh").read_text()
-    assert source.count("model_8200.pt") == 1
+    assert source.count("model_4999.pt") == 1
     assert "--ppo-coef 1.0" in source
     assert "--teacher-coef 0.01" in source

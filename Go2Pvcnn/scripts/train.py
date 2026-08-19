@@ -757,7 +757,10 @@ def main() -> int:
                 teacher_obs = self._flatten_group(
                     obs_dict, ["teacher_elevation_semantic_map", "teacher_state"]
                 )
-                return student_obs, {"observations": {"teacher": teacher_obs}}
+                critic_obs = self._flatten_group(
+                    obs_dict, ["critic_elevation_semantic_map", "critic_state"]
+                )
+                return student_obs, {"observations": {"teacher": teacher_obs, "critic": critic_obs}}
             policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
             critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
             return policy_obs, {"observations": {"critic": critic_obs}}
@@ -906,8 +909,17 @@ def main() -> int:
             checkpoint_path = os.path.join(resume_path, checkpoint_file)
             if not os.path.exists(checkpoint_path):
                 raise FileNotFoundError(f"Distillation checkpoint not found: {checkpoint_path}")
-            runner.load(checkpoint_path, keep_std=args_cli.keep_std)
-            print(f"[Resume] Distillation checkpoint loaded: {checkpoint_path}")
+            if args_cli.teacher_checkpoint is not None:
+                teacher_checkpoint = os.path.abspath(args_cli.teacher_checkpoint)
+                if not os.path.isfile(teacher_checkpoint):
+                    raise FileNotFoundError(f"Teacher checkpoint not found: {teacher_checkpoint}")
+                runner.load_student_checkpoint(checkpoint_path, keep_std=args_cli.keep_std)
+                runner.load_teacher(teacher_checkpoint, keep_std=True)
+                print(f"[Resume] Student checkpoint loaded: {checkpoint_path}")
+                print(f"[Resume] Explicit teacher checkpoint loaded: {teacher_checkpoint}")
+            else:
+                runner.load(checkpoint_path, keep_std=args_cli.keep_std)
+                print(f"[Resume] Distillation checkpoint loaded: {checkpoint_path}")
         elif args_cli.teacher_checkpoint is None:
             raise ValueError("Distillation training requires --teacher_checkpoint.")
         else:

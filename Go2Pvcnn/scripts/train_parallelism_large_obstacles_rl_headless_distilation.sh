@@ -16,6 +16,8 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --num_envs 1024 \
   --headless \
   --max_iterations 2000 \
-  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-18_15-46-25/d62bb63/model_8200.pt \
+  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-18_20-30-59/6def073/model_4999.pt \
   --ppo-coef 1.0 \
-  --teacher-coef 0.01
+  --teacher-coef 0.01 \
+  --teacher-ratio-start 0.0 \
+  --teacher-ratio-end 0.0

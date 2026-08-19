@@ -14,6 +14,7 @@ class StudentTeacherCNN(nn.Module):
         num_student_obs,
         num_teacher_obs,
         num_actions,
+        num_critic_obs=None,
         student_hidden_dims=[256, 256, 128],
         teacher_hidden_dims=[256, 256, 128],
         critic_hidden_dims=[256, 128],
@@ -32,6 +33,7 @@ class StudentTeacherCNN(nn.Module):
             )
         super().__init__()
         self.loaded_teacher = False
+        num_critic_obs = num_teacher_obs if num_critic_obs is None else num_critic_obs
         self.student_proprio_dim = int(num_student_obs) - int(cost_map_channels * cost_map_size * cost_map_size)
         self.student = ActorCriticCNN(
             num_student_obs,
@@ -47,8 +49,8 @@ class StudentTeacherCNN(nn.Module):
             critic_cnn_cfg=critic_cnn_cfg,
         )
         self.student_critic = ActorCriticCNN(
-            num_teacher_obs,
-            num_teacher_obs,
+            num_critic_obs,
+            num_critic_obs,
             num_actions,
             cost_map_channels=cost_map_channels,
             cost_map_size=cost_map_size,
@@ -140,6 +142,24 @@ class StudentTeacherCNN(nn.Module):
         self.teacher.eval()
         self.teacher.requires_grad_(False)
         return False
+
+    def load_student_state_dict(self, state_dict, keep_std=True):
+        """Load student and privileged critic weights without embedded teacher weights."""
+
+        state_dict = dict(state_dict)
+        self._adapt_legacy_student_input_weights(state_dict)
+        if not keep_std:
+            state_dict.pop("student.std", None)
+            state_dict.pop("student_critic.std", None)
+        student_state = {
+            key: value
+            for key, value in state_dict.items()
+            if key.startswith("student.") or key.startswith("student_critic.")
+        }
+        result = super().load_state_dict(student_state, strict=False)
+        self.teacher.eval()
+        self.teacher.requires_grad_(False)
+        return result
 
     def _adapt_legacy_student_input_weights(self, state_dict):
         """Drop legacy base_lin_vel columns when loading pre-removal student checkpoints."""

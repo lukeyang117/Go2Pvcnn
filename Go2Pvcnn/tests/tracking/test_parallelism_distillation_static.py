@@ -34,6 +34,80 @@ def test_student_teacher_cnn_builds_with_different_obs_dims():
     assert model.evaluate_value(torch.zeros(2, 620)).shape == (2, 1)
 
 
+def test_student_teacher_cnn_keeps_critic_observation_dimension_independent():
+    from rsl_rl.modules import StudentTeacherCNN
+
+    model = StudentTeacherCNN(
+        num_student_obs=560,
+        num_teacher_obs=620,
+        num_critic_obs=600,
+        num_actions=12,
+        cost_map_channels=2,
+        cost_map_size=16,
+        actor_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        critic_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        student_hidden_dims=[16],
+        teacher_hidden_dims=[16],
+        critic_hidden_dims=[16],
+        activation="elu",
+    )
+
+    assert model.student_critic.critic[0].in_features == 600 - 2 * 16 * 16 + 256
+
+
+def test_student_only_checkpoint_loading_does_not_replace_teacher():
+    from rsl_rl.modules import StudentTeacherCNN
+
+    model = StudentTeacherCNN(
+        num_student_obs=560,
+        num_teacher_obs=620,
+        num_critic_obs=600,
+        num_actions=12,
+        cost_map_channels=2,
+        cost_map_size=16,
+        actor_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        critic_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        student_hidden_dims=[16],
+        teacher_hidden_dims=[16],
+        critic_hidden_dims=[16],
+        activation="elu",
+    )
+    original_teacher = model.teacher.actor[0].weight.detach().clone()
+    state_dict = {key: value.detach().clone() for key, value in model.state_dict().items()}
+    state_dict["student.actor.0.weight"] = state_dict["student.actor.0.weight"] + 1.0
+    state_dict["student_critic.critic.0.weight"] = state_dict["student_critic.critic.0.weight"] + 1.0
+    state_dict["teacher.actor.0.weight"] = state_dict["teacher.actor.0.weight"] + 2.0
+
+    model.load_student_state_dict(state_dict)
+
+    assert torch.allclose(model.student.actor[0].weight, state_dict["student.actor.0.weight"])
+    assert torch.allclose(
+        model.student_critic.critic[0].weight,
+        state_dict["student_critic.critic.0.weight"],
+    )
+    assert torch.allclose(model.teacher.actor[0].weight, original_teacher)
+
+
 def test_hybrid_distillation_ppo_runs_one_update():
     from rsl_rl.algorithms import HybridDistillationPPO
     from rsl_rl.modules import StudentTeacherCNN
@@ -89,6 +163,62 @@ def test_hybrid_distillation_ppo_runs_one_update():
     assert losses["ppo_coef"] == 1.0
     assert losses["teacher_coef"] > 0.0
     assert torch.isfinite(torch.tensor(losses["imitation_loss"]))
+
+
+def test_hybrid_distillation_ppo_uses_separate_teacher_and_critic_observations():
+    from rsl_rl.algorithms import HybridDistillationPPO
+    from rsl_rl.modules import StudentTeacherCNN
+
+    num_envs = 2
+    num_steps = 2
+    policy = StudentTeacherCNN(
+        num_student_obs=560,
+        num_teacher_obs=620,
+        num_critic_obs=600,
+        num_actions=12,
+        cost_map_channels=2,
+        cost_map_size=16,
+        actor_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        critic_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        student_hidden_dims=[16],
+        teacher_hidden_dims=[16],
+        critic_hidden_dims=[16],
+        activation="elu",
+    )
+    alg = HybridDistillationPPO(
+        policy,
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        learning_rate=1e-3,
+        device="cpu",
+    )
+    alg.init_storage("hybrid_distillation", num_envs, num_steps, [560], [600], [12])
+    for _ in range(num_steps):
+        actions = alg.act(
+            torch.randn(num_envs, 560),
+            torch.randn(num_envs, 620),
+            torch.randn(num_envs, 600),
+        )
+        assert actions.shape == (num_envs, 12)
+        assert alg.transition.critic_observations.shape == (num_envs, 600)
+        alg.process_env_step(
+            torch.zeros(num_envs),
+            torch.zeros(num_envs, dtype=torch.bool),
+            {},
+        )
+    alg.compute_returns(torch.randn(num_envs, 600))
+    losses = alg.update()
+    assert torch.isfinite(torch.tensor(losses["value_loss"]))
 
 
 def _make_small_student_teacher_policy():
@@ -257,6 +387,7 @@ def test_runner_source_recognizes_distillation():
     assert '("distillation", "hybrid_distillation")' in source
     assert "load_teacher" in source
     assert 'extras["observations"].get("teacher"' in source
+    assert "load_student_checkpoint" in source
 
 
 def test_distillation_teacher_ratio_schedule():

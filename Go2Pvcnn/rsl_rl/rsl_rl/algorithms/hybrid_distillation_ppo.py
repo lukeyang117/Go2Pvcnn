@@ -186,12 +186,14 @@ class HybridDistillationPPO:
             self._teacher_control_mask[env_ids[permutation[:teacher_count]]] = True
         self._needs_control_assignment[env_ids] = False
 
-    def act(self, obs, teacher_obs):
+    def act(self, obs, teacher_obs, critic_obs=None):
         """Select teacher/student actions for the current environment batch."""
 
+        if critic_obs is None:
+            critic_obs = teacher_obs
         student_action = self.policy.student.act(obs)
         teacher_action = self.policy.evaluate(teacher_obs).detach()
-        value = self.policy.evaluate_value(teacher_obs).detach()
+        value = self.policy.evaluate_value(critic_obs).detach()
 
         teacher_ratio = self._compute_teacher_ratio()
         num_envs = obs.shape[0]
@@ -229,7 +231,7 @@ class HybridDistillationPPO:
         self.transition.privileged_actions = teacher_action
         self.transition.ppo_active = ppo_active
         self.transition.observations = obs
-        self.transition.critic_observations = teacher_obs
+        self.transition.critic_observations = critic_obs
         self.last_teacher_ratio = teacher_ratio
         self.last_student_ratio = 1.0 - teacher_ratio
         self.last_teacher_action_share = float(teacher_mask.float().mean().item())

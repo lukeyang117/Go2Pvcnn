@@ -37,10 +37,19 @@ class OnPolicyRunner:
 
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
-        if self.training_type in ("distillation", "hybrid_distillation"):
+        if self.training_type == "hybrid_distillation":
             if "teacher" not in extras["observations"]:
                 raise ValueError("Distillation training requires extras['observations']['teacher']")
-            num_critic_obs = extras["observations"]["teacher"].shape[1]
+            if "critic" not in extras["observations"]:
+                raise ValueError("Hybrid distillation training requires extras['observations']['critic']")
+            num_teacher_obs = extras["observations"]["teacher"].shape[1]
+            num_critic_obs = extras["observations"]["critic"].shape[1]
+            self.privileged_obs_type = "critic"
+        elif self.training_type == "distillation":
+            if "teacher" not in extras["observations"]:
+                raise ValueError("Distillation training requires extras['observations']['teacher']")
+            num_teacher_obs = extras["observations"]["teacher"].shape[1]
+            num_critic_obs = num_teacher_obs
             self.privileged_obs_type = "teacher"
         elif "critic" in extras["observations"]:
             num_critic_obs = extras["observations"]["critic"].shape[1]
@@ -49,9 +58,18 @@ class OnPolicyRunner:
             num_critic_obs = num_obs
             self.privileged_obs_type = None
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
-        actor_critic: ActorCritic | ActorCriticRecurrent = actor_critic_class(
-            num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
-        ).to(self.device)
+        if self.training_type == "hybrid_distillation":
+            actor_critic = actor_critic_class(
+                num_obs,
+                num_teacher_obs,
+                self.env.num_actions,
+                num_critic_obs=num_critic_obs,
+                **self.policy_cfg,
+            ).to(self.device)
+        else:
+            actor_critic = actor_critic_class(
+                num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
+            ).to(self.device)
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
         self.alg: PPO | Distillation | HybridDistillationPPO = alg_class(
             actor_critic,
@@ -141,11 +159,17 @@ class OnPolicyRunner:
         
         # 获取初始观测值
         obs, extras = self.env.get_observations()  # obs: (num_envs, obs_dim)
-        if self.training_type in ("distillation", "hybrid_distillation"):
-            critic_obs = extras["observations"].get("teacher", obs)
+        if self.training_type == "hybrid_distillation":
+            teacher_obs = extras["observations"]["teacher"]
+            critic_obs = extras["observations"]["critic"]
+        elif self.training_type == "distillation":
+            teacher_obs = extras["observations"].get("teacher", obs)
+            critic_obs = teacher_obs
         else:
             critic_obs = extras["observations"].get("critic", obs)  # critic观测（可能包含额外信息）
-        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)  # 移动到GPU/CPU
+        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
+        if self.training_type in ("distillation", "hybrid_distillation"):
+            teacher_obs = teacher_obs.to(self.device)
         self.train_mode()  # 切换到训练模式（启用dropout、batchnorm训练行为等）
         
 
@@ -178,8 +202,10 @@ class OnPolicyRunner:
             with torch.inference_mode():  # 推理模式，不计算梯度（节省内存和计算）
                 for i in range(self.num_steps_per_env):  # 每个环境收集num_steps_per_env步数据
                     # 使用当前策略选择动作
-                    if self.training_type in ("distillation", "hybrid_distillation"):
-                        actions = self.alg.act(obs, critic_obs)
+                    if self.training_type == "hybrid_distillation":
+                        actions = self.alg.act(obs, teacher_obs, critic_obs)
+                    elif self.training_type == "distillation":
+                        actions = self.alg.act(obs, teacher_obs)
                     else:
                         actions = self.alg.act(obs, critic_obs, env=self.env)  # (num_envs, action_dim)
                     
@@ -190,8 +216,12 @@ class OnPolicyRunner:
                     obs = self.obs_normalizer(obs)
                     
                     # 获取critic观测值（可能包含特权信息，如真实状态）
-                    if self.training_type in ("distillation", "hybrid_distillation") and "teacher" in infos["observations"]:
-                        critic_obs = self.critic_obs_normalizer(infos["observations"]["teacher"])
+                    if self.training_type == "hybrid_distillation" and "teacher" in infos["observations"]:
+                        teacher_obs = infos["observations"]["teacher"]
+                        critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
+                    elif self.training_type == "distillation" and "teacher" in infos["observations"]:
+                        teacher_obs = infos["observations"]["teacher"]
+                        critic_obs = self.critic_obs_normalizer(teacher_obs)
                     elif "critic" in infos["observations"]:
                         critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
                     else:
@@ -204,6 +234,8 @@ class OnPolicyRunner:
                         rewards.to(self.device),
                         dones.to(self.device),
                     )
+                    if self.training_type in ("distillation", "hybrid_distillation"):
+                        teacher_obs = teacher_obs.to(self.device)
                     
                     # 将数据存储到rollout buffer（用于后续训练）
                     self.alg.process_env_step(rewards, dones, infos)
@@ -433,6 +465,28 @@ class OnPolicyRunner:
         
         self.current_learning_iteration = loaded_dict["iter"]
         return loaded_dict["infos"]
+
+    def load_student_checkpoint(self, path, load_optimizer=True, keep_std=True):
+        """Load a hybrid student checkpoint without restoring its embedded teacher."""
+
+        loaded_dict = torch.load(path, map_location=self.device)
+        state_dict = loaded_dict["model_state_dict"]
+        if not hasattr(self.alg.actor_critic, "load_student_state_dict"):
+            raise TypeError("Student checkpoint loading requires a StudentTeacherCNN policy")
+        self.alg.actor_critic.load_student_state_dict(state_dict, keep_std=keep_std)
+        if self.empirical_normalization:
+            self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
+            self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_norm_state_dict"])
+        if load_optimizer:
+            try:
+                self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+            except (RuntimeError, ValueError) as exc:
+                print(
+                    "[Checkpoint] Student optimizer state is incompatible with the current "
+                    f"algorithm; keeping a fresh optimizer: {exc}"
+                )
+        self.current_learning_iteration = loaded_dict["iter"]
+        return loaded_dict.get("infos")
 
     def load_teacher(self, path, keep_std=True):
         loaded_dict = torch.load(path)

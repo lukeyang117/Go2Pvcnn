@@ -29,7 +29,10 @@ class ParallelismTrackingDistillationObservationsCfg:
 
     @configclass
     class TeacherStateCfg(ParallelismTrackingObservationsCfg.PolicyStateCfg):
-        pass
+        velocity_commands = ObsTerm(
+            func=isaac_mdp.generated_commands,
+            params={"command_name": "base_velocity"},
+        )
 
     @configclass
     class StudentElevationSemanticMapCfg(TeacherElevationSemanticMapCfg):
@@ -47,10 +50,20 @@ class ParallelismTrackingDistillationObservationsCfg:
         parallelism_ref_root_pos = None
         parallelism_ref_root_rot = None
 
+    @configclass
+    class CriticElevationSemanticMapCfg(ParallelismTrackingObservationsCfg.CriticElevationSemanticMapCfg):
+        pass
+
+    @configclass
+    class CriticStateCfg(ParallelismTrackingObservationsCfg.CriticStateCfg):
+        velocity_commands = None
+
     teacher_elevation_semantic_map: TeacherElevationSemanticMapCfg = TeacherElevationSemanticMapCfg()
     teacher_state: TeacherStateCfg = TeacherStateCfg()
     student_elevation_semantic_map: StudentElevationSemanticMapCfg = StudentElevationSemanticMapCfg()
     student_state: StudentStateCfg = StudentStateCfg()
+    critic_elevation_semantic_map: CriticElevationSemanticMapCfg = CriticElevationSemanticMapCfg()
+    critic_state: CriticStateCfg = CriticStateCfg()
 
 
 @configclass

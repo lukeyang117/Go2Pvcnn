@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism 蒸馏 Teacher 与 Critic 观测解耦设计</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #5f6b76;
+      --line: #d9e0e6;
+      --paper: #ffffff;
+      --bg: #eef2f5;
+      --blue: #1769aa;
+      --blue-soft: #e8f2fb;
+      --green: #176b4d;
+      --green-soft: #e8f6ef;
+      --amber: #8a5a00;
+      --amber-soft: #fff5dc;
+      --red: #8e2b2b;
+      --red-soft: #fdecec;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main {
+      width: min(1080px, calc(100% - 32px));
+      margin: 32px auto 64px;
+      padding: 42px 52px 56px;
+      background: var(--paper);
+      box-shadow: 0 8px 28px rgba(28, 47, 64, .08);
+    }
+    h1, h2, h3 { line-height: 1.3; }
+    h1 { margin: 0 0 10px; font-size: 34px; }
+    h2 { margin: 42px 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--line); font-size: 24px; }
+    h3 { margin: 26px 0 8px; font-size: 19px; }
+    p { margin: 10px 0; }
+    .eyebrow { color: var(--blue); font-weight: 700; letter-spacing: .04em; }
+    .subtitle { color: var(--muted); margin: 0 0 26px; }
+    .notice, .decision, .warning, .success {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid;
+    }
+    .notice { border-color: var(--blue); background: var(--blue-soft); }
+    .decision { border-color: var(--green); background: var(--green-soft); }
+    .warning { border-color: var(--amber); background: var(--amber-soft); }
+    .success { border-color: var(--red); background: var(--red-soft); }
+    code {
+      padding: 1px 5px;
+      color: #102f49;
+      background: #f0f4f7;
+      border-radius: 3px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: .92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 16px 18px;
+      color: #e8f0f6;
+      background: #17212b;
+      border-radius: 5px;
+      font: 14px/1.6 "SFMono-Regular", Consolas, monospace;
+    }
+    table { width: 100%; margin: 14px 0; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f3f6f8; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 5px 0; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 18px 0;
+    }
+    .flow div { padding: 14px; border: 1px solid var(--line); background: #fafcfd; }
+    .flow strong { display: block; color: var(--blue); }
+    .small { color: var(--muted); font-size: 14px; }
+    @media (max-width: 720px) {
+      main { width: 100%; margin: 0; padding: 28px 20px 42px; }
+      h1 { font-size: 28px; }
+      .flow { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">设计文档 · 2026-08-19 · 待审阅</p>
+  <h1>Parallelism 蒸馏 Teacher 与 Critic 观测解耦</h1>
+  <p class="subtitle">目标：使用 6def073 训练的新教师网络恢复蒸馏训练，同时完整保留旧 student actor 与 student critic，不让新教师增加的 3 维 command 输入破坏旧 critic。</p>
+
+  <div class="decision">
+    <strong>核心决定</strong>
+    <p>teacher 和 critic 不再共用同一份观测。新 teacher 使用 1102 维特权观测；student critic 继续使用旧的 1099 维特权观测。resume 时显式指定的 teacher checkpoint 始终覆盖 student checkpoint 内嵌的旧 teacher。</p>
+  </div>
+
+  <h2>一、当前问题</h2>
+  <p>当前蒸馏路径把同一个 <code>teacher_obs</code> 同时传给 frozen teacher 和 student critic：</p>
+  <pre>teacher_obs
+  ├── frozen teacher actor：生成 imitation target
+  └── student_critic：生成 PPO value</pre>
+  <p><code>6def073</code> 给大型地形 teacher 的 state 增加了 <code>velocity_commands</code>，因此新教师输入从 1099 维变为 1102 维。若直接让 critic 也使用这份新观测，旧 <code>model_5499.pt</code> 的 critic 权重将无法直接加载。</p>
+  <p>实际上，critic 并不需要依赖新 teacher 的输入结构。它只需要一份稳定的 privileged observation 来估计 value，teacher actor 则需要新 command 才能复现新教师行为。</p>
+
+  <h2>二、目标数据流</h2>
+  <div class="flow">
+    <div><strong>student MLP 输入 · 1069 维</strong>环境 flatten 后为 557 维；经过 CNN 后进入 student actor。学生不接收 reference trajectory。</div>
+    <div><strong>teacher MLP 输入 · 1102 维</strong>环境 flatten 后为 590 维；包含新 command，输入 frozen teacher actor。</div>
+    <div><strong>critic MLP 输入 · 1099 维</strong>环境 flatten 后为 587 维；使用旧版 privileged map/state，不加入新 command。</div>
+  </div>
+  <pre>student_obs  ────────────────&gt; student actor ──&gt; student action
+teacher_obs (1102) ─────────&gt; teacher actor ──&gt; teacher action target
+critic_obs  (1099) ─────────&gt; student_critic ─&gt; PPO value
+
+环境动作：按 teacher_ratio 选择 teacher action 或 student action
+PPO value：始终使用 critic_obs
+imitation loss：student mean 与 teacher action 比较</pre>
+
+  <h2>三、具体修改文件</h2>
+  <table>
+    <thead>
+      <tr><th>文件</th><th>修改内容</th><th>不改变的内容</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>Go2Pvcnn/tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td>
+        <td>teacher state 增加 <code>velocity_commands</code>；新增独立 critic map/state 观测组，内容保持旧版 1099 维。</td>
+        <td>student 输入、reward、课程、termination、Parallelism planner 逻辑。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/scripts/train.py</code></td>
+        <td>蒸馏 wrapper 同时导出 <code>teacher</code> 和 <code>critic</code>；runner 分别传递两份观测；resume 支持显式 teacher 路径。</td>
+        <td>普通 PPO、普通 teacher 训练和非蒸馏配置的行为。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/rsl_rl/rsl_rl/modules/student_teacher_cnn.py</code></td>
+        <td>student_critic 接收独立的 <code>num_critic_obs</code>，不再默认使用 <code>num_teacher_obs</code>。</td>
+        <td>student actor、teacher actor、std 参数的结构。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/rsl_rl/rsl_rl/algorithms/hybrid_distillation_ppo.py</code></td>
+        <td><code>act()</code> 区分 teacher_obs 与 critic_obs；teacher action 仍由 teacher_obs 生成，value 与 GAE 只用 critic_obs。</td>
+        <td>teacher/student episode 接管逻辑、PPO loss、imitation loss、teacher_ratio 和 teacher_coef。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py</code></td>
+        <td>蒸馏模式初始化、rollout、bootstrap value 时分别读取 teacher/critic；构造模型时传入两个输入维度。</td>
+        <td>rollout horizon、PPO epoch、mini-batch 和日志接口。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh</code></td>
+        <td>fresh distillation 使用新 teacher：<code>model_4999.pt</code>。</td>
+        <td>student 从零初始化的训练入口和现有 PPO/teacher 系数。</td>
+      </tr>
+      <tr>
+        <td><code>Go2Pvcnn/scripts/train_parallelism_large_obstacles_rl_headless_distilation_resume.sh</code></td>
+        <td>resume student：<code>model_5499.pt</code>；新增显式 <code>--teacher_checkpoint</code> 指向 <code>model_4999.pt</code>。</td>
+        <td>student checkpoint 的 actor、critic、std 和 iteration。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>四、Checkpoint 加载顺序</h2>
+  <ol>
+    <li>创建新结构：student actor 输入 1069，teacher actor 输入 1102，student critic 输入 1099。</li>
+    <li>加载蒸馏 checkpoint <code>model_5499.pt</code> 的 student actor、student critic、student std 和 optimizer。</li>
+    <li>跳过该 checkpoint 中的 <code>teacher.*</code>，不使用旧 teacher。</li>
+    <li>加载显式路径指定的新 teacher <code>model_4999.pt</code>，只写入 frozen teacher 子网络。</li>
+    <li>保留 checkpoint 的 iteration 5499，继续从该 iteration 之后训练。</li>
+  </ol>
+  <pre>student checkpoint:
+  student.*          加载
+  student_critic.*   加载，维度仍为 1099
+  teacher.*          跳过
+
+explicit teacher checkpoint:
+  actor.* / cnn.* / std  ──&gt; 写入 StudentTeacherCNN.teacher</pre>
+  <div class="warning">
+    <strong>std 规则</strong>
+    <p>resume 脚本保留 <code>--keep_std</code>，因此 student 使用 <code>model_5499.pt</code> 中保存的 std。新 teacher 使用 <code>model_4999.pt</code> 中的 teacher std；两者是不同网络的参数，不互相覆盖。</p>
+  </div>
+
+  <h2>五、损失与环境动作</h2>
+  <p>本设计不修改损失公式：</p>
+  <pre>teacher_action = Teacher(teacher_obs)
+student_mean   = Student(student_obs)
+value          = StudentCritic(critic_obs)
+
+imitation_loss = MSE(student_mean, teacher_action)
+ppo_loss       = PPO(student action, value, rollout return)
+total_loss     = ppo_coef * ppo_loss + teacher_coef * imitation_loss</pre>
+  <p>每个 episode 的 teacher/student 接管来源仍然固定，避免同一个 episode 中途切换控制源。环境动作依旧由原有 <code>teacher_ratio</code> 决定；新 teacher 只是替换 teacher action 的来源。</p>
+
+  <h2>六、Resume 命令语义</h2>
+  <p>resume 脚本将明确包含以下两条路径：</p>
+  <pre>--load_run 2026-08-18_21-38-36/6def073
+--load_checkpoint model_5499.pt
+--teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-18_20-30-59/6def073/model_4999.pt</pre>
+  <p>规则是：<code>--load_checkpoint</code> 指向 student resume 权重，<code>--teacher_checkpoint</code> 指向 frozen teacher 权重。只要显式提供 teacher 路径，就绝不从 student checkpoint 恢复旧 teacher。</p>
+
+  <h2>七、验证方案</h2>
+  <h3>静态与单元测试</h3>
+  <ul>
+    <li>检查 CNN 后 MLP 输入维度为 teacher 1102、critic 1099、student 1069；对应环境 flatten 维度为 590、587、557。</li>
+    <li>构造两个独立观测输入，确认 teacher action 使用 teacher obs，value 使用 critic obs。</li>
+    <li>加载旧 student checkpoint 后，确认 student actor 与 student critic 权重成功恢复。</li>
+    <li>显式加载新 teacher 后，确认 teacher actor 第一层权重来自 <code>model_4999.pt</code>，而不是 <code>model_5499.pt</code>。</li>
+    <li>运行现有 tracking 测试集，确认普通 PPO 和旧 teacher 训练路径不受影响。</li>
+  </ul>
+  <h3>1024 环境启动测试</h3>
+  <ul>
+    <li>使用新的 resume 脚本启动 1024 环境。</li>
+    <li>至少完成 4 个 iteration，不出现矩阵维度错误或 checkpoint 加载错误。</li>
+    <li>启动日志打印 student checkpoint、teacher checkpoint、teacher obs 维度、critic obs 维度。</li>
+    <li>确认 TensorBoard 的 PPO、imitation、teacher action share 和 episode 指标继续产生。</li>
+  </ul>
+
+  <h2>八、明确不修改的部分</h2>
+  <ul>
+    <li>不修改 Parallelism 规划、reset、重规划周期和 reference 轨迹。</li>
+    <li>不修改 reward、termination、curriculum 和 small/large obstacle 场景。</li>
+    <li>不把 velocity command 加回 student 输入；student 仍只按当前 distillation 配置输入速度指令，不输入 reference trajectory。</li>
+    <li>不删除旧 critic，不重新随机初始化旧 critic。</li>
+    <li>不改变 teacher_ratio 的 episode 级固定接管逻辑。</li>
+  </ul>
+
+  <div class="success">
+    <strong>审阅重点</strong>
+    <p>请重点确认两点：第一，student critic 是否继续保持 1099 维并直接恢复旧权重；第二，resume 时是否同意显式 teacher checkpoint 完全覆盖 student checkpoint 中的旧 teacher。确认后再进入代码修改和提交阶段。</p>
+  </div>
+</main>
+</body>
+</html>

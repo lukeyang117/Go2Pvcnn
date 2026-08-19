@@ -49,11 +49,11 @@ def test_cross_large_teacher_tracks_command_and_removes_foot_z_termination() -> 
 
 
 def test_cross_large_teacher_training_script_is_fresh() -> None:
-    source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_teacher.sh").read_text()
+    source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh").read_text()
     assert "parallelism_tracking_cross_large_complex" in source
     assert "--headless" in source
-    assert "--max_iterations 20000" in source
+    assert "--max_iterations 2000" in source
     assert "--resume" not in source
     assert "--load_run" not in source
     assert "--load_checkpoint" not in source
-    assert "--teacher_checkpoint" not in source
+    assert "--teacher_checkpoint" in source

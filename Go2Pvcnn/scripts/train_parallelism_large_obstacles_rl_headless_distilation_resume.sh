@@ -15,11 +15,12 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment parallelism_tracking_cross_large_complex_distillation \
   --num_envs 1024 \
   --headless \
-  --max_iterations 2000 \
+  --max_iterations 5000 \
   --resume \
-  --load_run 2026-08-17_18-15-07/82a2edc \
-  --load_checkpoint model_800.pt \
+  --load_run 2026-08-18_21-38-36/6def073 \
+  --load_checkpoint model_5499.pt \
   --keep_std \
+  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-18_20-30-59/6def073/model_4999.pt \
   --teacher-ratio-start 0.0 \
   --teacher-ratio-end 0.0 \
   --ppo-coef 1.0 \
