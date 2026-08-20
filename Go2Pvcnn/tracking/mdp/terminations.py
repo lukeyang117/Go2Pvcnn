@@ -17,6 +17,14 @@ from extension.convention import euler_to_quat_batch
 from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
 
 
+def _parallelism_plan_valid_mask(env, *, device: torch.device) -> torch.Tensor:
+    manager = get_parallelism_reference_manager(env)
+    valid = getattr(manager, "step_plan_valid", getattr(manager, "plan_valid", None))
+    if valid is None:
+        valid = torch.ones(int(getattr(env, "num_envs", 0)), dtype=torch.bool, device=device)
+    return torch.as_tensor(valid, dtype=torch.bool, device=device)
+
+
 def parallelism_consecutive_standstill(env, threshold: int = 2) -> torch.Tensor:
     """Terminate environments after the configured number of failed replans in a row."""
 
@@ -58,7 +66,8 @@ def parallelism_ref_root_z_too_far(
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     ref_z = get_parallelism_reference_manager(env).step_root_pos_w[:, 2]
-    return torch.abs(asset.data.root_pos_w[:, 2].to(device=ref_z.device, dtype=ref_z.dtype) - ref_z) > float(threshold)
+    violation = torch.abs(asset.data.root_pos_w[:, 2].to(device=ref_z.device, dtype=ref_z.dtype) - ref_z) > float(threshold)
+    return violation & _parallelism_plan_valid_mask(env, device=ref_z.device)
 
 
 def parallelism_ref_joint_pos_too_far(
@@ -71,7 +80,8 @@ def parallelism_ref_joint_pos_too_far(
     ref = get_parallelism_reference_manager(env).step_joint_pos
     actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
     error = torch.max(torch.abs(actual - ref), dim=-1).values
-    violation = error > float(threshold)
+    valid_mask = _parallelism_plan_valid_mask(env, device=ref.device)
+    violation = (error > float(threshold)) & valid_mask
     count = getattr(env, "_parallelism_joint_violation_count", None)
     if count is None or count.shape[0] != violation.shape[0]:
         count = torch.zeros(violation.shape[0], dtype=torch.long, device=violation.device)
@@ -98,7 +108,7 @@ def parallelism_ref_foot_z_too_far(
         body_pos = asset.data.body_pos_w[:, -4:, 2]
     body_pos = torch.as_tensor(body_pos, dtype=ref.dtype, device=ref.device)
     error = torch.max(torch.abs(body_pos - ref), dim=-1).values
-    return error > float(threshold)
+    return (error > float(threshold)) & _parallelism_plan_valid_mask(env, device=ref.device)
 
 
 def parallelism_ref_projected_gravity_too_far(
@@ -124,4 +134,4 @@ def parallelism_ref_projected_gravity_too_far(
         diff = torch.abs(actual_pg[:, 2] - ref_pg[:, 2])
     else:
         diff = torch.linalg.vector_norm(actual_pg - ref_pg, dim=-1)
-    return diff > float(threshold)
+    return (diff > float(threshold)) & _parallelism_plan_valid_mask(env, device=ref_quat.device)

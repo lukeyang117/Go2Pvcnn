@@ -71,10 +71,11 @@
       <li>Actor 和 Critic 都能识别当前规划是否有效。</li>
       <li>规划失败时不能因为无效 reference 牵制 policy，也不能因为 reference 误差触发 reset。</li>
       <li>规划失败时仍然保留 command velocity reward，使 policy 能够继续学习走路。</li>
+      <li>large teacher 的速度 command 每 10 秒刷新一次：<code>resampling_time_range=(10.0, 10.0)</code>。</li>
       <li>碰撞惩罚与 DOF 类行为约束一致，始终有效，不因 planner 失败而关闭。</li>
     </ul>
     <div class="box warning">
-      本设计只针对 large teacher 任务启用。small-obstacles 基础配置和 distillation 配置不因本次设计被隐式改变。
+      本设计以 large teacher 为主要目标。distillation 可以继承 large teacher 的 planner-valid 接口和环境行为；本次不额外改动其 student 专用 reward/observation 定义。
     </div>
   </section>
 
@@ -98,7 +99,7 @@ physics 执行动作
         <tr><td>reset 后规划失败</td><td>0</td><td>reference 置零，保留 command reward，屏蔽 reference termination。</td></tr>
         <tr><td>第 23 步重新规划成功</td><td>1</td><td>下一周期恢复真实 reference。</td></tr>
         <tr><td>第 23 步重新规划失败</td><td>0</td><td>下一周期进入速度 fallback。</td></tr>
-        <tr><td>command 改变并触发重规划</td><td>按新轨迹更新</td><td>不修改 planner 的重规划逻辑。</td></tr>
+        <tr><td>10 秒 command 刷新并触发重规划</td><td>按新轨迹更新</td><td>command 刷新周期为 10 秒；planner 仍保持第 23 个控制步的独立重规划。</td></tr>
       </tbody>
     </table>
   </section>
@@ -179,6 +180,9 @@ parallelism_geometry_collision</pre>
     <pre>plan_valid=1：碰撞会惩罚
 plan_valid=0：碰撞仍然惩罚</pre>
     <p>这样 planner 失败时，policy 仍然不能通过撞击障碍物来获得速度跟踪收益。</p>
+    <p>large teacher 同时将安全跨越小障碍的足端奖励覆盖为：</p>
+    <pre>active_swing_foot_on_small_obstacle.weight = 10.0</pre>
+    <p>该奖励只在 large teacher 配置中提高；small-obstacles 基础配置仍保持 <code>0.5</code>。</p>
   </section>
 
   <section>
@@ -277,6 +281,9 @@ Episode_Termination/invalid_parallelism_ref_joint_pos_too_far</pre>
     <div class="box success">
       这样 terrain curriculum 的失败原因可以分开：是 planner 没有轨迹、policy 没跟上速度，还是机器人发生了真实安全问题。
     </div>
+    <p>large teacher command 配置：</p>
+    <pre>commands.base_velocity.resampling_time_range = (10.0, 10.0)</pre>
+    <p>这只决定速度 command 什么时候变化，不改变 Parallelism 每 23 个控制步重规划的周期。</p>
   </section>
 
   <section>
@@ -290,11 +297,11 @@ Episode_Termination/invalid_parallelism_ref_joint_pos_too_far</pre>
         <tr><td><code>tracking/mdp/terminations.py</code></td><td>是</td><td>invalid 时屏蔽 reference termination，保留安全 termination。</td></tr>
         <tr><td><code>tracking/mdp/curriculums.py</code></td><td>是</td><td>分离 valid reference curriculum 和 invalid fallback locomotion 判断。</td></tr>
         <tr><td><code>tracking/env.py</code></td><td>是</td><td>输出分桶后的 episode metrics。</td></tr>
-        <tr><td><code>tracking/parallelism_cross_large_complex_env_cfg.py</code></td><td>是</td><td>large teacher 启用 plan_valid，并将碰撞权重设为 -10。</td></tr>
+        <tr><td><code>tracking/parallelism_cross_large_complex_env_cfg.py</code></td><td>是</td><td>large teacher 启用 plan_valid，将碰撞权重设为 -10，将安全小障碍足端奖励设为 10。</td></tr>
         <tr><td><code>tracking/mdp/__init__.py</code></td><td>必要时</td><td>导出新增 observation/reward/metric 函数。</td></tr>
-        <tr><td><code>tests/parallelism/test_plan_valid_fallback.py</code></td><td>新增</td><td>验证有效/无效轨迹的观测、奖励、termination 和 metric。</td></tr>
+        <tr><td><code>tests/tracking/test_parallelism_plan_valid.py</code></td><td>新增</td><td>验证有效/无效轨迹的观测、奖励、termination 和 metric。</td></tr>
         <tr><td><code>tracking/parallelism_small_obstacles_env_cfg.py</code></td><td>否</td><td>保留基础碰撞权重 -2，不影响 small-obstacles 任务。</td></tr>
-        <tr><td><code>tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>否</td><td>暂不改变 distillation reward 和 observation。</td></tr>
+        <tr><td><code>tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>否</td><td>允许继承 large teacher 的环境接口；保留 distillation 自己的 student reward 和 observation。</td></tr>
         <tr><td>Parallelism planner 实现</td><td>否</td><td>不改变 planner 的候选、IK、重规划和 standstill 判定逻辑。</td></tr>
       </tbody>
     </table>
@@ -318,4 +325,3 @@ Episode_Termination/invalid_parallelism_ref_joint_pos_too_far</pre>
 </main>
 </body>
 </html>
-

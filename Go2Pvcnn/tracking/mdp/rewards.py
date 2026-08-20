@@ -23,6 +23,14 @@ _LEG_NAMES = ("FL", "FR", "RL", "RR")
 _FOOT_NAMES = tuple(f"{leg}_foot" for leg in _LEG_NAMES)
 
 
+def _parallelism_plan_valid(env, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    manager = get_parallelism_reference_manager(env)
+    valid = getattr(manager, "step_plan_valid", getattr(manager, "plan_valid", None))
+    if valid is None:
+        valid = torch.ones(int(getattr(env, "num_envs")), dtype=torch.bool, device=device)
+    return torch.as_tensor(valid, dtype=dtype, device=device)
+
+
 def _active_small_obstacle_safe_mask(
     semantic: torch.Tensor,
     height: torch.Tensor,
@@ -114,17 +122,57 @@ def _update_obstacle_stats(
         device=collision_event.device,
         dtype=collision_event.dtype,
     )
+    valid = _parallelism_plan_valid(env, dtype=collision_event.dtype, device=collision_event.device)
+    invalid = 1.0 - valid
     env._parallelism_obstacle_collision_sum += collision_event
     env._parallelism_obstacle_collision_count += 1
     env._parallelism_obstacle_standstill_sum += manager.standstill_latched.to(dtype=collision_event.dtype)
-    env._parallelism_obstacle_valid_sum += manager.plan_valid.to(dtype=collision_event.dtype)
+    env._parallelism_obstacle_valid_sum += valid
     env._parallelism_obstacle_step_count += 1
+    _ensure_obstacle_split_stats(env, device=collision_event.device, dtype=collision_event.dtype)
+    env._parallelism_obstacle_valid_collision_sum += collision_event * valid
+    env._parallelism_obstacle_invalid_collision_sum += collision_event * invalid
+    standstill = manager.standstill_latched.to(dtype=collision_event.dtype)
+    env._parallelism_obstacle_valid_standstill_sum += standstill * valid
+    env._parallelism_obstacle_invalid_standstill_sum += standstill * invalid
+    env._parallelism_obstacle_valid_collision_count += valid.to(dtype=torch.long)
+    env._parallelism_obstacle_invalid_collision_count += invalid.to(dtype=torch.long)
+    env._parallelism_obstacle_valid_step_count += valid.to(dtype=torch.long)
+    env._parallelism_obstacle_invalid_step_count += invalid.to(dtype=torch.long)
     if small_foot_event is not None:
         env._parallelism_obstacle_small_foot_sum += small_foot_event
         env._parallelism_obstacle_small_foot_count += 1
+        env._parallelism_obstacle_valid_small_foot_sum += small_foot_event * valid
+        env._parallelism_obstacle_invalid_small_foot_sum += small_foot_event * invalid
+        env._parallelism_obstacle_valid_small_foot_count += valid.to(dtype=torch.long)
+        env._parallelism_obstacle_invalid_small_foot_count += invalid.to(dtype=torch.long)
     if safe_foot_event is not None:
         env._parallelism_obstacle_safe_foot_sum += safe_foot_event
         env._parallelism_obstacle_safe_foot_count += 1
+        env._parallelism_obstacle_valid_safe_foot_sum += safe_foot_event * valid
+        env._parallelism_obstacle_invalid_safe_foot_sum += safe_foot_event * invalid
+
+
+def _ensure_obstacle_split_stats(env, *, device: torch.device, dtype: torch.dtype) -> None:
+    count = int(env.scene["robot"].data.root_pos_w.shape[0])
+    if hasattr(env, "_parallelism_obstacle_valid_collision_sum"):
+        return
+    scalar = lambda: torch.zeros(count, dtype=dtype, device=device)
+    integer = lambda: torch.zeros(count, dtype=torch.long, device=device)
+    env._parallelism_obstacle_valid_collision_sum = scalar()
+    env._parallelism_obstacle_invalid_collision_sum = scalar()
+    env._parallelism_obstacle_valid_small_foot_sum = scalar()
+    env._parallelism_obstacle_invalid_small_foot_sum = scalar()
+    env._parallelism_obstacle_valid_safe_foot_sum = scalar()
+    env._parallelism_obstacle_invalid_safe_foot_sum = scalar()
+    env._parallelism_obstacle_valid_standstill_sum = scalar()
+    env._parallelism_obstacle_invalid_standstill_sum = scalar()
+    env._parallelism_obstacle_valid_collision_count = integer()
+    env._parallelism_obstacle_invalid_collision_count = integer()
+    env._parallelism_obstacle_valid_small_foot_count = integer()
+    env._parallelism_obstacle_invalid_small_foot_count = integer()
+    env._parallelism_obstacle_valid_step_count = integer()
+    env._parallelism_obstacle_invalid_step_count = integer()
 
 
 def parallelism_geometry_collision_penalty(
@@ -191,12 +239,35 @@ def parallelism_obstacle_episode_metrics(env) -> dict[str, torch.Tensor]:
     steps = env._parallelism_obstacle_step_count.clamp_min(1).to(dtype=env._parallelism_obstacle_collision_sum.dtype)
     collision_count = env._parallelism_obstacle_collision_count.clamp_min(1).to(dtype=steps.dtype)
     small_count = env._parallelism_obstacle_small_foot_count.clamp_min(1).to(dtype=steps.dtype)
+    _ensure_obstacle_split_stats(
+        env,
+        device=env._parallelism_obstacle_collision_sum.device,
+        dtype=env._parallelism_obstacle_collision_sum.dtype,
+    )
+    valid_collision_count = env._parallelism_obstacle_valid_collision_count.clamp_min(1).to(dtype=steps.dtype)
+    invalid_collision_count = env._parallelism_obstacle_invalid_collision_count.clamp_min(1).to(dtype=steps.dtype)
+    valid_small_count = env._parallelism_obstacle_valid_small_foot_count.clamp_min(1).to(dtype=steps.dtype)
+    invalid_small_count = env._parallelism_obstacle_invalid_small_foot_count.clamp_min(1).to(dtype=steps.dtype)
+    valid_steps = env._parallelism_obstacle_valid_step_count.clamp_min(1).to(dtype=steps.dtype)
+    invalid_steps = env._parallelism_obstacle_invalid_step_count.clamp_min(1).to(dtype=steps.dtype)
     return {
         "geometry_collision_ratio": env._parallelism_obstacle_collision_sum / collision_count,
         "active_swing_foot_on_small_ratio": env._parallelism_obstacle_small_foot_sum / small_count,
         "active_swing_foot_on_small_no_collision_ratio": env._parallelism_obstacle_safe_foot_sum / small_count,
         "standstill_ratio": env._parallelism_obstacle_standstill_sum / steps,
         "reference_valid_ratio": env._parallelism_obstacle_valid_sum / steps,
+        "valid_geometry_collision_ratio": env._parallelism_obstacle_valid_collision_sum / valid_collision_count,
+        "invalid_geometry_collision_ratio": env._parallelism_obstacle_invalid_collision_sum / invalid_collision_count,
+        "valid_standstill_ratio": env._parallelism_obstacle_valid_standstill_sum / valid_steps,
+        "invalid_standstill_ratio": env._parallelism_obstacle_invalid_standstill_sum / invalid_steps,
+        "valid_active_swing_foot_on_small_ratio": env._parallelism_obstacle_valid_small_foot_sum / valid_small_count,
+        "invalid_active_swing_foot_on_small_ratio": env._parallelism_obstacle_invalid_small_foot_sum / invalid_small_count,
+        "valid_active_swing_foot_on_small_no_collision_ratio": env._parallelism_obstacle_valid_safe_foot_sum / valid_small_count,
+        "invalid_active_swing_foot_on_small_no_collision_ratio": env._parallelism_obstacle_invalid_safe_foot_sum / invalid_small_count,
+        "valid_step_count": env._parallelism_obstacle_valid_step_count.to(dtype=steps.dtype),
+        "invalid_step_count": env._parallelism_obstacle_invalid_step_count.to(dtype=steps.dtype),
+        "valid_step_ratio": env._parallelism_obstacle_valid_step_count.to(dtype=steps.dtype) / steps,
+        "invalid_step_ratio": env._parallelism_obstacle_invalid_step_count.to(dtype=steps.dtype) / steps,
     }
 
 
@@ -211,6 +282,14 @@ def reset_parallelism_obstacle_stats(env, env_ids: torch.Tensor) -> None:
         "_parallelism_obstacle_safe_foot_sum",
         "_parallelism_obstacle_standstill_sum",
         "_parallelism_obstacle_valid_sum",
+        "_parallelism_obstacle_valid_collision_sum",
+        "_parallelism_obstacle_invalid_collision_sum",
+        "_parallelism_obstacle_valid_small_foot_sum",
+        "_parallelism_obstacle_invalid_small_foot_sum",
+        "_parallelism_obstacle_valid_safe_foot_sum",
+        "_parallelism_obstacle_invalid_safe_foot_sum",
+        "_parallelism_obstacle_valid_standstill_sum",
+        "_parallelism_obstacle_invalid_standstill_sum",
     ):
         getattr(env, name)[env_ids] = 0
     for name in (
@@ -218,6 +297,12 @@ def reset_parallelism_obstacle_stats(env, env_ids: torch.Tensor) -> None:
         "_parallelism_obstacle_small_foot_count",
         "_parallelism_obstacle_safe_foot_count",
         "_parallelism_obstacle_step_count",
+        "_parallelism_obstacle_valid_collision_count",
+        "_parallelism_obstacle_invalid_collision_count",
+        "_parallelism_obstacle_valid_small_foot_count",
+        "_parallelism_obstacle_invalid_small_foot_count",
+        "_parallelism_obstacle_valid_step_count",
+        "_parallelism_obstacle_invalid_step_count",
     ):
         getattr(env, name)[env_ids] = 0
 
@@ -368,6 +453,139 @@ def _current_parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg) -> dict
     }
 
 
+_TRACKING_SPLIT_SUFFIXES = (
+    "joint_mean_sum",
+    "joint_max",
+    "foot_mean_sum",
+    "foot_max",
+    "root_pos_sum",
+    "root_rot_sum",
+    "error_frames",
+    "active_swing_foot_sum",
+    "active_swing_foot_count",
+    "active_swing_foot_max",
+    "active_swing_foot_z_sum",
+    "active_swing_foot_z_max",
+    "swing_foot_sum_per_leg",
+    "swing_foot_count_per_leg",
+    "swing_foot_max_per_leg",
+    "swing_foot_z_sum_per_leg",
+    "joint_max_per_leg",
+)
+
+
+def _ensure_tracking_split_stats(env, errors: dict[str, torch.Tensor]) -> None:
+    count = int(errors["joint_mean_error"].shape[0])
+    dtype = errors["joint_mean_error"].dtype
+    device = errors["joint_mean_error"].device
+    per_leg_shape = (count, 4)
+    for prefix in ("valid", "invalid"):
+        for suffix in _TRACKING_SPLIT_SUFFIXES:
+            name = f"_parallelism_tracking_{prefix}_{suffix}"
+            if hasattr(env, name):
+                continue
+            if suffix.endswith("_per_leg"):
+                if "count" in suffix:
+                    value = torch.zeros(per_leg_shape, dtype=torch.long, device=device)
+                else:
+                    value = torch.zeros(per_leg_shape, dtype=dtype, device=device)
+            elif suffix in ("error_frames", "active_swing_foot_count"):
+                value = torch.zeros(count, dtype=torch.long, device=device)
+            else:
+                value = torch.zeros(count, dtype=dtype, device=device)
+            setattr(env, name, value)
+
+
+def _current_command_tracking_errors(env, *, command_name: str = "base_velocity") -> tuple[torch.Tensor, torch.Tensor]:
+    count = int(getattr(env, "num_envs", 0))
+    device = torch.device(getattr(env, "device", "cpu"))
+    asset = env.scene.get("robot") if hasattr(env.scene, "get") else env.scene["robot"]
+    data = getattr(asset, "data", None)
+    command_manager = getattr(env, "command_manager", None)
+    if data is None or command_manager is None or not hasattr(command_manager, "get_command"):
+        zeros = torch.zeros(count, dtype=torch.float32, device=device)
+        return zeros, zeros
+    command = torch.as_tensor(command_manager.get_command(command_name), device=device)
+    root_lin_vel_b = getattr(data, "root_lin_vel_b", None)
+    root_ang_vel_b = getattr(data, "root_ang_vel_b", None)
+    if root_lin_vel_b is None or root_ang_vel_b is None:
+        zeros = torch.zeros(count, dtype=command.dtype, device=command.device)
+        return zeros, zeros
+    lin_vel = torch.as_tensor(root_lin_vel_b, dtype=command.dtype, device=command.device)
+    ang_vel = torch.as_tensor(root_ang_vel_b, dtype=command.dtype, device=command.device)
+    return torch.linalg.vector_norm(command[:, :2] - lin_vel[:, :2], dim=-1), torch.abs(command[:, 2] - ang_vel[:, 2])
+
+
+def _ensure_command_split_stats(env, *, count: int, dtype: torch.dtype, device: torch.device) -> None:
+    for prefix in ("valid", "invalid"):
+        for suffix in ("command_lin_vel_sum", "command_ang_vel_sum", "command_frames"):
+            name = f"_parallelism_tracking_{prefix}_{suffix}"
+            if hasattr(env, name):
+                continue
+            value_dtype = torch.long if suffix == "command_frames" else dtype
+            setattr(env, name, torch.zeros(count, dtype=value_dtype, device=device))
+
+
+def _accumulate_command_tracking_stats(
+    env,
+    lin_error: torch.Tensor,
+    ang_error: torch.Tensor,
+    update_mask: torch.Tensor,
+    valid_mask: torch.Tensor,
+) -> None:
+    _ensure_command_split_stats(
+        env,
+        count=int(lin_error.shape[0]),
+        dtype=lin_error.dtype,
+        device=lin_error.device,
+    )
+    for prefix, bucket_mask in (("valid", update_mask & valid_mask), ("invalid", update_mask & ~valid_mask)):
+        getattr(env, f"_parallelism_tracking_{prefix}_command_lin_vel_sum").add_(
+            torch.where(bucket_mask, lin_error, torch.zeros_like(lin_error))
+        )
+        getattr(env, f"_parallelism_tracking_{prefix}_command_ang_vel_sum").add_(
+            torch.where(bucket_mask, ang_error, torch.zeros_like(ang_error))
+        )
+        getattr(env, f"_parallelism_tracking_{prefix}_command_frames").add_(bucket_mask.to(dtype=torch.long))
+
+
+def _accumulate_tracking_split_stats(
+    env,
+    errors: dict[str, torch.Tensor],
+    update_mask: torch.Tensor,
+    valid_mask: torch.Tensor,
+) -> None:
+    _ensure_tracking_split_stats(env, errors)
+    for prefix, bucket_mask in (("valid", update_mask & valid_mask), ("invalid", update_mask & ~valid_mask)):
+        def scalar(name: str) -> torch.Tensor:
+            return getattr(env, f"_parallelism_tracking_{prefix}_{name}")
+
+        scalar("joint_mean_sum").add_(torch.where(bucket_mask, errors["joint_mean_error"], torch.zeros_like(errors["joint_mean_error"])))
+        scalar("foot_mean_sum").add_(torch.where(bucket_mask, errors["foot_mean_error"], torch.zeros_like(errors["foot_mean_error"])))
+        scalar("root_pos_sum").add_(torch.where(bucket_mask, errors["root_pos_error"], torch.zeros_like(errors["root_pos_error"])))
+        scalar("root_rot_sum").add_(torch.where(bucket_mask, errors["root_rot_error"], torch.zeros_like(errors["root_rot_error"])))
+        scalar("joint_max").copy_(torch.maximum(scalar("joint_max"), torch.where(bucket_mask, errors["joint_max_error"], torch.zeros_like(errors["joint_max_error"]))))
+        scalar("foot_max").copy_(torch.maximum(scalar("foot_max"), torch.where(bucket_mask, errors["foot_max_error"], torch.zeros_like(errors["foot_max_error"]))))
+        scalar("error_frames").add_(bucket_mask.to(dtype=torch.long))
+
+        active_mask = bucket_mask[:, None] & errors["swing_mask"]
+        active_foot_error = torch.where(active_mask, errors["foot_error_per_leg"], torch.zeros_like(errors["foot_error_per_leg"]))
+        active_foot_z_error = torch.where(active_mask, errors["foot_z_error_per_leg"], torch.zeros_like(errors["foot_z_error_per_leg"]))
+        scalar("active_swing_foot_sum").add_(active_foot_error.sum(dim=-1))
+        scalar("active_swing_foot_count").add_(active_mask.sum(dim=-1).to(dtype=torch.long))
+        scalar("active_swing_foot_max").copy_(torch.maximum(scalar("active_swing_foot_max"), active_foot_error.amax(dim=-1)))
+        scalar("active_swing_foot_z_sum").add_(active_foot_z_error.sum(dim=-1))
+        scalar("active_swing_foot_z_max").copy_(torch.maximum(scalar("active_swing_foot_z_max"), active_foot_z_error.amax(dim=-1)))
+        scalar("swing_foot_sum_per_leg").add_(active_foot_error)
+        scalar("swing_foot_count_per_leg").add_(active_mask.to(dtype=torch.long))
+        scalar("swing_foot_max_per_leg").copy_(torch.maximum(scalar("swing_foot_max_per_leg"), active_foot_error))
+        scalar("swing_foot_z_sum_per_leg").add_(active_foot_z_error)
+        scalar("joint_max_per_leg").copy_(torch.maximum(
+            scalar("joint_max_per_leg"),
+            torch.where(bucket_mask[:, None], errors["joint_max_error_per_leg"], torch.zeros_like(errors["joint_max_error_per_leg"])),
+        ))
+
+
 def update_parallelism_tracking_error_stats(
     env,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -404,6 +622,8 @@ def update_parallelism_tracking_error_stats(
     )
     last_step = torch.as_tensor(last_step, dtype=torch.long, device=device)
     update_mask = step != last_step
+    valid_mask = _parallelism_plan_valid(env, dtype=torch.bool, device=device)
+    command_lin_error, command_ang_error = _current_command_tracking_errors(env)
 
     if not hasattr(env, "_parallelism_tracking_joint_mean_sum"):
         env._parallelism_tracking_joint_mean_sum = torch.zeros(count, dtype=errors["joint_mean_error"].dtype, device=device)
@@ -430,27 +650,31 @@ def update_parallelism_tracking_error_stats(
             env._parallelism_tracking_swing_foot_sum_per_leg
         )
 
+    _accumulate_tracking_split_stats(env, errors, update_mask, valid_mask)
+    _accumulate_command_tracking_stats(env, command_lin_error, command_ang_error, update_mask, valid_mask)
+    legacy_update_mask = update_mask & valid_mask
+
     env._parallelism_tracking_joint_mean_sum += torch.where(
-        update_mask, errors["joint_mean_error"], torch.zeros_like(errors["joint_mean_error"])
+        legacy_update_mask, errors["joint_mean_error"], torch.zeros_like(errors["joint_mean_error"])
     )
     env._parallelism_tracking_joint_max = torch.maximum(
         env._parallelism_tracking_joint_max,
-        torch.where(update_mask, errors["joint_max_error"], torch.zeros_like(errors["joint_max_error"])),
+        torch.where(legacy_update_mask, errors["joint_max_error"], torch.zeros_like(errors["joint_max_error"])),
     )
     env._parallelism_tracking_foot_mean_sum += torch.where(
-        update_mask, errors["foot_mean_error"], torch.zeros_like(errors["foot_mean_error"])
+        legacy_update_mask, errors["foot_mean_error"], torch.zeros_like(errors["foot_mean_error"])
     )
     env._parallelism_tracking_foot_max = torch.maximum(
         env._parallelism_tracking_foot_max,
-        torch.where(update_mask, errors["foot_max_error"], torch.zeros_like(errors["foot_max_error"])),
+        torch.where(legacy_update_mask, errors["foot_max_error"], torch.zeros_like(errors["foot_max_error"])),
     )
     env._parallelism_tracking_root_pos_sum += torch.where(
-        update_mask, errors["root_pos_error"], torch.zeros_like(errors["root_pos_error"])
+        legacy_update_mask, errors["root_pos_error"], torch.zeros_like(errors["root_pos_error"])
     )
     env._parallelism_tracking_root_rot_sum += torch.where(
-        update_mask, errors["root_rot_error"], torch.zeros_like(errors["root_rot_error"])
+        legacy_update_mask, errors["root_rot_error"], torch.zeros_like(errors["root_rot_error"])
     )
-    active_mask = update_mask[:, None] & errors["swing_mask"]
+    active_mask = legacy_update_mask[:, None] & errors["swing_mask"]
     active_foot_error = torch.where(active_mask, errors["foot_error_per_leg"], torch.zeros_like(errors["foot_error_per_leg"]))
     active_foot_z_error = torch.where(
         active_mask,
@@ -478,18 +702,59 @@ def update_parallelism_tracking_error_stats(
     env._parallelism_tracking_joint_max_per_leg = torch.maximum(
         env._parallelism_tracking_joint_max_per_leg,
         torch.where(
-            update_mask[:, None],
+            legacy_update_mask[:, None],
             errors["joint_max_error_per_leg"],
             torch.zeros_like(errors["joint_max_error_per_leg"]),
         ),
     )
-    env._parallelism_tracking_error_frames += update_mask.to(dtype=torch.long)
+    env._parallelism_tracking_error_frames += legacy_update_mask.to(dtype=torch.long)
     env._parallelism_tracking_last_step = torch.where(update_mask, step, last_step)
     return {**errors, **_parallelism_tracking_episode_stats(env)}
 
 
+def _parallelism_tracking_bucket_stats(env, prefix: str) -> dict[str, torch.Tensor]:
+    dtype = getattr(env, f"_parallelism_tracking_{prefix}_joint_mean_sum").dtype
+    scalar_zero = torch.zeros_like(getattr(env, f"_parallelism_tracking_{prefix}_joint_mean_sum"))
+    per_leg_zero = torch.zeros(scalar_zero.shape[0], 4, dtype=dtype, device=scalar_zero.device)
+    frames = getattr(env, f"_parallelism_tracking_{prefix}_error_frames").clamp_min(1).to(dtype=dtype)
+    command_frames = getattr(env, f"_parallelism_tracking_{prefix}_command_frames").clamp_min(1).to(dtype=dtype)
+    swing_count = getattr(env, f"_parallelism_tracking_{prefix}_active_swing_foot_count").clamp_min(1).to(dtype=dtype)
+    swing_count_per_leg = getattr(env, f"_parallelism_tracking_{prefix}_swing_foot_count_per_leg").clamp_min(1).to(dtype=dtype)
+    return {
+        f"{prefix}_episode_joint_mean_error": getattr(env, f"_parallelism_tracking_{prefix}_joint_mean_sum") / frames,
+        f"{prefix}_episode_joint_max_error": getattr(env, f"_parallelism_tracking_{prefix}_joint_max"),
+        f"{prefix}_episode_foot_mean_error": getattr(env, f"_parallelism_tracking_{prefix}_foot_mean_sum") / frames,
+        f"{prefix}_episode_foot_max_error": getattr(env, f"_parallelism_tracking_{prefix}_foot_max"),
+        f"{prefix}_episode_root_pos_error": getattr(env, f"_parallelism_tracking_{prefix}_root_pos_sum") / frames,
+        f"{prefix}_episode_root_rot_error": getattr(env, f"_parallelism_tracking_{prefix}_root_rot_sum") / frames,
+        f"{prefix}_episode_reference_frame_count": getattr(env, f"_parallelism_tracking_{prefix}_error_frames").to(dtype=dtype),
+        f"{prefix}_episode_active_swing_foot_mean_error": getattr(env, f"_parallelism_tracking_{prefix}_active_swing_foot_sum") / swing_count,
+        f"{prefix}_episode_active_swing_foot_max_error": getattr(env, f"_parallelism_tracking_{prefix}_active_swing_foot_max"),
+        f"{prefix}_episode_active_swing_foot_z_mean_error": getattr(env, f"_parallelism_tracking_{prefix}_active_swing_foot_z_sum") / swing_count,
+        f"{prefix}_episode_active_swing_foot_z_max_error": getattr(env, f"_parallelism_tracking_{prefix}_active_swing_foot_z_max"),
+        f"{prefix}_episode_swing_foot_mean_error_per_leg": getattr(env, f"_parallelism_tracking_{prefix}_swing_foot_sum_per_leg") / swing_count_per_leg,
+        f"{prefix}_episode_swing_foot_max_error_per_leg": getattr(env, f"_parallelism_tracking_{prefix}_swing_foot_max_per_leg"),
+        f"{prefix}_episode_swing_foot_z_mean_error_per_leg": getattr(env, f"_parallelism_tracking_{prefix}_swing_foot_z_sum_per_leg") / swing_count_per_leg,
+        f"{prefix}_episode_joint_max_error_per_leg": getattr(env, f"_parallelism_tracking_{prefix}_joint_max_per_leg"),
+        f"{prefix}_episode_command_lin_vel_error": getattr(env, f"_parallelism_tracking_{prefix}_command_lin_vel_sum") / command_frames,
+        f"{prefix}_episode_command_ang_vel_error": getattr(env, f"_parallelism_tracking_{prefix}_command_ang_vel_sum") / command_frames,
+        f"{prefix}_episode_command_frame_count": getattr(env, f"_parallelism_tracking_{prefix}_command_frames").to(dtype=dtype),
+    }
+
+
 def _parallelism_tracking_episode_stats(env) -> dict[str, torch.Tensor]:
     dtype = env._parallelism_tracking_joint_mean_sum.dtype
+    if not hasattr(env, "_parallelism_tracking_valid_joint_mean_sum"):
+        _ensure_tracking_split_stats(
+            env,
+            {"joint_mean_error": env._parallelism_tracking_joint_mean_sum},
+        )
+    _ensure_command_split_stats(
+        env,
+        count=int(env._parallelism_tracking_joint_mean_sum.shape[0]),
+        dtype=dtype,
+        device=env._parallelism_tracking_joint_mean_sum.device,
+    )
     frames = env._parallelism_tracking_error_frames.clamp_min(1).to(dtype=dtype)
     scalar_zero = torch.zeros_like(env._parallelism_tracking_joint_mean_sum)
     per_leg_zero = torch.zeros(scalar_zero.shape[0], 4, dtype=dtype, device=scalar_zero.device)
@@ -530,6 +795,8 @@ def _parallelism_tracking_episode_stats(env) -> dict[str, torch.Tensor]:
         "episode_swing_foot_max_error_per_leg": swing_foot_max_per_leg,
         "episode_swing_foot_z_mean_error_per_leg": swing_foot_z_sum_per_leg / swing_count_per_leg,
         "episode_joint_max_error_per_leg": joint_max_per_leg,
+        **_parallelism_tracking_bucket_stats(env, "valid"),
+        **_parallelism_tracking_bucket_stats(env, "invalid"),
     }
 
 
@@ -560,6 +827,15 @@ def reset_parallelism_tracking_error_stats(env, env_ids: torch.Tensor) -> None:
     ):
         if hasattr(env, name):
             getattr(env, name)[ids] = 0
+    for prefix in ("valid", "invalid"):
+        for suffix in _TRACKING_SPLIT_SUFFIXES:
+            name = f"_parallelism_tracking_{prefix}_{suffix}"
+            if hasattr(env, name):
+                getattr(env, name)[ids] = 0
+        for suffix in ("command_lin_vel_sum", "command_ang_vel_sum", "command_frames"):
+            name = f"_parallelism_tracking_{prefix}_{suffix}"
+            if hasattr(env, name):
+                getattr(env, name)[ids] = 0
     if hasattr(env, "_parallelism_tracking_last_step"):
         env._parallelism_tracking_last_step[ids] = -1
     if hasattr(env, "_parallelism_tracking_error_cache"):
@@ -585,7 +861,9 @@ def reference_joint_pos_reward(
     actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
     update_parallelism_tracking_error_stats(env, asset_cfg)
     error = _tolerance(actual - ref, tracking_tolerance)
-    return _gaussian_error_reward(error, std)
+    return _gaussian_error_reward(error, std) * _parallelism_plan_valid(
+        env, dtype=error.dtype, device=error.device
+    )
 
 
 def reference_joint_vel_reward(
@@ -599,7 +877,9 @@ def reference_joint_vel_reward(
     actual = torch.as_tensor(asset.data.joint_vel, dtype=ref.dtype, device=ref.device)
     update_parallelism_tracking_error_stats(env, asset_cfg)
     error = _tolerance(actual - ref, tracking_tolerance)
-    return _gaussian_error_reward(error, std)
+    return _gaussian_error_reward(error, std) * _parallelism_plan_valid(
+        env, dtype=error.dtype, device=error.device
+    )
 
 
 def reference_joint_max_reward(
@@ -611,7 +891,8 @@ def reference_joint_max_reward(
     ref = get_parallelism_reference_manager(env).step_joint_pos
     actual = torch.as_tensor(asset.data.joint_pos, dtype=ref.dtype, device=ref.device)
     worst_error = torch.abs(actual - ref).amax(dim=-1)
-    return torch.exp(-torch.square(worst_error / float(std)))
+    reward = torch.exp(-torch.square(worst_error / float(std)))
+    return reward * _parallelism_plan_valid(env, dtype=reward.dtype, device=reward.device)
 
 
 def reference_root_pos_reward(env, std: float = 0.12) -> torch.Tensor:
@@ -620,7 +901,9 @@ def reference_root_pos_reward(env, std: float = 0.12) -> torch.Tensor:
     manager = get_parallelism_reference_manager(env)
     error = manager.current_root_pos_b_policy
     update_parallelism_tracking_error_stats(env)
-    return _gaussian_error_reward(error, std)
+    return _gaussian_error_reward(error, std) * _parallelism_plan_valid(
+        env, dtype=error.dtype, device=error.device
+    )
 
 
 def reference_root_rot_reward(env, std: float = 0.30) -> torch.Tensor:
@@ -629,7 +912,9 @@ def reference_root_rot_reward(env, std: float = 0.30) -> torch.Tensor:
     manager = get_parallelism_reference_manager(env)
     error = manager.current_root_rot_b_policy
     update_parallelism_tracking_error_stats(env)
-    return _gaussian_error_reward(error, std)
+    return _gaussian_error_reward(error, std) * _parallelism_plan_valid(
+        env, dtype=error.dtype, device=error.device
+    )
 
 
 def reference_foot_pos_reward(
@@ -656,7 +941,8 @@ def reference_foot_pos_reward(
     )
     squared_error = torch.sum(torch.square(actual_b - ref_b), dim=-1)
     normalized_error = torch.sum(weight * squared_error, dim=-1) / torch.clamp_min(torch.sum(weight, dim=-1), 1.0e-6)
-    return torch.exp(-normalized_error / (float(std) * float(std)))
+    reward = torch.exp(-normalized_error / (float(std) * float(std)))
+    return reward * _parallelism_plan_valid(env, dtype=reward.dtype, device=reward.device)
 
 
 def reference_active_swing_foot_max_reward(
@@ -679,7 +965,8 @@ def reference_active_swing_foot_max_reward(
     has_swing = swing.any(dim=-1)
     worst_error = torch.where(swing, foot_error, torch.full_like(foot_error, -torch.inf)).amax(dim=-1)
     reward = torch.exp(-torch.square(worst_error / float(std)))
-    return torch.where(has_swing, reward, torch.zeros_like(reward))
+    reward = torch.where(has_swing, reward, torch.zeros_like(reward))
+    return reward * _parallelism_plan_valid(env, dtype=reward.dtype, device=reward.device)
 
 
 def parallelism_tracking_errors(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> dict[str, torch.Tensor]:

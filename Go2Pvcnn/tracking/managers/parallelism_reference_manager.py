@@ -227,6 +227,7 @@ class ParallelismReferenceManager:
         self.plan_per_leg_collision_count = torch.zeros(self.num_envs, 4, dtype=torch.long, device=self.device)
         self._manual_episode_length = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._step_reference_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.step_plan_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.root_pos_w = torch.zeros(self.num_envs, self.horizon, 3, dtype=torch.float32, device=self.device)
         self.root_rpy_w = torch.zeros_like(self.root_pos_w)
@@ -296,6 +297,7 @@ class ParallelismReferenceManager:
         self._initialized[ids] = False
         self._last_command_valid[ids] = False
         self._step_reference_valid[ids] = False
+        self.step_plan_valid[ids] = False
 
     def mark_command_changed(self, env_mask: Sequence[int] | Tensor | None = None, *_, **__) -> None:
         ids = _as_env_ids(env_mask, num_envs=self.num_envs, device=self.device)
@@ -307,6 +309,7 @@ class ParallelismReferenceManager:
         self._initialized[ids] = False
         self._last_command_valid[ids] = False
         self._step_reference_valid[ids] = False
+        self.step_plan_valid[ids] = False
 
     def _install_env_reset_hook(self) -> None:
         original = getattr(self.env, "reset", None)
@@ -349,6 +352,7 @@ class ParallelismReferenceManager:
         self._step_root_ang_vel_b_policy.copy_(
             self._angular_velocity_b_policy(self.root_rpy_w, start_phase, target_phase)
         )
+        self.step_plan_valid.copy_(self.plan_valid)
         self._step_reference_valid[:] = True
         self.parallelism_step_count += 1
 
@@ -749,6 +753,7 @@ class ParallelismReferenceManager:
             self.standstill_latched[subset] = ~trajectory.valid
             self._update_standstill_count(subset, trajectory.valid)
             self.plan_valid[subset] = trajectory.valid
+            self.step_plan_valid[subset] = trajectory.valid
             self.plan_valid_count[subset] = trajectory.diagnostics.candidate_valid.sum(dim=(1, 2)).to(dtype=torch.long)
             self.plan_reject_counts[subset] = trajectory.diagnostics.candidate_reject_bits.sum(dim=(1, 2)).to(dtype=torch.long)
             self.plan_collision_counts[subset] = trajectory.diagnostics.candidate_collision_bits.any(dim=-1).sum(dim=(1, 2)).to(dtype=torch.long)

@@ -2,6 +2,7 @@
 
 from tracking.mdp.curriculums import parallelism_velocity_curriculum
 from tracking.mdp.observations import (
+    parallelism_plan_valid,
     parallelism_ref_joint_pos_rel_t,
     parallelism_ref_joint_vel_t,
     parallelism_ref_root_pos_b_t,
@@ -30,6 +31,7 @@ from tracking.mdp.terminations import (
 
 __all__ = [
     "parallelism_consecutive_standstill",
+    "parallelism_plan_valid",
     "parallelism_ref_foot_z_too_far",
     "parallelism_ref_joint_pos_rel_t",
     "parallelism_ref_joint_pos_too_far",
