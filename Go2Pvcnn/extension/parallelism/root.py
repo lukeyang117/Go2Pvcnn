@@ -6,7 +6,6 @@ import torch
 from torch import Tensor
 
 from extension.parallelism.config import ParallelismCfg
-from extension.parallelism.kinematics import fk_go2
 from extension.parallelism.terrain import query_height_semantic_valid
 from extension.parallelism.types import ParallelismState, ParallelismTerrain
 
@@ -244,21 +243,13 @@ def _rollout_xy_yaw(root0: Tensor, rpy0: Tensor, command: Tensor, cfg: Paralleli
 
 
 def _flat_root_z(state: ParallelismState, root0: Tensor, rpy0: Tensor, terrain: ParallelismTerrain, cfg: ParallelismCfg) -> Tensor:
-    joint = torch.as_tensor(state.joint_pos, dtype=root0.dtype, device=root0.device)
-    foot0 = (
-        torch.as_tensor(state.foot_pos_w, dtype=root0.dtype, device=root0.device)
-        if state.foot_pos_w is not None
-        else fk_go2(root0, rpy0, joint).foot_pos_w
-    )
-    stance_first = query_height_semantic_valid(terrain, foot0[:, (1, 2), :2]).height.mean(dim=1)
-    stance_second = query_height_semantic_valid(terrain, foot0[:, (0, 3), :2]).height.mean(dim=1)
-    return torch.cat(
-        (
-            stance_first[:, None].expand(-1, int(cfg.half_cycle)),
-            stance_second[:, None].expand(-1, int(cfg.half_cycle)),
-        ),
-        dim=1,
-    ) + float(cfg.root_clearance_m)
+    del state, rpy0, terrain
+    target = root0.new_tensor(float(cfg.flat_root_z_target_m))
+    frame = torch.arange(int(cfg.horizon), dtype=root0.dtype, device=root0.device)
+    leveling_frames = max(int(cfg.root_leveling_frames), 1)
+    u = (frame / float(leveling_frames)).clamp(min=0.0, max=1.0)
+    smoothstep = u * u * (3.0 - 2.0 * u)
+    return root0[:, None, 2] + smoothstep[None, :] * (target - root0[:, None, 2])
 
 
 def _level_root_rpy(rpy0: Tensor, yaw: Tensor, cfg: ParallelismCfg) -> Tensor:

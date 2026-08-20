@@ -41,10 +41,10 @@ def _state(root_z: float = 0.42) -> ParallelismState:
     )
 
 
-def test_flat_mask_keeps_stance_foot_root_height_rule():
+def test_flat_mask_uses_fixed_root_height_independent_of_obstacle_height():
     height = torch.full((1, 151, 151), 0.20)
     terrain = _terrain_from_height(height)
-    cfg = ParallelismCfg(root_clearance_m=0.30)
+    cfg = ParallelismCfg(flat_base_z_m=0.0, flat_root_clearance_m=0.30)
 
     root = rollout_root(
         _state(root_z=0.42),
@@ -54,7 +54,26 @@ def test_flat_mask_keeps_stance_foot_root_height_rule():
         terrain_following_mask=torch.tensor([False]),
     )
 
-    assert torch.allclose(root.root_pos_w[..., 2], torch.full((1, cfg.horizon), 0.50))
+    assert torch.allclose(root.root_pos_w[:, 0, 2], torch.tensor([0.42]))
+    assert torch.allclose(root.root_pos_w[:, -1, 2], torch.tensor([0.30]))
+    assert torch.all(root.root_pos_w[:, 1:, 2] <= 0.42)
+
+
+def test_flat_root_target_is_computed_from_base_and_clearance():
+    terrain = _terrain_from_height(torch.full((1, 151, 151), 0.20))
+    cfg = ParallelismCfg(flat_base_z_m=0.07, flat_root_clearance_m=0.30)
+
+    root = rollout_root(
+        _state(root_z=0.42),
+        torch.zeros(1, 3),
+        terrain,
+        cfg,
+        terrain_following_mask=torch.tensor([False]),
+    )
+
+    assert cfg.flat_root_z_target_m == 0.37
+    assert torch.allclose(root.root_pos_w[:, 0, 2], torch.tensor([0.42]))
+    assert torch.allclose(root.root_pos_w[:, -1, 2], torch.tensor([0.37]))
 
 
 def test_nonflat_mask_uses_height_map_at_root_xy_and_keeps_first_frame_real_root():

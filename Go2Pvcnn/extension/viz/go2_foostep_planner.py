@@ -1529,11 +1529,18 @@ class PlannerVisualizer:
 
 
 def _build_env_cfg(args_cli: argparse.Namespace):
-    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
-        TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER,
-    )
+    if str(args_cli.planner_backend).lower() == "parallelism":
+        from tracking.parallelism_cross_large_complex_env_cfg import (
+            ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
+        )
 
-    env_cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER()
+        env_cfg = ParallelismTrackingCrossLargeComplexEnvCfg_PLAY()
+    else:
+        from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+            TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER,
+        )
+
+        env_cfg = TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER()
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.scene.env_spacing = 6.0
     env_cfg.sim.device = args_cli.device
@@ -1668,7 +1675,7 @@ def _viewer_terrain_following_mask_from_selection(scene, *, terrain_col: int, de
     if terrain_name is None:
         follow = int(terrain_col) != 0
     else:
-        follow = terrain_name.lower() != "flat"
+        follow = terrain_name.lower() not in {"flat", "flat_dense_small_obstacles"}
     return torch.tensor([follow], dtype=torch.bool, device=device)
 
 
@@ -2520,7 +2527,12 @@ def main() -> int:
     test_terminal_state = ViewerTestTerminalState(enabled=bool(getattr(args_cli, "used_test_terminal", True)))
     test_terminal_window = _create_viewer_test_terminal(test_terminal_state) if parallel_backend and test_terminal_state.enabled else None
 
-    print("[Viewer] Terrain source: teacher_elevation_trajectory env config", flush=True)
+    terrain_source = (
+        "parallelism_cross_large_complex env config"
+        if parallel_backend
+        else "teacher_elevation_trajectory env config"
+    )
+    print(f"[Viewer] Terrain source: {terrain_source}", flush=True)
     print(f"[Viewer] Planner horizon: {args_cli.n_frames} frames @ dt={args_cli.plan_dt:.3f}s", flush=True)
     print("[Viewer] Playback mode: kinematic (no physics)", flush=True)
     print("[Viewer] Step mode: disabled; press M to toggle, Space advances one frame while enabled.", flush=True)

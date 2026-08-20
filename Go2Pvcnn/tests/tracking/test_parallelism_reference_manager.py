@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import torch
 
+from extension.parallelism.types import ParallelismTerrain
 from tracking.managers.parallelism_reference_manager import ParallelismReferenceManager
 
 
@@ -511,6 +512,7 @@ def test_standstill_count_tracks_only_consecutive_failed_replans():
 
 def test_reset_clears_standstill_count_but_command_change_does_not():
     env = _fake_env()
+    env.scene["robot"].data.root_pos_w[:, 2] = 0.40
     manager = ParallelismReferenceManager(env, autostart=False)
     manager.standstill_count[:] = torch.tensor([2, 1])
 
@@ -519,6 +521,29 @@ def test_reset_clears_standstill_count_but_command_change_does_not():
 
     manager.reset(torch.tensor([0]))
     assert manager.standstill_count.tolist() == [0, 1]
+
+
+def test_flat_standstill_fallback_keeps_fixed_root_target_on_obstacle_height():
+    env = _fake_env(num_envs=1)
+    manager = ParallelismReferenceManager(env, autostart=False)
+    state = manager._state(torch.tensor([0]))
+    terrain = ParallelismTerrain(
+        height_w=torch.full((1, 151, 151), 0.20),
+        semantic_id=torch.zeros((1, 151, 151), dtype=torch.long),
+        valid_mask=torch.ones((1, 151, 151), dtype=torch.bool),
+        origin_w=torch.tensor([[-0.75, -0.75, 0.0]]),
+        yaw_w=torch.zeros(1),
+        resolution=0.01,
+    )
+
+    fallback = manager._standard_stand_state(
+        state,
+        terrain,
+        torch.tensor([0]),
+        terrain_following_mask=torch.tensor([False]),
+    )
+
+    assert torch.allclose(fallback.root_pos_w[:, 2], torch.tensor([0.30]))
 
 
 def test_internal_environment_reset_invalidates_reference_without_planning():
@@ -544,9 +569,9 @@ def test_terrain_following_mask_uses_non_flat_terrain_names():
         cfg=SimpleNamespace(
             terrain_generator=SimpleNamespace(
                 sub_terrains={
+                    "flat_dense_small_obstacles": object(),
                     "flat": object(),
                     "random_rough": object(),
-                    "pyramid_stairs": object(),
                 }
             )
         ),
@@ -555,7 +580,7 @@ def test_terrain_following_mask_uses_non_flat_terrain_names():
 
     mask = manager._terrain_following_mask(torch.tensor([0, 1, 2]))
 
-    assert mask.tolist() == [False, True, True]
+    assert mask.tolist() == [False, False, True]
 
 
 def test_terrain_following_mask_defaults_to_flat_without_metadata():

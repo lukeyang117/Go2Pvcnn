@@ -278,6 +278,7 @@ def test_viewer_build_env_cfg_uses_viewer_cfg_name() -> None:
 
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER" in build_env_cfg_source
     assert "TeacherElevationTrajectoryMpcSemanticEnvCfg_PLAY" not in build_env_cfg_source
+    assert "ParallelismTrackingCrossLargeComplexEnvCfg_PLAY" in build_env_cfg_source
 
 
 def test_real_viewer_fixture_compacts_physx_buffers_only_for_small_runtime() -> None:

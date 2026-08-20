@@ -9,9 +9,17 @@ def test_cross_large_complex_config_declares_mixed_terrain_and_counts() -> None:
     assert "ParallelismTrackingSmallObstaclesEnvCfg" in source
     assert "parallelism_tracking_cross_large_complex" in source
     assert "flat_dense_small_obstacles" in source
+    assert "SemanticObstacleCount(small=0, large=2)" in source
     assert "SemanticObstacleCount(small=40, large=0)" in source
     assert "SemanticObstacleCount(small=5, large=2)" in source
-    assert "proportion=0.0625" in source
+    assert "proportion=0.1" in source
+    assert "proportion=0.2" in source
+
+
+def test_cross_large_complex_config_uses_expected_terrain_proportions() -> None:
+    source = (ROOT / "tracking/parallelism_cross_large_complex_env_cfg.py").read_text()
+    assert source.count("proportion=0.1") >= 6
+    assert source.count("proportion=0.2") >= 2
 
 
 def test_cross_large_complex_config_disables_standstill_termination() -> None:
@@ -32,6 +40,7 @@ def test_cross_large_complex_config_excludes_only_dense_flat_from_terrain_curric
     source = (ROOT / "tracking/parallelism_cross_large_complex_env_cfg.py").read_text()
     assert "flat_dense_small_obstacles" in source
     assert "excluded_terrain_names" in source
+    assert 'excluded_terrain_names": ("flat_dense_small_obstacles",)' in source
 
 
 def test_cross_large_teacher_tracks_command_and_removes_foot_z_termination() -> None:

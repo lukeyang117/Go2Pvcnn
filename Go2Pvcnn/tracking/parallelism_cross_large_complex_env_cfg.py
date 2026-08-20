@@ -79,34 +79,34 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
         difficulty_range=SEMANTIC_TERRAIN_CFG.difficulty_range,
         curriculum=True,
         sub_terrains={
-            "flat_dense_small_obstacles": terrain_gen.MeshPlaneTerrainCfg(proportion=0.0625),
-            "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.0375),
+            "flat_dense_small_obstacles": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
+            "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
             "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-                proportion=0.10,
+                proportion=0.1,
                 noise_range=(0.01, 0.06),
                 noise_step=0.01,
                 border_width=0.25,
             ),
             "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
-                proportion=0.10,
+                proportion=0.1,
                 slope_range=(0.0, 0.4),
                 platform_width=1.0,
                 border_width=0.25,
             ),
             "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
-                proportion=0.10,
+                proportion=0.1,
                 slope_range=(0.0, 0.4),
                 platform_width=1.0,
                 border_width=0.25,
             ),
             "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-                proportion=0.20,
+                proportion=0.1,
                 grid_width=0.45,
                 grid_height_range=(0.05, 0.2),
                 platform_width=2.0,
             ),
             "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
-                proportion=0.20,
+                proportion=0.2,
                 step_height_range=(0.05, 0.23),
                 step_width=0.3,
                 platform_width=1.0,
@@ -114,7 +114,7 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
                 holes=False,
             ),
             "pyramid_stairs_inv": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-                proportion=0.20,
+                proportion=0.2,
                 step_height_range=(0.05, 0.23),
                 step_width=0.3,
                 platform_width=1.0,
@@ -155,9 +155,10 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
         default_factory=lambda: SemanticObstacleCurriculumCfg(
             enabled=True,
             plane_terrain_names=("flat_dense_small_obstacles", "flat"),
-            plane_counts=(SemanticObstacleCount(small=5, large=2),),
+            plane_counts=(SemanticObstacleCount(small=0, large=2),),
             non_plane_counts=(SemanticObstacleCount(small=5, large=2),),
             terrain_obstacle_count_overrides={
+                "flat": SemanticObstacleCount(small=0, large=2),
                 "flat_dense_small_obstacles": SemanticObstacleCount(small=40, large=0),
             },
             center_safety_half_extent_m=(0.25,),

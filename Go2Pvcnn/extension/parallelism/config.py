@@ -30,6 +30,8 @@ class ParallelismCfg:
     hip_lateral_bias_m: float = 0.0955
     foothold_step_gain: float = 1.5
     root_clearance_m: float = 0.30
+    flat_base_z_m: float = 0.0
+    flat_root_clearance_m: float = 0.30
     swing_clearance_m: float = 0.05
     min_swing_apex_m: float = 0.08
     landing_tolerance_m: float = 0.025
@@ -76,6 +78,11 @@ class ParallelismCfg:
     cylinder_angles: int = 4
     sphere_surface_points: int = 6
     contact_tolerant_collision_shape_names: tuple[str, ...] = ("calf_lower_cylinder", "foot_sphere")
+
+    @property
+    def flat_root_z_target_m(self) -> float:
+        return float(self.flat_base_z_m) + float(self.flat_root_clearance_m)
+
     official_collision_shapes: tuple[OfficialCollisionShapeSpec, ...] = (
         OfficialCollisionShapeSpec(
             "thigh_box",

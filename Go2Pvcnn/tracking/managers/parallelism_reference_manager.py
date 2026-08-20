@@ -525,12 +525,16 @@ class ParallelismReferenceManager:
         state: ParallelismState,
         terrain: ParallelismTerrain,
         env_ids: Tensor,
+        terrain_following_mask: Tensor | None = None,
     ) -> ParallelismState:
-        """Build the canonical flat standing pose used after a failed plan."""
+        """Build the canonical standing pose used after a failed plan."""
 
         root_pos = state.root_pos_w.clone()
         root_rpy = state.root_rpy_w.clone()
         root_rpy[:, :2] = 0.0
+        if terrain_following_mask is None:
+            terrain_following_mask = self._terrain_following_mask(env_ids)
+        flat_mask = ~torch.as_tensor(terrain_following_mask, dtype=torch.bool, device=self.device)
         foot_pos = state.foot_pos_w
         if foot_pos is None:
             foot_pos = fk_go2(state.root_pos_w, state.root_rpy_w, state.joint_pos).foot_pos_w
@@ -538,7 +542,12 @@ class ParallelismReferenceManager:
         heights = query.height.reshape_as(foot_pos[..., 2])
         valid = query.valid.reshape_as(foot_pos[..., 2])
         support_height = torch.where(valid, heights, foot_pos[..., 2]).mean(dim=-1)
-        root_pos[:, 2] = support_height + float(self.cfg.root_clearance_m)
+        terrain_root_z = support_height + float(self.cfg.root_clearance_m)
+        root_pos[:, 2] = torch.where(
+            flat_mask,
+            root_pos.new_tensor(float(self.cfg.flat_root_z_target_m)),
+            terrain_root_z,
+        )
 
         robot = self._robot()
         default_joint = getattr(getattr(robot, "data", None), "default_joint_pos", None)
@@ -560,7 +569,12 @@ class ParallelismReferenceManager:
         foot_valid = foot_query.valid.reshape_as(canonical_foot[..., 2])
         canonical_foot = canonical_foot.clone()
         canonical_foot[..., 2] = torch.where(foot_valid, foot_height, canonical_foot[..., 2])
-        root_pos[:, 2] = canonical_foot[..., 2].mean(dim=-1) + float(self.cfg.root_clearance_m)
+        terrain_root_z = canonical_foot[..., 2].mean(dim=-1) + float(self.cfg.root_clearance_m)
+        root_pos[:, 2] = torch.where(
+            flat_mask,
+            root_pos.new_tensor(float(self.cfg.flat_root_z_target_m)),
+            terrain_root_z,
+        )
         return ParallelismState(
             root_pos_w=root_pos,
             root_rpy_w=root_rpy,
@@ -690,7 +704,13 @@ class ParallelismReferenceManager:
                     foot_pos_w=fk_go2(live_state.root_pos_w, live_state.root_rpy_w, live_state.joint_pos).foot_pos_w,
                 )
             terrain = self._terrain(live_state.root_pos_w, subset)
-            standard_state = self._standard_stand_state(live_state, terrain, subset)
+            terrain_following_mask = self._terrain_following_mask(subset)
+            standard_state = self._standard_stand_state(
+                live_state,
+                terrain,
+                subset,
+                terrain_following_mask=terrain_following_mask,
+            )
             latched = self.standstill_latched.index_select(0, subset)
             latch_root = latched[:, None]
             latch_root_rpy = latched[:, None]
@@ -707,7 +727,7 @@ class ParallelismReferenceManager:
                 self._command(subset),
                 terrain,
                 self.cfg,
-                terrain_following_mask=self._terrain_following_mask(subset),
+                terrain_following_mask=terrain_following_mask,
             )
             self.root_pos_w[subset] = trajectory.root_pos_w
             self.root_rpy_w[subset] = trajectory.root_rpy_w
@@ -801,7 +821,8 @@ class ParallelismReferenceManager:
         elif int(type_tensor.numel()) != int(ids.numel()):
             return torch.zeros(int(ids.numel()), dtype=torch.bool, device=self.device)
         valid_type = (type_tensor >= 0) & (type_tensor < len(names))
-        flat_indices = [idx for idx, name in enumerate(names) if str(name).lower() == "flat"]
+        flat_names = {"flat", "flat_dense_small_obstacles"}
+        flat_indices = [idx for idx, name in enumerate(names) if str(name).lower() in flat_names]
         if not flat_indices:
             return valid_type
         flat_tensor = torch.tensor(flat_indices, dtype=torch.long, device=self.device)
