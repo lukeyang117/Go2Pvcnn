@@ -178,7 +178,13 @@ def course_anchor_counts(stage: SemanticCourseStage) -> dict[str, int]:
 def terrain_name_for_col(
     col: int,
     terrain_names: tuple[str, ...] | list[str] | None,
+    terrain_generator=None,
 ) -> str | None:
+    generated_names = terrain_column_names_from_generator(terrain_generator)
+    if generated_names is not None:
+        if 0 <= int(col) < len(generated_names):
+            return generated_names[int(col)]
+        return None
     if terrain_names is None:
         return None
     if len(terrain_names) == 1:
@@ -199,6 +205,40 @@ def terrain_names_from_generator(terrain_generator) -> tuple[str, ...] | None:
     return None
 
 
+def terrain_column_names_from_generator(terrain_generator) -> tuple[str, ...] | None:
+    """Expand sub-terrain proportions to the generated terrain columns."""
+
+    if terrain_generator is None:
+        return None
+    sub_terrains = getattr(terrain_generator, "sub_terrains", None)
+    num_cols = int(getattr(terrain_generator, "num_cols", 0) or 0)
+    if not isinstance(sub_terrains, dict) or num_cols <= 0:
+        return None
+
+    weighted_names: list[tuple[str, float]] = []
+    total = 0.0
+    for name, cfg in sub_terrains.items():
+        proportion = float(getattr(cfg, "proportion", 0.0) or 0.0)
+        if proportion <= 0.0:
+            continue
+        weighted_names.append((str(name), proportion))
+        total += proportion
+    if total <= 0.0:
+        return None
+
+    columns = [weighted_names[-1][0]] * num_cols
+    cumulative = 0.0
+    for index, (name, proportion) in enumerate(weighted_names):
+        start = int(round(num_cols * cumulative / total))
+        cumulative += proportion
+        end = int(round(num_cols * cumulative / total))
+        if index == len(weighted_names) - 1:
+            end = num_cols
+        for column in range(max(start, 0), min(end, num_cols)):
+            columns[column] = name
+    return tuple(columns)
+
+
 def semantic_counts_for_tile(
     *,
     row: int,
@@ -206,10 +246,11 @@ def semantic_counts_for_tile(
     terrain_names: tuple[str, ...] | list[str] | None,
     curriculum_cfg: SemanticObstacleCurriculumCfg | None,
     fallback_stage: SemanticCourseStage,
+    terrain_generator=None,
 ) -> dict[str, int]:
     if curriculum_cfg is None or not bool(curriculum_cfg.enabled):
         return course_anchor_counts(fallback_stage)
-    terrain_name = terrain_name_for_col(col, terrain_names)
+    terrain_name = terrain_name_for_col(col, terrain_names, terrain_generator)
     return count_to_dict(count_for_row(curriculum_cfg, row=row, terrain_name=terrain_name))
 
 
@@ -612,6 +653,7 @@ def build_course_anchors(
                 terrain_names=resolved_terrain_names,
                 curriculum_cfg=semantic_curriculum_cfg,
                 fallback_stage=stage,
+                terrain_generator=terrain_generator,
             )
             for slot in _stage_slots(
                 stage=stage,

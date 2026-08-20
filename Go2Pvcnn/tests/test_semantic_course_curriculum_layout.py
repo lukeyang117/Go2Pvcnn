@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -99,6 +100,52 @@ def test_semantic_course_repeats_single_terrain_name_across_all_columns(monkeypa
             curriculum_cfg=cfg,
             fallback_stage=SemanticCourseStage.S1,
         ) == {"small": 8, "large": 0}
+
+
+def test_semantic_course_uses_generated_column_proportions_for_obstacle_counts(monkeypatch) -> None:
+    _install_fake_isaaclab(monkeypatch)
+    from extension.semantic_course import SemanticCourseStage, semantic_counts_for_tile
+    from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
+
+    cfg = SemanticObstacleCurriculumCfg(
+        plane_terrain_names=("flat", "flat_dense_small_obstacles"),
+        plane_counts=(SemanticObstacleCount(0, 0),),
+        non_plane_counts=(SemanticObstacleCount(5, 2),),
+        terrain_obstacle_count_overrides={
+            "flat": SemanticObstacleCount(0, 2),
+            "flat_dense_small_obstacles": SemanticObstacleCount(40, 0),
+        },
+    )
+    generator = SimpleNamespace(
+        num_cols=20,
+        sub_terrains={
+            "flat_dense_small_obstacles": SimpleNamespace(proportion=0.1),
+            "flat": SimpleNamespace(proportion=0.1),
+            "random_rough": SimpleNamespace(proportion=0.1),
+            "hf_pyramid_slope": SimpleNamespace(proportion=0.1),
+            "hf_pyramid_slope_inv": SimpleNamespace(proportion=0.1),
+            "boxes": SimpleNamespace(proportion=0.1),
+            "pyramid_stairs": SimpleNamespace(proportion=0.2),
+            "pyramid_stairs_inv": SimpleNamespace(proportion=0.2),
+        },
+    )
+
+    assert semantic_counts_for_tile(
+        row=0,
+        col=0,
+        terrain_names=tuple(generator.sub_terrains),
+        curriculum_cfg=cfg,
+        fallback_stage=SemanticCourseStage.S1,
+        terrain_generator=generator,
+    ) == {"small": 40, "large": 0}
+    assert semantic_counts_for_tile(
+        row=0,
+        col=2,
+        terrain_names=tuple(generator.sub_terrains),
+        curriculum_cfg=cfg,
+        fallback_stage=SemanticCourseStage.S1,
+        terrain_generator=generator,
+    ) == {"small": 0, "large": 2}
 
 
 def test_semantic_course_curriculum_layout_row(monkeypatch) -> None:
