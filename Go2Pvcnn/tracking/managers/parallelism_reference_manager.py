@@ -808,6 +808,49 @@ class ParallelismReferenceManager:
             return None
         return tuple(str(name) for name in sub_terrains.keys())
 
+    def _terrain_column_names(self) -> tuple[str, ...] | None:
+        """Resolve generated terrain columns to their sub-terrain family names.
+
+        Isaac Lab's ``terrain_types`` buffer contains a generated column index,
+        while ``sub_terrains`` contains only the compact family definitions.
+        When ``num_cols`` is larger than the number of families, direct
+        indexing into ``sub_terrains`` misclassifies most columns.
+        """
+
+        terrain = self._scene_terrain()
+        generator = getattr(getattr(terrain, "cfg", None), "terrain_generator", None) if terrain is not None else None
+        if generator is None:
+            cfg = getattr(getattr(self.env, "cfg", None), "scene", None)
+            terrain_cfg = getattr(cfg, "terrain", None)
+            generator = getattr(terrain_cfg, "terrain_generator", None)
+        sub_terrains = getattr(generator, "sub_terrains", None)
+        num_cols = int(getattr(generator, "num_cols", 0) or 0)
+        if not isinstance(sub_terrains, dict) or num_cols <= 0:
+            return None
+
+        weighted_names: list[tuple[str, float]] = []
+        total = 0.0
+        for name, cfg in sub_terrains.items():
+            proportion = float(getattr(cfg, "proportion", 0.0) or 0.0)
+            if proportion <= 0.0:
+                continue
+            weighted_names.append((str(name), proportion))
+            total += proportion
+        if total <= 0.0:
+            return None
+
+        columns = [weighted_names[-1][0]] * num_cols
+        cumulative = 0.0
+        for index, (name, proportion) in enumerate(weighted_names):
+            start = int(round(num_cols * cumulative / total))
+            cumulative += proportion
+            end = int(round(num_cols * cumulative / total))
+            if index == len(weighted_names) - 1:
+                end = num_cols
+            for column in range(max(start, 0), min(end, num_cols)):
+                columns[column] = name
+        return tuple(columns)
+
     def _terrain_following_mask(self, env_ids: Tensor) -> Tensor:
         terrain = self._scene_terrain()
         terrain_types = getattr(terrain, "terrain_types", None) if terrain is not None else None
@@ -820,9 +863,14 @@ class ParallelismReferenceManager:
             type_tensor = type_tensor.index_select(0, ids)
         elif int(type_tensor.numel()) != int(ids.numel()):
             return torch.zeros(int(ids.numel()), dtype=torch.bool, device=self.device)
-        valid_type = (type_tensor >= 0) & (type_tensor < len(names))
+        column_names = self._terrain_column_names()
+        if column_names is None:
+            column_names = names
+        valid_type = (type_tensor >= 0) & (type_tensor < len(column_names))
         flat_names = {"flat", "flat_dense_small_obstacles"}
-        flat_indices = [idx for idx, name in enumerate(names) if str(name).lower() in flat_names]
+        flat_indices = [
+            idx for idx, name in enumerate(column_names) if str(name).lower() in flat_names
+        ]
         if not flat_indices:
             return valid_type
         flat_tensor = torch.tensor(flat_indices, dtype=torch.long, device=self.device)
