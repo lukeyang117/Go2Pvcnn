@@ -224,12 +224,12 @@ def test_viewer_terrain_following_mask_uses_selected_column_proportions():
     from extension.viz.go2_foostep_planner import _viewer_terrain_following_mask_from_selection
 
     sub_terrains = {
-        "flat_dense_small_obstacles": SimpleNamespace(proportion=0.1),
-        "flat": SimpleNamespace(proportion=0.1),
+        "flat_dense_small_obstacles": SimpleNamespace(proportion=0.05),
+        "flat": SimpleNamespace(proportion=0.05),
         "random_rough": SimpleNamespace(proportion=0.1),
         "hf_pyramid_slope": SimpleNamespace(proportion=0.1),
         "hf_pyramid_slope_inv": SimpleNamespace(proportion=0.1),
-        "boxes": SimpleNamespace(proportion=0.1),
+        "boxes": SimpleNamespace(proportion=0.2),
         "pyramid_stairs": SimpleNamespace(proportion=0.2),
         "pyramid_stairs_inv": SimpleNamespace(proportion=0.2),
     }
@@ -245,6 +245,6 @@ def test_viewer_terrain_following_mask_uses_selected_column_proportions():
 
     assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=0, device="cpu").item() is False
     assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=1, device="cpu").item() is False
-    assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=2, device="cpu").item() is False
+    assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=2, device="cpu").item() is True
     assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=12, device="cpu").item() is True
     assert _viewer_terrain_following_mask_from_selection(scene, terrain_col=16, device="cpu").item() is True

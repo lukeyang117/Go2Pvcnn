@@ -586,17 +586,17 @@ def test_terrain_following_mask_uses_non_flat_terrain_names():
 def test_terrain_following_mask_expands_proportional_generated_columns():
     env = _fake_env(num_envs=3)
     env.scene.terrain = SimpleNamespace(
-        terrain_types=torch.tensor([0, 2, 12], dtype=torch.long),
+        terrain_types=torch.tensor([0, 1, 12], dtype=torch.long),
         cfg=SimpleNamespace(
             terrain_generator=SimpleNamespace(
                 num_cols=20,
                 sub_terrains={
-                    "flat_dense_small_obstacles": SimpleNamespace(proportion=0.1),
-                    "flat": SimpleNamespace(proportion=0.1),
+                    "flat_dense_small_obstacles": SimpleNamespace(proportion=0.05),
+                    "flat": SimpleNamespace(proportion=0.05),
                     "random_rough": SimpleNamespace(proportion=0.1),
                     "hf_pyramid_slope": SimpleNamespace(proportion=0.1),
                     "hf_pyramid_slope_inv": SimpleNamespace(proportion=0.1),
-                    "boxes": SimpleNamespace(proportion=0.1),
+                    "boxes": SimpleNamespace(proportion=0.2),
                     "pyramid_stairs": SimpleNamespace(proportion=0.2),
                     "pyramid_stairs_inv": SimpleNamespace(proportion=0.2),
                 },
@@ -607,7 +607,7 @@ def test_terrain_following_mask_expands_proportional_generated_columns():
 
     mask = manager._terrain_following_mask(torch.tensor([0, 1, 2]))
 
-    # Columns 0 and 2 are the two flat families; column 12 is stairs.
+    # Columns 0 and 1 are the two flat families; column 12 is stairs.
     assert mask.tolist() == [False, False, True]
     assert manager._terrain_column_names()[12] == "pyramid_stairs"
 

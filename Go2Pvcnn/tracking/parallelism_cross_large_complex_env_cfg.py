@@ -79,8 +79,9 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
         difficulty_range=SEMANTIC_TERRAIN_CFG.difficulty_range,
         curriculum=True,
         sub_terrains={
-            "flat_dense_small_obstacles": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
-            "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
+            # With num_cols=20, each 0.05 family occupies exactly one column.
+            "flat_dense_small_obstacles": terrain_gen.MeshPlaneTerrainCfg(proportion=0.05),
+            "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.05),
             "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
                 proportion=0.1,
                 noise_range=(0.01, 0.06),
@@ -90,17 +91,17 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
             "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
                 proportion=0.1,
                 slope_range=(0.0, 0.4),
-                platform_width=1.0,
+                platform_width=2.0,
                 border_width=0.25,
             ),
             "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
                 proportion=0.1,
                 slope_range=(0.0, 0.4),
-                platform_width=1.0,
+                platform_width=2.0,
                 border_width=0.25,
             ),
             "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-                proportion=0.1,
+                proportion=0.2,
                 grid_width=0.45,
                 grid_height_range=(0.05, 0.2),
                 platform_width=2.0,
@@ -109,7 +110,7 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
                 proportion=0.2,
                 step_height_range=(0.05, 0.23),
                 step_width=0.3,
-                platform_width=1.0,
+                platform_width=3.0,
                 border_width=1.0,
                 holes=False,
             ),
@@ -117,7 +118,7 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
                 proportion=0.2,
                 step_height_range=(0.05, 0.23),
                 step_width=0.3,
-                platform_width=1.0,
+                platform_width=3.0,
                 border_width=1.0,
                 holes=False,
             ),

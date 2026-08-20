@@ -2,7 +2,7 @@
 
 > For agentic workers: REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** 让 flat 和 flat_dense_small_obstacles 使用平地基准面加 0.30m 的固定 root target，并统一 large train、play、distillation、viewer 的 terrain 比例与语义障碍物数量。
+**Goal:** 让 flat 和 flat_dense_small_obstacles 使用平地基准面加 0.30m 的固定 root target，并统一 large train、play、distillation、viewer 的 terrain 比例、terrain column 映射与语义障碍物数量。
 
 **Architecture:** 保留复杂地形的 terrain-following root 逻辑，只在 flat terrain mask 为 false 的分支中使用固定 root target。reference manager 和 viewer 统一把两个 flat 名称识别为 flat；small obstacle 高程继续传给 touchdown、swing、IK 和 geometry collision。
 
@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-- flat 比例为 0.1，flat_dense_small_obstacles 比例为 0.1。
-- random_rough、hf_pyramid_slope、hf_pyramid_slope_inv、boxes 比例为 0.1。
-- pyramid_stairs、pyramid_stairs_inv 比例为 0.2。
+- num_cols=20 时 flat 比例为 0.05，flat_dense_small_obstacles 比例为 0.05，各占一列。
+- random_rough、hf_pyramid_slope、hf_pyramid_slope_inv 比例为 0.1。
+- boxes、pyramid_stairs、pyramid_stairs_inv 比例为 0.2。
 - flat 的 semantic obstacle 数量为 small=0, large=2。
 - flat_dense_small_obstacles 的 semantic obstacle 数量为 small=40, large=0。
 - 其他 terrain 的 semantic obstacle 数量为 small=5, large=2。
@@ -21,6 +21,8 @@
 - reference 第 0 帧必须保留 IsaacLab 当前真实 root 状态。
 - 不修改 touchdown、swing clearance、IK、geometry collision、RL observation、reward、termination。
 - 不覆盖工作区中未相关的训练脚本改动。
+- terrain_types 是生成 column 编号，不能直接作为 sub_terrains 紧凑字典索引。
+- Parallelism root mask 与 semantic obstacle 数量必须共享 proportion 展开的 column 名称。
 
 ---
 
@@ -56,7 +58,7 @@ def test_flat_mask_uses_fixed_root_height_independent_of_obstacle_height():
 
 - [x] Step 2: Add a configurable target test using flat_base_z_m=0.07 and flat_root_clearance_m=0.30, expecting frame 0 to remain 0.42m and the final frame to be 0.37m.
 - [x] Step 3: Add the dense-flat mask case with names flat_dense_small_obstacles, flat, random_rough and expected mask [False, False, True].
-- [x] Step 4: Add source assertions for all eight proportions, the three obstacle count rules, and exclusion of only flat_dense_small_obstacles.
+- [x] Step 4: Add source assertions for the 0.05/0.1/0.2 proportions, the three obstacle count rules, and exclusion of only flat_dense_small_obstacles.
 - [x] Step 5: Run the focused pytest command and verify RED because the current implementation still queries terrain height and recognizes only flat.
 
 Run:
@@ -105,7 +107,7 @@ def _flat_root_z(state, root0, rpy0, terrain, cfg):
     return root0[:, None, 2] + smoothstep[None, :] * (target - root0[:, None, 2])
 ~~~
 
-- [x] Step 3: Set terrain proportions to 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.2 in the terrain generator.
+- [x] Step 3: Set terrain proportions to 0.05, 0.05, 0.1, 0.1, 0.1, 0.2, 0.2, 0.2 in the terrain generator and align the provided slope/box/stair geometry parameters.
 - [x] Step 4: Set explicit semantic overrides:
 
 ~~~python
@@ -125,9 +127,11 @@ terrain_obstacle_count_overrides={
 
 **Files:**
 - Modify: Go2Pvcnn/tracking/managers/parallelism_reference_manager.py
+- Modify: Go2Pvcnn/extension/semantic_course.py
 - Modify: Go2Pvcnn/extension/viz/go2_foostep_planner.py
 - Modify: Go2Pvcnn/tests/parallelism/test_viewer_adapter.py
 - Modify: Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py
+- Modify: Go2Pvcnn/tests/test_semantic_course_curriculum_layout.py
 
 **Interfaces:**
 - Manager flat names are exactly {"flat", "flat_dense_small_obstacles"}.
@@ -138,7 +142,8 @@ terrain_obstacle_count_overrides={
 - [x] Step 2: Make _standard_stand_state select cfg.flat_root_z_target_m for flat-class environments and preserve current support-height calculation for non-flat environments.
 - [x] Step 3: Update viewer selection so follow = terrain_name.lower() not in {"flat", "flat_dense_small_obstacles"}.
 - [x] Step 4: Add viewer and fallback regression tests.
-- [x] Step 5: Run:
+- [x] Step 5: Resolve semantic obstacle counts with the same proportion-expanded terrain column mapping.
+- [x] Step 6: Run:
 
 ~~~bash
 pytest -q Go2Pvcnn/tests/tracking/test_parallelism_reference_manager.py \

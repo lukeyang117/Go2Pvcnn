@@ -18,8 +18,9 @@ def test_cross_large_complex_config_declares_mixed_terrain_and_counts() -> None:
 
 def test_cross_large_complex_config_uses_expected_terrain_proportions() -> None:
     source = (ROOT / "tracking/parallelism_cross_large_complex_env_cfg.py").read_text()
-    assert source.count("proportion=0.1") >= 6
-    assert source.count("proportion=0.2") >= 2
+    assert source.count("proportion=0.05") == 2
+    assert source.count("proportion=0.1") == 3
+    assert source.count("proportion=0.2") == 3
 
 
 def test_cross_large_complex_config_disables_standstill_termination() -> None:

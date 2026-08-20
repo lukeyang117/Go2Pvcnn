@@ -96,7 +96,7 @@
 <main>
   <header>
     <h1>Parallelism Mixed Terrain Root 高度与障碍物设计</h1>
-    <div class="meta">日期：2026-08-20　状态：待实现设计　范围：large train / play / distillation / viewer</div>
+    <div class="meta">日期：2026-08-20　状态：实现与验证更新　范围：large train / play / distillation / viewer</div>
     <div class="summary">
       <strong>核心结论：</strong>统一 mixed terrain 配置；<code>flat</code> 和
       <code>flat_dense_small_obstacles</code> 使用平地基准面加 <code>0.30m</code> 的固定 root target，
@@ -123,21 +123,37 @@ root_z = stance_height + root_clearance_m</pre>
         <tr><th>Terrain</th><th>比例</th><th>基础地形</th><th>Small</th><th>Large</th><th>Root 模式</th></tr>
       </thead>
       <tbody>
-        <tr><td><code>flat</code></td><td>0.1</td><td>MeshPlane</td><td>0</td><td>2</td><td>Fixed flat root</td></tr>
-        <tr><td><code>flat_dense_small_obstacles</code></td><td>0.1</td><td>MeshPlane</td><td>40</td><td>0</td><td>Fixed flat root</td></tr>
+        <tr><td><code>flat_dense_small_obstacles</code></td><td>0.05</td><td>MeshPlane</td><td>40</td><td>0</td><td>Fixed flat root</td></tr>
+        <tr><td><code>flat</code></td><td>0.05</td><td>MeshPlane</td><td>0</td><td>2</td><td>Fixed flat root</td></tr>
         <tr><td><code>random_rough</code></td><td>0.1</td><td>Random rough</td><td>5</td><td>2</td><td>Terrain following</td></tr>
         <tr><td><code>hf_pyramid_slope</code></td><td>0.1</td><td>Slope</td><td>5</td><td>2</td><td>Terrain following</td></tr>
         <tr><td><code>hf_pyramid_slope_inv</code></td><td>0.1</td><td>Inverted slope</td><td>5</td><td>2</td><td>Terrain following</td></tr>
-        <tr><td><code>boxes</code></td><td>0.1</td><td>Random grid boxes</td><td>5</td><td>2</td><td>Terrain following</td></tr>
+        <tr><td><code>boxes</code></td><td>0.2</td><td>Random grid boxes</td><td>5</td><td>2</td><td>Terrain following</td></tr>
         <tr><td><code>pyramid_stairs</code></td><td>0.2</td><td>Stairs</td><td>5</td><td>2</td><td>Terrain following</td></tr>
         <tr><td><code>pyramid_stairs_inv</code></td><td>0.2</td><td>Inverted stairs</td><td>5</td><td>2</td><td>Terrain following</td></tr>
       </tbody>
     </table>
+    <p>
+      几何参数与统一配置保持一致：两个 slope 的 <code>platform_width=2.0m</code>，
+      boxes 保持 <code>grid_width=0.45m</code> 和 <code>platform_width=2.0m</code>，两个 stairs
+      的 <code>step_width=0.3m</code>、<code>platform_width=3.0m</code>；这些参数在 train、play
+      和 distillation 中共用。
+    </p>
     <p>总比例为：</p>
-    <pre>0.1 + 0.1 + 0.1 + 0.1 + 0.1 + 0.1 + 0.2 + 0.2 = 1.0</pre>
+    <pre>0.05 + 0.05 + 0.1 + 0.1 + 0.1 + 0.2 + 0.2 + 0.2 = 1.0</pre>
     <p>
       训练、play、distillation 和 viewer 共用一份 mixed terrain generator，不复制多套 subterrain。
       Terrain generator 按比例分配 terrain column；dense flat 不是单独复制出来的场景。
+      在 <code>num_cols=20</code> 时，dense flat 为第 <code>0</code> 列，flat 为第
+      <code>1</code> 列；random rough、两个 slope 各占两列，boxes 和两个 stairs 各占四列。
+    </p>
+    <h3>Terrain column 的唯一解析规则</h3>
+    <p>
+      Isaac Lab 的 <code>terrain_types</code> 保存的是生成后的 column 编号，不是
+      <code>sub_terrains</code> 字典的紧凑索引。root terrain-following 和 semantic obstacle
+      生成必须共同使用 proportion 展开的 column 名称表。禁止直接执行
+      <code>terrain_names[terrain_types]</code>，否则 flat 会被误判为普通地形，出现 flat 和
+      dense flat 同时拥有 small、large 障碍物的问题。
     </p>
     <h3>Semantic obstacle overrides</h3>
     <pre>plane_terrain_names = (
@@ -169,7 +185,7 @@ non_plane_counts = (
       <li><code>flat</code> 保留在 terrain curriculum 中，只有 large obstacle。</li>
       <li><code>flat_dense_small_obstacles</code> 固定为 40 个 small obstacle，不随 terrain level 增加。</li>
       <li>rough、slope、boxes、stairs 继续按原 terrain level 逻辑运行。</li>
-      <li>环境数量按 terrain generator 比例分布；dense flat 的目标比例为 0.1。</li>
+      <li>环境数量按 terrain generator 比例分布；dense flat 和 flat 各占 0.05，即各一列。</li>
     </ul>
   </section>
 
@@ -253,9 +269,11 @@ foot touchdown / swing / IK / collision</pre>
         <tr><td><code>Go2Pvcnn/tracking/parallelism_cross_large_complex_env_cfg.py</code></td><td>统一 terrain 比例、semantic obstacle 数量和课程排除项</td><td>不复制新的 subterrain 场景</td></tr>
         <tr><td><code>Go2Pvcnn/extension/parallelism/config.py</code></td><td>新增 <code>flat_base_z_m = 0.0</code>、<code>flat_root_clearance_m = 0.30</code></td><td>不改足端和碰撞参数</td></tr>
         <tr><td><code>Go2Pvcnn/extension/parallelism/root.py</code></td><td>平地 root Z 使用固定目标高度，并保留第 0 帧真实状态</td><td>不改 terrain-following root</td></tr>
-        <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</code></td><td>将两个 flat 名称都标记为非 terrain-following；standstill fallback 使用固定高度</td><td>不改重规划周期和 command 逻辑</td></tr>
+        <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</code></td><td>将两个 flat 名称都标记为非 terrain-following；按 proportion 解析 terrain column；standstill fallback 使用固定高度</td><td>不改重规划周期和 command 逻辑</td></tr>
+        <tr><td><code>Go2Pvcnn/extension/semantic_course.py</code></td><td>语义障碍物数量按 proportion 展开的 terrain column 解析</td><td>不改障碍物尺寸、形状和布局算法</td></tr>
         <tr><td><code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code></td><td>viewer 使用同一组 flat terrain 名称</td><td>不改 viewer 速度面板和轨迹显示</td></tr>
         <tr><td><code>Go2Pvcnn/tests/tracking/</code></td><td>增加比例、数量、固定 root、高程隔离和 terrain mask 测试</td><td>不启动真实 IsaacSim 作为单元测试依赖</td></tr>
+        <tr><td><code>Go2Pvcnn/tests/test_semantic_course_curriculum_layout.py</code></td><td>验证 col=0 dense flat 与 col=1 flat 的障碍物数量</td><td>不改变 obstacle layout 采样</td></tr>
       </tbody>
     </table>
   </section>
@@ -263,7 +281,8 @@ foot touchdown / swing / IK / collision</pre>
   <section>
     <h2>八、验证标准</h2>
     <ol>
-      <li>terrain generator 的八类 terrain 比例总和为 1.0，比例与本设计表一致。</li>
+      <li>terrain generator 的八类 terrain 比例总和为 1.0；flat 和 dense flat 各为 0.05，其余比例与本设计表一致。</li>
+      <li>在 20 列生成器中，<code>col=0</code> 只有 dense flat 的 40 个 small，<code>col=1</code> 只有 flat 的 2 个 large。</li>
       <li>flat obstacle 数量为 small=0、large=2；dense flat 为 small=40、large=0；其他 terrain 为 small=5、large=2。</li>
       <li>在 flat terrain 中，把局部高程从 <code>0.00m</code> 改为 <code>0.10m</code>，root reference 的第 1～23 帧目标高度仍为 <code>0.30m</code>。</li>
       <li>在 flat dense terrain 中，即使 root XY 正好位于小障碍物上方，也不能进入 terrain-following root 分支。</li>
@@ -281,7 +300,7 @@ foot touchdown / swing / IK / collision</pre>
       <li>本设计只解决 root 高度被 flat 类小障碍物抬高的问题。</li>
       <li>不改变 Parallelism 的 touchdown 候选采样半径。</li>
       <li>不改变 swing clearance 的配置。</li>
-      <li>semantic obstacle 数量和 terrain 比例按本设计统一修改。</li>
+      <li>semantic obstacle 数量和 terrain 比例按本设计统一修改；root mask 与障碍物生成使用同一 column 映射。</li>
       <li>不改变 RL 的 observation、reward、termination 或 curriculum 定义。</li>
       <li>不把复杂地形错误地当成固定高度平地。</li>
     </ul>

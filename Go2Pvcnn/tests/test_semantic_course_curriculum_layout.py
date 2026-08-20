@@ -119,12 +119,12 @@ def test_semantic_course_uses_generated_column_proportions_for_obstacle_counts(m
     generator = SimpleNamespace(
         num_cols=20,
         sub_terrains={
-            "flat_dense_small_obstacles": SimpleNamespace(proportion=0.1),
-            "flat": SimpleNamespace(proportion=0.1),
+            "flat_dense_small_obstacles": SimpleNamespace(proportion=0.05),
+            "flat": SimpleNamespace(proportion=0.05),
             "random_rough": SimpleNamespace(proportion=0.1),
             "hf_pyramid_slope": SimpleNamespace(proportion=0.1),
             "hf_pyramid_slope_inv": SimpleNamespace(proportion=0.1),
-            "boxes": SimpleNamespace(proportion=0.1),
+            "boxes": SimpleNamespace(proportion=0.2),
             "pyramid_stairs": SimpleNamespace(proportion=0.2),
             "pyramid_stairs_inv": SimpleNamespace(proportion=0.2),
         },
@@ -140,7 +140,7 @@ def test_semantic_course_uses_generated_column_proportions_for_obstacle_counts(m
     ) == {"small": 40, "large": 0}
     assert semantic_counts_for_tile(
         row=0,
-        col=2,
+        col=1,
         terrain_names=tuple(generator.sub_terrains),
         curriculum_cfg=cfg,
         fallback_stage=SemanticCourseStage.S1,
