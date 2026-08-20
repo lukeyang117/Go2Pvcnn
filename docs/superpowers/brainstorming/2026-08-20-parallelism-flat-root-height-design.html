@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parallelism 平地 Root 固定高度设计</title>
+  <style>
+    :root {
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d8dee8;
+      --paper: #ffffff;
+      --wash: #f5f7fa;
+      --blue: #2457a6;
+      --blue-wash: #eaf1ff;
+      --amber-wash: #fff7df;
+      --green-wash: #e8f6ee;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--wash);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+    }
+    main { width: min(1120px, calc(100% - 32px)); margin: 32px auto 64px; }
+    header, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 28px 32px;
+      margin-bottom: 18px;
+    }
+    header { border-top: 5px solid var(--blue); }
+    h1, h2, h3 { line-height: 1.3; margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { font-size: 22px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+    h3 { font-size: 17px; margin-top: 22px; }
+    p { margin: 10px 0; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .summary, .warning, .success {
+      padding: 14px 16px;
+      margin: 16px 0;
+      border-left: 4px solid;
+    }
+    .summary { background: var(--blue-wash); border-color: var(--blue); }
+    .warning { background: var(--amber-wash); border-color: #d39200; }
+    .success { background: var(--green-wash); border-color: #2c9862; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { background: #eef1f5; border-radius: 3px; padding: 2px 5px; font-size: 0.92em; }
+    pre {
+      background: #18212f;
+      color: #e8eef7;
+      overflow-x: auto;
+      border-radius: 6px;
+      padding: 16px;
+      line-height: 1.55;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: 9px 10px; }
+    th { background: #f0f3f7; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 6px 0; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      align-items: center;
+      margin: 20px 0;
+    }
+    .node {
+      min-height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      border: 1px solid #9db6dd;
+      border-radius: 6px;
+      background: var(--blue-wash);
+      padding: 8px;
+      font-size: 14px;
+    }
+    .arrow { text-align: center; color: var(--blue); font-size: 22px; }
+    @media (max-width: 760px) {
+      main { width: min(100% - 18px, 1120px); margin-top: 10px; }
+      header, section { padding: 20px 18px; }
+      h1 { font-size: 25px; }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Parallelism 平地 Root 固定高度设计</h1>
+    <div class="meta">日期：2026-08-20　状态：待实现设计　范围：flat / flat_dense_small_obstacles</div>
+    <div class="summary">
+      <strong>核心结论：</strong>平地类地形的 root 参考高度固定为 <code>0.30m</code>。小障碍物继续参与足端高度和碰撞规划，但不再参与 root 高度生成。
+    </div>
+  </header>
+
+  <section>
+    <h2>一、问题与根因</h2>
+    <p>当前 planner 的平地 root 高度不是固定值，而是读取当前 stance 足端下方的高程，再加上 <code>root_clearance_m</code>：</p>
+    <pre>stance_height = query_height(stance_foot_xy)
+root_z = stance_height + root_clearance_m</pre>
+    <p>当某条腿踩在小障碍物上时，查询到的 <code>stance_height</code> 包含小障碍物高度，root 参考轨迹就会被整体抬高。</p>
+    <p>同时，<code>flat_dense_small_obstacles</code> 当前没有被识别为平地。reference manager 只把名称严格等于 <code>flat</code> 的 terrain 视为平地，因此 dense flat 可能进入 terrain-following 分支，读取 root XY 下方的高程，同样会受到小障碍物影响。</p>
+    <div class="warning">
+      <strong>需要避免的错误：</strong>不能通过删除语义高程图、删除 touchdown 高度或关闭碰撞检测来解决。问题只在 root 高度来源，不在足端规划本身。
+    </div>
+  </section>
+
+  <section>
+    <h2>二、目标行为</h2>
+    <table>
+      <thead>
+        <tr><th>地形类型</th><th>Root 高度策略</th><th>小障碍物对 root 的影响</th><th>其他地形跟随逻辑</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>flat</code></td><td>目标高度固定为 <code>0.30m</code></td><td>不影响</td><td>保留平地 roll/pitch 回正</td></tr>
+        <tr><td><code>flat_dense_small_obstacles</code></td><td>目标高度固定为 <code>0.30m</code></td><td>不影响</td><td>保留平地 roll/pitch 回正</td></tr>
+        <tr><td>rough、slope、boxes、stairs</td><td>继续使用 terrain-following</td><td>按现有复杂地形逻辑处理</td><td>不修改</td></tr>
+      </tbody>
+    </table>
+    <p>配置项：</p>
+    <pre>flat_root_z_target_m: float = 0.30</pre>
+  </section>
+
+  <section>
+    <h2>三、Reference 时间与高度轨迹</h2>
+    <div class="flow">
+      <div class="node">第 0 帧<br>IsaacLab 真实 root</div>
+      <div class="arrow">→</div>
+      <div class="node">第 1～23 帧<br>平滑回归目标高度</div>
+      <div class="arrow">→</div>
+      <div class="node">目标高度<br><code>0.30m</code></div>
+    </div>
+    <p>每次 reset 或重规划时：</p>
+    <pre>root_z_ref[0] = root_z_actual
+root_z_ref[t] = smooth(root_z_actual, 0.30, t), 1 &lt;= t &lt; 24</pre>
+    <p>第 0 帧继续用于保证 reference 与真实机器人对齐。第 1～23 帧回到固定高度，避免当前 root 因站在小障碍物上而把整个 reference 抬高。</p>
+    <p>root 的 XY 轨迹、yaw 轨迹、平地 roll/pitch 回正逻辑不变。</p>
+  </section>
+
+  <section>
+    <h2>四、规划数据流</h2>
+    <h3>4.1 平地类地形</h3>
+    <pre>command
+  ↓
+root XY / yaw rollout
+  ↓
+flat_root_z_target_m = 0.30
+  ↓
+root reference
+  ↓
+foot touchdown / swing 高程查询
+  ↓
+IK 与几何碰撞检测</pre>
+    <p>高程图仍然会进入足端规划，但不会进入平地 root 高度计算。</p>
+    <h3>4.2 复杂地形</h3>
+    <pre>command
+  ↓
+root XY / yaw rollout
+  ↓
+root XY 下方高程查询
+  ↓
+terrain-following root Z 与 roll/pitch
+  ↓
+foot touchdown / swing / IK / collision</pre>
+    <p>这条路径保持现有实现，不使用固定的 <code>0.30m</code>。</p>
+  </section>
+
+  <section>
+    <h2>五、需要修改的文件</h2>
+    <table>
+      <thead><tr><th>文件</th><th>修改内容</th><th>不修改内容</th></tr></thead>
+      <tbody>
+        <tr><td><code>Go2Pvcnn/extension/parallelism/config.py</code></td><td>新增 <code>flat_root_z_target_m = 0.30</code></td><td>不改足端和碰撞参数</td></tr>
+        <tr><td><code>Go2Pvcnn/extension/parallelism/root.py</code></td><td>平地 root Z 使用固定目标高度，并保留第 0 帧真实状态</td><td>不改 terrain-following root</td></tr>
+        <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</code></td><td>将两个 flat 名称都标记为非 terrain-following；standstill fallback 使用固定高度</td><td>不改重规划周期和 command 逻辑</td></tr>
+        <tr><td><code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code></td><td>viewer 使用同一组 flat terrain 名称</td><td>不改 viewer 速度面板和轨迹显示</td></tr>
+        <tr><td><code>Go2Pvcnn/tests/tracking/</code></td><td>增加固定 root 高度、dense flat 分类和障碍物高度隔离测试</td><td>不启动真实 IsaacSim 作为单元测试依赖</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>六、验证标准</h2>
+    <ol>
+      <li>在 flat terrain 中，把局部高程从 <code>0.00m</code> 改为 <code>0.10m</code>，root reference 的第 1～23 帧目标高度仍为 <code>0.30m</code>。</li>
+      <li>在 flat dense terrain 中，即使 root XY 正好位于小障碍物上方，也不能进入 terrain-following root 分支。</li>
+      <li>reference 第 0 帧仍等于当前 IsaacLab 真实 root 状态。</li>
+      <li>rough、slope、boxes、stairs 的 root Z 仍随高程图变化。</li>
+      <li>standstill fallback 不再通过小障碍物高度抬高 flat 类 terrain 的 root。</li>
+      <li>现有足端 touchdown、swing clearance、IK 和 geometry collision 测试继续通过。</li>
+    </ol>
+    <div class="success"><strong>验收结果：</strong>平地上的小障碍物只改变腿和足端的规划约束，不改变 root 的默认参考高度。</div>
+  </section>
+
+  <section>
+    <h2>七、范围边界</h2>
+    <ul>
+      <li>本设计只解决 root 高度被 flat 类小障碍物抬高的问题。</li>
+      <li>不改变 Parallelism 的 touchdown 候选采样半径。</li>
+      <li>不改变 swing clearance 的配置。</li>
+      <li>不改变 semantic obstacle 数量和 terrain 比例。</li>
+      <li>不改变 RL 的 observation、reward、termination 或 curriculum 定义。</li>
+      <li>不把复杂地形错误地当成固定高度平地。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
