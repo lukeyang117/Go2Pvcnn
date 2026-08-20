@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import torch
 
-from extension.parallelism.types import ParallelismTerrain
+from tracking.managers import parallelism_reference_manager as reference_manager_module
 from tracking.managers.parallelism_reference_manager import ParallelismReferenceManager
 
 
@@ -523,27 +523,57 @@ def test_reset_clears_standstill_count_but_command_change_does_not():
     assert manager.standstill_count.tolist() == [0, 1]
 
 
-def test_flat_standstill_fallback_keeps_fixed_root_target_on_obstacle_height():
+def test_failed_replan_uses_live_state_even_when_standstill_was_latched(monkeypatch):
     env = _fake_env(num_envs=1)
+    env.scene["robot"].data.root_pos_w[:] = torch.tensor([[0.7, -0.2, 0.46]])
+    env.scene["robot"].data.root_quat_w[:] = torch.tensor([[0.96, 0.0, 0.28, 0.1]])
+    env.scene["robot"].data.joint_pos[:] = torch.arange(12, dtype=torch.float32).reshape(1, 12) * 0.01
+    env.scene["robot"].data.default_joint_pos = torch.full((1, 12), 99.0)
+    env.scene["robot"].data.body_pos_w[:, -4:] = torch.tensor(
+        [[[0.2, 0.1, 0.03], [0.2, -0.1, 0.04], [-0.2, 0.1, 0.05], [-0.2, -0.1, 0.06]]]
+    )
     manager = ParallelismReferenceManager(env, autostart=False)
-    state = manager._state(torch.tensor([0]))
-    terrain = ParallelismTerrain(
-        height_w=torch.full((1, 151, 151), 0.20),
-        semantic_id=torch.zeros((1, 151, 151), dtype=torch.long),
-        valid_mask=torch.ones((1, 151, 151), dtype=torch.bool),
-        origin_w=torch.tensor([[-0.75, -0.75, 0.0]]),
-        yaw_w=torch.zeros(1),
-        resolution=0.01,
+    manager.standstill_latched[:] = True
+    captured_states = []
+
+    def fake_plan(state, command, terrain, cfg, *, terrain_following_mask):
+        captured_states.append(state)
+        batch = state.root_pos_w.shape[0]
+        horizon = manager.horizon
+        diagnostics = SimpleNamespace(
+            candidate_valid=torch.zeros(batch, 4, 1, dtype=torch.bool),
+            candidate_reject_bits=torch.zeros(batch, 4, 1, dtype=torch.bool),
+            candidate_collision_bits=torch.zeros(batch, 4, 1, 1, dtype=torch.bool),
+        )
+        return SimpleNamespace(
+            root_pos_w=state.root_pos_w[:, None, :].expand(batch, horizon, 3).clone(),
+            root_rpy_w=state.root_rpy_w[:, None, :].expand(batch, horizon, 3).clone(),
+            joint_pos=state.joint_pos[:, None, :].expand(batch, horizon, 12).clone(),
+            foot_pos_w=state.foot_pos_w[:, None, :, :].expand(batch, horizon, 4, 3).clone(),
+            contact_state=torch.ones(batch, horizon, 4, dtype=torch.bool),
+            valid=torch.zeros(batch, dtype=torch.bool),
+            diagnostics=diagnostics,
+        )
+
+    monkeypatch.setattr(reference_manager_module, "plan_trajectory", fake_plan)
+    monkeypatch.setattr(
+        manager,
+        "_terrain_following_mask",
+        lambda env_ids: torch.zeros(int(env_ids.numel()), dtype=torch.bool),
     )
 
-    fallback = manager._standard_stand_state(
-        state,
-        terrain,
-        torch.tensor([0]),
-        terrain_following_mask=torch.tensor([False]),
-    )
+    manager._plan(torch.tensor([0]), torch.tensor([0]))
 
-    assert torch.allclose(fallback.root_pos_w[:, 2], torch.tensor([0.30]))
+    assert len(captured_states) == 1
+    live_state = manager._state(torch.tensor([0]))
+    planned_state = captured_states[0]
+    assert torch.allclose(planned_state.root_pos_w, live_state.root_pos_w)
+    assert torch.allclose(planned_state.root_rpy_w, live_state.root_rpy_w)
+    assert torch.allclose(planned_state.joint_pos, live_state.joint_pos)
+    assert torch.allclose(planned_state.foot_pos_w, live_state.foot_pos_w)
+    assert torch.allclose(manager.root_pos_w[0, 0], live_state.root_pos_w[0])
+    assert torch.allclose(manager.joint_pos[0, 0], live_state.joint_pos[0])
+    assert manager.standstill_latched.tolist() == [True]
 
 
 def test_internal_environment_reset_invalidates_reference_without_planning():

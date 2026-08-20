@@ -12,7 +12,6 @@ from extension.convention import extract_roll_pitch_batch, extract_yaw_batch
 from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.kinematics import fk_go2
 from extension.parallelism.planner import plan_trajectory
-from extension.parallelism.terrain import query_height_semantic_valid
 from extension.parallelism.types import ParallelismState, ParallelismTerrain
 
 _PLANNER_JOINT_ORDER = (
@@ -524,68 +523,6 @@ class ParallelismReferenceManager:
         foot_pos = self._measured_foot_pos_w(robot, env_ids)
         return ParallelismState(root_pos_w=root_pos, root_rpy_w=root_rpy, joint_pos=joint, foot_pos_w=foot_pos)
 
-    def _standard_stand_state(
-        self,
-        state: ParallelismState,
-        terrain: ParallelismTerrain,
-        env_ids: Tensor,
-        terrain_following_mask: Tensor | None = None,
-    ) -> ParallelismState:
-        """Build the canonical standing pose used after a failed plan."""
-
-        root_pos = state.root_pos_w.clone()
-        root_rpy = state.root_rpy_w.clone()
-        root_rpy[:, :2] = 0.0
-        if terrain_following_mask is None:
-            terrain_following_mask = self._terrain_following_mask(env_ids)
-        flat_mask = ~torch.as_tensor(terrain_following_mask, dtype=torch.bool, device=self.device)
-        foot_pos = state.foot_pos_w
-        if foot_pos is None:
-            foot_pos = fk_go2(state.root_pos_w, state.root_rpy_w, state.joint_pos).foot_pos_w
-        query = query_height_semantic_valid(terrain, foot_pos[..., :2].reshape(foot_pos.shape[0], -1, 2))
-        heights = query.height.reshape_as(foot_pos[..., 2])
-        valid = query.valid.reshape_as(foot_pos[..., 2])
-        support_height = torch.where(valid, heights, foot_pos[..., 2]).mean(dim=-1)
-        terrain_root_z = support_height + float(self.cfg.root_clearance_m)
-        root_pos[:, 2] = torch.where(
-            flat_mask,
-            root_pos.new_tensor(float(self.cfg.flat_root_z_target_m)),
-            terrain_root_z,
-        )
-
-        robot = self._robot()
-        default_joint = getattr(getattr(robot, "data", None), "default_joint_pos", None)
-        if default_joint is None:
-            joint_pos = state.joint_pos
-        else:
-            default_joint = torch.as_tensor(default_joint, dtype=state.joint_pos.dtype, device=self.device)
-            if int(default_joint.shape[0]) == self.num_envs:
-                default_joint = default_joint.index_select(0, env_ids)
-            joint_pos = _reorder_joint_to_planner(default_joint, getattr(robot, "joint_names", None))
-            if int(joint_pos.shape[0]) != int(state.joint_pos.shape[0]):
-                joint_pos = state.joint_pos
-        canonical_foot = fk_go2(root_pos, root_rpy, joint_pos).foot_pos_w
-        foot_query = query_height_semantic_valid(
-            terrain,
-            canonical_foot[..., :2].reshape(canonical_foot.shape[0], -1, 2),
-        )
-        foot_height = foot_query.height.reshape_as(canonical_foot[..., 2])
-        foot_valid = foot_query.valid.reshape_as(canonical_foot[..., 2])
-        canonical_foot = canonical_foot.clone()
-        canonical_foot[..., 2] = torch.where(foot_valid, foot_height, canonical_foot[..., 2])
-        terrain_root_z = canonical_foot[..., 2].mean(dim=-1) + float(self.cfg.root_clearance_m)
-        root_pos[:, 2] = torch.where(
-            flat_mask,
-            root_pos.new_tensor(float(self.cfg.flat_root_z_target_m)),
-            terrain_root_z,
-        )
-        return ParallelismState(
-            root_pos_w=root_pos,
-            root_rpy_w=root_rpy,
-            joint_pos=joint_pos,
-            foot_pos_w=canonical_foot,
-        )
-
     def _measured_foot_pos_w(self, robot, env_ids: Tensor) -> Tensor | None:
         body_pos = getattr(getattr(robot, "data", None), "body_pos_w", None)
         if body_pos is None:
@@ -709,25 +646,8 @@ class ParallelismReferenceManager:
                 )
             terrain = self._terrain(live_state.root_pos_w, subset)
             terrain_following_mask = self._terrain_following_mask(subset)
-            standard_state = self._standard_stand_state(
-                live_state,
-                terrain,
-                subset,
-                terrain_following_mask=terrain_following_mask,
-            )
-            latched = self.standstill_latched.index_select(0, subset)
-            latch_root = latched[:, None]
-            latch_root_rpy = latched[:, None]
-            latch_joint = latched[:, None]
-            latch_foot = latched[:, None, None]
-            state = ParallelismState(
-                root_pos_w=torch.where(latch_root, standard_state.root_pos_w, live_state.root_pos_w),
-                root_rpy_w=torch.where(latch_root_rpy, standard_state.root_rpy_w, live_state.root_rpy_w),
-                joint_pos=torch.where(latch_joint, standard_state.joint_pos, live_state.joint_pos),
-                foot_pos_w=torch.where(latch_foot, standard_state.foot_pos_w, live_state.foot_pos_w),
-            )
             trajectory = plan_trajectory(
-                state,
+                live_state,
                 self._command(subset),
                 terrain,
                 self.cfg,
@@ -741,14 +661,14 @@ class ParallelismReferenceManager:
             # The first frame of every episode/cycle is the measured robot state.
             # This prevents a reset from displaying a planned pose before the robot
             # has reached the planner's first sample.
-            self.root_pos_w[subset, 0] = state.root_pos_w
-            self.root_rpy_w[subset, 0] = state.root_rpy_w
+            self.root_pos_w[subset, 0] = live_state.root_pos_w
+            self.root_rpy_w[subset, 0] = live_state.root_rpy_w
             self.joint_pos[subset, 0] = _reorder_joint_from_planner(
-                state.joint_pos,
+                live_state.joint_pos,
                 getattr(self._robot(), "joint_names", None),
             )
-            if state.foot_pos_w is not None:
-                self.foot_pos_w[subset, 0] = state.foot_pos_w
+            if live_state.foot_pos_w is not None:
+                self.foot_pos_w[subset, 0] = live_state.foot_pos_w
             self.valid[subset] = trajectory.valid[:, None].expand(-1, self.horizon)
             self.standstill_latched[subset] = ~trajectory.valid
             self._update_standstill_count(subset, trajectory.valid)
