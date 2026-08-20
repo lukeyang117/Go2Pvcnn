@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parallelism 有效轨迹与速度 Fallback 设计</title>
+  <style>
+    :root {
+      --ink: #1f2937; --muted: #5b6472; --line: #d8dee8;
+      --paper: #ffffff; --wash: #f5f7fa; --blue: #2457a6;
+      --blue-wash: #eaf1ff; --amber-wash: #fff7df;
+      --green-wash: #e8f6ee; --red-wash: #fff0ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; color: var(--ink); background: var(--wash);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+    }
+    main { width: min(1140px, calc(100% - 32px)); margin: 32px auto 64px; }
+    header, section {
+      background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+      padding: 28px 32px; margin-bottom: 18px;
+    }
+    header { border-top: 5px solid var(--blue); }
+    h1, h2, h3 { line-height: 1.3; margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { font-size: 22px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+    h3 { font-size: 17px; margin-top: 22px; }
+    p { margin: 10px 0; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .box { padding: 14px 16px; margin: 16px 0; border-left: 4px solid; }
+    .summary { background: var(--blue-wash); border-color: var(--blue); }
+    .warning { background: var(--amber-wash); border-color: #d39200; }
+    .success { background: var(--green-wash); border-color: #2c9862; }
+    .danger { background: var(--red-wash); border-color: #bd3d36; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { background: #eef1f5; border-radius: 3px; padding: 2px 5px; font-size: 0.92em; }
+    pre {
+      background: #18212f; color: #e8eef7; overflow-x: auto; border-radius: 6px;
+      padding: 16px; line-height: 1.55;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: 9px 10px; }
+    th { background: #f0f3f7; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 6px 0; }
+    @media (max-width: 760px) {
+      main { width: min(100% - 18px, 1140px); margin-top: 10px; }
+      header, section { padding: 20px 18px; }
+      h1 { font-size: 25px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Parallelism 有效轨迹与速度 Fallback 设计</h1>
+    <div class="meta">日期：2026-08-20　范围：large teacher RL　状态：设计确认后进入实现</div>
+    <div class="box summary">
+      当 Parallelism 成功规划时，policy 学习有效的 joint、root、foot reference；当规划失败或 standstill 时，reference 输入置零，policy 改为跟踪当前速度 command。碰撞检测奖励不依赖规划有效性，large teacher 的权重从 <code>-2.0</code> 调整为 <code>-10.0</code>。
+    </div>
+  </header>
+
+  <section>
+    <h2>一、目标与边界</h2>
+    <ul>
+      <li>保留现有 Parallelism 的规划逻辑、24 帧轨迹和第 23 个控制步重规划时序。</li>
+      <li>不新增 planner root velocity observation。</li>
+      <li>Actor 和 Critic 都能识别当前规划是否有效。</li>
+      <li>规划失败时不能因为无效 reference 牵制 policy，也不能因为 reference 误差触发 reset。</li>
+      <li>规划失败时仍然保留 command velocity reward，使 policy 能够继续学习走路。</li>
+      <li>碰撞惩罚与 DOF 类行为约束一致，始终有效，不因 planner 失败而关闭。</li>
+    </ul>
+    <div class="box warning">
+      本设计只针对 large teacher 任务启用。small-obstacles 基础配置和 distillation 配置不因本次设计被隐式改变。
+    </div>
+  </section>
+
+  <section>
+    <h2>二、时间与状态定义</h2>
+    <p>每个控制步的目标仍然是 reference 的下一帧：</p>
+    <pre>当前真实状态 t
+    |
+    | Parallelism 当前周期缓存
+    v
+policy observation 使用 reference[t+1]
+reward / termination 使用同一 reference[t+1]
+physics 执行动作
+    |
+    +-- 到第 23 个控制步：重新规划，下一周期从新轨迹的第 1 帧输入</pre>
+    <p><code>plan_valid</code> 是每个环境独立的状态，在一次规划周期内保持不变：</p>
+    <table>
+      <thead><tr><th>事件</th><th>plan_valid</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td>reset 后规划成功</td><td>1</td><td>输入真实 reference，开启 reference reward 和 reference termination。</td></tr>
+        <tr><td>reset 后规划失败</td><td>0</td><td>reference 置零，保留 command reward，屏蔽 reference termination。</td></tr>
+        <tr><td>第 23 步重新规划成功</td><td>1</td><td>下一周期恢复真实 reference。</td></tr>
+        <tr><td>第 23 步重新规划失败</td><td>0</td><td>下一周期进入速度 fallback。</td></tr>
+        <tr><td>command 改变并触发重规划</td><td>按新轨迹更新</td><td>不修改 planner 的重规划逻辑。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>三、Manager 修改</h2>
+    <p>文件：</p>
+    <pre>Go2Pvcnn/tracking/managers/parallelism_reference_manager.py</pre>
+    <p>新增 step 级别的有效状态：</p>
+    <pre>step_plan_valid: Tensor[num_envs] bool</pre>
+    <p>它与当前已经缓存的 <code>step_joint_pos</code>、<code>step_root_pos_w</code>、<code>step_foot_pos_w</code> 使用相同的 t+1 时间戳。不能把“reference cache 已准备”误当成“planner 轨迹有效”。</p>
+    <ul>
+      <li>trajectory.valid 为真时，<code>step_plan_valid=1</code>。</li>
+      <li>trajectory.valid 为假时，<code>step_plan_valid=0</code>，并保持整个规划周期有效。</li>
+      <li>reset 时清理周期状态。</li>
+      <li>成功重规划时清除 standstill 状态。</li>
+      <li>失败重规划时只更新 fallback 状态，不修改 IsaacLab 真实机器人状态。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>四、Actor 与 Critic 观测</h2>
+    <p>文件：</p>
+    <pre>Go2Pvcnn/tracking/mdp/observations.py
+Go2Pvcnn/tracking/parallelism_cross_large_complex_env_cfg.py</pre>
+    <p>Actor 和 Critic 各新增一维：</p>
+    <pre>parallelism_plan_valid</pre>
+    <p>现有 reference observation 保留原维度，只根据有效状态置零：</p>
+    <table>
+      <thead><tr><th>观测</th><th>plan_valid=1</th><th>plan_valid=0</th></tr></thead>
+      <tbody>
+        <tr><td>parallelism_ref_joint_pos</td><td>真实 reference[t+1]</td><td>全 0</td></tr>
+        <tr><td>parallelism_ref_joint_vel</td><td>真实 reference[t+1]</td><td>全 0</td></tr>
+        <tr><td>parallelism_ref_root_pos</td><td>真实 reference[t+1]</td><td>全 0</td></tr>
+        <tr><td>parallelism_ref_root_rot</td><td>真实 reference[t+1]</td><td>全 0</td></tr>
+        <tr><td>velocity_commands</td><td>始终为当前 command</td><td>始终为当前 command</td></tr>
+        <tr><td>parallelism_plan_valid</td><td>1</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <div class="box success">
+      不新增 planner root velocity。command 是唯一的 fallback 速度目标，避免把 command 伪装成 planner 速度。
+    </div>
+  </section>
+
+  <section>
+    <h2>五、Reward 修改</h2>
+    <p>文件：</p>
+    <pre>Go2Pvcnn/tracking/mdp/rewards.py
+Go2Pvcnn/tracking/parallelism_cross_large_complex_env_cfg.py</pre>
+    <h3>5.1 只在有效轨迹时启用的 reward</h3>
+    <p>以下 reward 统一乘以 <code>plan_valid</code>：</p>
+    <pre>track_root_pos
+track_root_rot
+reference_joint_pos
+reference_joint_vel
+reference_joint_max
+reference_foot_pos
+reference_active_swing_foot_max</pre>
+    <p>无效规划阶段这些 reward 为零，不把置零后的 reference 当成真实目标。</p>
+
+    <h3>5.2 始终保留的 reward</h3>
+    <pre>track_lin_vel_xy
+track_ang_vel_z
+joint_pos / joint_vel / joint_acc
+feet_air_time / feet_slide
+energy / action_rate
+flat_orientation_l2
+undesired_contacts
+parallelism_geometry_collision</pre>
+
+    <h3>5.3 碰撞惩罚</h3>
+    <p>文件 <code>parallelism_small_obstacles_env_cfg.py</code> 中的基础默认值保持不动。large teacher 在：</p>
+    <pre>Go2Pvcnn/tracking/parallelism_cross_large_complex_env_cfg.py</pre>
+    <p>显式覆盖：</p>
+    <pre>parallelism_geometry_collision.weight = -10.0</pre>
+    <p>当前值为 <code>-2.0</code>，本次提高到 <code>-10.0</code>。碰撞函数的检测逻辑不改，仍然使用 Parallelism 几何碰撞检测；只提高负奖励强度。</p>
+    <p>该惩罚不乘 <code>plan_valid</code>：</p>
+    <pre>plan_valid=1：碰撞会惩罚
+plan_valid=0：碰撞仍然惩罚</pre>
+    <p>这样 planner 失败时，policy 仍然不能通过撞击障碍物来获得速度跟踪收益。</p>
+  </section>
+
+  <section>
+    <h2>六、Termination 修改</h2>
+    <p>当前 large 配置继承的 termination 包括：</p>
+    <pre>time_out
+base_contact
+bad_orientation
+parallelism_ref_root_z_too_far
+parallelism_ref_projected_gravity_too_far
+parallelism_ref_joint_pos_too_far</pre>
+    <p>当前 large 配置已经关闭：</p>
+    <pre>parallelism_ref_foot_z_too_far
+parallelism_consecutive_standstill</pre>
+    <p>修改文件：</p>
+    <pre>Go2Pvcnn/tracking/mdp/terminations.py
+Go2Pvcnn/tracking/parallelism_cross_large_complex_env_cfg.py</pre>
+    <h3>6.1 Reference termination</h3>
+    <p>以下 termination 仅在 <code>plan_valid=1</code> 时检查：</p>
+    <pre>parallelism_ref_root_z_too_far
+parallelism_ref_projected_gravity_too_far
+parallelism_ref_joint_pos_too_far</pre>
+    <p>当 <code>plan_valid=0</code> 时返回 false，不能因为无效 reference 与机器人真实状态不同而 reset。</p>
+    <h3>6.2 安全 termination</h3>
+    <p>以下 termination 不受 <code>plan_valid</code> 影响：</p>
+    <pre>base_contact
+bad_orientation
+time_out</pre>
+    <p>它们代表真实机器人状态问题，fallback 阶段也必须保留。</p>
+    <h3>6.3 Standstill</h3>
+    <p>large teacher 继续关闭 <code>parallelism_consecutive_standstill</code>。standstill 只作为 planner 诊断和 fallback 触发原因，不直接终止 episode。</p>
+  </section>
+
+  <section>
+    <h2>七、Metric：必须区分有效和无效轨迹</h2>
+    <p>文件：</p>
+    <pre>Go2Pvcnn/tracking/mdp/rewards.py
+Go2Pvcnn/tracking/env.py</pre>
+    <p>所有需要 reference 解释的统计都按 <code>plan_valid</code> 分桶。有效帧和无效帧分别累加、分别除以各自的帧数，不使用整个 episode 的总步数作为分母。</p>
+    <h3>7.1 Planner 状态</h3>
+    <table>
+      <thead><tr><th>指标</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td>Episode_Planner/valid_ratio</td><td>有效规划帧数 / 总规划帧数。</td></tr>
+        <tr><td>Episode_Planner/invalid_ratio</td><td>无效规划帧数 / 总规划帧数。</td></tr>
+        <tr><td>Episode_Planner/standstill_ratio</td><td>standstill 规划周期或帧的比例。</td></tr>
+        <tr><td>Episode_Planner/invalid_replan_count</td><td>本 episode 失败重规划次数。</td></tr>
+        <tr><td>Episode_Planner/valid_frame_count</td><td>有效 reference metric 的样本数量。</td></tr>
+        <tr><td>Episode_Planner/invalid_frame_count</td><td>fallback metric 的样本数量。</td></tr>
+      </tbody>
+    </table>
+    <h3>7.2 Reference tracking 指标</h3>
+    <table>
+      <thead><tr><th>有效轨迹</th><th>无效轨迹</th></tr></thead>
+      <tbody>
+        <tr><td>Episode_Tracking/valid_joint_mean_error</td><td>Episode_Tracking/invalid_joint_mean_error</td></tr>
+        <tr><td>Episode_Tracking/valid_joint_max_error</td><td>Episode_Tracking/invalid_joint_max_error</td></tr>
+        <tr><td>Episode_Tracking/valid_root_pos_error</td><td>Episode_Tracking/invalid_root_pos_error</td></tr>
+        <tr><td>Episode_Tracking/valid_root_rot_error</td><td>Episode_Tracking/invalid_root_rot_error</td></tr>
+        <tr><td>Episode_Tracking/valid_foot_mean_error</td><td>Episode_Tracking/invalid_foot_mean_error</td></tr>
+        <tr><td>Episode_Tracking/valid_foot_max_error</td><td>Episode_Tracking/invalid_foot_max_error</td></tr>
+      </tbody>
+    </table>
+    <p>无效轨迹的 reference error 原则上不参与 reference curriculum；如果为了诊断保留 raw error，也必须单独命名为 <code>invalid_*</code>，不能与有效轨迹平均。</p>
+    <h3>7.3 速度与碰撞指标</h3>
+    <table>
+      <thead><tr><th>指标类型</th><th>有效轨迹</th><th>无效轨迹</th></tr></thead>
+      <tbody>
+        <tr><td>command 速度误差</td><td><code>valid_command_lin_vel_error</code>、<code>valid_command_ang_vel_error</code></td><td><code>invalid_command_lin_vel_error</code>、<code>invalid_command_ang_vel_error</code></td></tr>
+        <tr><td>几何碰撞</td><td><code>valid_geometry_collision_ratio</code></td><td><code>invalid_geometry_collision_ratio</code></td></tr>
+        <tr><td>小障碍足端行为</td><td><code>valid_active_swing_foot_on_small_ratio</code></td><td><code>invalid_active_swing_foot_on_small_ratio</code></td></tr>
+      </tbody>
+    </table>
+    <h3>7.4 Termination 指标</h3>
+    <p>每次 termination 触发时，使用触发当步的 <code>plan_valid</code> 分桶：</p>
+    <pre>Episode_Termination/valid_base_contact
+Episode_Termination/invalid_base_contact
+Episode_Termination/valid_bad_orientation
+Episode_Termination/invalid_bad_orientation
+Episode_Termination/valid_parallelism_ref_joint_pos_too_far
+Episode_Termination/invalid_parallelism_ref_joint_pos_too_far</pre>
+    <p>由于 invalid 时 reference termination 被屏蔽，<code>invalid_parallelism_ref_*</code> 应为零；保留它们是为了验证屏蔽逻辑没有失效。</p>
+  </section>
+
+  <section>
+    <h2>八、Curriculum 修改</h2>
+    <p>文件：</p>
+    <pre>Go2Pvcnn/tracking/mdp/curriculums.py</pre>
+    <ul>
+      <li>有效轨迹：使用有效帧的 joint/root/reference tracking error。</li>
+      <li>无效轨迹：不使用置零 reference 产生的误差。</li>
+      <li>fallback 阶段：使用 command velocity error、运动进度和安全 termination 判断 policy 是否仍能走路。</li>
+      <li>planner invalid 本身不作为 terrain curriculum 的失败条件。</li>
+      <li>planner invalid ratio 只作为诊断，判断 terrain 是否让规划器频繁失败。</li>
+    </ul>
+    <div class="box success">
+      这样 terrain curriculum 的失败原因可以分开：是 planner 没有轨迹、policy 没跟上速度，还是机器人发生了真实安全问题。
+    </div>
+  </section>
+
+  <section>
+    <h2>九、文件清单</h2>
+    <table>
+      <thead><tr><th>文件</th><th>是否修改</th><th>职责</th></tr></thead>
+      <tbody>
+        <tr><td><code>tracking/managers/parallelism_reference_manager.py</code></td><td>是</td><td>维护 step-level plan_valid，和 t+1 reference 对齐。</td></tr>
+        <tr><td><code>tracking/mdp/observations.py</code></td><td>是</td><td>增加 plan_valid，统一置零无效 reference。</td></tr>
+        <tr><td><code>tracking/mdp/rewards.py</code></td><td>是</td><td>reference reward gating、有效/无效 metric 分桶。</td></tr>
+        <tr><td><code>tracking/mdp/terminations.py</code></td><td>是</td><td>invalid 时屏蔽 reference termination，保留安全 termination。</td></tr>
+        <tr><td><code>tracking/mdp/curriculums.py</code></td><td>是</td><td>分离 valid reference curriculum 和 invalid fallback locomotion 判断。</td></tr>
+        <tr><td><code>tracking/env.py</code></td><td>是</td><td>输出分桶后的 episode metrics。</td></tr>
+        <tr><td><code>tracking/parallelism_cross_large_complex_env_cfg.py</code></td><td>是</td><td>large teacher 启用 plan_valid，并将碰撞权重设为 -10。</td></tr>
+        <tr><td><code>tracking/mdp/__init__.py</code></td><td>必要时</td><td>导出新增 observation/reward/metric 函数。</td></tr>
+        <tr><td><code>tests/parallelism/test_plan_valid_fallback.py</code></td><td>新增</td><td>验证有效/无效轨迹的观测、奖励、termination 和 metric。</td></tr>
+        <tr><td><code>tracking/parallelism_small_obstacles_env_cfg.py</code></td><td>否</td><td>保留基础碰撞权重 -2，不影响 small-obstacles 任务。</td></tr>
+        <tr><td><code>tracking/parallelism_cross_large_complex_distillation_env_cfg.py</code></td><td>否</td><td>暂不改变 distillation reward 和 observation。</td></tr>
+        <tr><td>Parallelism planner 实现</td><td>否</td><td>不改变 planner 的候选、IK、重规划和 standstill 判定逻辑。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>十、验证标准</h2>
+    <ol>
+      <li>planner 成功时，Actor/Critic 收到真实 reference 和 <code>plan_valid=1</code>。</li>
+      <li>planner 失败时，Actor/Critic 收到置零 reference、当前 command 和 <code>plan_valid=0</code>。</li>
+      <li>无效轨迹不会触发 root/joint reference termination。</li>
+      <li>base contact、bad orientation 和碰撞奖励在有效、无效两种状态下都正常工作。</li>
+      <li>large teacher 的碰撞 reward 权重实际为 <code>-10.0</code>，small-obstacles 基础配置仍为 <code>-2.0</code>。</li>
+      <li>TensorBoard 中 valid 和 invalid 指标不混合、不共享错误分母。</li>
+      <li>1024 环境短训练可以正常 reset、重规划、采集和 PPO 更新。</li>
+    </ol>
+    <div class="box danger">
+      新增 Actor/Critic 的 <code>plan_valid</code> 后，观测维度会增加一维。旧模型不能直接 resume，需要重新训练 large teacher。
+    </div>
+  </section>
+</main>
+</body>
+</html>
+
