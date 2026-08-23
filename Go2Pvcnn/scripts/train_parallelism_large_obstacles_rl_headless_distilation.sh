@@ -6,6 +6,7 @@ cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn
 export DISPLAY="${DISPLAY:-:1}"
 export OMNI_KIT_ACCEPT_EULA="${OMNI_KIT_ACCEPT_EULA:-Y}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+MAX_ITERATIONS="${MAX_ITERATIONS:-2000}"
 
 ISAAC_ENV="/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim"
 export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cuda_nvrtc/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cudnn/lib:${ISAAC_ENV}/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}"
@@ -15,9 +16,9 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment parallelism_tracking_cross_large_complex_distillation \
   --num_envs 1024 \
   --headless \
-  --max_iterations 2000 \
-  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-18_20-30-59/6def073/model_4999.pt \
+  --max_iterations "${MAX_ITERATIONS}" \
+  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-20_21-20-52/91b27a4/model_9899.pt \
   --ppo-coef 1.0 \
-  --teacher-coef 0.01 \
+  --teacher-coef 0.1 \
   --teacher-ratio-start 0.0 \
   --teacher-ratio-end 0.0

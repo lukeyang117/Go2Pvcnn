@@ -186,11 +186,22 @@ class HybridDistillationPPO:
             self._teacher_control_mask[env_ids[permutation[:teacher_count]]] = True
         self._needs_control_assignment[env_ids] = False
 
-    def act(self, obs, teacher_obs, critic_obs=None):
+    def act(self, obs, teacher_obs, critic_obs=None, distillation_context=None):
         """Select teacher/student actions for the current environment batch."""
 
         if critic_obs is None:
             critic_obs = teacher_obs
+        if distillation_context is None:
+            imitation_weight = torch.ones(obs.shape[0], device=obs.device)
+            plan_valid = torch.ones(obs.shape[0], device=obs.device)
+        else:
+            context = torch.as_tensor(distillation_context, device=obs.device)
+            if context.ndim != 2 or context.shape[0] != obs.shape[0] or context.shape[1] < 2:
+                raise ValueError(
+                    "distillation_context must have shape [num_envs, 2] with multiplier and plan_valid"
+                )
+            imitation_weight = context[:, 0].float()
+            plan_valid = context[:, 1].float()
         student_action = self.policy.student.act(obs)
         teacher_action = self.policy.evaluate(teacher_obs).detach()
         value = self.policy.evaluate_value(critic_obs).detach()
@@ -230,6 +241,8 @@ class HybridDistillationPPO:
         self.transition.action_sigma = self.policy.student.action_std.detach()
         self.transition.privileged_actions = teacher_action
         self.transition.ppo_active = ppo_active
+        self.transition.imitation_weight = imitation_weight.detach()
+        self.transition.plan_valid = plan_valid.detach()
         self.transition.observations = obs
         self.transition.critic_observations = critic_obs
         self.last_teacher_ratio = teacher_ratio
@@ -263,7 +276,12 @@ class HybridDistillationPPO:
         teacher_coef = self._compute_teacher_coef()
         mean_value_loss = 0.0
         mean_surrogate_loss = 0.0
-        mean_imitation_loss = 0.0
+        mean_imitation_loss_unweighted = 0.0
+        mean_imitation_loss_weighted = 0.0
+        mean_imitation_contribution = 0.0
+        mean_effective_teacher_coef = 0.0
+        mean_plan_valid_ratio = 0.0
+        mean_imitation_to_surrogate_ratio = 0.0
         mean_action_l1 = 0.0
         mean_entropy = 0.0
         update_count = 0
@@ -273,6 +291,7 @@ class HybridDistillationPPO:
             self.num_learning_epochs,
             include_privileged_actions=True,
             include_ppo_mask=True,
+            include_imitation_context=True,
         )
         for (
             obs_batch,
@@ -290,6 +309,8 @@ class HybridDistillationPPO:
             _semantic_labels_batch,
             privileged_actions_batch,
             ppo_active_mask_batch,
+            imitation_weight_batch,
+            plan_valid_batch,
         ) in generator:
             self.policy.student.act(obs_batch)
             actions_log_prob_batch = self.policy.student.get_actions_log_prob(actions_batch)
@@ -327,8 +348,15 @@ class HybridDistillationPPO:
             else:
                 value_loss = (returns_batch - value_batch).pow(2).mean()
 
-            imitation_loss = nn.functional.mse_loss(mu_batch, privileged_actions_batch)
+            sample_mse = torch.mean((mu_batch - privileged_actions_batch).pow(2), dim=-1)
+            imitation_loss_unweighted = sample_mse.mean()
+            imitation_loss_weighted = torch.mean(
+                sample_mse * imitation_weight_batch.reshape(-1)
+            )
+            imitation_contribution = teacher_coef * imitation_loss_weighted
             action_l1 = torch.mean(torch.abs(mu_batch - privileged_actions_batch))
+            surrogate_scale = surrogate_loss.detach().abs() + 1.0e-6
+            imitation_to_surrogate_ratio = imitation_contribution.detach().abs() / surrogate_scale
 
             loss = (
                 self.ppo_coef
@@ -337,7 +365,7 @@ class HybridDistillationPPO:
                     + self.value_loss_coef * value_loss
                     - self.entropy_coef * entropy_loss
                 )
-                + teacher_coef * imitation_loss
+                + imitation_contribution
             )
 
             self.optimizer.zero_grad()
@@ -353,7 +381,14 @@ class HybridDistillationPPO:
 
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
-            mean_imitation_loss += imitation_loss.item()
+            mean_imitation_loss_unweighted += imitation_loss_unweighted.item()
+            mean_imitation_loss_weighted += imitation_loss_weighted.item()
+            mean_imitation_contribution += imitation_contribution.detach().item()
+            mean_effective_teacher_coef += (
+                teacher_coef * imitation_weight_batch.reshape(-1).mean().item()
+            )
+            mean_plan_valid_ratio += plan_valid_batch.reshape(-1).mean().item()
+            mean_imitation_to_surrogate_ratio += imitation_to_surrogate_ratio.item()
             mean_action_l1 += action_l1.item()
             mean_entropy += entropy_loss.item()
             update_count += 1
@@ -370,7 +405,13 @@ class HybridDistillationPPO:
             "ppo_active_ratio": self.last_ppo_active_ratio,
             "value_loss": mean_value_loss / count,
             "surrogate_loss": mean_surrogate_loss / count,
-            "imitation_loss": mean_imitation_loss / count,
+            "imitation_loss": mean_imitation_loss_unweighted / count,
+            "imitation_loss_unweighted": mean_imitation_loss_unweighted / count,
+            "imitation_loss_weighted": mean_imitation_loss_weighted / count,
+            "imitation_contribution": mean_imitation_contribution / count,
+            "effective_teacher_coef_mean": mean_effective_teacher_coef / count,
+            "plan_valid_ratio": mean_plan_valid_ratio / count,
+            "imitation_to_surrogate_ratio": mean_imitation_to_surrogate_ratio / count,
             "action_l1": mean_action_l1 / count,
             "entropy": mean_entropy / count,
         }

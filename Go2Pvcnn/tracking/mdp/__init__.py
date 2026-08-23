@@ -1,6 +1,10 @@
 """MDP terms for parallelism tracking."""
 
 from tracking.mdp.curriculums import parallelism_velocity_curriculum
+from tracking.mdp.distillation import (
+    parallelism_distillation_context,
+    terrain_imitation_context_from_metadata,
+)
 from tracking.mdp.observations import (
     parallelism_plan_valid,
     parallelism_ref_joint_pos_rel_t,
@@ -31,6 +35,7 @@ from tracking.mdp.terminations import (
 
 __all__ = [
     "parallelism_consecutive_standstill",
+    "parallelism_distillation_context",
     "parallelism_plan_valid",
     "parallelism_ref_foot_z_too_far",
     "parallelism_ref_joint_pos_rel_t",
@@ -41,6 +46,7 @@ __all__ = [
     "parallelism_ref_root_rot_b_t",
     "parallelism_ref_root_z_too_far",
     "parallelism_velocity_curriculum",
+    "terrain_imitation_context_from_metadata",
     "active_swing_foot_on_small_obstacle_reward",
     "parallelism_geometry_collision_penalty",
     "parallelism_obstacle_episode_metrics",

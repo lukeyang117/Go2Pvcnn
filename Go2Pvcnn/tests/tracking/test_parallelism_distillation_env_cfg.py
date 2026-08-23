@@ -12,6 +12,10 @@ def test_distillation_env_cfg_static_contract():
     assert "ParallelismTrackingObservationsCfg.PolicyStateCfg" in source
     assert "student_state" in source
     assert "teacher_state" in source
+    assert "DistillationContextCfg" in source
+    assert "distillation_context" in source
+    assert "parallelism_plan_valid = ObsTerm" in source
+    assert "parallelism_plan_valid = None" in source
     assert "parallelism_ref_joint_pos = None" in source
     assert "parallelism_ref_joint_vel = None" in source
     assert "parallelism_ref_root_pos = None" in source

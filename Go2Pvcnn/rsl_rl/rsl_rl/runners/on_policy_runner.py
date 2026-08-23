@@ -42,6 +42,8 @@ class OnPolicyRunner:
                 raise ValueError("Distillation training requires extras['observations']['teacher']")
             if "critic" not in extras["observations"]:
                 raise ValueError("Hybrid distillation training requires extras['observations']['critic']")
+            if "distillation_context" not in extras["observations"]:
+                raise ValueError("Hybrid distillation training requires extras['observations']['distillation_context']")
             num_teacher_obs = extras["observations"]["teacher"].shape[1]
             num_critic_obs = extras["observations"]["critic"].shape[1]
             self.privileged_obs_type = "critic"
@@ -162,6 +164,7 @@ class OnPolicyRunner:
         if self.training_type == "hybrid_distillation":
             teacher_obs = extras["observations"]["teacher"]
             critic_obs = extras["observations"]["critic"]
+            distillation_context = extras["observations"]["distillation_context"]
         elif self.training_type == "distillation":
             teacher_obs = extras["observations"].get("teacher", obs)
             critic_obs = teacher_obs
@@ -170,6 +173,8 @@ class OnPolicyRunner:
         obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
         if self.training_type in ("distillation", "hybrid_distillation"):
             teacher_obs = teacher_obs.to(self.device)
+        if self.training_type == "hybrid_distillation":
+            distillation_context = distillation_context.to(self.device)
         self.train_mode()  # 切换到训练模式（启用dropout、batchnorm训练行为等）
         
 
@@ -203,7 +208,7 @@ class OnPolicyRunner:
                 for i in range(self.num_steps_per_env):  # 每个环境收集num_steps_per_env步数据
                     # 使用当前策略选择动作
                     if self.training_type == "hybrid_distillation":
-                        actions = self.alg.act(obs, teacher_obs, critic_obs)
+                        actions = self.alg.act(obs, teacher_obs, critic_obs, distillation_context)
                     elif self.training_type == "distillation":
                         actions = self.alg.act(obs, teacher_obs)
                     else:
@@ -219,6 +224,7 @@ class OnPolicyRunner:
                     if self.training_type == "hybrid_distillation" and "teacher" in infos["observations"]:
                         teacher_obs = infos["observations"]["teacher"]
                         critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
+                        distillation_context = infos["observations"]["distillation_context"]
                     elif self.training_type == "distillation" and "teacher" in infos["observations"]:
                         teacher_obs = infos["observations"]["teacher"]
                         critic_obs = self.critic_obs_normalizer(teacher_obs)
@@ -236,6 +242,8 @@ class OnPolicyRunner:
                     )
                     if self.training_type in ("distillation", "hybrid_distillation"):
                         teacher_obs = teacher_obs.to(self.device)
+                    if self.training_type == "hybrid_distillation":
+                        distillation_context = distillation_context.to(self.device)
                     
                     # 将数据存储到rollout buffer（用于后续训练）
                     self.alg.process_env_step(rewards, dones, infos)

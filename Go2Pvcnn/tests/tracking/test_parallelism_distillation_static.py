@@ -165,6 +165,53 @@ def test_hybrid_distillation_ppo_runs_one_update():
     assert torch.isfinite(torch.tensor(losses["imitation_loss"]))
 
 
+def test_hybrid_distillation_update_consumes_weighted_context():
+    from rsl_rl.algorithms import HybridDistillationPPO
+    from rsl_rl.modules import StudentTeacherCNN
+
+    policy = StudentTeacherCNN(
+        num_student_obs=560,
+        num_teacher_obs=620,
+        num_actions=12,
+        cost_map_channels=2,
+        cost_map_size=16,
+        actor_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        critic_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        student_hidden_dims=[16],
+        teacher_hidden_dims=[16],
+        critic_hidden_dims=[16],
+        activation="elu",
+    )
+    alg = HybridDistillationPPO(
+        policy,
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        teacher_coef=0.1,
+        device="cpu",
+    )
+    alg.init_storage("hybrid_distillation", 2, 2, [560], [620], [12])
+    context = torch.tensor([[1.0, 1.0], [0.0, 0.0]])
+    for _ in range(2):
+        actions = alg.act(torch.randn(2, 560), torch.randn(2, 620), distillation_context=context)
+        alg.process_env_step(torch.zeros(2), torch.zeros(2, dtype=torch.bool), {})
+        assert actions.shape == (2, 12)
+    alg.compute_returns(torch.randn(2, 620))
+    losses = alg.update()
+    assert losses["plan_valid_ratio"] == 0.5
+    assert losses["effective_teacher_coef_mean"] == 0.05
+    assert torch.isfinite(torch.tensor(losses["imitation_loss_weighted"]))
+
+
 def test_hybrid_distillation_ppo_uses_separate_teacher_and_critic_observations():
     from rsl_rl.algorithms import HybridDistillationPPO
     from rsl_rl.modules import StudentTeacherCNN
@@ -380,6 +427,64 @@ def test_rollout_storage_preserves_ppo_active_mask():
     )
 
 
+def test_rollout_storage_preserves_imitation_context():
+    from rsl_rl.storage.rollout_storage import RolloutStorage
+
+    storage = RolloutStorage(
+        num_envs=2,
+        num_transitions_per_env=1,
+        obs_shape=[3],
+        privileged_obs_shape=[4],
+        actions_shape=[2],
+        device="cpu",
+    )
+    transition = RolloutStorage.Transition()
+    transition.observations = torch.zeros(2, 3)
+    transition.critic_observations = torch.zeros(2, 4)
+    transition.actions = torch.zeros(2, 2)
+    transition.privileged_actions = torch.zeros(2, 2)
+    transition.rewards = torch.zeros(2)
+    transition.dones = torch.zeros(2, dtype=torch.bool)
+    transition.imitation_weight = torch.tensor([1.0, 0.0])
+    transition.plan_valid = torch.tensor([1.0, 0.0])
+    storage.add_transitions(transition)
+
+    batch = next(
+        storage.mini_batch_generator(
+            num_mini_batches=1,
+            num_epochs=1,
+            include_privileged_actions=True,
+            include_imitation_context=True,
+        )
+    )
+    assert torch.equal(batch[-2].flatten().sort().values, torch.tensor([0.0, 1.0]))
+    assert torch.equal(batch[-1].flatten().sort().values, torch.tensor([0.0, 1.0]))
+
+
+def test_invalid_plan_has_exactly_zero_imitation_gradient():
+    student_mean = torch.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+    teacher_action = torch.zeros_like(student_mean)
+    weights = torch.tensor([1.0, 0.0])
+    sample_mse = (student_mean - teacher_action).pow(2).mean(dim=-1)
+    loss = (sample_mse * weights).mean()
+    loss.backward()
+
+    assert torch.equal(student_mean.grad[1], torch.zeros(2))
+    assert torch.any(student_mean.grad[0] != 0)
+
+
+def test_all_invalid_imitation_loss_is_finite_zero_with_zero_gradient():
+    student_mean = torch.randn(4, 12, requires_grad=True)
+    teacher_action = torch.randn(4, 12)
+    weights = torch.zeros(4)
+    loss = ((student_mean - teacher_action).pow(2).mean(dim=-1) * weights).mean()
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert loss.item() == 0.0
+    assert torch.equal(student_mean.grad, torch.zeros_like(student_mean))
+
+
 def test_runner_source_recognizes_distillation():
     source = Path("Go2Pvcnn/rsl_rl/rsl_rl/runners/on_policy_runner.py").read_text()
 
@@ -502,14 +607,21 @@ def test_hybrid_schedule_config_and_fresh_launcher():
 
     cfg = get_train_cfg("parallelism_tracking_cross_large_complex_distillation")
     algorithm = cfg["algorithm"]
-    assert algorithm["teacher_ratio_warmup_pct"] == 0.10
-    assert algorithm["teacher_ratio_decay_end_pct"] == 0.80
+    assert algorithm["teacher_coef"] == 0.1
+    assert algorithm["teacher_ratio_start"] == 0.0
+    assert algorithm["teacher_ratio_end"] == 0.0
+    assert algorithm["teacher_ratio_warmup_pct"] == 0.0
+    assert algorithm["teacher_ratio_decay_end_pct"] == 0.0
     assert algorithm["teacher_ratio_min"] == 0.0
 
     launcher = Path(
         "Go2Pvcnn/scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh"
     ).read_text()
     assert "--teacher_checkpoint" in launcher
+    assert "2026-08-20_21-20-52/91b27a4/model_9899.pt" in launcher
+    assert "--teacher-coef 0.1" in launcher
+    assert "--teacher-ratio-start 0.0" in launcher
+    assert "--teacher-ratio-end 0.0" in launcher
     assert "--resume" not in launcher
     assert "--load_run" not in launcher
     assert "--load_checkpoint" not in launcher

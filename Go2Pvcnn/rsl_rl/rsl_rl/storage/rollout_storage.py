@@ -24,6 +24,8 @@ class RolloutStorage:
             self.hidden_states = None
             self.privileged_actions = None
             self.ppo_active = None
+            self.imitation_weight = None
+            self.plan_valid = None
             # For PVCNN semantic supervision
             self.point_cloud = None
             self.semantic_labels = None
@@ -57,6 +59,12 @@ class RolloutStorage:
         # Teacher-controlled samples are excluded from the student PPO actor loss.
         # Default to active so legacy PPO callers keep their original behavior.
         self.ppo_active_masks = torch.ones(
+            num_transitions_per_env, num_envs, 1, device=self.device
+        )
+        self.imitation_weights = torch.ones(
+            num_transitions_per_env, num_envs, 1, device=self.device
+        )
+        self.plan_valid_masks = torch.ones(
             num_transitions_per_env, num_envs, 1, device=self.device
         )
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
@@ -101,6 +109,18 @@ class RolloutStorage:
             )
         else:
             self.ppo_active_masks[self.step].fill_(1.0)
+        if transition.imitation_weight is not None:
+            self.imitation_weights[self.step].copy_(
+                transition.imitation_weight.to(device=self.device).view(-1, 1)
+            )
+        else:
+            self.imitation_weights[self.step].fill_(1.0)
+        if transition.plan_valid is not None:
+            self.plan_valid_masks[self.step].copy_(
+                transition.plan_valid.to(device=self.device).view(-1, 1)
+            )
+        else:
+            self.plan_valid_masks[self.step].fill_(1.0)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
         if transition.values is not None:
@@ -191,6 +211,7 @@ class RolloutStorage:
         num_epochs=8,
         include_privileged_actions=False,
         include_ppo_mask=False,
+        include_imitation_context=False,
     ):
         batch_size = self.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
@@ -205,6 +226,8 @@ class RolloutStorage:
         actions = self.actions.flatten(0, 1)
         privileged_actions = self.privileged_actions.flatten(0, 1)
         ppo_active_masks = self.ppo_active_masks.flatten(0, 1)
+        imitation_weights = self.imitation_weights.flatten(0, 1)
+        plan_valid_masks = self.plan_valid_masks.flatten(0, 1)
         values = self.values.flatten(0, 1)
         if self.train_with_transitions:
             transitions = self.transitions.flatten(0, 1)
@@ -255,6 +278,11 @@ class RolloutStorage:
                     batch = base_batch
                 if include_ppo_mask:
                     batch = batch + (ppo_active_masks[batch_idx],)
+                if include_imitation_context:
+                    batch = batch + (
+                        imitation_weights[batch_idx],
+                        plan_valid_masks[batch_idx],
+                    )
                 yield batch
 
     def distillation_generator(self, num_mini_batches, num_epochs=1):

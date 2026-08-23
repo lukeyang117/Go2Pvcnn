@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 
 import go2_pvcnn.mdp as go2_mdp
+import tracking.mdp as tracking_mdp
 from tracking.parallelism_cross_large_complex_env_cfg import (
     ParallelismTrackingCrossLargeComplexCurriculumCfg,
     ParallelismTrackingCrossLargeComplexEnvCfg,
@@ -33,6 +35,7 @@ class ParallelismTrackingDistillationObservationsCfg:
             func=isaac_mdp.generated_commands,
             params={"command_name": "base_velocity"},
         )
+        parallelism_plan_valid = ObsTerm(func=tracking_mdp.parallelism_plan_valid)
 
     @configclass
     class StudentElevationSemanticMapCfg(TeacherElevationSemanticMapCfg):
@@ -41,6 +44,7 @@ class ParallelismTrackingDistillationObservationsCfg:
     @configclass
     class StudentStateCfg(TeacherStateCfg):
         base_lin_vel = None
+        parallelism_plan_valid = None
         velocity_commands = ObsTerm(
             func=isaac_mdp.generated_commands,
             params={"command_name": "base_velocity"},
@@ -58,12 +62,46 @@ class ParallelismTrackingDistillationObservationsCfg:
     class CriticStateCfg(ParallelismTrackingObservationsCfg.CriticStateCfg):
         velocity_commands = None
 
+    @configclass
+    class DistillationContextCfg(ObsGroup):
+        imitation_context = ObsTerm(
+            func=tracking_mdp.parallelism_distillation_context,
+            params={
+                "end_multipliers": {
+                    "flat_dense_small_obstacles": 1.0,
+                    "flat": 1.0,
+                    "random_rough": 0.30,
+                    "hf_pyramid_slope": 0.20,
+                    "hf_pyramid_slope_inv": 0.20,
+                    "boxes": 0.0,
+                    "pyramid_stairs": 0.0,
+                    "pyramid_stairs_inv": 0.0,
+                },
+                "powers": {
+                    "flat_dense_small_obstacles": 1.0,
+                    "flat": 1.0,
+                    "random_rough": 1.0,
+                    "hf_pyramid_slope": 1.25,
+                    "hf_pyramid_slope_inv": 1.25,
+                    "boxes": 1.5,
+                    "pyramid_stairs": 2.0,
+                    "pyramid_stairs_inv": 2.0,
+                },
+                "num_rows": 10,
+            },
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
     teacher_elevation_semantic_map: TeacherElevationSemanticMapCfg = TeacherElevationSemanticMapCfg()
     teacher_state: TeacherStateCfg = TeacherStateCfg()
     student_elevation_semantic_map: StudentElevationSemanticMapCfg = StudentElevationSemanticMapCfg()
     student_state: StudentStateCfg = StudentStateCfg()
     critic_elevation_semantic_map: CriticElevationSemanticMapCfg = CriticElevationSemanticMapCfg()
     critic_state: CriticStateCfg = CriticStateCfg()
+    distillation_context: DistillationContextCfg = DistillationContextCfg()
 
 
 @configclass

@@ -760,7 +760,13 @@ def main() -> int:
                 critic_obs = self._flatten_group(
                     obs_dict, ["critic_elevation_semantic_map", "critic_state"]
                 )
-                return student_obs, {"observations": {"teacher": teacher_obs, "critic": critic_obs}}
+                return student_obs, {
+                    "observations": {
+                        "teacher": teacher_obs,
+                        "critic": critic_obs,
+                        "distillation_context": obs_dict["distillation_context"],
+                    }
+                }
             policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
             critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
             return policy_obs, {"observations": {"critic": critic_obs}}
