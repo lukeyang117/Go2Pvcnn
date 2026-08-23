@@ -15,4 +15,4 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment parallelism_tracking_cross_large_complex \
   --num_envs 1024 \
   --headless \
-  --max_iterations 20000
+  --max_iterations 5000
