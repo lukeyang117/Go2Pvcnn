@@ -108,6 +108,44 @@ def test_student_only_checkpoint_loading_does_not_replace_teacher():
     assert torch.allclose(model.teacher.actor[0].weight, original_teacher)
 
 
+def test_legacy_teacher_checkpoint_missing_plan_valid_column_is_padded():
+    from rsl_rl.modules import StudentTeacherCNN
+
+    model = StudentTeacherCNN(
+        num_student_obs=560,
+        num_teacher_obs=621,
+        num_critic_obs=600,
+        num_actions=12,
+        cost_map_channels=2,
+        cost_map_size=16,
+        actor_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        critic_cnn_cfg={
+            "output_channels": [8, 16],
+            "kernel_size": [3, 3],
+            "max_pool": [True, True],
+            "activation": "elu",
+        },
+        student_hidden_dims=[16],
+        teacher_hidden_dims=[16],
+        critic_hidden_dims=[16],
+        activation="elu",
+    )
+    current = {key: value.detach().clone() for key, value in model.teacher.state_dict().items()}
+    legacy_weight = current["actor.0.weight"][:, :-1].clone()
+    current["actor.0.weight"] = legacy_weight
+
+    model.load_state_dict(current, strict=False)
+
+    loaded_weight = model.teacher.actor[0].weight.detach()
+    assert torch.allclose(loaded_weight[:, :-1], legacy_weight)
+    assert torch.equal(loaded_weight[:, -1], torch.zeros_like(loaded_weight[:, -1]))
+
+
 def test_hybrid_distillation_ppo_runs_one_update():
     from rsl_rl.algorithms import HybridDistillationPPO
     from rsl_rl.modules import StudentTeacherCNN
