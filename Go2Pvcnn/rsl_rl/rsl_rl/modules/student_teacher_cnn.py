@@ -122,7 +122,6 @@ class StudentTeacherCNN(nn.Module):
     def load_state_dict(self, state_dict, strict=True):
         state_dict = dict(state_dict)
         self._adapt_legacy_student_input_weights(state_dict)
-        self._adapt_legacy_teacher_input_weights(state_dict)
         if any(key.startswith("student.") or key.startswith("teacher.") for key in state_dict.keys()):
             super().load_state_dict(state_dict, strict=strict)
             self.loaded_teacher = True
@@ -161,27 +160,6 @@ class StudentTeacherCNN(nn.Module):
         self.teacher.eval()
         self.teacher.requires_grad_(False)
         return result
-
-    def _adapt_legacy_teacher_input_weights(self, state_dict):
-        """Pad a legacy teacher that predates the plan-valid observation."""
-
-        current_weight = self.teacher.actor[0].weight
-        for key in ("teacher.actor.0.weight", "actor.0.weight"):
-            weight = state_dict.get(key)
-            if weight is None or weight.ndim != 2:
-                continue
-            if weight.shape[0] != current_weight.shape[0]:
-                continue
-            if weight.shape[1] != current_weight.shape[1] - 1:
-                continue
-            padding = torch.zeros(
-                (weight.shape[0], 1), dtype=weight.dtype, device=weight.device
-            )
-            state_dict[key] = torch.cat((weight, padding), dim=1)
-            print(
-                "[Checkpoint] Padded legacy teacher actor input by one zero column "
-                f"for {key}: {weight.shape[1]} -> {current_weight.shape[1]}"
-            )
 
     def _adapt_legacy_student_input_weights(self, state_dict):
         """Drop legacy base_lin_vel columns when loading pre-removal student checkpoints."""
