@@ -336,6 +336,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Visualize batched Go2 footstep planning in Isaac Lab.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of Isaac Lab environments.")
     parser.add_argument(
+        "--robot",
+        type=str,
+        default="go2",
+        choices=["go2", "m1"],
+        help="Robot asset and Parallelism backend to visualize.",
+    )
+    parser.add_argument(
+        "--max-plan-cycles",
+        dest="max_plan_cycles",
+        type=int,
+        default=0,
+        help="Exit after this many planning cycles; zero keeps the interactive viewer running.",
+    )
+    parser.add_argument(
         "--terrain",
         type=str,
         default="task",
@@ -693,16 +707,19 @@ def _read_actual_kinematic_state(
     foot_ids: list[int] | torch.Tensor,
     *,
     reorder_by_quadrant: bool = False,
+    robot_backend=None,
 ) -> dict[str, torch.Tensor]:
     robot = base_env.scene["robot"]
     joint_pos_planner = _joint_pos_robot_to_planner(
         robot,
         torch.as_tensor(robot.data.joint_pos[:1], dtype=torch.float64).clone(),
+        robot_backend,
     )
     body_pos_w = torch.as_tensor(robot.data.body_pos_w[:1], dtype=torch.float64).clone()
     foot_ids_t = torch.as_tensor(_foot_id_list(foot_ids), dtype=torch.long, device=body_pos_w.device)
     foot_pos_w = body_pos_w.index_select(1, foot_ids_t)
-    foot_pos_w = _reorder_feet_to_planner_order(robot, foot_ids_t, foot_pos_w)
+    if robot_backend is None or str(robot_backend.name).lower() != "m1":
+        foot_pos_w = _reorder_feet_to_planner_order(robot, foot_ids_t, foot_pos_w)
     if reorder_by_quadrant:
         root_pos_w = torch.as_tensor(robot.data.root_pos_w[:1], dtype=torch.float64).clone()
         foot_pos_w = _reorder_feet_by_quadrant(foot_pos_w, root_pos_w)
@@ -812,7 +829,7 @@ def _viewer_should_drain_before_zero_replan(
     return _viewer_plan_has_motion(result)
 
 
-def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
+def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int, robot_backend=None) -> None:
     """Write the planner frame pose/joints into the displayed robot.
 
     Isaac Lab is not available in unit tests, so we keep this duck-typed and
@@ -822,8 +839,12 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int) -> None:
     root_pos_w = torch.as_tensor(result.root_pos_w[:, frame], dtype=torch.float32)
     root_quat_wxyz = torch.as_tensor(result.root_quat_w[:, frame], dtype=torch.float32)
     root_pose_wxyz = torch.cat([root_pos_w, root_quat_wxyz], dim=-1)
-    joint_pos = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float32)
-    joint_pos = _joint_pos_planner_to_robot(robot, joint_pos)
+    planner_joint_pos = torch.as_tensor(result.joint_angles[:, frame], dtype=torch.float32)
+    if robot_backend is not None and str(robot_backend.name).lower() == "m1":
+        current_joint_pos = torch.as_tensor(robot.data.joint_pos, dtype=planner_joint_pos.dtype, device=planner_joint_pos.device).clone()
+        joint_pos = merge_planner_joints_into_robot(current_joint_pos, planner_joint_pos, robot_backend, robot=robot)
+    else:
+        joint_pos = _joint_pos_planner_to_robot(robot, planner_joint_pos)
     joint_vel = torch.zeros_like(joint_pos)
 
     if hasattr(robot, "write_root_pose_to_sim"):
@@ -950,8 +971,13 @@ def _viewer_ground_robot_from_scanner(
     return float(z_shift[0, 0].item())
 
 
-def _viewer_direct_playback_step(base_env, result, *, frame_idx: int, sync_scene: bool = True) -> str:
-    _apply_direct_playback_to_robot(base_env.scene["robot"], result, frame_idx=int(frame_idx))
+def _viewer_direct_playback_step(base_env, result, *, frame_idx: int, sync_scene: bool = True, robot_backend=None) -> str:
+    _apply_direct_playback_to_robot(
+        base_env.scene["robot"],
+        result,
+        frame_idx=int(frame_idx),
+        robot_backend=robot_backend,
+    )
     if sync_scene and hasattr(base_env.scene, "write_data_to_sim"):
         base_env.scene.write_data_to_sim()
     base_env.sim.render()
@@ -1038,11 +1064,57 @@ def _joint_order_indices(*, source_order: tuple[str, ...], target_order: tuple[s
         return None
 
 
-def _joint_pos_planner_to_robot(robot, joint_pos: torch.Tensor) -> torch.Tensor:
+def _backend_asset_joint_indices(robot, robot_backend) -> torch.Tensor:
+    expected = tuple(str(name) for name in robot_backend.asset_joint_names)
+    actual = tuple(str(name) for name in getattr(robot, "joint_names", ()) or ())
+    if actual:
+        normalized = {normalize_articulation_name(name): index for index, name in enumerate(actual)}
+        indices = [normalized.get(normalize_articulation_name(name)) for name in expected]
+        if all(index is not None for index in indices):
+            return torch.tensor(indices, dtype=torch.long)
+    if len(expected) == 16:
+        return torch.arange(16, dtype=torch.long)
+    raise ValueError(f"robot {robot_backend.name} does not expose the expected asset joint names")
+
+
+def _backend_planner_joint_indices(robot, robot_backend) -> torch.Tensor:
+    asset_indices = _backend_asset_joint_indices(robot, robot_backend)
+    expected = tuple(str(name) for name in robot_backend.asset_joint_names)
+    positions = {name: index for index, name in enumerate(expected)}
+    return asset_indices[torch.tensor([positions[name] for name in robot_backend.planner_joint_names], dtype=torch.long)]
+
+
+def merge_planner_joints_into_robot(
+    robot_joint_pos: torch.Tensor,
+    planner_joint_pos: torch.Tensor,
+    robot_backend,
+    *,
+    robot=None,
+) -> torch.Tensor:
+    current = torch.as_tensor(robot_joint_pos).clone()
+    planned = torch.as_tensor(planner_joint_pos, dtype=current.dtype, device=current.device)
+    if current.shape[:-1] != planned.shape[:-1] or planned.shape[-1] != len(robot_backend.planner_joint_names):
+        raise ValueError("robot_joint_pos and planner_joint_pos have incompatible batch or planner dimensions")
+    if robot is None:
+        planner_indices = _backend_planner_joint_indices(SimpleNamespace(joint_names=robot_backend.asset_joint_names), robot_backend)
+    else:
+        planner_indices = _backend_planner_joint_indices(robot, robot_backend)
+    if current.shape[-1] <= int(planner_indices.max().item()):
+        raise ValueError("robot_joint_pos is smaller than the selected robot asset joint layout")
+    return current.scatter(-1, planner_indices.to(device=current.device).view(*((1,) * (current.ndim - 1)), -1).expand(*current.shape[:-1], planned.shape[-1]), planned)
+
+
+def _joint_pos_planner_to_robot(robot, joint_pos: torch.Tensor, robot_backend=None) -> torch.Tensor:
+    if robot_backend is not None and str(robot_backend.name).lower() == "m1":
+        current = torch.as_tensor(robot.data.joint_pos, dtype=joint_pos.dtype, device=joint_pos.device)
+        return merge_planner_joints_into_robot(current, joint_pos, robot_backend, robot=robot)
     return planner_to_robot_joints(joint_pos, getattr(robot, "joint_names", None))
 
 
-def _joint_pos_robot_to_planner(robot, joint_pos: torch.Tensor) -> torch.Tensor:
+def _joint_pos_robot_to_planner(robot, joint_pos: torch.Tensor, robot_backend=None) -> torch.Tensor:
+    if robot_backend is not None and str(robot_backend.name).lower() == "m1":
+        indices = _backend_planner_joint_indices(robot, robot_backend).to(device=joint_pos.device)
+        return torch.as_tensor(joint_pos).index_select(-1, indices)
     return robot_to_planner_joints(joint_pos, getattr(robot, "joint_names", None))
 
 
@@ -1529,12 +1601,21 @@ class PlannerVisualizer:
 
 
 def _build_env_cfg(args_cli: argparse.Namespace):
-    if str(args_cli.planner_backend).lower() == "parallelism":
-        from tracking.parallelism_cross_large_complex_env_cfg import (
-            ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
-        )
+    robot_name = str(getattr(args_cli, "robot", "go2")).lower()
+    planner_backend = str(args_cli.planner_backend).lower()
+    if robot_name == "m1" and planner_backend != "parallelism":
+        raise ValueError("--robot m1 currently supports only --planner-backend parallelism")
+    if planner_backend == "parallelism":
+        if robot_name == "m1":
+            from tracking.m1_parallelism_viewer_env_cfg import M1ParallelismViewerEnvCfg
 
-        env_cfg = ParallelismTrackingCrossLargeComplexEnvCfg_PLAY()
+            env_cfg = M1ParallelismViewerEnvCfg()
+        else:
+            from tracking.parallelism_cross_large_complex_env_cfg import (
+                ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
+            )
+
+            env_cfg = ParallelismTrackingCrossLargeComplexEnvCfg_PLAY()
     else:
         from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
             TeacherElevationTrajectoryMpcSemanticEnvCfg_VIEWER,
@@ -1545,9 +1626,11 @@ def _build_env_cfg(args_cli: argparse.Namespace):
     env_cfg.scene.env_spacing = 6.0
     env_cfg.sim.device = args_cli.device
     env_cfg.sim.render_interval = env_cfg.decimation
-    env_cfg.events.push_robot = None
+    if hasattr(env_cfg.events, "push_robot"):
+        env_cfg.events.push_robot = None
     env_cfg.commands.base_velocity.debug_vis = False
-    env_cfg.commands.base_velocity.ranges = env_cfg.commands.base_velocity.limit_ranges
+    if hasattr(env_cfg.commands.base_velocity, "limit_ranges"):
+        env_cfg.commands.base_velocity.ranges = env_cfg.commands.base_velocity.limit_ranges
     env_cfg.planner_backend = str(args_cli.planner_backend)
     if env_cfg.planner_backend == "joint_mpc_rti":
         env_cfg.joint_mpc_rti_cfg.runtime.horizon_steps = int(args_cli.n_frames)
@@ -2381,11 +2464,11 @@ def _plan_viewer_trajectory(
     )
 
 
-def _parallelism_state_from_env(base_env, foot_ids):
+def _parallelism_state_from_env(base_env, foot_ids, robot_backend=None):
     from extension.parallelism import ParallelismState
 
     actual = _read_actual_base_state(base_env)
-    kinematic = _read_actual_kinematic_state(base_env, foot_ids)
+    kinematic = _read_actual_kinematic_state(base_env, foot_ids, robot_backend=robot_backend)
     device = torch.device(getattr(base_env, "device", actual["root_pos_w"].device))
     root_pos = actual["root_pos_w"].to(device=device, dtype=torch.float32)
     root_rpy = actual["rpy_if_wxyz"].to(device=device, dtype=torch.float32)
@@ -2399,59 +2482,65 @@ def _parallelism_state_from_env(base_env, foot_ids):
     )
 
 
-def _parallelism_cfg_from_viewer_args(args_cli: argparse.Namespace, test_terminal_state: ViewerTestTerminalState | None):
-    from extension.parallelism import ParallelismCfg
+def _parallelism_cfg_from_viewer_args(
+    args_cli: argparse.Namespace,
+    test_terminal_state: ViewerTestTerminalState | None,
+    robot_backend=None,
+):
+    from extension.parallelism.robot_backend import get_robot_backend
 
-    return ParallelismCfg(
+    base_cfg = (robot_backend or get_robot_backend("go2")).cfg
+    return replace(
+        base_cfg,
         dt=float(args_cli.plan_dt),
         swing_clearance_m=float(test_terminal_state.swing_clearance_m)
         if test_terminal_state is not None
-        else ParallelismCfg.swing_clearance_m,
+        else float(base_cfg.swing_clearance_m),
         semantic_touchdown_margin_m=float(test_terminal_state.semantic_touchdown_margin_m)
         if test_terminal_state is not None
-        else ParallelismCfg.semantic_touchdown_margin_m,
+        else float(base_cfg.semantic_touchdown_margin_m),
         candidate_radius_m=float(test_terminal_state.candidate_radius_m)
         if test_terminal_state is not None
-        else ParallelismCfg.candidate_radius_m,
+        else float(base_cfg.candidate_radius_m),
         standstill_fallback_enabled=bool(test_terminal_state.standstill_fallback_enabled)
         if test_terminal_state is not None
-        else True,
+        else bool(base_cfg.standstill_fallback_enabled),
         terrain_following_root_clearance_m=float(test_terminal_state.terrain_following_root_clearance_m)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_root_clearance_m,
+        else float(base_cfg.terrain_following_root_clearance_m),
         terrain_following_root_z_smoothing=float(test_terminal_state.terrain_following_root_z_smoothing)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_root_z_smoothing,
+        else float(base_cfg.terrain_following_root_z_smoothing),
         terrain_following_root_z_rate_limit_m=float(test_terminal_state.terrain_following_root_z_rate_limit_m)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_root_z_rate_limit_m,
+        else float(base_cfg.terrain_following_root_z_rate_limit_m),
         terrain_following_pitch_sample_range_m=float(test_terminal_state.terrain_following_pitch_sample_range_m)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_pitch_sample_range_m,
+        else float(base_cfg.terrain_following_pitch_sample_range_m),
         terrain_following_pitch_sample_count=int(test_terminal_state.terrain_following_pitch_sample_count)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_pitch_sample_count,
+        else int(base_cfg.terrain_following_pitch_sample_count),
         terrain_following_roll_sample_range_m=float(test_terminal_state.terrain_following_roll_sample_range_m)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_roll_sample_range_m,
+        else float(base_cfg.terrain_following_roll_sample_range_m),
         terrain_following_roll_sample_count=int(test_terminal_state.terrain_following_roll_sample_count)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_roll_sample_count,
+        else int(base_cfg.terrain_following_roll_sample_count),
         terrain_following_rpy_deadband_rad=float(test_terminal_state.terrain_following_rpy_deadband_rad)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_rpy_deadband_rad,
+        else float(base_cfg.terrain_following_rpy_deadband_rad),
         terrain_following_rpy_smoothing=float(test_terminal_state.terrain_following_rpy_smoothing)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_rpy_smoothing,
+        else float(base_cfg.terrain_following_rpy_smoothing),
         terrain_following_rpy_rate_limit_rad=float(test_terminal_state.terrain_following_rpy_rate_limit_rad)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_rpy_rate_limit_rad,
+        else float(base_cfg.terrain_following_rpy_rate_limit_rad),
         terrain_following_pitch_limit_rad=float(test_terminal_state.terrain_following_pitch_limit_rad)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_pitch_limit_rad,
+        else float(base_cfg.terrain_following_pitch_limit_rad),
         terrain_following_roll_limit_rad=float(test_terminal_state.terrain_following_roll_limit_rad)
         if test_terminal_state is not None
-        else ParallelismCfg.terrain_following_roll_limit_rad,
+        else float(base_cfg.terrain_following_roll_limit_rad),
     )
 
 
@@ -2463,13 +2552,14 @@ def _plan_parallelism_viewer_trajectory(
     command: torch.Tensor,
     args_cli: argparse.Namespace,
     test_terminal_state: ViewerTestTerminalState | None = None,
+    robot_backend=None,
 ):
     from extension.parallelism.planner import plan_trajectory
     from extension.parallelism.viewer_adapter import parallelism_trajectory_to_viewer_result
 
     terrain, ray_hits = _compute_parallelism_terrain(scanner)
-    state = _parallelism_state_from_env(base_env, foot_ids)
-    cfg = _parallelism_cfg_from_viewer_args(args_cli, test_terminal_state)
+    state = _parallelism_state_from_env(base_env, foot_ids, robot_backend)
+    cfg = _parallelism_cfg_from_viewer_args(args_cli, test_terminal_state, robot_backend)
     terrain_following_mask = _viewer_terrain_following_mask_from_selection(
         base_env.scene,
         terrain_col=int(args_cli.terrain_col),
@@ -2481,8 +2571,51 @@ def _plan_parallelism_viewer_trajectory(
         terrain,
         cfg,
         terrain_following_mask=terrain_following_mask,
+        robot_backend=robot_backend,
     )
-    return parallelism_trajectory_to_viewer_result(trajectory), ray_hits
+    return parallelism_trajectory_to_viewer_result(trajectory, robot_backend=robot_backend), ray_hits
+
+
+def _viewer_support_body_ids(robot, robot_backend):
+    if str(robot_backend.name).lower() != "m1":
+        return robot.find_bodies(".*_foot")[0]
+    body_ids, body_names = robot.find_bodies(".*_FOOT_LINK")
+    normalized = {normalize_articulation_name(name): int(body_id) for body_id, name in zip(body_ids, body_names)}
+    try:
+        return torch.tensor(
+            [normalized[normalize_articulation_name(name)] for name in robot_backend.support_body_names],
+            dtype=torch.long,
+        )
+    except KeyError as exc:
+        raise RuntimeError(
+            f"M1 viewer requires support bodies {robot_backend.support_body_names}; found {tuple(body_names)}"
+        ) from exc
+
+
+def _viewer_terminal_state_for_backend(robot_backend):
+    state = ViewerTestTerminalState()
+    cfg = robot_backend.cfg
+    for name in (
+        "swing_clearance_m",
+        "semantic_touchdown_margin_m",
+        "candidate_radius_m",
+        "standstill_fallback_enabled",
+        "terrain_following_root_clearance_m",
+        "terrain_following_root_z_smoothing",
+        "terrain_following_root_z_rate_limit_m",
+        "terrain_following_pitch_sample_range_m",
+        "terrain_following_pitch_sample_count",
+        "terrain_following_roll_sample_range_m",
+        "terrain_following_roll_sample_count",
+        "terrain_following_rpy_deadband_rad",
+        "terrain_following_rpy_smoothing",
+        "terrain_following_rpy_rate_limit_rad",
+        "terrain_following_pitch_limit_rad",
+        "terrain_following_roll_limit_rad",
+    ):
+        if hasattr(cfg, name) and hasattr(state, name):
+            setattr(state, name, getattr(cfg, name))
+    return state
 
 
 def _print_help() -> None:
@@ -2505,15 +2638,18 @@ def main() -> int:
 
     import go2_pvcnn.tasks.register_envs  # noqa: F401
     from extension.convention import extract_yaw_batch
+    from extension.parallelism.robot_backend import get_robot_backend
     from isaaclab.envs import ManagerBasedRLEnv
 
+    robot_backend = get_robot_backend(getattr(args_cli, "robot", "go2"))
     env_cfg = _build_env_cfg(args_cli)
     joint_backend = str(args_cli.planner_backend).lower() == "joint_mpc_rti"
     parallel_backend = str(args_cli.planner_backend).lower() == "parallelism"
     mpc_planner_cfg = None if (joint_backend or parallel_backend) else _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
 
+    env_id = "Isaac-M1-Parallelism-Viewer-v0" if robot_backend.name == "m1" else "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0"
     env = gym.make(
-        "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0",
+        env_id,
         cfg=env_cfg,
         render_mode="rgb_array" if getattr(args_cli, "livestream", -1) in (1, 2) else None,
     )
@@ -2521,10 +2657,11 @@ def main() -> int:
     base_env = env.unwrapped
     trajectory_manager = _attach_reference_manager_if_enabled(base_env, env_cfg)
     zero_actions = _make_zero_actions(base_env)
-    foot_ids, _ = base_env.scene["robot"].find_bodies(".*_foot")
+    foot_ids = _viewer_support_body_ids(base_env.scene["robot"], robot_backend)
     scanner = _reference_height_scanner(base_env, env_cfg)
     visualizer = PlannerVisualizer()
-    test_terminal_state = ViewerTestTerminalState(enabled=bool(getattr(args_cli, "used_test_terminal", True)))
+    test_terminal_state = _viewer_terminal_state_for_backend(robot_backend)
+    test_terminal_state.enabled = bool(getattr(args_cli, "used_test_terminal", True))
     test_terminal_window = _create_viewer_test_terminal(test_terminal_state) if parallel_backend and test_terminal_state.enabled else None
 
     terrain_source = (
@@ -2608,7 +2745,7 @@ def main() -> int:
                         active_cmd,
                         values=_apply_test_terminal_command(active_cmd.values, test_terminal_state),
                     )
-                if parallel_backend and test_terminal_state is not None:
+                if parallel_backend and test_terminal_state is not None and test_terminal_state.enabled:
                     show_mesh = bool(test_terminal_state.show_mesh)
                     if last_show_mesh is None or show_mesh != last_show_mesh:
                         _set_go2_mesh_visibility(base_env, show_mesh)
@@ -2725,6 +2862,7 @@ def main() -> int:
                             command=active_cmd.values,
                             args_cli=args_cli,
                             test_terminal_state=test_terminal_state,
+                            robot_backend=robot_backend,
                         )
                     else:
                         state = _mpc_state_from_env(base_env, foot_ids)
@@ -2780,13 +2918,22 @@ def main() -> int:
                     plan_cycle += 1
                     if scripted_command is not None and scripted_cycles_remaining > 0:
                         scripted_cycles_remaining = max(0, scripted_cycles_remaining - 1)
+                    max_plan_cycles = int(getattr(args_cli, "max_plan_cycles", 0))
+                    if max_plan_cycles > 0 and plan_cycle >= max_plan_cycles:
+                        print(f"[Viewer] Reached --max-plan-cycles={max_plan_cycles}; exiting.", flush=True)
+                        break
 
                 if result is not None and playback_frame < result.num_frames and frame_permitted:
                     applied_frame = _viewer_playback_frame_index(
                         args_cli.planner_backend,
                         playback_frame=playback_frame,
                     )
-                    playback_path = _viewer_direct_playback_step(base_env, result, frame_idx=applied_frame)
+                    playback_path = _viewer_direct_playback_step(
+                        base_env,
+                        result,
+                        frame_idx=applied_frame,
+                        robot_backend=robot_backend if parallel_backend else None,
+                    )
                     if playback_path != last_playback_path:
                         print(
                             f"[Viewer][Playback] path={playback_path}",
@@ -2816,7 +2963,11 @@ def main() -> int:
                         #     flush=True,
                         # )
                         last_actual_summary = actual_summary
-                    actual_kin = _read_actual_kinematic_state(base_env, foot_ids)
+                    actual_kin = _read_actual_kinematic_state(
+                        base_env,
+                        foot_ids,
+                        robot_backend=robot_backend if parallel_backend else None,
+                    )
                     joint_err = actual_kin["joint_pos_planner"] - planner_frame.joint_angles
                     foot_err = actual_kin["foot_pos_w"] - planner_frame.foot_pos
                     foot_err_norm = torch.linalg.vector_norm(foot_err, dim=-1)

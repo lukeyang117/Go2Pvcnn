@@ -9,6 +9,7 @@ from extension.parallelism.config import ParallelismCfg
 from extension.parallelism.ik import ik_go2
 from extension.parallelism.kinematics import JOINT_LOWER, JOINT_UPPER, fk_go2
 from extension.parallelism.root import clamp_command, rollout_root
+from extension.parallelism.robot_backend import RobotBackend, get_robot_backend
 from extension.parallelism.swing import terrain_aware_swing_curve
 from extension.parallelism.terrain import expanded_obstacle_mask, query_expanded_obstacle, query_height_semantic_valid
 from extension.parallelism.types import (
@@ -19,16 +20,13 @@ from extension.parallelism.types import (
 )
 
 
-def _joint_limit_mask(joint_pos: Tensor) -> Tensor:
-    lower = torch.tensor(JOINT_LOWER, dtype=joint_pos.dtype, device=joint_pos.device).view(
-        *((1,) * (joint_pos.ndim - 1)),
-        3,
-    )
-    upper = torch.tensor(JOINT_UPPER, dtype=joint_pos.dtype, device=joint_pos.device).view(
-        *((1,) * (joint_pos.ndim - 1)),
-        3,
-    )
-    return ((joint_pos >= lower) & (joint_pos <= upper)).all(dim=-1)
+def _joint_limit_mask(
+    joint_pos: Tensor,
+    robot_backend: RobotBackend | None = None,
+    leg_indices: Tensor | None = None,
+) -> Tensor:
+    backend = robot_backend or get_robot_backend("go2")
+    return backend.joint_limit_mask(joint_pos, leg_indices)
 
 
 def _selected_take(values: Tensor, selected_index: Tensor) -> Tensor:
@@ -46,8 +44,9 @@ def _contact_safe_current_foot(
     root_rpy: Tensor,
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg,
+    robot_backend: RobotBackend | None = None,
 ) -> Tensor:
-    foot = _current_foot_pos(state, root_pos, root_rpy)
+    foot = _current_foot_pos(state, root_pos, root_rpy, robot_backend)
     query = query_height_semantic_valid(terrain, foot[..., :2])
     safe_z = query.height + float(cfg.foot_contact_offset_m)
     z = torch.where(query.valid, torch.maximum(foot[..., 2], safe_z), foot[..., 2])
@@ -61,10 +60,11 @@ def _candidate_targets(
     candidate_w: Tensor,
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg,
+    robot_backend: RobotBackend | None = None,
 ) -> Tensor:
     batch, leg_count, candidate_count, _ = candidate_w.shape
     joint = torch.as_tensor(state.joint_pos, dtype=root_pos.dtype, device=root_pos.device)
-    foot0 = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg)
+    foot0 = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg, robot_backend)
     base = foot0[:, None, None, :, :].expand(batch, leg_count, candidate_count, leg_count, 3)
     active_leg = torch.eye(leg_count, dtype=torch.bool, device=root_pos.device).view(1, leg_count, 1, leg_count, 1)
     return torch.where(active_leg, candidate_w[..., None, :], base)
@@ -84,8 +84,10 @@ def _collision_mask(
     terrain: ParallelismTerrain,
     geometry,
     cfg: ParallelismCfg,
+    robot_backend: RobotBackend | None = None,
 ) -> tuple[Tensor, Tensor]:
-    return official_collision_mask(terrain, geometry, cfg)
+    backend = robot_backend or get_robot_backend("go2")
+    return backend.collision_mask(terrain, geometry, cfg)
 
 
 def _contact_tolerant_indices(cfg: ParallelismCfg, *, device: torch.device) -> Tensor:
@@ -110,10 +112,12 @@ def _swing_collision_mask(
     candidates,
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg,
+    robot_backend: RobotBackend | None = None,
 ) -> tuple[Tensor, Tensor]:
+    backend = robot_backend or get_robot_backend("go2")
     batch, leg_count, candidate_count, _ = candidates.candidate_w.shape
     half_cycle = int(cfg.half_cycle)
-    current_foot = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg)
+    current_foot = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg, backend)
     swing_ok = torch.ones(batch, leg_count, candidate_count, dtype=torch.bool, device=root_pos.device)
     swing_bits = torch.zeros(
         batch,
@@ -148,9 +152,9 @@ def _swing_collision_mask(
         foot_targets[..., leg_idx, :] = active_path
         root_eval_pos = root_phase_pos[:, None].expand(batch, candidate_count, eval_count, 3)
         root_eval_rpy = root_phase_rpy[:, None].expand(batch, candidate_count, eval_count, 3)
-        joint_candidate, reachable = ik_go2(root_eval_pos, root_eval_rpy, foot_targets)
+        joint_candidate, reachable = backend.ik(root_eval_pos, root_eval_rpy, foot_targets)
         flat_count = batch * candidate_count * eval_count
-        geometry = fk_go2(
+        geometry = backend.fk(
             root_eval_pos.reshape(flat_count, 3),
             root_eval_rpy.reshape(flat_count, 3),
             joint_candidate.reshape(flat_count, 12),
@@ -168,6 +172,7 @@ def _swing_collision_mask(
 
         geometry = type(geometry)(
             hip_pos_w=_expand_candidate_leg(geometry.hip_pos_w, 3),
+            hip_rot_w=_expand_candidate_leg(geometry.hip_rot_w, 3, 3),
             foot_pos_w=_expand_candidate_leg(geometry.foot_pos_w, 3),
             knee_pos_w=_expand_candidate_leg(geometry.knee_pos_w, 3),
             calf_samples_w=geometry.calf_samples_w.reshape(batch, candidate_count * eval_count, 4, sample_count, 3)
@@ -182,7 +187,7 @@ def _swing_collision_mask(
             calf_rot_w=_expand_candidate_leg(geometry.calf_rot_w, 3, 3),
             foot_rot_w=_expand_candidate_leg(geometry.foot_rot_w, 3, 3),
         )
-        collision_ok, collision_bits = _collision_mask(terrain, geometry, cfg)
+        collision_ok, collision_bits = _collision_mask(terrain, geometry, cfg, backend)
         active_collision_bits = collision_bits[:, leg_idx].reshape(
             batch,
             candidate_count,
@@ -204,13 +209,19 @@ def _tracking_score(candidates, command: Tensor, cfg: ParallelismCfg) -> Tensor:
     return displacement_error.square().sum(dim=-1)
 
 
-def _current_foot_pos(state: ParallelismState, root_pos: Tensor, root_rpy: Tensor) -> Tensor:
+def _current_foot_pos(
+    state: ParallelismState,
+    root_pos: Tensor,
+    root_rpy: Tensor,
+    robot_backend: RobotBackend | None = None,
+) -> Tensor:
     root = torch.as_tensor(root_pos)
     if state.foot_pos_w is not None:
         return torch.as_tensor(state.foot_pos_w, dtype=root.dtype, device=root.device)
     joint = torch.as_tensor(state.joint_pos, dtype=root.dtype, device=root.device)
     rpy = torch.as_tensor(root_rpy, dtype=root.dtype, device=root.device)
-    return fk_go2(root, rpy, joint).foot_pos_w
+    backend = robot_backend or get_robot_backend("go2")
+    return backend.fk(root, rpy, joint).foot_pos_w
 
 
 def _semantic_ok(semantic: Tensor, cfg: ParallelismCfg) -> Tensor:
@@ -229,9 +240,10 @@ def _assemble_foot_targets(
     selected_foothold_w: Tensor,
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg,
+    robot_backend: RobotBackend | None = None,
 ) -> Tensor:
     batch = root_pos.shape[0]
-    foot0 = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg)
+    foot0 = _contact_safe_current_foot(state, root_pos[:, 0], root_rpy[:, 0], terrain, cfg, robot_backend)
     first = foot0[:, None].expand(-1, int(cfg.half_cycle), -1, -1).clone()
     second = first.clone()
     first_swing = terrain_aware_swing_curve(
@@ -269,8 +281,10 @@ def plan_trajectory(
     terrain: ParallelismTerrain,
     cfg: ParallelismCfg | None = None,
     terrain_following_mask: Tensor | None = None,
+    robot_backend: RobotBackend | None = None,
 ) -> ParallelismTrajectory:
-    cfg = cfg or ParallelismCfg()
+    backend = robot_backend or get_robot_backend("go2")
+    cfg = cfg or backend.cfg
     command = clamp_command(command_body, cfg)
     root = rollout_root(state, command, terrain, cfg, terrain_following_mask=terrain_following_mask)
     candidates = build_candidates(root, state, command, terrain, cfg)
@@ -286,9 +300,10 @@ def plan_trajectory(
         candidates.candidate_w,
         terrain,
         cfg,
+        backend,
     )
-    joint_candidate, reachable = ik_go2(root_eval_pos, root_eval_rpy, target)
-    geometry = fk_go2(
+    joint_candidate, reachable = backend.ik(root_eval_pos, root_eval_rpy, target)
+    geometry = backend.fk(
         root_eval_pos.reshape(batch * leg_count * candidate_count, 3),
         root_eval_rpy.reshape(batch * leg_count * candidate_count, 3),
         joint_candidate.reshape(batch * leg_count * candidate_count, 12),
@@ -296,6 +311,7 @@ def plan_trajectory(
     sample_count = int(geometry.calf_samples_w.shape[-2])
     geometry = type(geometry)(
         hip_pos_w=geometry.hip_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
+        hip_rot_w=geometry.hip_rot_w.reshape(batch, leg_count, candidate_count, 4, 3, 3),
         foot_pos_w=geometry.foot_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
         knee_pos_w=geometry.knee_pos_w.reshape(batch, leg_count, candidate_count, 4, 3),
         calf_samples_w=geometry.calf_samples_w.reshape(batch, leg_count, candidate_count, 4, sample_count, 3),
@@ -312,17 +328,18 @@ def plan_trajectory(
     fk_touchdown = geometry.foot_pos_w.gather(3, leg_select).squeeze(3)
 
     valid_map_ok = candidates.candidate_valid_map
-    joint_ok = active_reachable & _joint_limit_mask(active_joint)
+    active_leg_indices = torch.arange(leg_count, device=active_joint.device).view(1, leg_count, 1).expand(batch, leg_count, candidate_count)
+    joint_ok = active_reachable & _joint_limit_mask(active_joint, backend, active_leg_indices)
     landing_query = query_height_semantic_valid(terrain, fk_touchdown[..., :2].reshape(batch, leg_count * candidate_count, 2))
     landing_height = landing_query.height.reshape(batch, leg_count, candidate_count)
     landing_target_height = landing_height + float(cfg.foot_contact_offset_m)
     landing_ok = landing_query.valid.reshape(batch, leg_count, candidate_count) & (
         (fk_touchdown[..., 2] - landing_target_height).abs() <= float(cfg.landing_tolerance_m)
     )
-    _touchdown_collision_ok, touchdown_collision_bits = _collision_mask(terrain, geometry, cfg)
+    _touchdown_collision_ok, touchdown_collision_bits = _collision_mask(terrain, geometry, cfg, backend)
     touchdown_collision_bits = _suppress_contact_tolerant(touchdown_collision_bits, cfg)
     touchdown_collision_ok = ~touchdown_collision_bits.any(dim=-1)
-    swing_collision_ok, swing_collision_bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg)
+    swing_collision_ok, swing_collision_bits = _swing_collision_mask(state, root.root_pos_w, root.root_rpy_w, candidates, terrain, cfg, backend)
     collision_ok = touchdown_collision_ok & swing_collision_ok
     collision_bits = touchdown_collision_bits | swing_collision_bits
     semantic_obstacle = expanded_obstacle_mask(
@@ -368,10 +385,10 @@ def plan_trajectory(
     per_leg_has_valid = candidate_valid.any(dim=-1)
     selected_valid = per_leg_has_valid.all(dim=-1)
 
-    foot_targets = _assemble_foot_targets(state, root.root_pos_w, root.root_rpy_w, selected_foothold, terrain, cfg)
-    joint_traj, _reachable = ik_go2(root.root_pos_w, root.root_rpy_w, foot_targets)
+    foot_targets = _assemble_foot_targets(state, root.root_pos_w, root.root_rpy_w, selected_foothold, terrain, cfg, backend)
+    joint_traj, _reachable = backend.ik(root.root_pos_w, root.root_rpy_w, foot_targets)
     joint_pos = joint_traj.reshape(batch, int(cfg.horizon), 12)
-    fk = fk_go2(
+    fk = backend.fk(
         root.root_pos_w.reshape(batch * int(cfg.horizon), 3),
         root.root_rpy_w.reshape(batch * int(cfg.horizon), 3),
         joint_pos.reshape(batch * int(cfg.horizon), 12),
@@ -380,7 +397,7 @@ def plan_trajectory(
     current_root_pos = torch.as_tensor(state.root_pos_w, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
     current_root_rpy = torch.as_tensor(state.root_rpy_w, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
     current_joint = torch.as_tensor(state.joint_pos, dtype=root.root_pos_w.dtype, device=root.root_pos_w.device)
-    current_foot = _current_foot_pos(state, current_root_pos, current_root_rpy)
+    current_foot = _current_foot_pos(state, current_root_pos, current_root_rpy, backend)
     output_planned = selected_valid | (torch.full_like(selected_valid, True) if not bool(cfg.standstill_fallback_enabled) else torch.zeros_like(selected_valid))
     env_mask_3 = output_planned[:, None, None]
     root_pos_out = torch.where(env_mask_3, root.root_pos_w, current_root_pos[:, None].expand(-1, int(cfg.horizon), -1))

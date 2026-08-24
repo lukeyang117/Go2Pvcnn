@@ -23,6 +23,7 @@ JOINT_UPPER = (1.0472, 2.966, -0.837)
 @dataclass(frozen=True)
 class Go2ParallelGeometry:
     hip_pos_w: Tensor
+    hip_rot_w: Tensor
     foot_pos_w: Tensor
     knee_pos_w: Tensor
     calf_samples_w: Tensor
@@ -144,6 +145,7 @@ def fk_go2(root_pos_w: Tensor, root_rpy_w: Tensor, joint_pos: Tensor, *, capsule
     thigh_samples = hip_world.unsqueeze(-2) * (1.0 - sample_alpha) + knee_world.unsqueeze(-2) * sample_alpha
     return Go2ParallelGeometry(
         hip_pos_w=hip_world,
+        hip_rot_w=torch.einsum("...ij,...ljk->...lik", rotation, torch.eye(3, dtype=root_pos.dtype, device=root_pos.device).expand(*hip_world.shape[:-1], 3, 3)),
         foot_pos_w=foot_world,
         knee_pos_w=knee_world,
         calf_samples_w=calf_samples,

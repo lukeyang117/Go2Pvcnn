@@ -78,6 +78,7 @@ class ParallelismCfg:
     cylinder_angles: int = 4
     sphere_surface_points: int = 6
     contact_tolerant_collision_shape_names: tuple[str, ...] = ("calf_lower_cylinder", "foot_sphere")
+    contact_tolerant_collision_point_indices: tuple[tuple[str, tuple[int, ...]], ...] = ()
 
     @property
     def flat_root_z_target_m(self) -> float:

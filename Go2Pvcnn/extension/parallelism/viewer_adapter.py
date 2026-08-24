@@ -4,21 +4,21 @@ from types import SimpleNamespace
 
 import torch
 
-from extension.parallelism.collision import build_official_surface_points_l
-from extension.parallelism.config import ParallelismCfg
-from extension.parallelism.kinematics import fk_go2
 from extension.parallelism.types import ParallelismTrajectory
 from extension.convention import euler_to_quat_batch
 
 
-def _surface_points_for_viewer(trajectory: ParallelismTrajectory) -> tuple[torch.Tensor, torch.Tensor]:
-    cfg = ParallelismCfg()
+def _surface_points_for_viewer(trajectory: ParallelismTrajectory, robot_backend=None) -> tuple[torch.Tensor, torch.Tensor]:
+    from extension.parallelism.robot_backend import get_robot_backend
+
+    backend = robot_backend or get_robot_backend("go2")
+    cfg = backend.cfg
     root_pos = trajectory.root_pos_w[:, 0]
     root_rpy = trajectory.root_rpy_w[:, 0]
     joint = trajectory.joint_pos[:, 0]
-    geometry = fk_go2(root_pos, root_rpy, joint)
-    specs = tuple(cfg.official_collision_shapes)
-    points_l, mask = build_official_surface_points_l(
+    geometry = backend.fk(root_pos, root_rpy, joint)
+    specs = tuple(backend.collision_shapes)
+    points_l, mask = backend.surface_points_builder(
         specs,
         cfg,
         dtype=root_pos.dtype,
@@ -30,6 +30,9 @@ def _surface_points_for_viewer(trajectory: ParallelismTrajectory) -> tuple[torch
         if spec.link_type == "thigh":
             link_pos.append(geometry.thigh_pos_w)
             link_rot.append(geometry.thigh_rot_w)
+        elif spec.link_type == "hip":
+            link_pos.append(geometry.hip_pos_w)
+            link_rot.append(geometry.hip_rot_w)
         elif spec.link_type == "calf":
             link_pos.append(geometry.calf_pos_w)
             link_rot.append(geometry.calf_rot_w)
@@ -47,13 +50,13 @@ def _surface_points_for_viewer(trajectory: ParallelismTrajectory) -> tuple[torch
     return points_w.reshape(-1, 3), centers_w
 
 
-def parallelism_trajectory_to_viewer_result(trajectory: ParallelismTrajectory):
+def parallelism_trajectory_to_viewer_result(trajectory: ParallelismTrajectory, robot_backend=None):
     root_quat_w = euler_to_quat_batch(
         trajectory.root_rpy_w[..., 0],
         trajectory.root_rpy_w[..., 1],
         trajectory.root_rpy_w[..., 2],
     )
-    surface_points_w, collision_body_centers_w = _surface_points_for_viewer(trajectory)
+    surface_points_w, collision_body_centers_w = _surface_points_for_viewer(trajectory, robot_backend)
     return SimpleNamespace(
         num_frames=int(trajectory.root_pos_w.shape[1]),
         root_pos_w=trajectory.root_pos_w,

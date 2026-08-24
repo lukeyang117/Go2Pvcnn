@@ -7,6 +7,7 @@ from extension.parallelism.types import (
     ParallelismTrajectory,
     TerrainQueryResult,
 )
+from extension.parallelism.robot_backend import RobotBackend, get_robot_backend
 
 __all__ = [
     "ParallelismCfg",
@@ -17,4 +18,6 @@ __all__ = [
     "ParallelismTerrain",
     "ParallelismTrajectory",
     "TerrainQueryResult",
+    "RobotBackend",
+    "get_robot_backend",
 ]

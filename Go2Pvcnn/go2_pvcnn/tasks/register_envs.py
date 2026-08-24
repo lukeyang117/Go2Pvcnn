@@ -60,3 +60,19 @@ try:
     import tracking.register_envs  # noqa: F401
 except Exception as exc:  # noqa: BLE001 - tracking registration is optional for static imports.
     print(f"[go2_pvcnn] Tracking env registration skipped: {exc}")
+
+try:
+    from tracking.m1_parallelism_viewer_env_cfg import M1ParallelismViewerEnvCfg
+
+    gym.register(
+        id="Isaac-M1-Parallelism-Viewer-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        kwargs={
+            "env_cfg_entry_point": M1ParallelismViewerEnvCfg,
+            "rsl_rl_cfg_entry_point": None,
+        },
+        disable_env_checker=True,
+    )
+    print("[go2_pvcnn]   - Isaac-M1-Parallelism-Viewer-v0")
+except Exception as exc:  # noqa: BLE001 - M1 registration is optional outside Isaac Sim.
+    print(f"[go2_pvcnn] M1 viewer registration skipped: {exc}")

@@ -230,6 +230,33 @@ agent_cfg = OnPolicyRunnerCfg(
 
 训练日志保存在 `logs/rsl_rl/go2_pvcnn/` 目录下。
 
+## Parallelism Viewer
+
+默认启动 Go2 Parallelism viewer：
+
+```bash
+./isaaclab.sh -p Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --planner-backend parallelism
+```
+
+启动 M1（ZJ_V3）viewer：
+
+```bash
+./isaaclab.sh -p Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --robot m1 --planner-backend parallelism --terrain-col 1
+```
+
+有限周期 headless smoke：
+
+```bash
+./isaaclab.sh -p Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --robot m1 --planner-backend parallelism --terrain-col 1 \
+  --scripted-command "0.1 0 0" --scripted-command-cycles 1 \
+  --max-plan-cycles 1 --headless
+```
+
+M1 Parallelism 只规划 FBL/FAR/RBL/RAR 的 ABAD、HIP、KNEE 共 12 个关节。四个 `FOOT_JOINT` 在 viewer 回放时保持当前值，不进入规划、限位或碰撞结果。
+
 使用TensorBoard查看训练曲线：
 
 ```bash
