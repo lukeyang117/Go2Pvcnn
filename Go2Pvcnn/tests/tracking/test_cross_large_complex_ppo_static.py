@@ -56,6 +56,27 @@ def test_pure_ppo_experiment_is_registered_as_normal_manager_env():
     assert '"cross_large_complex_ppo"' in train
 
 
+def test_pure_ppo_play_entrypoint_has_no_parallelism_path():
+    play = (ROOT / "scripts/play.py").read_text()
+
+    assert '"cross_large_complex_ppo"' in play
+    assert "CrossLargeComplexPpoEnvCfg_PLAY" in play
+    assert '"Isaac-Go2-Cross-Large-Complex-PPO-v0"' in play
+
+    parallelism_block = play.split("is_parallelism_play =", 1)[1].split("parallelism_panel_state", 1)[0]
+    assert '"cross_large_complex_ppo"' not in parallelism_block
+
+
+def test_pure_ppo_launcher_is_headless_and_planner_free():
+    source = (ROOT / "scripts/train_cross_large_complex_ppo_headless.sh").read_text()
+
+    assert "--experiment cross_large_complex_ppo" in source
+    assert "--headless" in source
+    assert "--max_iterations" in source
+    assert "--teacher_checkpoint" not in source
+    assert "planner" not in source.lower()
+
+
 def test_pure_ppo_runner_has_no_distillation_fields():
     from agent.train_cfg import get_train_cfg
 
