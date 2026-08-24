@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M1 Parallelism 机器人后端设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f5f6;
+      --surface: #ffffff;
+      --ink: #18201d;
+      --muted: #5f6c66;
+      --line: #d7ddda;
+      --green: #19764a;
+      --green-soft: #e7f3ec;
+      --blue: #2563a8;
+      --blue-soft: #eaf1f9;
+      --amber: #a35b00;
+      --amber-soft: #fff2dc;
+      --red: #a63b32;
+      --code: #202825;
+      --code-ink: #edf4f0;
+      --radius: 6px;
+      --content: 1180px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .top-band {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .top-inner {
+      max-width: var(--content);
+      margin: 0 auto;
+      padding: 28px 24px 24px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin-top: 0;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin-bottom: 8px;
+      font-size: clamp(26px, 4vw, 40px);
+      line-height: 1.25;
+      font-weight: 500;
+    }
+
+    h2 {
+      margin-bottom: 18px;
+      font-size: 23px;
+      line-height: 1.35;
+      font-weight: 500;
+    }
+
+    h3 {
+      margin-bottom: 10px;
+      font-size: 17px;
+      line-height: 1.45;
+      font-weight: 500;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .meta strong {
+      color: var(--ink);
+      font-weight: 500;
+    }
+
+    .page {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 30px;
+      max-width: var(--content);
+      margin: 0 auto;
+      padding: 28px 24px 72px;
+    }
+
+    nav {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      border-left: 2px solid var(--line);
+      padding-left: 14px;
+    }
+
+    nav a {
+      display: block;
+      padding: 5px 0;
+      color: var(--muted);
+      text-decoration: none;
+      line-height: 1.35;
+    }
+
+    nav a:hover {
+      color: var(--ink);
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+      scroll-margin-top: 18px;
+    }
+
+    section:first-child {
+      padding-top: 0;
+    }
+
+    .summary-grid,
+    .two-col,
+    .three-col {
+      display: grid;
+      gap: 14px;
+    }
+
+    .summary-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .two-col {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .three-col {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .fact,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .fact {
+      min-height: 112px;
+      padding: 16px;
+    }
+
+    .fact .value {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--green);
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 500;
+    }
+
+    .fact .label {
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel.green {
+      border-left: 4px solid var(--green);
+    }
+
+    .panel.blue {
+      border-left: 4px solid var(--blue);
+    }
+
+    .panel.amber {
+      border-left: 4px solid var(--amber);
+    }
+
+    .panel p:last-child,
+    .panel ul:last-child {
+      margin-bottom: 0;
+    }
+
+    ul,
+    ol {
+      margin: 0 0 14px;
+      padding-left: 22px;
+    }
+
+    li + li {
+      margin-top: 5px;
+    }
+
+    .decision-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--line);
+    }
+
+    .decision-list div {
+      min-height: 72px;
+      padding: 13px 15px;
+      background: var(--surface);
+    }
+
+    .decision-list strong {
+      display: block;
+      margin-bottom: 3px;
+      font-weight: 500;
+    }
+
+    .diagram {
+      overflow: hidden;
+      margin: 16px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .diagram svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .diagram text {
+      font-family: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      align-items: stretch;
+      gap: 8px;
+      margin: 16px 0;
+    }
+
+    .flow .node {
+      display: grid;
+      place-items: center;
+      min-height: 76px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      text-align: center;
+      line-height: 1.35;
+    }
+
+    .flow .arrow {
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 20px;
+    }
+
+    .flow .node.accent {
+      border-color: #9fcbb4;
+      background: var(--green-soft);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 14px 0 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    table {
+      width: 100%;
+      min-width: 680px;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #edf1ef;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .code-block {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 15px 17px;
+      border-radius: var(--radius);
+      background: var(--code);
+      color: var(--code-ink);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+
+    .note,
+    .warning {
+      margin: 16px 0;
+      padding: 13px 15px;
+      border-left: 4px solid;
+      background: var(--surface);
+    }
+
+    .note {
+      border-color: var(--blue);
+    }
+
+    .warning {
+      border-color: var(--amber);
+    }
+
+    .note strong,
+    .warning strong {
+      font-weight: 500;
+    }
+
+    .point-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .key {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    .dot.support {
+      background: var(--amber);
+    }
+
+    .file-tree {
+      overflow-x: auto;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      white-space: pre;
+    }
+
+    .status {
+      color: var(--green);
+      font-weight: 500;
+    }
+
+    footer {
+      padding: 22px 24px;
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+    }
+
+    @media (max-width: 920px) {
+      .page {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        position: static;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 2px 12px;
+        border-left: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 0 0 18px;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .three-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .top-inner,
+      .page {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      nav,
+      .summary-grid,
+      .two-col,
+      .decision-list {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .flow .arrow {
+        min-height: 24px;
+        transform: rotate(90deg);
+      }
+
+      .fact {
+        min-height: 0;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      nav {
+        display: none;
+      }
+
+      .page {
+        display: block;
+        max-width: none;
+      }
+
+      section,
+      .panel,
+      .fact,
+      .diagram,
+      .table-wrap {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="top-band">
+    <div class="top-inner">
+      <h1>M1 Parallelism 机器人后端设计</h1>
+      <p class="subtitle">在保持 Go2 默认行为不变的前提下，为轮式机器狗 M1 增加独立运动学、关节映射、地形策略和腿部碰撞几何。</p>
+      <div class="meta">
+        <span><strong>日期</strong> 2026-08-24</span>
+        <span><strong>状态</strong> 设计已确认，待实现计划</span>
+        <span><strong>目标分支</strong> m1</span>
+        <span><strong>机器人参数</strong> <code>--robot {go2,m1}</code></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="page">
+    <nav aria-label="设计章节">
+      <a href="#summary">设计摘要</a>
+      <a href="#scope">边界与决策</a>
+      <a href="#architecture">总体架构</a>
+      <a href="#usd">USD 几何</a>
+      <a href="#kinematics">FK / IK</a>
+      <a href="#collision">碰撞近似</a>
+      <a href="#terrain">地形策略</a>
+      <a href="#dataflow">数据流</a>
+      <a href="#files">文件结构</a>
+      <a href="#validation">验证策略</a>
+    </nav>
+
+    <main>
+      <section id="summary">
+        <h2>设计摘要</h2>
+        <div class="summary-grid">
+          <div class="fact">
+            <span class="value">12 DOF</span>
+            <span class="label">Parallelism 只规划 ABAD、HIP、KNEE</span>
+          </div>
+          <div class="fact">
+            <span class="value">4 wheels</span>
+            <span class="label">轮轴关节完全不进入规划参考</span>
+          </div>
+          <div class="fact">
+            <span class="value">16 shapes</span>
+            <span class="label">四腿与轮子碰撞体，不检测 BASE</span>
+          </div>
+          <div class="fact">
+            <span class="value">0.6358 m</span>
+            <span class="label">M1 零位姿轮底贴地 Root 高度</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="scope">
+        <h2>边界与确认决策</h2>
+        <div class="decision-list">
+          <div><strong>统一 Planner</strong>Go2 与 M1 共用候选、步态、地形查询和轨迹结构。</div>
+          <div><strong>后端隔离</strong>关节映射、FK、IK、限位与碰撞几何由 robot backend 提供。</div>
+          <div><strong>Go2 默认兼容</strong>未传 <code>--robot</code>、直接构造 <code>ParallelismCfg()</code> 都继续表示 Go2。</div>
+          <div><strong>轮轴不受关注</strong>M1 四个 <code>FOOT_JOINT</code> 不输入、不输出，也不参与限位检查。</div>
+          <div><strong>保持对角相位</strong>继续使用当前 24 帧与 diagonal trot 相位，不重新设计 gait。</div>
+          <div><strong>平地滚动参考</strong><code>flat</code> 垂向 apex 为零；非平地或小障碍物才抬腿。</div>
+          <div><strong>大障碍绕行</strong>沿用当前横向绕行，不尝试抬腿跨越大障碍。</div>
+          <div><strong>不检测 BASE</strong>与 Go2 当前边界一致，Parallelism 只做腿部和脚端几何碰撞。</div>
+        </div>
+        <div class="note">
+          <strong>范围外：</strong>RL policy、奖励、动作空间、轮子转速参考、self-collision 和 M1 Isaac Lab 资产配置的完整实现。
+        </div>
+      </section>
+
+      <section id="architecture">
+        <h2>总体架构</h2>
+        <div class="flow" aria-label="Parallelism 后端数据流">
+          <div class="node">CLI / env cfg<br><code>robot</code></div>
+          <div class="arrow">→</div>
+          <div class="node">Backend Registry</div>
+          <div class="arrow">→</div>
+          <div class="node accent">Go2 / M1 Backend</div>
+          <div class="arrow">→</div>
+          <div class="node">通用 Planner</div>
+        </div>
+        <div class="two-col">
+          <div class="panel green">
+            <h3>通用层继续复用</h3>
+            <ul>
+              <li>Root rollout 与命令限幅</li>
+              <li>候选落点和语义障碍查询</li>
+              <li>对角步态与 terrain-aware swing</li>
+              <li>评分、fallback、诊断和轨迹结构</li>
+            </ul>
+          </div>
+          <div class="panel blue">
+            <h3>机器人后端负责</h3>
+            <ul>
+              <li>资产 DOF 到 12 DOF planner 顺序</li>
+              <li>support body 名称与轮心位置</li>
+              <li>FK、IK、关节限位和默认站姿</li>
+              <li>碰撞 primitive、采样点和接触容忍</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="usd">
+        <h2>M1 USD 几何提取</h2>
+        <p>参数来自 <code>m1/ZJ_V3_URDF_V1_0/ZJ_V3_URDF_V1_0.usd</code>。USD 是 composed binary crate，运行时不读取约 116 MB 的 Mesh；所需值离线提取后写入 M1 静态配置。</p>
+
+        <h3>关节映射</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Planner 腿</th><th>M1 前缀</th><th>12 DOF 顺序</th><th>排除的轮轴</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>FL</td><td>FBL</td><td>FBL_ABAD, FBL_HIP, FBL_KNEE</td><td>FBL_FOOT_JOINT</td></tr>
+              <tr><td>FR</td><td>FAR</td><td>FAR_ABAD, FAR_HIP, FAR_KNEE</td><td>FAR_FOOT_JOINT</td></tr>
+              <tr><td>RL</td><td>RBL</td><td>RBL_ABAD, RBL_HIP, RBL_KNEE</td><td>RBL_FOOT_JOINT</td></tr>
+              <tr><td>RR</td><td>RAR</td><td>RAR_ABAD, RAR_HIP, RAR_KNEE</td><td>RAR_FOOT_JOINT</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>对称零位姿</h3>
+        <div class="diagram">
+          <svg viewBox="0 0 820 360" role="img" aria-label="M1 四轮心在 Root 局部坐标系中的对称位置">
+            <rect x="275" y="90" width="270" height="180" rx="6" fill="#e7f3ec" stroke="#19764a" stroke-width="2"/>
+            <line x1="410" y1="42" x2="410" y2="318" stroke="#aab5b0" stroke-width="1"/>
+            <line x1="120" y1="180" x2="700" y2="180" stroke="#aab5b0" stroke-width="1"/>
+            <line x1="410" y1="180" x2="560" y2="180" stroke="#2563a8" stroke-width="3"/>
+            <line x1="410" y1="180" x2="410" y2="70" stroke="#a35b00" stroke-width="3"/>
+            <polygon points="560,180 546,173 546,187" fill="#2563a8"/>
+            <polygon points="410,70 403,84 417,84" fill="#a35b00"/>
+            <g fill="#2563a8">
+              <circle cx="610" cy="70" r="13"/>
+              <circle cx="610" cy="290" r="13"/>
+              <circle cx="210" cy="70" r="13"/>
+              <circle cx="210" cy="290" r="13"/>
+            </g>
+            <g fill="#18201d" font-size="15">
+              <text x="626" y="74">FL / FBL (+0.3295, +0.2074)</text>
+              <text x="626" y="294">FR / FAR (+0.3295, -0.2074)</text>
+              <text x="24" y="74">RL / RBL (-0.3295, +0.2074)</text>
+              <text x="24" y="294">RR / RAR (-0.3295, -0.2074)</text>
+              <text x="568" y="173" fill="#2563a8">+X 前</text>
+              <text x="424" y="62" fill="#a35b00">+Y 左</text>
+              <text x="382" y="205">Root</text>
+              <text x="336" y="336">轮心轴距 0.659 m · 左右轮距 0.4148 m</text>
+            </g>
+          </svg>
+        </div>
+        <div class="warning">
+          <strong>对称化规则：</strong>忽略 FBL link frame 中约 <code>0.01°</code> 的 X 轴导入误差；前后仅改变 X 符号，左右仅改变 Y 符号，所有同类 link 使用相同尺寸。
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>连接</th><th>对称 localPos0</th><th>关节轴</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>BASE → ABAD</td><td><code>x=±0.272, y=±0.065, z=0.0002</code></td><td>X</td></tr>
+              <tr><td>ABAD → HIP</td><td><code>x=±0.0575, y=±0.039, z=0</code></td><td>Y</td></tr>
+              <tr><td>HIP → KNEE</td><td><code>x=0, y=±0.0442, z=-0.26</code></td><td>Y</td></tr>
+              <tr><td>KNEE → 轮心</td><td><code>x=0, y=±0.0592, z=-0.28</code></td><td>Y，轮轴不进入 planner</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="two-col">
+          <div class="panel green">
+            <h3>默认站姿</h3>
+            <p>USD 中 16 个关节的 <code>targetPosition</code> 均为 0°。M1 的 12 DOF <code>neutral_joint_pos</code> 定义为全零。</p>
+          </div>
+          <div class="panel amber">
+            <h3>Root 高度</h3>
+            <p>Root 到轮心为 <code>0.5398 m</code>，轮半径为 <code>0.095958 m</code>，平地目标高度取 <code>0.6358 m</code>。</p>
+          </div>
+        </div>
+
+        <h3>关节限位</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>关节</th><th>左腿</th><th>右腿</th><th>处理方式</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ABAD</td><td>[-0.523, 0.697] rad</td><td>[-0.697, 0.523] rad</td><td>保留左右不对称限位</td></tr>
+              <tr><td>HIP</td><td>[-2.443, 2.443] rad</td><td>[-2.443, 2.443] rad</td><td>planner 检查</td></tr>
+              <tr><td>KNEE</td><td>[-2.801, 2.801] rad</td><td>[-2.801, 2.801] rad</td><td>planner 检查</td></tr>
+              <tr><td>FOOT wheel</td><td>忽略</td><td>忽略</td><td>不进入 Parallelism</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="kinematics">
+        <h2>M1 FK / IK</h2>
+        <div class="code-block">Root transform
+  → BASE-to-ABAD translation
+  → RotX(ABAD)
+  → ABAD-to-HIP translation
+  → RotY(HIP)
+  → HIP-to-KNEE translation
+  → RotY(KNEE)
+  → KNEE-to-wheel-center translation</div>
+        <div class="two-col">
+          <div class="panel green">
+            <h3>FK 输出</h3>
+            <ul>
+              <li>四个轮轴中心世界位置</li>
+              <li>ABAD、HIP、KNEE 和 wheel link frame</li>
+              <li>碰撞 primitive 的世界坐标变换</li>
+              <li>不读取或依赖轮轴角度</li>
+            </ul>
+          </div>
+          <div class="panel blue">
+            <h3>IK 判定</h3>
+            <ul>
+              <li>输入 Root pose 与四个轮心目标</li>
+              <li>返回 12 DOF 和 reachable mask</li>
+              <li>不可达、越限、非有限值均拒绝候选</li>
+              <li>同主评分候选优先接近零位姿</li>
+            </ul>
+          </div>
+        </div>
+        <p class="note"><strong>Go2 隔离要求：</strong><code>fk_go2()</code>、<code>ik_go2()</code> 和现有 Go2 数值保持原样，由 Go2 backend 包装调用，不把 M1 分支写入公式内部。</p>
+      </section>
+
+      <section id="collision">
+        <h2>碰撞近似与碰撞点</h2>
+        <p>M1 沿用 Go2 的“静态 primitive → 固定表面点 → FK 变换 → terrain height 查询”结构。不同点在于 M1 的 box 和 wheel 使用更密的固定采样，且完全不建立 BASE shape。</p>
+
+        <h3>16 个碰撞体</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Link</th><th>数量</th><th>Primitive</th><th>局部中心</th><th>尺寸</th><th>点数/个</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ABAD</td><td>4</td><td>box</td><td><code>(±0.044875, ±0.003375, 0)</code></td><td><code>(0.08975, 0.07125, 0.084187)</code></td><td>26</td></tr>
+              <tr><td>HIP</td><td>4</td><td>box</td><td><code>(0, ±0.056, -0.12875)</code></td><td><code>(0.096987, 0.1246, 0.3545)</code></td><td>26</td></tr>
+              <tr><td>KNEE</td><td>4</td><td>box</td><td><code>(0, ±0.0323, -0.1375)</code></td><td><code>(0.09999, 0.0966, 0.375)</code></td><td>26</td></tr>
+              <tr><td>wheel</td><td>4</td><td>Y 轴 cylinder</td><td><code>(0, ±0.0073, 0)</code></td><td><code>r=0.09596, width=0.04650</code></td><td>38</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="summary-grid">
+          <div class="fact"><span class="value">116</span><span class="label">每条腿碰撞点</span></div>
+          <div class="fact"><span class="value">464</span><span class="label">四条腿静态总点数</span></div>
+          <div class="fact"><span class="value">0</span><span class="label">BASE 碰撞点</span></div>
+          <div class="fact"><span class="value">3 mm</span><span class="label">沿用 Go2 collision margin</span></div>
+        </div>
+
+        <h3>Box：26 个边界格点</h3>
+        <div class="two-col">
+          <div>
+            <div class="code-block">p = center + (i·hx, j·hy, k·hz)
+
+i, j, k ∈ {-1, 0, 1}
+排除 (0, 0, 0)
+
+8 个角点
+12 个边中心
+6 个面中心
+合计 26 点</div>
+          </div>
+          <div class="diagram">
+            <svg viewBox="0 0 420 300" role="img" aria-label="Box 的 26 个表面采样点示意">
+              <g fill="none" stroke="#7e8b85" stroke-width="2">
+                <rect x="92" y="78" width="190" height="140"/>
+                <rect x="140" y="42" width="190" height="140"/>
+                <line x1="92" y1="78" x2="140" y2="42"/>
+                <line x1="282" y1="78" x2="330" y2="42"/>
+                <line x1="282" y1="218" x2="330" y2="182"/>
+                <line x1="92" y1="218" x2="140" y2="182"/>
+              </g>
+              <g fill="#2563a8">
+                <circle cx="92" cy="78" r="5"/><circle cx="187" cy="78" r="5"/><circle cx="282" cy="78" r="5"/>
+                <circle cx="92" cy="148" r="5"/><circle cx="282" cy="148" r="5"/>
+                <circle cx="92" cy="218" r="5"/><circle cx="187" cy="218" r="5"/><circle cx="282" cy="218" r="5"/>
+                <circle cx="140" cy="42" r="5"/><circle cx="235" cy="42" r="5"/><circle cx="330" cy="42" r="5"/>
+                <circle cx="140" cy="112" r="5"/><circle cx="330" cy="112" r="5"/>
+                <circle cx="140" cy="182" r="5"/><circle cx="235" cy="182" r="5"/><circle cx="330" cy="182" r="5"/>
+                <circle cx="116" cy="60" r="5"/><circle cx="306" cy="60" r="5"/>
+                <circle cx="116" cy="200" r="5"/><circle cx="306" cy="200" r="5"/>
+                <circle cx="116" cy="130" r="5"/><circle cx="306" cy="130" r="5"/>
+                <circle cx="211" cy="60" r="5"/><circle cx="211" cy="200" r="5"/>
+                <circle cx="187" cy="148" r="5"/><circle cx="235" cy="112" r="5"/>
+              </g>
+              <text x="86" y="266" fill="#18201d" font-size="15">角点 + 边中心 + 面中心，避免 6 点方案漏掉边角</text>
+            </svg>
+          </div>
+        </div>
+
+        <h3>Wheel：38 个圆柱表面点</h3>
+        <div class="two-col">
+          <div class="diagram">
+            <svg viewBox="0 0 420 320" role="img" aria-label="轮子圆柱采样与三个底部支撑容忍点">
+              <ellipse cx="210" cy="155" rx="126" ry="126" fill="#eaf1f9" stroke="#2563a8" stroke-width="2"/>
+              <g id="wheel-points" fill="#2563a8">
+                <circle cx="210" cy="29" r="5"/><circle cx="273" cy="46" r="5"/><circle cx="319" cy="92" r="5"/>
+                <circle cx="336" cy="155" r="5"/><circle cx="319" cy="218" r="5"/><circle cx="273" cy="264" r="5"/>
+                <circle cx="210" cy="281" r="7" fill="#a35b00"/><circle cx="147" cy="264" r="5"/><circle cx="101" cy="218" r="5"/>
+                <circle cx="84" cy="155" r="5"/><circle cx="101" cy="92" r="5"/><circle cx="147" cy="46" r="5"/>
+              </g>
+              <line x1="70" y1="292" x2="350" y2="292" stroke="#7e8b85" stroke-width="2"/>
+              <text x="154" y="314" fill="#18201d" font-size="14">θ=270° 为轮底支撑方向</text>
+              <text x="168" y="160" fill="#18201d" font-size="15">12 angles</text>
+            </svg>
+          </div>
+          <div>
+            <div class="code-block">y ∈ {-width/2, 0, +width/2}
+θ = 2πk/12, k = 0..11
+
+p = center + (r·cosθ, y, r·sinθ)
+
+3 layers × 12 angles = 36
+加两个端面中心 = 38 点</div>
+            <div class="point-legend">
+              <span class="key"><span class="dot"></span>正常碰撞点</span>
+              <span class="key"><span class="dot support"></span>轮底支撑方向</span>
+            </div>
+          </div>
+        </div>
+
+        <h3>轮底接触容忍</h3>
+        <p>只有圆周角 <code>θ=270°</code>、位于三层宽度上的三个轮底点可以容忍普通地形接触。必须同时满足：</p>
+        <div class="code-block">contact_state == True
+AND point_role == wheel_bottom_support
+AND semantic_id NOT IN {small_obstacle, large_obstacle}</div>
+        <p>摆动帧、轮子前后/侧面/顶部，以及任何命中语义障碍物的点都正常判碰撞。碰撞条件沿用：</p>
+        <div class="code-block">terrain_height >= point_world_z - collision_margin_m</div>
+
+        <div class="warning">
+          <strong>明确边界：</strong>不生成 BASE primitive，不输出 BASE collision bit，不做机器人 link 间 self-collision。大障碍物继续由现有横向绕行逻辑处理。
+        </div>
+      </section>
+
+      <section id="terrain">
+        <h2>Terrain Profile</h2>
+        <p>继续按 terrain generator 的 20 个 column 映射 family。M1 的摆动安全高度为：</p>
+        <div class="code-block">terrain_height + wheel_contact_offset_m + swing_extra_clearance_m</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Col</th><th>Family</th><th>Root Z</th><th>Root roll/pitch</th><th>Extra clearance</th><th>Min apex</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>0</td><td>flat_dense_small_obstacles</td><td>fixed 0.6358</td><td>level</td><td>0.030 m</td><td>0.060 m</td></tr>
+              <tr><td>1</td><td>flat</td><td>fixed 0.6358</td><td>level</td><td>0.000 m</td><td>0.000 m</td></tr>
+              <tr><td>2-3</td><td>random_rough</td><td>follow</td><td>rough_filtered</td><td>0.025 m</td><td>0.050 m</td></tr>
+              <tr><td>4-5</td><td>hf_pyramid_slope</td><td>follow</td><td>slope</td><td>0.015 m</td><td>0.040 m</td></tr>
+              <tr><td>6-7</td><td>hf_pyramid_slope_inv</td><td>follow</td><td>slope</td><td>0.015 m</td><td>0.040 m</td></tr>
+              <tr><td>8-11</td><td>boxes</td><td>follow</td><td>level</td><td>0.040 m</td><td>0.080 m</td></tr>
+              <tr><td>12-15</td><td>pyramid_stairs</td><td>follow</td><td>level</td><td>0.040 m</td><td>0.080 m</td></tr>
+              <tr><td>16-19</td><td>pyramid_stairs_inv</td><td>follow</td><td>level</td><td>0.040 m</td><td>0.080 m</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="two-col">
+          <div class="panel blue">
+            <h3>random_rough</h3>
+            <p>Root Z 跟随地形；RPY 使用低频过滤，smoothing 为 0.90，roll/pitch 上限均为 0.12 rad。</p>
+          </div>
+          <div class="panel amber">
+            <h3>boxes 与 stairs</h3>
+            <p>Root Z 跟随台面高度，但 roll/pitch 目标保持零，避免机身追随离散台阶法向。</p>
+          </div>
+        </div>
+        <p class="note"><strong>未知列 fallback：</strong>固定当前 Root Z、机身水平，使用 <code>extra=0.040 m</code>、<code>min_apex=0.080 m</code>，并记录诊断，不误判为 flat。</p>
+      </section>
+
+      <section id="dataflow">
+        <h2>轨迹数据流与输出</h2>
+        <div class="flow">
+          <div class="node">M1 16 DOF<br>实测状态</div>
+          <div class="arrow">→</div>
+          <div class="node accent">提取 12 DOF<br>与四轮心</div>
+          <div class="arrow">→</div>
+          <div class="node">通用 Planner<br>+ M1 Backend</div>
+          <div class="arrow">→</div>
+          <div class="node">现有 RL Policy<br>参考输入</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>字段</th><th>Shape</th><th>M1 语义</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>root_pos_w</td><td>[B,H,3]</td><td>Root 世界位置</td></tr>
+              <tr><td>root_rpy_w</td><td>[B,H,3]</td><td>Root 世界姿态</td></tr>
+              <tr><td>joint_pos</td><td>[B,H,12]</td><td>四腿 ABAD/HIP/KNEE，不含轮轴</td></tr>
+              <tr><td>foot_pos_w</td><td>[B,H,4,3]</td><td>四个轮轴中心</td></tr>
+              <tr><td>contact_state</td><td>[B,H,4]</td><td>保留当前对角相位</td></tr>
+              <tr><td>valid</td><td>[B]</td><td>manager 中按 horizon 展开</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="files">
+        <h2>文件结构与配置传播</h2>
+        <div class="file-tree">Go2Pvcnn/extension/parallelism/
+├── cli.py
+├── robots/
+│   ├── __init__.py
+│   ├── protocol.py
+│   ├── registry.py
+│   ├── go2_backend.py
+│   └── m1/
+│       ├── __init__.py
+│       ├── config.py
+│       ├── mapping.py
+│       ├── kinematics.py
+│       ├── ik.py
+│       ├── collision_specs.py
+│       └── validation.py</div>
+        <p><code>M1ParallelismCfg</code> 继承现有 <code>ParallelismCfg</code>，只覆盖几何、Root 高度、support offset、限位、碰撞规格和 terrain profile。</p>
+        <div class="code-block">ParallelismReferenceManager 显式 robot
+  > env.cfg.parallelism_robot
+  > go2</div>
+        <p>新增 CLI 参数 <code>--robot {go2,m1}</code>，默认值为 <code>go2</code>。未知名称或 backend 与场景资产不匹配时，在启动规划前抛出明确错误。</p>
+      </section>
+
+      <section id="validation">
+        <h2>验证与回归策略</h2>
+        <div class="three-col">
+          <div class="panel green">
+            <h3>Go2 零回归</h3>
+            <ul>
+              <li>原 FK、IK 和配置数值不变</li>
+              <li>无参数与 <code>--robot go2</code> 等价</li>
+              <li>固定输入 trajectory tensor 一致</li>
+              <li>现有 Parallelism 测试全部通过</li>
+            </ul>
+          </div>
+          <div class="panel blue">
+            <h3>M1 单元验证</h3>
+            <ul>
+              <li>16 → 12 DOF 任意顺序映射</li>
+              <li>零位姿 FK 与 USD 几何一致</li>
+              <li>FK → IK → FK 闭环</li>
+              <li>左右 ABAD 限位正确</li>
+              <li>轮轴不进入输出</li>
+            </ul>
+          </div>
+          <div class="panel amber">
+            <h3>碰撞与地形</h3>
+            <ul>
+              <li>Box 26 点、wheel 38 点精确生成</li>
+              <li>仅三个轮底点可容忍支撑</li>
+              <li>BASE shape 数量严格为零</li>
+              <li>20 列 terrain profile 精确映射</li>
+              <li>各 terrain family 仿真 smoke</li>
+            </ul>
+          </div>
+        </div>
+        <div class="note">
+          <strong>验收标准：</strong>M1 能产生现有 schema 的有效 12 DOF 轨迹；flat 不主动抬腿，非平地按 profile 抬腿；轮底能支撑，轮子前侧撞障碍会拒绝候选；Go2 默认命令与改造前一致。
+        </div>
+        <p class="status">下一阶段：用户审核本设计后，再单独编写实现计划。</p>
+      </section>
+    </main>
+  </div>
+
+  <footer>M1 Parallelism 机器人后端设计 · 保持 Go2 默认行为不变</footer>
+</body>
+</html>
