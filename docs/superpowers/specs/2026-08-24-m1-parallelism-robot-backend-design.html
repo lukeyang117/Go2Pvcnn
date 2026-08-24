@@ -530,6 +530,7 @@
       <a href="#terrain">地形策略</a>
       <a href="#dataflow">数据流</a>
       <a href="#files">文件结构</a>
+      <a href="#viewer">Isaac Sim Viewer</a>
       <a href="#validation">验证策略</a>
     </nav>
 
@@ -567,9 +568,11 @@
           <div><strong>平地滚动参考</strong><code>flat</code> 垂向 apex 为零；非平地或小障碍物才抬腿。</div>
           <div><strong>大障碍绕行</strong>沿用当前横向绕行，不尝试抬腿跨越大障碍。</div>
           <div><strong>不检测 BASE</strong>与 Go2 当前边界一致，Parallelism 只做腿部和脚端几何碰撞。</div>
+          <div><strong>Viewer 选择资产</strong><code>go2_foostep_planner.py</code> 根据 <code>--robot</code> 选择 USD、环境配置和 backend。</div>
+          <div><strong>Isaac Sim 验证</strong>第一阶段使用运动学直接回放，验证规划、几何、碰撞点和参数，不接入 RL。</div>
         </div>
         <div class="note">
-          <strong>范围外：</strong>RL policy、奖励、动作空间、轮子转速参考、self-collision 和 M1 Isaac Lab 资产配置的完整实现。
+          <strong>范围外：</strong>RL policy、训练奖励、正式动作空间、轮子转速参考、self-collision，以及面向物理控制/训练的 M1 actuator 调参与完整任务配置。
         </div>
       </section>
 
@@ -603,6 +606,9 @@
               <li>碰撞 primitive、采样点和接触容忍</li>
             </ul>
           </div>
+        </div>
+        <div class="note">
+          <strong>Viewer 运行时选择：</strong>planner backend 与 Isaac Lab asset config 使用同一个规范化 robot name。<code>go2</code> 选择现有 Go2 资产和配置；<code>m1</code> 选择本地 M1 USD、M1 viewer 配置和 M1 planner backend。两者不允许交叉组合。
         </div>
       </section>
 
@@ -905,7 +911,16 @@ AND semantic_id NOT IN {small_obstacle, large_obstacle}</div>
 
       <section id="files">
         <h2>文件结构与配置传播</h2>
-        <div class="file-tree">Go2Pvcnn/extension/parallelism/
+        <div class="file-tree">Go2Pvcnn/
+├── go2_pvcnn/assets/
+│   ├── __init__.py
+│   └── m1.py                         # M1 ArticulationCfg 与本地 USD
+├── tracking/
+│   └── m1_parallelism_viewer_env_cfg.py
+│                                      # M1 专用 Isaac Sim viewer 环境
+├── extension/viz/
+│   └── go2_foostep_planner.py         # --robot 选择环境、backend 和回放映射
+└── extension/parallelism/
 ├── cli.py
 ├── robots/
 │   ├── __init__.py
@@ -925,6 +940,154 @@ AND semantic_id NOT IN {small_obstacle, large_obstacle}</div>
   > env.cfg.parallelism_robot
   > go2</div>
         <p>新增 CLI 参数 <code>--robot {go2,m1}</code>，默认值为 <code>go2</code>。未知名称或 backend 与场景资产不匹配时，在启动规划前抛出明确错误。</p>
+      </section>
+
+      <section id="viewer">
+        <h2>Isaac Sim Viewer 接入</h2>
+        <p>允许修改 <code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code>。Viewer 继续承担交互命令、terrain tile 选择、Parallelism 调参、轨迹可视化和逐帧直接回放；机器人差异通过运行时选择对象传入，不在主循环中散落 M1 条件分支。</p>
+
+        <h3>启动参数与选择结果</h3>
+        <div class="code-block">--planner-backend parallelism
+--robot {go2,m1}
+--terrain-row ROW
+--terrain-col COL
+--scripted-command "vx vy vyaw"
+--scripted-command-cycles N</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th><code>--robot</code></th><th>Isaac USD / ArticulationCfg</th><th>环境配置</th><th>Planner backend</th><th>Support body</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>go2（默认）</td>
+                <td>现有 <code>UNITREE_GO2_CFG</code></td>
+                <td>现有 Parallelism PLAY 配置</td>
+                <td>Go2 backend</td>
+                <td><code>FL/FR/RL/RR_foot</code></td>
+              </tr>
+              <tr>
+                <td>m1</td>
+                <td><code>M1_CFG</code> + 本地 <code>ZJ_V3_URDF_V1_0.usd</code></td>
+                <td><code>M1ParallelismViewerEnvCfg</code></td>
+                <td>M1 backend</td>
+                <td><code>FBL/FAR/RBL/RAR_FOOT_LINK</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="warning"><strong>一致性校验：</strong>Viewer 在创建环境后立即检查 joint/body names。选择 <code>m1</code> 却加载 Go2 asset，或者选择 <code>go2</code> 却加载 M1 asset，都必须在第一次规划前报错，不能静默退回 Go2。</p>
+
+        <h3>M1 ArticulationCfg</h3>
+        <p><code>M1_CFG</code> 参考 <code>UNITREE_GO2_CFG</code> 的 Isaac Lab 配置结构，但机器人参数取自 M1 USD，不复制 Go2 的关节初值和 actuator 数值。</p>
+        <div class="two-col">
+          <div class="panel green">
+            <h3>复用 Go2 配置结构</h3>
+            <ul>
+              <li><code>UsdFileCfg</code> 和 contact sensor 启用方式</li>
+              <li>关闭 articulation self-collision</li>
+              <li>solver iteration 和刚体速度限制的配置形式</li>
+              <li><code>soft_joint_pos_limit_factor=0.9</code></li>
+            </ul>
+          </div>
+          <div class="panel amber">
+            <h3>M1 必须覆盖</h3>
+            <ul>
+              <li>USD 路径与 Root 初始高度 <code>0.6358 m</code></li>
+              <li>16 个关节初值和速度均为零</li>
+              <li>ABAD/HIP/KNEE 与 wheel 的 actuator 分组</li>
+              <li>关节、BASE 和 support body 名称</li>
+            </ul>
+          </div>
+        </div>
+        <div class="note">
+          <strong>第一阶段限制：</strong>Viewer 使用当前的运动学直接回放路径，不通过 actuator 跟踪轨迹。Actuator 配置只需保证 Isaac Lab articulation 能正确实例化和完成 warmup；正式物理控制参数不在本设计范围内。
+        </div>
+
+        <h3>M1 Viewer 专用环境配置</h3>
+        <p>不能仅替换 <code>env_cfg.scene.robot.spawn.usd_path</code>。现有 PLAY 配置还包含 Go2 的 scanner attachment、<code>.*_foot</code> body selector、<code>base</code> selector和 12 DOF tracking term。M1 viewer 配置继承现有 terrain generator、语义障碍和 scanner 参数，并完成以下替换：</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>配置项</th><th>Go2</th><th>M1 Viewer</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>scene.robot</td><td><code>UNITREE_GO2_CFG</code></td><td><code>M1_CFG</code></td></tr>
+              <tr><td>reference_robot</td><td>保持现有 Go2 行为</td><td>禁用；M1 viewer 直接回放 scene.robot</td></tr>
+              <tr><td>scanner prim</td><td><code>/Robot/base</code></td><td><code>/Robot/BASE_LINK</code></td></tr>
+              <tr><td>support body</td><td><code>.*_foot</code></td><td>四个显式 <code>*_FOOT_LINK</code></td></tr>
+              <tr><td>action shape</td><td>12 joints</td><td>16 joints，仅供 zero-action warmup</td></tr>
+              <tr><td>tracking managers</td><td>保持现有 Go2 行为</td><td>tracking rewards、terminations、curriculum 全部禁用；observation 保留最小 viewer 状态</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>M1 viewer 不附加 RL policy 或 <code>ParallelismReferenceManager</code>，只保留 terrain、semantic scanner、命令源、reset 和 16 维 zero-action warmup 所需的最小 manager 配置。这样环境初始化不会因为大小写不同的 body name、Go2 的 <code>base</code> 名称或 12/16 DOF shape 不一致而失败。</p>
+
+        <h3>状态读取与逐帧回放</h3>
+        <div class="flow">
+          <div class="node">Isaac M1<br>16 DOF</div>
+          <div class="arrow">→</div>
+          <div class="node accent">Backend 提取<br>12 DOF + 四轮心</div>
+          <div class="arrow">→</div>
+          <div class="node">Parallelism<br>12 DOF 轨迹</div>
+          <div class="arrow">→</div>
+          <div class="node">合并写回<br>16 DOF</div>
+        </div>
+        <div class="code-block">q16_playback = q16_current.clone()
+q16_playback[leg_joint_indices] = q12_planned
+q16_playback[wheel_joint_indices] = q16_current[wheel_joint_indices]</div>
+        <p>四个轮轴在规划和回放期间保持当前值，不写零、不复制某一轮到其他轮，也不参与 joint error。Root pose、12 个腿关节和四轮心用于规划轨迹误差检查。</p>
+
+        <h3>Viewer Adapter 与可视化内容</h3>
+        <p><code>parallelism_trajectory_to_viewer_result()</code> 接收已选择的 backend，不再固定构造 Go2 配置或调用 <code>fk_go2()</code>。Go2 显示保持现状；M1 模式显示：</p>
+        <div class="three-col">
+          <div class="panel green">
+            <h3>轨迹</h3>
+            <ul>
+              <li>Root 24 帧轨迹</li>
+              <li>四个轮心轨迹</li>
+              <li>对角 contact state</li>
+              <li>候选圆和最终落点</li>
+            </ul>
+          </div>
+          <div class="panel blue">
+            <h3>碰撞几何</h3>
+            <ul>
+              <li>16 个碰撞体中心</li>
+              <li>四腿共 464 个采样点</li>
+              <li>轮底 3 个支撑容忍点</li>
+              <li>每个 shape 的 reject count</li>
+            </ul>
+          </div>
+          <div class="panel amber">
+            <h3>调试状态</h3>
+            <ul>
+              <li>candidate valid / reject bits</li>
+              <li>IK reachable 和 joint limit</li>
+              <li>规划/实测 12 DOF 误差</li>
+              <li>当前 terrain family/profile</li>
+            </ul>
+          </div>
+        </div>
+        <p>现有 <code>show mesh</code>、<code>show collision body</code> 和 <code>show contact points</code> 开关继续使用，但 mesh visibility helper 改为机器人无关名称，按当前 asset prim path 查找，不再以 <code>go2</code> 作为 fallback 名称。</p>
+
+        <h3>调参方式</h3>
+        <p>调试面板的字段继续参考 Go2，但初始值从当前 robot backend 和所选 terrain column 的 profile 构造，而不是使用 <code>ViewerTestTerminalState</code> 中写死的 Go2 默认值。</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>参数组</th><th>Go2 初始值</th><th>M1 初始值来源</th><th>运行时行为</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>swing</td><td>现有 Go2 cfg</td><td>所选 terrain profile</td><td>只覆盖本次 viewer 规划</td></tr>
+              <tr><td>Root height/following</td><td>现有 Go2 cfg</td><td><code>0.6358 m</code> 与 M1 profile</td><td>flat 固定，其他 family 跟随</td></tr>
+              <tr><td>candidate radius</td><td>现有 Go2 cfg</td><td>M1 cfg 初值</td><td>面板可调</td></tr>
+              <tr><td>collision margin</td><td><code>0.003 m</code></td><td><code>0.003 m</code></td><td>保持 Go2 初值，可诊断后调整</td></tr>
+              <tr><td>显示开关</td><td>现有行为</td><td>现有行为</td><td>不写入持久配置</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="warning"><strong>参数归属：</strong>Viewer slider 是临时 override。确认后的 M1 参数必须回写 <code>m1/config.py</code>，不能依赖某次 UI 状态。</p>
       </section>
 
       <section id="validation">
@@ -960,8 +1123,25 @@ AND semantic_id NOT IN {small_obstacle, large_obstacle}</div>
             </ul>
           </div>
         </div>
+        <h3>Isaac Sim Viewer 测试矩阵</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>阶段</th><th>机器人 / terrain</th><th>检查项</th><th>通过条件</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>启动 smoke</td><td>Go2 col 1</td><td>默认命令不加 <code>--robot</code></td><td>启动和既有 viewer 行为不变</td></tr>
+              <tr><td>启动 smoke</td><td>M1 col 1 flat</td><td>USD、16 joints、四轮心、scanner</td><td>环境初始化且能生成有效轨迹</td></tr>
+              <tr><td>确定性规划</td><td>M1 col 0,1,2,4,8,12,16</td><td>固定 scripted command</td><td>覆盖所有 terrain family，无 shape/name 错误</td></tr>
+              <tr><td>映射</td><td>M1 任意 terrain</td><td>逐帧 12 → 16 DOF 写回</td><td>腿关节匹配轨迹，四轮轴保持不变</td></tr>
+              <tr><td>碰撞可视化</td><td>M1 rough/boxes/stairs</td><td>16 centers、464 points、轮底点</td><td>点与 Mesh 对齐，无 BASE 点</td></tr>
+              <tr><td>参数调整</td><td>M1 各 family</td><td>swing/Root/candidate override</td><td>重规划立即反映，默认 cfg 不被修改</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>为自动化 Isaac Sim smoke 增加有限运行参数，例如 <code>--max-plan-cycles N</code>。达到周期数后输出结构化诊断并正常关闭 simulation app，避免测试依赖人工按键退出。</p>
         <div class="note">
-          <strong>验收标准：</strong>M1 能产生现有 schema 的有效 12 DOF 轨迹；flat 不主动抬腿，非平地按 profile 抬腿；轮底能支撑，轮子前侧撞障碍会拒绝候选；Go2 默认命令与改造前一致。
+          <strong>验收标准：</strong>M1 能在 Isaac Sim viewer 中加载本地 USD，并产生现有 schema 的有效 12 DOF 轨迹；flat 不主动抬腿，非平地按 profile 抬腿；轮底能支撑，轮子前侧撞障碍会拒绝候选；逐帧回放不修改轮轴；Go2 默认命令与改造前一致。
         </div>
         <p class="status">下一阶段：用户审核本设计后，再单独编写实现计划。</p>
       </section>
