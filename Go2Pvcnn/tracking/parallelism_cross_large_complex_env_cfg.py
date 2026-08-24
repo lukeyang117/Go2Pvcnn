@@ -147,6 +147,25 @@ def _cross_large_complex_terrain_cfg() -> terrain_gen.TerrainGeneratorCfg:
     )
 
 
+def cross_large_complex_semantic_obstacle_curriculum_cfg() -> SemanticObstacleCurriculumCfg:
+    """Return the shared semantic obstacle layout for cross-large experiments."""
+
+    return SemanticObstacleCurriculumCfg(
+        enabled=True,
+        plane_terrain_names=("flat_dense_small_obstacles", "flat"),
+        plane_counts=(SemanticObstacleCount(small=0, large=2),),
+        non_plane_counts=(SemanticObstacleCount(small=5, large=2),),
+        terrain_obstacle_count_overrides={
+            "flat": SemanticObstacleCount(small=0, large=2),
+            "flat_dense_small_obstacles": SemanticObstacleCount(small=40, large=0),
+        },
+        center_safety_half_extent_m=(0.25,),
+        min_spacing_clearance_m=(0.08,),
+        tile_margin_m=(0.50,),
+        collision_force_threshold=1.0,
+    )
+
+
 @configclass
 class ParallelismTrackingCrossLargeComplexCurriculumCfg(ParallelismTrackingCurriculumCfg):
     terrain_levels = CurrTerm(
@@ -174,20 +193,7 @@ class ParallelismTrackingCrossLargeComplexEnvCfg(ParallelismTrackingSmallObstacl
         ParallelismTrackingCrossLargeComplexCurriculumCfg()
     )
     semantic_obstacle_curriculum: SemanticObstacleCurriculumCfg = field(
-        default_factory=lambda: SemanticObstacleCurriculumCfg(
-            enabled=True,
-            plane_terrain_names=("flat_dense_small_obstacles", "flat"),
-            plane_counts=(SemanticObstacleCount(small=0, large=2),),
-            non_plane_counts=(SemanticObstacleCount(small=5, large=2),),
-            terrain_obstacle_count_overrides={
-                "flat": SemanticObstacleCount(small=0, large=2),
-                "flat_dense_small_obstacles": SemanticObstacleCount(small=40, large=0),
-            },
-            center_safety_half_extent_m=(0.25,),
-            min_spacing_clearance_m=(0.08,),
-            tile_margin_m=(0.50,),
-            collision_force_threshold=1.0,
-        )
+        default_factory=cross_large_complex_semantic_obstacle_curriculum_cfg
     )
 
     def __post_init__(self):
