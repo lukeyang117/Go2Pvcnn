@@ -84,8 +84,8 @@ def test_pure_ppo_runner_has_no_distillation_fields():
 
     assert cfg["algorithm"]["class_name"] == "PPO"
     assert cfg["policy"]["class_name"] == "ActorCriticCNN"
-    assert cfg["algorithm"]["learning_rate"] == 3e-4
-    assert cfg["algorithm"]["schedule"] == "fixed"
+    assert cfg["algorithm"]["learning_rate"] == 1e-3
+    assert cfg["algorithm"]["schedule"] == "adaptive"
     assert cfg["algorithm"]["entropy_coef"] == 0.01
     assert cfg["policy"]["init_noise_std"] == 1.0
     assert cfg["obs_groups"] == {
