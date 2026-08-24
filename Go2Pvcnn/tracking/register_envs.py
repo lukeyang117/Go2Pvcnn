@@ -10,6 +10,7 @@ from tracking.parallelism_cross_large_complex_env_cfg import ParallelismTracking
 from tracking.parallelism_cross_large_complex_distillation_env_cfg import (
     ParallelismTrackingCrossLargeComplexDistillationEnvCfg,
 )
+from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
 from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg
 from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg
 
@@ -45,6 +46,16 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-Go2-Cross-Large-Complex-PPO-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": CrossLargeComplexPpoEnvCfg,
+        "rsl_rl_cfg_entry_point": None,
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
     id="Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0",
     entry_point="tracking.env:ParallelismTrackingEnv",
     kwargs={
@@ -70,5 +81,6 @@ print("[tracking]   - Isaac-Go2-Parallelism-Tracking-Small-Obstacles-v0")
 print("[tracking]   - Isaac-Go2-Parallelism-Tracking-Ladder-v0")
 print("[tracking]   - Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0")
 print("[tracking]   - Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-Distillation-v0")
+print("[tracking]   - Isaac-Go2-Cross-Large-Complex-PPO-v0")
 print("[tracking]   - parallelism_tracking_cross_large_complex_distillation")
 print("[tracking]   - parallelism_tracking_cross_large_complex")

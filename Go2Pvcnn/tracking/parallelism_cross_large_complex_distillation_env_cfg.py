@@ -161,7 +161,7 @@ class ParallelismTrackingCrossLargeComplexDistillationEnvCfg(
         super().__post_init__()
         self.experiment_name = "parallelism_tracking_cross_large_complex_distillation"
         self.curriculum.parallelism_velocity = None
-        self.commands.base_velocity.resampling_time_range = (100.0, 100.0)
+        self.commands.base_velocity.resampling_time_range = (10.0, 10.0)
         self.commands.base_velocity.rel_standing_envs = 0.1
         self.commands.base_velocity.ranges.lin_vel_x = (-0.1, 0.1)
         self.commands.base_velocity.ranges.lin_vel_y = (-0.1, 0.1)

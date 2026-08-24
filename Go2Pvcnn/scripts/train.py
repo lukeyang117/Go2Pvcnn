@@ -186,6 +186,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "parallelism_tracking_ladder",
             "parallelism_tracking_cross_large_complex",
             "parallelism_tracking_cross_large_complex_distillation",
+            "cross_large_complex_ppo",
         ],
         help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
     )
@@ -529,6 +530,7 @@ def main() -> int:
     from tracking.parallelism_cross_large_complex_distillation_env_cfg import (
         ParallelismTrackingCrossLargeComplexDistillationEnvCfg,
     )
+    from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg
     import go2_pvcnn.tasks.register_envs  # noqa: F401 — register Gym tasks
@@ -623,6 +625,10 @@ def main() -> int:
         "parallelism_tracking_cross_large_complex_distillation": (
             ParallelismTrackingCrossLargeComplexDistillationEnvCfg,
             "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-Distillation-v0",
+        ),
+        "cross_large_complex_ppo": (
+            CrossLargeComplexPpoEnvCfg,
+            "Isaac-Go2-Cross-Large-Complex-PPO-v0",
         ),
     }
     env_cfg_cls, env_id = EXPERIMENT_ENV_MAP[args_cli.experiment]

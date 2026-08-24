@@ -45,3 +45,33 @@ def test_pure_ppo_reuses_mixed_terrain_and_obstacle_counts():
     assert "cross_large_complex_semantic_obstacle_curriculum_cfg" in source
     assert "excluded_terrain_names" in source
     assert '"flat_dense_small_obstacles"' in source
+
+
+def test_pure_ppo_experiment_is_registered_as_normal_manager_env():
+    register = (ROOT / "tracking/register_envs.py").read_text()
+    train = (ROOT / "scripts/train.py").read_text()
+
+    assert 'id="Isaac-Go2-Cross-Large-Complex-PPO-v0"' in register
+    assert 'entry_point="isaaclab.envs:ManagerBasedRLEnv"' in register
+    assert '"cross_large_complex_ppo"' in train
+
+
+def test_pure_ppo_runner_has_no_distillation_fields():
+    from agent.train_cfg import get_train_cfg
+
+    cfg = get_train_cfg("cross_large_complex_ppo")
+
+    assert cfg["algorithm"]["class_name"] == "PPO"
+    assert cfg["policy"]["class_name"] == "ActorCriticCNN"
+    assert cfg["algorithm"]["learning_rate"] == 3e-4
+    assert cfg["algorithm"]["schedule"] == "fixed"
+    assert cfg["algorithm"]["entropy_coef"] == 0.01
+    assert cfg["policy"]["init_noise_std"] == 1.0
+    assert cfg["obs_groups"] == {
+        "policy": ["policy_elevation_semantic_map", "policy_state"],
+        "critic": ["critic_elevation_semantic_map", "critic_state"],
+    }
+    serialized = repr(cfg)
+    assert "teacher_coef" not in serialized
+    assert "teacher_ratio" not in serialized
+    assert "HybridDistillationPPO" not in serialized

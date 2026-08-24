@@ -23,7 +23,8 @@ def test_distillation_env_cfg_static_contract():
     assert "base_lin_vel = None" in source
     assert "track_lin_vel_xy" in source
     assert "track_ang_vel_z" in source
-    assert "resampling_time_range = (100.0, 100.0)" in source
+    assert "resampling_time_range = (10.0, 10.0)" in source
+    assert "resampling_time_range = (100.0, 100.0)" not in source
     assert "ranges.lin_vel_y = (-0.1, 0.1)" in source
     assert "ranges.ang_vel_z = (-1.0, 1.0)" in source
 
