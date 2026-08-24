@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import field
 
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
@@ -32,7 +33,17 @@ class CrossLargeComplexPpoRewardsCfg(TeacherElevationTrajectoryMpcSemanticReward
     """Locomotion rewards aligned with distillation plus live geometry collision."""
 
     reference_foot_pos = None
-    undesired_contacts = None
+    undesired_contacts = RewTerm(
+        func=isaac_mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "threshold": 1.0,
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=["Head_.*", ".*_hip", ".*_thigh", ".*_calf"],
+            ),
+        },
+    )
     semantic_contact_collision = None
     active_swing_foot_on_small_obstacle = None
     parallelism_geometry_collision = RewTerm(

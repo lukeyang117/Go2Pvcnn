@@ -129,7 +129,17 @@ class ParallelismDistillationRewardsCfg(ParallelismSmallObstaclesRewardsCfg):
     reference_foot_pos = None
     reference_active_swing_foot_max = None
     active_swing_foot_on_small_obstacle = None
-    undesired_contacts = None
+    undesired_contacts = RewTerm(
+        func=isaac_mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "threshold": 1.0,
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=["Head_.*", ".*_hip", ".*_thigh", ".*_calf"],
+            ),
+        },
+    )
     semantic_contact_collision = None
 
 

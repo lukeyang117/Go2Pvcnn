@@ -40,16 +40,19 @@ def test_distillation_reward_contract_removes_reference_rewards() -> None:
         "reference_foot_pos",
         "reference_active_swing_foot_max",
         "active_swing_foot_on_small_obstacle",
-        "undesired_contacts",
         "semantic_contact_collision",
     ):
         assert f"{term} = None" in source
+    assert "undesired_contacts = RewTerm(" in source
+    assert "func=isaac_mdp.undesired_contacts" in source
+    assert '"threshold": 1.0' in source
+    assert '".*_thigh"' in source
     assert '"std": 0.5' in source
     assert '"threshold"] = 0.5' in source
 
 
 def test_distillation_script_uses_requested_teacher_and_ppo_dominance() -> None:
     source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh").read_text()
-    assert source.count("model_4999.pt") == 1
+    assert source.count("model_9899.pt") == 1
     assert "--ppo-coef 1.0" in source
-    assert "--teacher-coef 0.01" in source
+    assert "--teacher-coef 0.1" in source

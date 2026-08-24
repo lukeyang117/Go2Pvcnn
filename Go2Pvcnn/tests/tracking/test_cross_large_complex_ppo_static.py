@@ -31,7 +31,9 @@ def test_pure_ppo_reward_and_termination_contract():
     assert "weight=-10.0" in source
     assert "active_swing_foot_on_small_obstacle = None" in source
     assert "reference_foot_pos = None" in source
-    assert "undesired_contacts = None" in source
+    assert "undesired_contacts = RewTerm(" in source
+    assert "func=isaac_mdp.undesired_contacts" in source
+    assert '"threshold": 1.0' in source
     assert "semantic_contact_collision = None" in source
     assert "TeacherElevationTrajectoryMpcSemanticTerminationsCfg" in source
     assert "parallelism_consecutive_standstill" not in source
