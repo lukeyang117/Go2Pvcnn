@@ -1,6 +1,12 @@
 import pytest
+import torch
 
 from rsl_rl.algorithms.hybrid_distillation_ppo import HybridDistillationPPO
+
+
+class _Optimizer:
+    def __init__(self, learning_rate):
+        self.param_groups = [{"lr": learning_rate}]
 
 
 def _algorithm(**kwargs):
@@ -42,3 +48,40 @@ def test_explicit_ratio_schedule_interpolates_between_start_and_end():
 def test_legacy_ratio_schedule_remains_unchanged():
     algorithm = _algorithm(iteration=20, total_iterations=100)
     assert algorithm._compute_teacher_ratio() == pytest.approx(1.0 - 0.1 / 0.7)
+
+
+def test_adaptive_learning_rate_matches_ppo_thresholds():
+    algorithm = HybridDistillationPPO.__new__(HybridDistillationPPO)
+    algorithm.desired_kl = 0.01
+    algorithm.schedule = "adaptive"
+    algorithm.learning_rate = 1.0e-3
+    algorithm.optimizer = _Optimizer(algorithm.learning_rate)
+    algorithm.distributed = False
+
+    old_mu = torch.zeros(2, 3)
+    old_sigma = torch.ones(2, 3)
+    high_kl_mu = torch.full((2, 3), 0.3)
+    low_kl_mu = torch.full((2, 3), 1.0e-3)
+
+    # For unit variance, the first case is above desired_kl * 2.
+    algorithm._adapt_learning_rate_from_kl(high_kl_mu, old_sigma, old_mu, old_sigma)
+    assert algorithm.learning_rate == pytest.approx(1.0e-3 / 1.5)
+    assert algorithm.optimizer.param_groups[0]["lr"] == pytest.approx(1.0e-3 / 1.5)
+
+    algorithm.learning_rate = 1.0e-3
+    algorithm.optimizer.param_groups[0]["lr"] = 1.0e-3
+    algorithm._adapt_learning_rate_from_kl(low_kl_mu, old_sigma, old_mu, old_sigma)
+    assert algorithm.learning_rate == pytest.approx(1.0e-3 * 1.5)
+
+
+def test_fixed_schedule_does_not_change_learning_rate():
+    algorithm = HybridDistillationPPO.__new__(HybridDistillationPPO)
+    algorithm.desired_kl = 0.01
+    algorithm.schedule = "fixed"
+    algorithm.learning_rate = 1.0e-3
+    algorithm.optimizer = _Optimizer(algorithm.learning_rate)
+    algorithm.distributed = False
+
+    values = torch.zeros(2, 3)
+    algorithm._adapt_learning_rate_from_kl(values, torch.ones(2, 3), values, torch.ones(2, 3))
+    assert algorithm.learning_rate == pytest.approx(1.0e-3)

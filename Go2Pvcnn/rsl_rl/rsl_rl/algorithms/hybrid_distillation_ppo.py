@@ -22,14 +22,14 @@ class HybridDistillationPPO:
     def __init__(
         self,
         policy,
-        num_learning_epochs=3,
-        num_mini_batches=4,
-        learning_rate=3e-4,
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        learning_rate=1e-3,
         clip_param=0.2,
         gamma=0.99,
         lam=0.95,
         value_loss_coef=1.0,
-        entropy_coef=0.001,
+        entropy_coef=0.0,
         max_grad_norm=1.0,
         use_clipped_value_loss=True,
         schedule="fixed",
@@ -44,7 +44,7 @@ class HybridDistillationPPO:
         teacher_ratio_start=None,
         teacher_ratio_end=None,
         device="cpu",
-        clip_min_std=1.0e-6,
+        clip_min_std=1.0e-15,
         multi_gpu_cfg: dict | None = None,
     ):
         self.device = device
@@ -271,6 +271,42 @@ class HybridDistillationPPO:
         last_values = self.policy.evaluate_value(last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
+    def _adapt_learning_rate_from_kl(
+        self,
+        mu_batch: torch.Tensor,
+        sigma_batch: torch.Tensor,
+        old_mu_batch: torch.Tensor,
+        old_sigma_batch: torch.Tensor,
+    ) -> None:
+        """Apply the same KL-based learning-rate rule as the PPO algorithm."""
+        if self.desired_kl is None or self.schedule != "adaptive":
+            return
+
+        with torch.inference_mode():
+            kl = torch.sum(
+                torch.log(sigma_batch / old_sigma_batch + 1.0e-5)
+                + (
+                    torch.square(old_sigma_batch)
+                    + torch.square(old_mu_batch - mu_batch)
+                )
+                / (2.0 * torch.square(sigma_batch))
+                - 0.5,
+                axis=-1,
+            )
+            kl_mean = torch.mean(kl)
+            if self.distributed:
+                kl_tensor = torch.tensor([kl_mean], device=self.device)
+                self.dist.all_reduce(kl_tensor, op=self.dist.ReduceOp.SUM)
+                kl_mean = (kl_tensor / self.gpu_world_size).item()
+
+            if kl_mean > self.desired_kl * 2.0:
+                self.learning_rate = max(1.0e-5, self.learning_rate / 1.5)
+            elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
+                self.learning_rate = min(1.0e-2, self.learning_rate * 1.5)
+
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = self.learning_rate
+
     def update(self):
         self.num_updates += 1
         teacher_coef = self._compute_teacher_coef()
@@ -318,6 +354,15 @@ class HybridDistillationPPO:
             mu_batch = self.policy.student.action_mean
             sigma_batch = self.policy.student.action_std
             entropy_batch = self.policy.student.entropy
+
+            # The teacher target is added below and does not participate in
+            # the PPO KL-based learning-rate schedule.
+            self._adapt_learning_rate_from_kl(
+                mu_batch,
+                sigma_batch,
+                old_mu_batch,
+                old_sigma_batch,
+            )
 
             ratio = torch.exp(
                 actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch)
@@ -414,6 +459,7 @@ class HybridDistillationPPO:
             "imitation_to_surrogate_ratio": mean_imitation_to_surrogate_ratio / count,
             "action_l1": mean_action_l1 / count,
             "entropy": mean_entropy / count,
+            "learning_rate": self.learning_rate,
         }
 
     def _reduce_gradients(self):
