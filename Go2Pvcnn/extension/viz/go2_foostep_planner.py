@@ -2745,7 +2745,12 @@ def main() -> int:
                         active_cmd,
                         values=_apply_test_terminal_command(active_cmd.values, test_terminal_state),
                     )
-                if parallel_backend and test_terminal_state is not None and test_terminal_state.enabled:
+                if (
+                    parallel_backend
+                    and test_terminal_state is not None
+                    and test_terminal_state.enabled
+                    and robot_backend.name != "m1"
+                ):
                     show_mesh = bool(test_terminal_state.show_mesh)
                     if last_show_mesh is None or show_mesh != last_show_mesh:
                         _set_go2_mesh_visibility(base_env, show_mesh)

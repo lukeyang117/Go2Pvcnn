@@ -52,3 +52,10 @@ def test_m1_direct_playback_preserves_current_wheel_values():
 
     assert robot.written is not None
     torch.testing.assert_close(robot.written[0][:, [3, 7, 11, 15]], torch.tensor([[3.0, 7.0, 11.0, 15.0]]))
+
+
+def test_m1_viewer_does_not_toggle_usd_mesh_visibility():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    assert 'robot_backend.name != "m1"' in source
