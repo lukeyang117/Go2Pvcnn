@@ -234,7 +234,7 @@ def test_amp_gae_cuts_at_inactive_boundary():
     storage.amp_active[:, 0, 0] = torch.tensor([1,1,0,0,0,1,1,1], dtype=torch.float)
     storage.compute_returns(torch.zeros(1,1), torch.zeros(1,1), .99, .95)
     assert torch.equal(storage.amp_advantages[2:5], torch.zeros(3,1,1))
-    assert storage.amp_advantages[1].abs() < 1e-6
+    assert storage.amp_advantages[1].abs() > 1e-6
 
 def test_inactive_rows_keep_exact_base_actor_advantage():
     base = torch.tensor([[1.0], [2.0], [3.0]])
