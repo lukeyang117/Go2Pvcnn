@@ -173,7 +173,7 @@
                             └─&gt; stop-grad critic feature + AMP context ─&gt; V_amp(s_t)
 
 policy_obs_t ─&gt; Actor ─&gt; a_t ─&gt; Isaac physics ─&gt; s_{t+1} ─┐
-Parallelism(s_t, terrain) ────────────────&gt; r_{t+1} ───────┼─&gt; 24-frame paired history
+Parallelism(s_t, terrain) ─&gt; Δreference(start,target) ─────┼─&gt; 23 transitions -&gt; 24-frame window
                                                            └─&gt; D(agent window) ─&gt; r_amp_t
 
 base env reward ─&gt; base GAE ─┐
@@ -185,7 +185,7 @@ AMP reward + gate ─&gt; AMP GAE ├─&gt; A_actor = A_base + lambda_amp * A_a
     <thead><tr><th>模块</th><th>输入</th><th>输出</th><th>持久状态</th></tr></thead>
     <tbody>
       <tr><td>Parallelism reference manager</td><td>真实 root/joint、command、terrain</td><td>冻结的下一帧 expert state、<code>step_plan_valid</code></td><td>24 帧 plan、phase、standstill latch</td></tr>
-      <tr><td>Parallelism AMP manager</td><td>冻结 expert frame、physics 后 agent state、done</td><td>expert/agent window、<code>amp_reward_active</code>、history ratio</td><td>每 env 两个 24 帧 ring buffer 与 valid count</td></tr>
+      <tr><td>Parallelism AMP manager</td><td>冻结 expert start/target、physics 前后 agent state、done</td><td>连续重建的 expert/agent window、<code>amp_reward_active</code>、history ratio</td><td>每 env 两个 23-transition ring buffer、frame anchor 与 valid count</td></tr>
       <tr><td>AMP discriminator</td><td><code>[batch, 936]</code> normalized window</td><td><code>[batch, 1]</code> logit</td><td>网络参数</td></tr>
       <tr><td>AMP normalizer</td><td>仅 active 的 expert/agent windows</td><td>normalized <code>[batch, 936]</code></td><td>running mean/variance/count</td></tr>
       <tr><td>AMP Actor-Critic CNN</td><td>原 policy obs、原 critic obs、2 维 AMP context</td><td>action、<code>V_base</code>、<code>V_amp</code></td><td>Actor、base critic、AMP value head</td></tr>
@@ -199,15 +199,36 @@ AMP reward + gate ─&gt; AMP GAE ├─&gt; A_actor = A_base + lambda_amp * A_a
   <table>
     <thead><tr><th>字段</th><th>维数</th><th>expert 来源</th><th>agent 来源</th></tr></thead>
     <tbody>
-      <tr><td><code>joint_pos</code></td><td>12</td><td>冻结的 planner target joint position</td><td>physics 后真实 joint position</td></tr>
-      <tr><td><code>joint_vel</code></td><td>12</td><td>相邻 planner frame 差分；replan 后用新 plan 的 frame 0 -&gt; 1</td><td>physics 后真实 joint velocity</td></tr>
+      <tr><td><code>joint_pos</code></td><td>12</td><td>以最新 target 为锚、由 23 个 <code>Δq_ref</code> 反向重建的连续 joint state</td><td>以最新真实 joint state 为锚、由 <code>Δq_agent</code> 反向重建</td></tr>
+      <tr><td><code>joint_vel</code></td><td>12</td><td><code>Δq_ref / dt</code>；replan 后明确使用新 plan frame 0 -&gt; 1</td><td><code>Δq_agent / dt</code></td></tr>
       <tr><td><code>root_pos_local</code></td><td>3</td><td>窗口末帧为局部原点</td><td>窗口末帧为局部原点</td></tr>
       <tr><td><code>root_rot_6d_local</code></td><td>6</td><td>移除窗口末帧 heading 后的连续 6D rotation</td><td>同一变换规则</td></tr>
-      <tr><td><code>root_lin_vel_local</code></td><td>3</td><td>planner root 差分速度，旋转到窗口末 heading frame</td><td>真实 root linear velocity，旋转到窗口末 heading frame</td></tr>
-      <tr><td><code>root_ang_vel_local</code></td><td>3</td><td>planner orientation 差分角速度，旋转到局部 frame</td><td>真实 root angular velocity，旋转到局部 frame</td></tr>
+      <tr><td><code>root_lin_vel_local</code></td><td>3</td><td>由 <code>Log(ΔT_ref)/dt</code> 得到并旋转到窗口末 heading frame</td><td>由 <code>Log(ΔT_agent)/dt</code> 得到并使用同一变换</td></tr>
+      <tr><td><code>root_ang_vel_local</code></td><td>3</td><td>由相对 rotation log / dt 得到并旋转到局部 frame</td><td>由真实相对 rotation 使用同一公式得到</td></tr>
       <tr><th>合计</th><th>39</th><td colspan="2"><code>39 × 24 = 936</code> 维 discriminator observation</td></tr>
     </tbody>
   </table>
+
+  <h3>跨 replan 的连续轨迹重建</h3>
+  <p>末帧局部化不能消除窗口内部的跳变，因此 AMP manager 不把 raw <code>A23</code> 与 raw <code>B1</code> 直接连接。每个有效 transition 先保存 start -&gt; target 的相对运动：</p>
+  <pre><code>expert:
+ΔT_ref_t = inverse(T_ref_start_t) * T_ref_target_t
+Δq_ref_t = q_ref_target_t - q_ref_start_t
+
+agent:
+ΔT_agent_t = inverse(T_agent_start_t) * T_agent_target_t
+Δq_agent_t = q_agent_target_t - q_agent_start_t
+
+[v_t, ω_t] = Log_SE3(ΔT_t) / dt</code></pre>
+  <p>正常 plan 内，start/target 是相邻 planner frame；发生 replan 时，现有 reference manager 会把新 plan frame 0 覆盖为当前实测状态，所以边界 transition 使用 <code>ΔT_B1 = inverse(T_B0) * T_B1</code>，绝不能使用 <code>inverse(T_A23) * T_B1</code>。</p>
+  <p>凑齐 23 个 transition 后，以最新 state 为末端锚点，反向重建 24 个连续 state：</p>
+  <pre><code>T_virtual[23] = T_latest
+q_virtual[23] = q_latest
+
+for i = 23 ... 1:
+    T_virtual[i - 1] = T_virtual[i] * inverse(ΔT[i])
+    q_virtual[i - 1] = q_virtual[i] - Δq[i]</code></pre>
+  <p>该重建只生成判别器的虚拟连续 expert/agent window，不回写 Parallelism reference manager，不改变 tracking reward，也不修改实际物理状态。每个窗口都重新以末端 state 为锚，因此不会跨多个 replan 累积漂移。</p>
 
   <h3>局部 root 变换</h3>
   <pre><code>p_ref = root_pos[:, -1]
@@ -218,7 +239,7 @@ root_pos_local[k]     = R_ref^T (root_pos[k] - p_ref)
 root_rot_local[k]     = R_ref^T R(root_rot[k])  -&gt; first two columns -&gt; 6D
 root_lin_vel_local[k] = R_ref^T root_lin_vel_world[k]
 root_ang_vel_local[k] = R_ref^T root_ang_vel_world[k]</code></pre>
-  <p>expert 与 agent 各自使用自己窗口的末帧建立局部 frame。这样 D 能看到避障轨迹的弯曲、横移和高度变化，但看不到世界绝对位置，也不需要 terrain 输入。</p>
+  <p>连续重建完成后，expert 与 agent 再各自使用窗口末帧建立局部 frame。这样 D 能看到避障轨迹的弯曲、横移和高度变化，但看不到世界绝对位置，也不会看到 replan tracking error 形成的假跳变。</p>
 
   <div class="contract">
     <strong>禁止进入 D 的信息</strong>
@@ -236,27 +257,35 @@ root_ang_vel_local[k] = R_ref^T root_ang_vel_world[k]</code></pre>
    - 冻结下一控制目标 r_{t+1}
    - 冻结本 transition 的 step_plan_valid
 4. physics(a_t) 得到 s_{t+1}
-5. 若 transition 有效：push(expert=r_{t+1}, agent=s_{t+1})
-6. 由更新后的 24 帧 agent window 计算 r_amp_t
-7. storage 写入属于 (s_t, a_t, s_{t+1}) 的 base reward、AMP reward 和 gates</code></pre>
+5. 若 transition 有效：
+   - push Δreference(r_start -&gt; r_target)
+   - push Δagent(s_t -&gt; s_{t+1})
+6. 用最新锚点与 23 个相对 transition 重建 24 帧连续 window
+7. 由重建后的 agent window 计算 r_amp_t
+8. storage 写入属于 (s_t, a_t, s_{t+1}) 的 base reward、AMP reward 和 gates</code></pre>
 
-  <p>判别器比较的是同时刻的 <code>r_{t+1}</code> 与 <code>s_{t+1}</code>。不能把执行后的 <code>s_{t+1}</code> 与旧的 <code>r_t</code> 比较，也不能在 physics 后才决定本步使用哪个 reference。</p>
+  <p>判别器比较的是同一组控制 transition 上的 expert 与 agent 相对运动。不能把执行后的 <code>s_{t+1}</code> 与旧的 <code>r_t</code> 比较，也不能在 physics 后才决定本步使用哪个 reference start/target。</p>
 
   <h3>replan 边界</h3>
   <pre><code>Plan A: A0 是实测状态，控制目标为 A1 ... A23
 Plan B: B0 是 step 23 后的新实测状态，控制目标为 B1 ... B23
 
-transition 23: push(A23, S23)
-transition 24: prepare 时 replan B，push(B1, S24)
-transition 40: push(B17, S40)
+transition 23: push ΔA23 = inverse(A22) * A23
+transition 24: prepare 时 replan B，push ΔB1 = inverse(B0) * B1
+transition 40: push ΔB17 = inverse(B16) * B17
 
-step 40 的 expert window = [A17 ... A23, B1 ... B17]  共 7 + 17 = 24 帧
-step 40 的 agent  window = [S17 ................ S40]  共 24 帧</code></pre>
-  <p>历史不记录 plan id，也不因正常成功 replan 清空。它只表达连续执行时间，允许一个窗口跨越相邻 planning segment。新 plan 的 frame 0 只在 reset 或从 invalid 恢复时用于初始化历史；正常滚动 replan 不重复压入 B0。</p>
+step 40 保存的 23 个 expert 增量：
+[ΔA18 ... ΔA23, ΔB1 ... ΔB17]  共 6 + 17 = 23
+
+以 B17 为末端锚反向重建：
+[E17 ... E40]  共 24 个连续虚拟 expert state
+
+agent 同样由 [ΔS18 ... ΔS40] 反向重建 24 个连续 state</code></pre>
+  <p>历史不因正常成功 replan 清空。plan id 仅用于诊断，不进入 D；新 plan 的 frame 0 不作为额外 state 重复压入，而只作为 <code>ΔB1</code> 的 start。这样既保留连续时间窗口，也彻底排除 raw <code>A23 -&gt; B1</code> 跳变。</p>
 
   <h2 id="history">五、24 帧历史与 40 步 rollout</h2>
   <h3>24 帧是 state window，不是 24 个 PPO action</h3>
-  <p>窗口包含 24 个状态采样点，时间跨度为 <code>(24 - 1) × 0.02s = 0.46s</code>。episode/reset 或 invalid 恢复时，frame 0 使用同一真实状态初始化 expert 与 agent，位置、姿态及速度都取当前实测值；随后每个 transition 追加一帧。</p>
+  <p>窗口包含 24 个重建状态采样点和 23 个相对 transition，时间跨度为 <code>(24 - 1) × 0.02s = 0.46s</code>。episode/reset 或 invalid 恢复时先保存同一真实 frame anchor；随后每个 transition 追加一个 expert/agent 相对增量，达到 23 个增量后生成第一组完整窗口。</p>
 
   <table>
     <thead><tr><th>时刻</th><th>history 内容</th><th>valid_count</th><th>AMP reward</th></tr></thead>
@@ -265,7 +294,7 @@ step 40 的 agent  window = [S17 ................ S40]  共 24 帧</code></pre>
       <tr><td>transition 1 后</td><td><code>[r0,r1]</code> / <code>[s0,s1]</code></td><td>2</td><td>0</td></tr>
       <tr><td>transition 22 后</td><td>23 帧</td><td>23</td><td>0</td></tr>
       <tr><td>transition 23 后</td><td>完整 24 帧</td><td>24</td><td>启用</td></tr>
-      <tr><td>transition 24..40</td><td>ring buffer 每步丢最老帧、追加最新帧</td><td>24</td><td>保持启用</td></tr>
+      <tr><td>transition 24..40</td><td>ring buffer 每步丢最老增量、追加最新增量，再重建 24 帧</td><td>24</td><td>保持启用</td></tr>
     </tbody>
   </table>
 
@@ -401,21 +430,79 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
   </table>
 
   <h2 id="checkpoint">九、初始化、恢复与部署</h2>
-  <h3>从 pure PPO warm start</h3>
+  <h3>统一 resume 入口与自动识别</h3>
+  <p>启动脚本始终传入 <code>--resume --load_checkpoint CHECKPOINT --keep_std</code>。AMP 专用 loader 读取 checkpoint key 后选择两种模式，不要求用户手工判断 checkpoint 类型：</p>
+  <pre><code>has_amp_value = any(key starts with "amp_value_head." in model_state_dict)
+has_amp_disc  = "amp_discriminator_state_dict" in checkpoint
+
+if not has_amp_value and not has_amp_disc:
+    mode = "legacy_policy_warm_start"
+elif has_amp_value and has_amp_disc:
+    mode = "full_amp_resume"
+else:
+    raise IncompleteAMPCheckpointError</code></pre>
+
+  <h3>模式一：旧 pure PPO policy 没有 AMP Critic</h3>
   <ul>
-    <li>新参数 <code>--amp_init_checkpoint /absolute/path/model_x.pt</code> 只允许 AMP 新 run 使用。</li>
-    <li>精确加载 pure PPO 的 Actor、action std、Actor CNN、base Critic、base Critic CNN 和 observation normalizer。</li>
-    <li>不加载 pure PPO optimizer，不继承 pure PPO iteration；AMP run 从 iteration 0 和新 optimizer 开始。</li>
-    <li><code>amp_value_head</code>、D、D optimizer、AMP normalizer 与 replay 全部重新初始化。</li>
-    <li>加载时逐项报告 missing/unexpected keys；除明确的 AMP 新增 key 外，任何缺失都报错，禁止静默部分加载。</li>
+    <li>精确加载 pure PPO 的 Actor、action std、Actor CNN、base Critic、base Critic CNN，以及 checkpoint 中存在的 observation normalizer。</li>
+    <li>加载 common 参数时逐项校验 shape；除了 <code>amp_value_head.*</code> 外不允许缺失，禁止用无条件 <code>strict=False</code> 静默吞掉基础网络不兼容。</li>
+    <li>检测到没有 <code>amp_value_head.*</code> 后，新建 AMP value head：hidden Linear 使用 orthogonal gain <code>sqrt(2)</code>，最后 value Linear 权重与 bias 初始化为 0，使初始 <code>V_amp=0</code>。</li>
+    <li>D、D optimizer、AMP normalizer、AMP replay 和 PPO optimizer 全部新建；不加载旧 PPO optimizer。</li>
+    <li>保留旧 policy 的 action std（脚本传 <code>--keep_std</code>），但 AMP iteration 从 0 开始，确保 AMP reward warm-up 从头执行。</li>
+    <li>启动日志必须打印 <code>checkpoint_mode=legacy_policy_warm_start</code>、已恢复 common key 数和 <code>amp_value_head=initialized</code>。</li>
   </ul>
 
-  <h3>AMP run resume</h3>
+  <h3>模式二：checkpoint 已包含 AMP Critic</h3>
   <ul>
-    <li><code>--resume</code> 从 AMP 自己的 experiment log root 加载完整 Actor、两个 value 分支、D、两个 optimizer、normalizers 和 iteration。</li>
-    <li>不保存 simulator AMP history；resume 后新环境从 frame 0 重新积累，达到 24 帧再恢复 AMP。</li>
+    <li>完整恢复 Actor、base Critic、AMP value head、D、PPO optimizer、D optimizer、normalizers 和 iteration。</li>
+    <li>若检测到 AMP value head 但缺 D，或有 D 但缺 AMP value head，视为损坏/不完整 AMP checkpoint并直接报错，不能猜测性初始化一半状态。</li>
+    <li>不保存 simulator AMP history；resume 后新环境从 frame anchor 重新积累，达到 24 帧再恢复 AMP。</li>
     <li>首版不保存 replay buffer，避免 checkpoint 体积膨胀；resume 后 replay 重新填充。</li>
+    <li>启动日志必须打印 <code>checkpoint_mode=full_amp_resume</code> 与恢复的 iteration。</li>
   </ul>
+
+  <h3>checkpoint 路径解析</h3>
+  <p>AMP 分支允许 <code>--load_checkpoint</code> 直接接收绝对路径或相对当前仓库的文件路径；只有传入纯文件名时才沿用当前 experiment run 目录解析。其他 experiment 的 resume 路径规则不改变。</p>
+
+  <h3>训练启动脚本契约</h3>
+  <p>新增 <code>Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh</code>，第一个位置参数必须是要恢复的 policy/AMP checkpoint：</p>
+  <pre><code>#!/usr/bin/env bash
+set -euo pipefail
+
+cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn
+
+CHECKPOINT="${1:?Usage: $0 /path/to/policy_or_amp_checkpoint.pt}"
+if [[ ! -f "${CHECKPOINT}" ]]; then
+  echo "Checkpoint not found: ${CHECKPOINT}" &gt;&amp;2
+  exit 2
+fi
+CHECKPOINT="$(realpath "${CHECKPOINT}")"
+
+export DISPLAY="${DISPLAY:-:1}"
+export OMNI_KIT_ACCEPT_EULA="${OMNI_KIT_ACCEPT_EULA:-Y}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+
+ISAAC_ENV="/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim"
+export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cuda_nvrtc/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cudnn/lib:${ISAAC_ENV}/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cuda/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}"
+
+exec "${ISAAC_ENV}/bin/python" \
+  Go2Pvcnn/scripts/train.py \
+  --experiment parallelism_tracking_cross_large_complex_amp \
+  --num_envs "${NUM_ENVS:-1024}" \
+  --headless \
+  --max_iterations "${MAX_ITERATIONS:-10000}" \
+  --resume \
+  --load_checkpoint "${CHECKPOINT}" \
+  --keep_std</code></pre>
+  <p>示例：</p>
+  <pre><code># 从不含 AMP Critic 的 pure PPO policy 开始 AMP 训练
+NUM_ENVS=1024 MAX_ITERATIONS=10000 \
+  bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
+  logs/rsl_rl/cross_large_complex_ppo/.../model_1000.pt
+
+# 从已有 AMP checkpoint 完整恢复
+bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
+  logs/rsl_rl/parallelism_tracking_cross_large_complex_amp/.../model_500.pt</code></pre>
 
   <h3>部署导出</h3>
   <p>play/export 仅调用 <code>act_inference(policy_obs)</code>。部署 checkpoint 可以只保留 Actor、Actor CNN、std/normalizer；不创建 Parallelism manager、AMP manager、D 或任一 value branch。</p>
@@ -427,12 +514,12 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
     <tbody>
       <tr><td><code>Go2Pvcnn/tracking/parallelism_amp_env.py</code></td><td>在现有 reference 冻结与 physics 之后生成 AMP transition payload，不改变基础 reward。</td></tr>
       <tr><td><code>Go2Pvcnn/tracking/parallelism_amp_cross_large_complex_env_cfg.py</code></td><td>独立 mixed-terrain AMP experiment 配置。</td></tr>
-      <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_amp_manager.py</code></td><td>frame 编码、局部化、24 帧 paired ring buffer、reset/recovery/standstill 状态机。</td></tr>
+      <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_amp_manager.py</code></td><td>相对增量提取、23-transition ring buffer、24 帧连续重建、局部化与 reset/recovery/standstill 状态机。</td></tr>
       <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/modules/amp_actor_critic_cnn.py</code></td><td>兼容 pure PPO 参数名的 Actor/base value，加 stop-gradient AMP value head。</td></tr>
       <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/modules/amp_discriminator.py</code></td><td>D 网络、AMP normalizer 与 reward 计算。</td></tr>
       <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/storage/parallelism_amp_storage.py</code></td><td>base/AMP rewards、values、masks、returns 与 masked mini-batch。</td></tr>
       <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/algorithms/parallelism_amp_ppo.py</code></td><td>双 GAE、组合 advantage、PPO loss、D update 与 replay。</td></tr>
-      <tr><td><code>Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh</code></td><td>要求 pure PPO init checkpoint 的独立启动脚本。</td></tr>
+      <tr><td><code>Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh</code></td><td>要求 checkpoint 参数，统一启动 legacy policy warm-start 或完整 AMP resume。</td></tr>
     </tbody>
   </table>
 
@@ -440,7 +527,7 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
   <ul>
     <li><code>Go2Pvcnn/agent/train_cfg.py</code>：新增 AMP experiment 配置，不修改两个旧 experiment 的返回值。</li>
     <li><code>Go2Pvcnn/tracking/register_envs.py</code>：新增 Gym id <code>Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AMP-v0</code>。</li>
-    <li><code>Go2Pvcnn/scripts/train.py</code>：新增 AMP env map、init checkpoint 分支与仅 AMP 启用的 runner/context hook。</li>
+    <li><code>Go2Pvcnn/scripts/train.py</code>：新增 AMP env map、仅 AMP 启用的 runner/context hook，以及 absolute/relative checkpoint 解析和 AMP key 自动识别；其他 resume 分支不变。</li>
     <li><code>rsl_rl/modules|algorithms|storage/__init__.py</code>：只增加 exports。</li>
     <li><code>on_policy_runner.py</code>：只识别 <code>ParallelismAMPPPO</code> 训练类型并传递最终 AMP context；普通 PPO 和 distillation 分支保持原调用路径。</li>
   </ul>
@@ -460,9 +547,9 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
   <table>
     <thead><tr><th>测试文件</th><th>真实执行内容</th><th>关键断言</th></tr></thead>
     <tbody>
-      <tr><td><code>test_parallelism_amp_history.py</code></td><td>在 CPU 与可用 CUDA 上创建真实 ring buffer，逐帧 push 50 次</td><td>顺序、wrap-around、per-env reset、跨 rollout 保留均数值正确</td></tr>
-      <tr><td><code>test_parallelism_amp_time_alignment.py</code></td><td>使用真实 <code>ParallelismReferenceManager</code> tensor 与递增编号 state</td><td>transition 23/24/40 分别得到 A23、B1、B17；step 40 window 精确等于 A17..A23+B1..B17</td></tr>
-      <tr><td><code>test_parallelism_amp_state_encoding.py</code></td><td>构造平移、旋转后的同一真实 24 帧 trajectory 并执行 encoder</td><td>局部观测平移/全局 yaw 不变；shape 为 936；所有值 finite</td></tr>
+      <tr><td><code>test_parallelism_amp_history.py</code></td><td>在 CPU 与可用 CUDA 上创建真实 transition ring buffer，逐步 push 50 次</td><td>23 个增量顺序、wrap-around、per-env reset、跨 rollout 保留均数值正确</td></tr>
+      <tr><td><code>test_parallelism_amp_time_alignment.py</code></td><td>使用真实 <code>ParallelismReferenceManager</code> tensor 与有意制造 <code>A23 != B0</code> 的 replan</td><td>边界保存 <code>inverse(B0)*B1</code> 而非 <code>inverse(A23)*B1</code>；step 40 重建 24 帧连续且无跳变</td></tr>
+      <tr><td><code>test_parallelism_amp_state_encoding.py</code></td><td>对相同 23 个 SE(3)/joint 增量使用不同世界 anchor 重建并执行 encoder</td><td>编码对平移/全局 yaw/replan tracking error 不变；shape 为 936；所有值 finite</td></tr>
       <tr><td><code>test_parallelism_amp_standstill.py</code></td><td>给真实 <code>plan_trajectory</code> 输入全 invalid terrain 产生失败，再恢复可行 terrain</td><td>失败立即 count 0；inactive 不入 replay/normalizer；恢复到第 24 帧才 active</td></tr>
     </tbody>
   </table>
@@ -476,7 +563,8 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
       <tr><td>AMP value 梯度隔离</td><td>只对真实 <code>V_amp</code> loss 调 <code>backward()</code></td><td>AMP head grad 非零；Actor/base critic/base CNN grad 为零</td></tr>
       <tr><td>D optimizer step</td><td>真实 expert/agent batch 前向、gradient penalty、Adam step</td><td>loss finite；至少一个 D 参数改变；normalizer 只统计 active rows</td></tr>
       <tr><td>AMP reward gate</td><td>同一 D logit 配 active/inactive mask</td><td>active reward 符合 MimicKit 公式；inactive 精确为 0</td></tr>
-      <tr><td>checkpoint warm start</td><td>保存真实 <code>ActorCriticCNN</code> checkpoint，再加载到 <code>AmpActorCriticCNN</code></td><td>Actor/base Critic/std 输出 bitwise 或容差内一致；AMP 新参数保持新初始化</td></tr>
+      <tr><td>legacy checkpoint warm start</td><td>保存真实 <code>ActorCriticCNN</code> checkpoint，通过统一 resume loader 加载到 <code>AmpActorCriticCNN</code></td><td>自动识别 legacy；Actor/base Critic/std 输出一致；AMP head 输出初始为 0；optimizer/iteration 新建</td></tr>
+      <tr><td>完整 AMP resume</td><td>先执行一次真实 AMP update 并保存，再通过同一脚本/loader 恢复</td><td>两个 value、D、两个 optimizer、normalizers 和 iteration 一致；部分 AMP checkpoint 明确报错</td></tr>
       <tr><td>一次完整 update</td><td>小 batch 真实收集张量，执行 PPO + 两 value losses + D update</td><td>所有 loss/grad finite，storage 正确 clear，history/replay 不被错误 clear</td></tr>
     </tbody>
   </table>
@@ -494,7 +582,7 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
     <tbody>
       <tr><td>单环境时序 probe</td><td>1 env，至少 50 control steps</td><td>实际启动 Isaac physics；transition 23 后 AMP active；经历正常 replan 后 history 不清；无 NaN/Inf</td></tr>
       <tr><td>真实规划失败 probe</td><td>真实语义/高度输入制造不可规划区域，再进入可规划区域</td><td>日志出现 inactive 段；AMP reward 精确为 0；恢复后完整 24 帧才重新 active</td></tr>
-      <tr><td>训练 smoke</td><td>64 env，2 PPO iterations，真实 pure PPO checkpoint</td><td>两个 learning iteration 完成；Actor/base/AMP/D 参数按预期更新；checkpoint 可保存并 resume</td></tr>
+      <tr><td>训练 smoke</td><td>用新 shell 脚本启动 64 env、2 PPO iterations，传真实 pure PPO checkpoint</td><td>日志识别 legacy warm-start；AMP head 初始化；两个 iteration 完成；checkpoint 可再由同一脚本完整 resume</td></tr>
       <tr><td>目标规模 smoke</td><td>1024 env，至少 2 PPO iterations</td><td>无 OOM、NaN、Traceback；active ratio、D accuracy、base/AMP reward、两个 value loss 均写入 TensorBoard</td></tr>
       <tr><td>4096 memory guard</td><td>4096 env，24 rollout steps，1 iteration</td><td>guard 生效；history horizon 仍为 24；跨 iteration 语义通过；若硬件不足必须明确记录为未验证，不能用 static test 替代</td></tr>
     </tbody>
@@ -523,11 +611,10 @@ Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py</code></pre>
   Go2Pvcnn/tests/tracking/parallelism_amp_runtime_probe.py \
   --num-envs 1 --steps 50 --device cuda:0
 
-# 真实 64-env 两次训练更新
-/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
-  Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py \
-  --num-envs 64 --max-iterations 2 --device cuda:0 \
-  --amp-init-checkpoint /absolute/path/to/pure_ppo_checkpoint.pt
+# 真实 64-env 两次训练更新，并覆盖实际 shell launcher
+NUM_ENVS=64 MAX_ITERATIONS=2 \
+  bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
+  /absolute/path/to/pure_ppo_checkpoint.pt
 
 # AMP 之外的回归
 /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
@@ -555,7 +642,7 @@ Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py</code></pre>
       <tr><td>AMP reward</td><td><code>raw/MimicKit/mimickit/learning/amp_agent.py::_calc_disc_rewards()</code></td><td>采用 <code>-log(1-sigmoid(logit))</code> 与 scale 2</td></tr>
       <tr><td>D loss</td><td><code>AMPAgent._compute_disc_loss()</code></td><td>采用 BCE、input gradient penalty、logit L2 与 replay</td></tr>
       <tr><td>单 Critic 合并 reward</td><td><code>AMPAgent._compute_rewards()</code></td><td><span class="no">不采用</span>；当前需求要隔离 standstill，改为 base/AMP 双价值与双 GAE</td></tr>
-      <tr><td>24 帧下一目标</td><td><code>tracking/managers/parallelism_reference_manager.py::prepare_step_reference()</code></td><td>消费已冻结的 target position/rotation/joint 与 validity；expert root velocity 从同一 start/target 在 AMP manager 内计算，保持 <code>r_{t+1}</code> 对齐且不混入 policy frame</td></tr>
+      <tr><td>24 帧下一目标</td><td><code>tracking/managers/parallelism_reference_manager.py::prepare_step_reference()</code></td><td>消费冻结的 start/target 与 validity；保存相对 SE(3)/joint transition，再重建连续 state window</td></tr>
       <tr><td>规划有效性</td><td>同 manager 的 <code>plan_valid</code>、<code>step_plan_valid</code>、<code>standstill_latched</code></td><td>作为 history/reward/GAE/D sample 的统一硬门</td></tr>
       <tr><td>PPO 40 步</td><td><code>agent/train_cfg.py</code> 与 <code>on_policy_runner.py</code></td><td>保持 rollout；AMP history 生命周期与 PPO storage 解耦</td></tr>
     </tbody>
@@ -565,7 +652,8 @@ Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py</code></pre>
   <ul>
     <li>AMP experiment 能从真实 pure PPO checkpoint 初始化，并完成真实 Isaac Lab PPO update。</li>
     <li>D 输入严格为 <code>[N, 936]</code> state window，无 terrain/command/action。</li>
-    <li>step 40 的 24 帧跨 replan window 与本文示例逐帧一致。</li>
+    <li>step 40 的 24 帧由 23 个相对 transition 连续重建；有意设置 <code>A23 != B0</code> 时也不出现 root/joint 假跳变。</li>
+    <li>同一启动脚本既能从无 AMP Critic 的 pure PPO policy 初始化新 AMP head，也能完整恢复已有 AMP checkpoint。</li>
     <li>standstill/inactive transition 的 AMP reward、AMP advantage、AMP value loss 与 D sample weight 精确为 0。</li>
     <li>恢复后只有完整 24 帧有效 history 才重新启用 AMP。</li>
     <li>pure PPO 与 distillation 原实验的真实配置和 focused regressions 保持通过。</li>
