@@ -8,5 +8,13 @@ from .actor_critic_cnn import ActorCriticCNN
 from .actor_critic_recurrent import ActorCriticRecurrent
 from .normalizer import EmpiricalNormalization
 from .student_teacher_cnn import StudentTeacherCNN
+from .amp_discriminator import AMPDiscriminator, AMPObservationNormalizer
 
-__all__ = ["ActorCritic", "ActorCriticCNN", "ActorCriticRecurrent", "StudentTeacherCNN"]
+__all__ = [
+    "ActorCritic",
+    "ActorCriticCNN",
+    "ActorCriticRecurrent",
+    "StudentTeacherCNN",
+    "AMPDiscriminator",
+    "AMPObservationNormalizer",
+]
