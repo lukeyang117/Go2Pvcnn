@@ -376,8 +376,9 @@ class OnPolicyRunner:
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
         if locs.get("loss_dict") is not None:
+            metric_prefix = "AMP" if self.training_type == "amp" else "Distillation"
             for key, value in locs["loss_dict"].items():
-                self.writer.add_scalar(f"Distillation/{key}", float(value), locs["it"])
+                self.writer.add_scalar(f"{metric_prefix}/{key}", float(value), locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
@@ -424,7 +425,7 @@ class OnPolicyRunner:
             f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
                             locs['num_learning_iterations'] - locs['it']):.1f}s\n"""
         )
-        print(log_string)
+        print(log_string, flush=True)
 
     def save(self, path, infos=None):
         saved_dict = {
@@ -505,7 +506,6 @@ class OnPolicyRunner:
             from rsl_rl.modules import AMPDiscriminator
 
             self.alg.amp_discriminator = AMPDiscriminator().to(self.device)
-            self.alg.amp_optimizer = torch.optim.Adam(self.alg.amp_discriminator.parameters(), lr=1.0e-4)
             self.current_learning_iteration = 0
             print("[Checkpoint] checkpoint_mode=legacy_policy_warm_start")
             print("[Checkpoint] amp_value_head=initialized")

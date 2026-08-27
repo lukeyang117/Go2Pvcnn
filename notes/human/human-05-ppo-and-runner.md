@@ -41,6 +41,8 @@ graph LR
 - [ppo.py](../../Go2Pvcnn/rsl_rl/rsl_rl/algorithms/ppo.py)
 - [rollout_storage.py](../../Go2Pvcnn/rsl_rl/rsl_rl/storage/rollout_storage.py)
 
+AMP continuation details: [T304 Parallelism AMP](../todo/T304-parallelism-amp.md) and the [Chinese AMP design](../../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html). The isolated runner preserves pure PPO/distillation while adding masked AMP rewards, a separate value channel, and batched discriminator windows.
+
 ## 上游输入
 
 - env wrapper 提供的观测、奖励、done

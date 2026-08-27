@@ -3,14 +3,6 @@ set -euo pipefail
 
 cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn
 
-DEFAULT_CHECKPOINT="/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/cross_large_complex_ppo/2026-08-26_17-47-24/11d453a/model_19998.pt"
-CHECKPOINT="${1:-${AMP_CHECKPOINT:-${DEFAULT_CHECKPOINT}}}"
-if [[ ! -f "${CHECKPOINT}" ]]; then
-  echo "Checkpoint not found: ${CHECKPOINT}" >&2
-  exit 2
-fi
-CHECKPOINT="$(realpath "${CHECKPOINT}")"
-
 export DISPLAY="${DISPLAY:-:1}"
 export OMNI_KIT_ACCEPT_EULA="${OMNI_KIT_ACCEPT_EULA:-Y}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
@@ -18,12 +10,9 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 ISAAC_ENV="/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim"
 export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cuda_nvrtc/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cudnn/lib:${ISAAC_ENV}/lib:${ISAAC_ENV}/lib/python3.10/site-packages/nvidia/cuda/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}"
 
-exec "${ISAAC_ENV}/bin/python" \
+"${ISAAC_ENV}/bin/python" \
   Go2Pvcnn/scripts/train.py \
-  --experiment parallelism_tracking_cross_large_complex_amp \
-  --num_envs "${NUM_ENVS:-1024}" \
+  --experiment parallelism_tracking_cross_large_complex \
+  --num_envs 1024 \
   --headless \
-  --max_iterations "${MAX_ITERATIONS:-2000}" \
-  --resume \
-  --load_checkpoint "${CHECKPOINT}" \
-  --keep_std
+  --max_iterations 5000

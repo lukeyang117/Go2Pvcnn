@@ -26,6 +26,14 @@ class RolloutStorage:
             self.ppo_active = None
             self.imitation_weight = None
             self.plan_valid = None
+            # Optional Parallelism AMP transition payload. These fields stay
+            # on the transition so AMP remains additive to legacy PPO.
+            self.amp_reward = None
+            self.amp_value = None
+            self.amp_active = None
+            self.history_ratio = None
+            self.amp_expert_window = None
+            self.amp_agent_window = None
             # For PVCNN semantic supervision
             self.point_cloud = None
             self.semantic_labels = None

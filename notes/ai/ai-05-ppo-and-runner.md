@@ -38,6 +38,8 @@ graph LR
 - `Go2Pvcnn/rsl_rl/rsl_rl/storage/rollout_storage.py`
 - `Go2Pvcnn/rsl_rl/rsl_rl/storage/replay_buffer.py`
 
+The isolated Parallelism AMP continuation is documented in [T304](../todo/T304-parallelism-amp.md) and the [Chinese AMP design](../../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html); it adds masked dual-value/discriminator paths without changing pure PPO or distillation classes.
+
 ## Inputs
 
 - observations

@@ -4,6 +4,10 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
+- 2026-08-27 Parallelism AMP is implemented on `parallelism-amp`: 39-D state frames, 23-transition batch ring, `B0 -> B1` replan alignment, standstill gating, dual values, discriminator replay/update, legacy/full checkpoint resume, and a real `1024 env x 4 iteration` smoke (exit `0`). See [AMP smoke evidence](log/2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md) and the [Chinese HTML design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html).
+
+  Branch details: [T304 Parallelism AMP](todo/T304-parallelism-amp.md).
+
 - 2026-07-27 Parallelism branch checkpoint: `extension/parallelism` now has a self-contained flat Go2 foot planner with 24-frame trot rollout, 50 candidates per foot, torch single-pass filters/scores, RL reference adapter, and `go2_foostep_planner.py --planner-backend parallelism` wiring. Focused verification is `14 passed`; real Isaac viewer smoke remains the next check. See [Parallelism planner implementation](log/2026-07-27-parallelism-flat-foot-planner-implementation.md).
 
 - 2026-07-25 viewer CUDA Graph OOM fallback is local: the real H30 livestream command now catches graph capture OOM, disables graph for that manager, and continues eager RTI instead of exiting at `capture_end()`. Runtime regression is `12 passed`; viewer smoke reached fallback and continued. A later phase-6 `kkt=(nan,nan)` / `clearance=-inf` is separate and remains open. See [viewer OOM fallback](log/2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md).

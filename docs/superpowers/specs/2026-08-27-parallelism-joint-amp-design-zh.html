@@ -535,7 +535,7 @@ bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
   <table>
     <thead><tr><th>文件</th><th>唯一职责</th></tr></thead>
     <tbody>
-      <tr><td><code>Go2Pvcnn/tracking/parallelism_amp_env.py</code></td><td>在现有 reference 冻结与 physics 之后生成 AMP transition payload，不改变基础 reward。</td></tr>
+      <tr><td><code>Go2Pvcnn/tracking/amp_env.py</code></td><td>在现有 reference 冻结与 physics 之后生成 AMP transition payload，不改变基础 reward。</td></tr>
       <tr><td><code>Go2Pvcnn/tracking/parallelism_amp_cross_large_complex_env_cfg.py</code></td><td>独立 mixed-terrain AMP experiment 配置。</td></tr>
       <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_amp_manager.py</code></td><td>相对增量提取、23-transition ring buffer、24 帧连续重建、局部化与 reset/recovery/standstill 状态机。</td></tr>
       <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/modules/amp_actor_critic_cnn.py</code></td><td>兼容 pure PPO 参数名的 Actor/base value，加 stop-gradient AMP value head。</td></tr>

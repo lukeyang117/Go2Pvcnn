@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-08-27 | Parallelism AMP batched transition and 1024-env smoke | AMP transition/replay/PPO integration | pass | focused `22 passed`; real 1024 env x 4 iterations exit `0`; TensorBoard AMP steps `0..3`; no OOM/NaN/Traceback | [AMP design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html) | [evidence](2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md) |
+
 | 2026-07-27 | Parallelism flat foot planner | self-contained GPU/batched foot planner | pass; real viewer smoke follow-up open | `14 passed`; import smoke `24`; 24-frame trot, 50 candidates per foot, torch single-pass filter/score, viewer backend route | [T303](../todo/T303-parallelism-flat-foot-planner.md) | [2026-07-27-parallelism-flat-foot-planner-implementation.md](2026-07-27-parallelism-flat-foot-planner-implementation.md) |
 
 | 2026-07-25 | Joint MPC viewer CUDA Graph OOM fallback | runtime manager / viewer refresh | pass for crash fallback; later planner NaN remains separate | new CUDA Graph OOM fallback; RED/GREEN `1 passed`; runtime `12 passed`; viewer smoke caught OOM and continued eager | [T302v](../todo/T302v-joint-mpc-rti-gpu.md) | [2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md](2026-07-25-joint-mpc-viewer-cuda-graph-oom-fallback.md) |

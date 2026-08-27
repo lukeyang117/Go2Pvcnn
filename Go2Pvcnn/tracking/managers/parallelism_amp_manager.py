@@ -134,6 +134,27 @@ class ParallelismAmpManager:
         expert = torch.where(active_f, expert.reshape(self.num_envs, self.window_frames, self.frame_dim), torch.zeros_like(agent))
         return AmpStepPayload(expert, agent, active, ratio)
 
+    def compute_transition_deltas(
+        self,
+        agent_start: Tensor,
+        agent_target: Tensor,
+        expert_start: Tensor,
+        expert_target: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Compute all environment transition increments in one Torch op.
+
+        The method deliberately has no per-environment Python work: callers
+        provide ``[num_envs, 39]`` tensors and receive paired deltas with the
+        same shape.  It is kept public so runtime probes can verify that the
+        transition path is batched independently of ring-buffer maintenance.
+        """
+
+        agent_start = self._batch(agent_start)
+        agent_target = self._batch(agent_target)
+        expert_start = self._batch(expert_start)
+        expert_target = self._batch(expert_target)
+        return torch.sub(agent_target, agent_start), torch.sub(expert_target, expert_start)
+
     def push_transition(
         self,
         agent_start: Tensor,
@@ -144,10 +165,6 @@ class ParallelismAmpManager:
     ) -> AmpStepPayload:
         """Push one batched transition and return the current paired windows."""
 
-        agent_start = self._batch(agent_start)
-        agent_target = self._batch(agent_target)
-        expert_start = self._batch(expert_start)
-        expert_target = self._batch(expert_target)
         valid = torch.as_tensor(valid, device=self.device, dtype=torch.bool).reshape(-1)
         if valid.numel() != self.num_envs:
             raise ValueError(f"expected valid with {self.num_envs} rows")
@@ -156,8 +173,9 @@ class ParallelismAmpManager:
         self.expert_delta_ring[invalid] = 0.0
         self.valid_count[invalid] = 0
         self.write_index[invalid] = 0
-        agent_delta = agent_target - agent_start
-        expert_delta = expert_target - expert_start
+        agent_delta, expert_delta = self.compute_transition_deltas(
+            agent_start, agent_target, expert_start, expert_target
+        )
         rows = torch.arange(self.num_envs, device=self.device)
         slots = self.write_index
         old_agent = self.agent_delta_ring[rows, slots]

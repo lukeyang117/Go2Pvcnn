@@ -988,7 +988,7 @@ def main() -> int:
     runner.learn(num_learning_iterations=args_cli.max_iterations, init_at_random_ep_len=True)
     
     print(f"\n{'='*80}")
-    print(f"Training Complete!")
+    print(f"Training Complete!", flush=True)
     print(f"{'='*80}\n")
 
     # ========================================
