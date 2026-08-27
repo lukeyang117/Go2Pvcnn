@@ -948,34 +948,22 @@ def main() -> int:
             print(f"[Distillation] Loaded frozen teacher checkpoint: {teacher_checkpoint}")
     elif args_cli.resume:
         print(f"\n[Resume] Loading checkpoint...")
-        
-        if args_cli.load_run is not None:
-            resume_path = os.path.join(log_root_path, args_cli.load_run)
+        if args_cli.load_checkpoint is not None and os.path.isabs(args_cli.load_checkpoint):
+            checkpoint_path = args_cli.load_checkpoint
         else:
-            # Find latest run
-            resume_path = find_latest_run_dir(log_root_path)
-        
-        if resume_path is None:
-            raise ValueError("No run found to resume from!")
-        
-        print(f"[Resume] Loading from: {resume_path}")
-        
-        if args_cli.load_checkpoint is not None:
-            checkpoint_file = args_cli.load_checkpoint
+            resume_path = os.path.join(log_root_path, args_cli.load_run) if args_cli.load_run is not None else find_latest_run_dir(log_root_path)
+            if resume_path is None:
+                raise ValueError("No run found to resume from!")
+            checkpoint_path = os.path.join(resume_path, args_cli.load_checkpoint or "model_最新.pt")
+        checkpoint_path = os.path.abspath(checkpoint_path)
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        if experiment_name == "parallelism_tracking_cross_large_complex_amp":
+            runner.load_amp(checkpoint_path, keep_std=args_cli.keep_std)
+            print(f"[Resume] AMP checkpoint loaded: {checkpoint_path}")
         else:
-            checkpoint_file = "model_最新.pt"
-        
-        checkpoint_path = os.path.join(resume_path, checkpoint_file)
-        
-        if os.path.exists(checkpoint_path):
             runner.load(checkpoint_path, keep_std=args_cli.keep_std)
             print(f"[Resume] Checkpoint loaded: {checkpoint_path}")
-            if args_cli.keep_std:
-                print("[Resume] Keeping action std from checkpoint")
-            else:
-                print("[Resume] Resetting action std to init_noise_std")
-        else:
-            print(f"[Resume] WARNING: Checkpoint not found: {checkpoint_path}")
     
     # ========================================
     # Save Configuration

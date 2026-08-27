@@ -17,6 +17,10 @@ from rsl_rl.modules import ActorCritic, ActorCriticCNN, ActorCriticRecurrent, Em
 from rsl_rl.utils import store_code_state
 
 
+class IncompleteAMPCheckpointError(RuntimeError):
+    """Raised when only one half of the AMP checkpoint state is present."""
+
+
 class OnPolicyRunner:
     """On-policy runner for training and evaluation."""
 
@@ -438,6 +442,9 @@ class OnPolicyRunner:
             saved_dict["pvcnn_state_dict"] = self.alg.pvcnn_model.state_dict()
             if hasattr(self.alg, 'pvcnn_optimizer') and self.alg.pvcnn_optimizer is not None:
                 saved_dict["pvcnn_optimizer_state_dict"] = self.alg.pvcnn_optimizer.state_dict()
+        if hasattr(self.alg, "amp_discriminator") and self.alg.amp_discriminator is not None:
+            saved_dict["amp_discriminator_state_dict"] = self.alg.amp_discriminator.state_dict()
+            saved_dict["amp_optimizer_state_dict"] = self.alg.amp_discriminator.optimizer.state_dict()
         
         torch.save(saved_dict, path)
 
@@ -479,6 +486,42 @@ class OnPolicyRunner:
         
         self.current_learning_iteration = loaded_dict["iter"]
         return loaded_dict["infos"]
+
+    def load_amp(self, path, load_optimizer=True, keep_std=True):
+        """Load a legacy PPO policy or a complete AMP checkpoint explicitly."""
+
+        loaded_dict = torch.load(path, map_location=self.device)
+        state_dict = dict(loaded_dict["model_state_dict"])
+        has_amp_value = any(key.startswith("amp_value_head.") for key in state_dict)
+        has_amp_disc = "amp_discriminator_state_dict" in loaded_dict
+        if has_amp_value != has_amp_disc:
+            raise IncompleteAMPCheckpointError(
+                "AMP checkpoint must contain both amp_value_head.* and amp_discriminator_state_dict"
+            )
+        if not keep_std:
+            state_dict.pop("std", None)
+        if not has_amp_value:
+            self.alg.actor_critic.load_common_state_dict(state_dict)
+            from rsl_rl.modules import AMPDiscriminator
+
+            self.alg.amp_discriminator = AMPDiscriminator().to(self.device)
+            self.alg.amp_optimizer = torch.optim.Adam(self.alg.amp_discriminator.parameters(), lr=1.0e-4)
+            self.current_learning_iteration = 0
+            print("[Checkpoint] checkpoint_mode=legacy_policy_warm_start")
+            print("[Checkpoint] amp_value_head=initialized")
+            return "legacy_policy_warm_start"
+
+        self.alg.actor_critic.load_state_dict(state_dict, strict=True)
+        from rsl_rl.modules import AMPDiscriminator
+
+        if not hasattr(self.alg, "amp_discriminator") or self.alg.amp_discriminator is None:
+            self.alg.amp_discriminator = AMPDiscriminator().to(self.device)
+        self.alg.amp_discriminator.load_state_dict(loaded_dict["amp_discriminator_state_dict"], strict=True)
+        if load_optimizer and "amp_optimizer_state_dict" in loaded_dict:
+            self.alg.amp_discriminator.optimizer.load_state_dict(loaded_dict["amp_optimizer_state_dict"])
+        self.current_learning_iteration = int(loaded_dict.get("iter", 0))
+        print(f"[Checkpoint] checkpoint_mode=full_amp_resume iter={self.current_learning_iteration}")
+        return "full_amp_resume"
 
     def load_student_checkpoint(self, path, load_optimizer=True, keep_std=True):
         """Load a hybrid student checkpoint without restoring its embedded teacher."""

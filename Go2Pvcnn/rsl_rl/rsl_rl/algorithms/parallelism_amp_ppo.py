@@ -14,6 +14,7 @@ class ParallelismAMPPPO(PPO):
         super().__init__(actor_critic, **kwargs)
         self.amp_reward_weight = float(amp_reward_weight)
         self.amp_value_loss_coef = float(amp_value_loss_coef)
+        self.amp_discriminator = None
         self._amp_active = torch.zeros(1, device=self.device)
         self._history_ratio = torch.zeros(1, device=self.device)
 
@@ -94,4 +95,3 @@ class ParallelismAMPPPO(PPO):
             total_surrogate += float(surrogate_loss.detach())
         storage.clear()
         return {"value_loss": total_value / self.num_learning_epochs, "amp_value_loss": total_amp_value / self.num_learning_epochs, "surrogate_loss": total_surrogate / self.num_learning_epochs, "discriminator_loss": 0.0}
-
