@@ -230,6 +230,29 @@ for i = 23 ... 1:
     q_virtual[i - 1] = q_virtual[i] - Δq[i]</code></pre>
   <p>该重建只生成判别器的虚拟连续 expert/agent window，不回写 Parallelism reference manager，不改变 tracking reward，也不修改实际物理状态。每个窗口都重新以末端 state 为锚，因此不会跨多个 replan 累积漂移。</p>
 
+  <h3>Transition 增量的并行处理</h3>
+  <div class="contract">
+    <strong>1024 环境硬约束</strong>
+    <p>增量提取、replan 边界选择、ring-buffer 写入、23 个增量的反向重建和局部 root 编码必须对整个环境 batch 使用 Torch/GPU 张量并行完成；禁止逐环境 Python <code>for</code> 循环、逐环境 planner 调用或 CPU round-trip。单次调用的张量第一维固定为 <code>[num_envs]</code>，允许用布尔 mask 选择有效行，但不得破坏 fixed-shape storage。</p>
+  </div>
+  <pre><code># B = num_envs, K = amp_window_frames - 1 = 23
+# 所有操作保持 batch 维；invalid 行通过 mask 保持原 buffer，不参与统计
+delta_root = se3_compose(se3_inverse(start_root[B]), target_root[B])
+delta_joint = target_joint[B] - start_joint[B]
+delta_root = torch.where(valid[:, None], delta_root, torch.zeros_like(delta_root))
+delta_joint = torch.where(valid[:, None], delta_joint, torch.zeros_like(delta_joint))
+
+write_slot = (write_index + torch.arange(B, device=device)) % K
+transition_ring[env_index, write_slot] = torch.where(
+    valid[:, None], packed_delta, transition_ring[env_index, write_slot]
+)
+
+slot_ids = (write_index[:, None] - torch.arange(K - 1, -1, -1, device=device)) % K
+ordered_delta = transition_ring[batch_ids[:, None], slot_ids]
+window = reconstruct_from_terminal_anchor(terminal_state, ordered_delta)
+window = localize_window_last_frame(window)</code></pre>
+  <p>实际实现可以使用 batched gather/scatter、<code>torch.where</code>、<code>torch.roll</code> 或固定索引表；若 GPU 显存需要分块，分块只能沿环境 batch 进行，且每块执行相同 fixed-shape 算子后合并，不能退化为逐环境循环。应记录 1024 env 的增量/重建耗时和最大显存，作为真实 smoke 的性能证据。</p>
+
   <h3>局部 root 变换</h3>
   <pre><code>p_ref = root_pos[:, -1]
 yaw_ref = heading(root_rot[:, -1])
@@ -583,7 +606,7 @@ bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
       <tr><td>单环境时序 probe</td><td>1 env，至少 50 control steps</td><td>实际启动 Isaac physics；transition 23 后 AMP active；经历正常 replan 后 history 不清；无 NaN/Inf</td></tr>
       <tr><td>真实规划失败 probe</td><td>真实语义/高度输入制造不可规划区域，再进入可规划区域</td><td>日志出现 inactive 段；AMP reward 精确为 0；恢复后完整 24 帧才重新 active</td></tr>
       <tr><td>训练 smoke</td><td>用新 shell 脚本启动 64 env、2 PPO iterations，传真实 pure PPO checkpoint</td><td>日志识别 legacy warm-start；AMP head 初始化；两个 iteration 完成；checkpoint 可再由同一脚本完整 resume</td></tr>
-      <tr><td>目标规模 smoke</td><td>1024 env，至少 2 PPO iterations</td><td>无 OOM、NaN、Traceback；active ratio、D accuracy、base/AMP reward、两个 value loss 均写入 TensorBoard</td></tr>
+      <tr><td>目标规模 smoke</td><td>通过 AMP launcher 启动真实 Isaac Lab，1024 env，完整 4 PPO iterations</td><td>进程退出码必须为 <code>0</code>；日志必须出现 iteration 1、2、3、4 的完成记录，且无 OOM、NaN/Inf 或 Traceback；active ratio、D accuracy、base/AMP reward、两个 value loss 均写入 TensorBoard；增量提取/重建走 batch Torch 路径并记录耗时/峰值显存。不能用 static test、dry-run 或少于 4 次 iteration 的替代。</td></tr>
       <tr><td>4096 memory guard</td><td>4096 env，24 rollout steps，1 iteration</td><td>guard 生效；history horizon 仍为 24；跨 iteration 语义通过；若硬件不足必须明确记录为未验证，不能用 static test 替代</td></tr>
     </tbody>
   </table>
@@ -615,6 +638,14 @@ Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py</code></pre>
 NUM_ENVS=64 MAX_ITERATIONS=2 \
   bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
   /absolute/path/to/pure_ppo_checkpoint.pt
+
+# 真实目标规模验收：必须完整运行 4 次 iteration 并正常退出（exit code 0）
+NUM_ENVS=1024 MAX_ITERATIONS=4 \
+  bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
+  /absolute/path/to/pure_ppo_checkpoint.pt
+
+# 目标规模验收后检查：shell 返回码为 0，日志含 4 个完成的 iteration，且不含
+# "Traceback"、"CUDA out of memory"、"nan"、"inf"（大小写不敏感）。
 
 # AMP 之外的回归
 /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
