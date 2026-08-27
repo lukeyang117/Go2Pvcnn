@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism Joint AMP 训练设计</title>
+  <style>
+    :root {
+      --ink: #17212a;
+      --muted: #5c6871;
+      --line: #d8e0e4;
+      --paper: #ffffff;
+      --page: #edf1f3;
+      --blue: #155f91;
+      --blue-soft: #eaf3f9;
+      --green: #216844;
+      --green-soft: #eaf6ef;
+      --amber: #805800;
+      --amber-soft: #fff5d8;
+      --red: #8a3030;
+      --red-soft: #fcecec;
+      --violet: #65428a;
+      --violet-soft: #f3edf8;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font: 16px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 32px auto 64px;
+      padding: 42px 52px 58px;
+      background: var(--paper);
+      box-shadow: 0 8px 28px rgba(28, 47, 64, .08);
+    }
+    h1, h2, h3, h4 { line-height: 1.3; letter-spacing: 0; }
+    h1 { margin: 0 0 10px; font-size: 34px; }
+    h2 { margin: 42px 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--line); font-size: 24px; }
+    h3 { margin: 26px 0 8px; font-size: 19px; }
+    h4 { margin: 20px 0 7px; font-size: 16px; }
+    p { margin: 10px 0; }
+    a { color: var(--blue); }
+    .eyebrow { color: var(--blue); font-weight: 700; }
+    .subtitle { max-width: 980px; margin: 0 0 26px; color: var(--muted); }
+    .decision, .notice, .warning, .contract, .test-note {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid;
+    }
+    .decision { border-color: var(--green); background: var(--green-soft); }
+    .notice { border-color: var(--blue); background: var(--blue-soft); }
+    .warning { border-color: var(--amber); background: var(--amber-soft); }
+    .contract { border-color: var(--red); background: var(--red-soft); }
+    .test-note { border-color: var(--violet); background: var(--violet-soft); }
+    code {
+      padding: 1px 5px;
+      color: #12344e;
+      background: #f0f4f7;
+      border-radius: 3px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: .92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 16px 18px;
+      color: #eaf0f4;
+      background: #17212b;
+      border-radius: 5px;
+      font: 14px/1.62 "SFMono-Regular", Consolas, monospace;
+    }
+    pre code { padding: 0; color: inherit; background: transparent; }
+    table { width: 100%; margin: 14px 0; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f3f6f8; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 5px 0; }
+    .toc {
+      columns: 2;
+      column-gap: 36px;
+      margin: 18px 0;
+      padding: 16px 20px 16px 38px;
+      border: 1px solid var(--line);
+      background: #fafcfd;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 9px;
+      margin: 18px 0;
+    }
+    .flow div { min-height: 118px; padding: 13px; border: 1px solid var(--line); background: #fafcfd; }
+    .flow strong { display: block; margin-bottom: 5px; color: var(--blue); }
+    .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .panel { padding: 15px 17px; border: 1px solid var(--line); background: #fafcfd; }
+    .panel h3, .panel h4 { margin-top: 0; }
+    .small { color: var(--muted); font-size: 14px; }
+    .yes { color: var(--green); font-weight: 700; }
+    .no { color: var(--red); font-weight: 700; }
+    @media (max-width: 820px) {
+      main { width: 100%; margin: 0; padding: 28px 20px 42px; }
+      h1 { font-size: 28px; }
+      .flow, .two-col { grid-template-columns: 1fr; }
+      .toc { columns: 1; }
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">设计规格 · 2026-08-27 · 待用户复核</p>
+  <h1>Parallelism Joint AMP 训练</h1>
+  <p class="subtitle">把 Parallelism 生成的 24 帧运动学可行状态轨迹作为 AMP expert 数据，让已有基本行走能力的纯 PPO policy 学习规划轨迹的局部运动模式；规划失败进入 standstill 时，AMP 奖励、AMP GAE、判别器样本和归一化统计均停止作用。</p>
+
+  <div class="decision">
+    <strong>最终架构决定</strong>
+    <p>新增独立实验 <code>parallelism_tracking_cross_large_complex_amp</code>。Actor 从 <code>cross_large_complex_ppo</code> 已训练 checkpoint 初始化；Parallelism 仅在训练期生成 expert state window；判别器只读取 24 帧关节与局部 root 状态，不读取 terrain、command 或 action；PPO 使用基础价值与 AMP 价值两个通道，standstill transition 的 AMP advantage 严格为 0。</p>
+  </div>
+
+  <ol class="toc">
+    <li><a href="#scope">目标与边界</a></li>
+    <li><a href="#architecture">总体架构</a></li>
+    <li><a href="#state-contract">判别器状态契约</a></li>
+    <li><a href="#time-alignment">逐步时间对齐</a></li>
+    <li><a href="#history">24 帧历史与 40 步 rollout</a></li>
+    <li><a href="#standstill">standstill 门控</a></li>
+    <li><a href="#dual-value">双价值通道</a></li>
+    <li><a href="#algorithm">AMP/PPO 更新</a></li>
+    <li><a href="#checkpoint">权重与 checkpoint</a></li>
+    <li><a href="#files">文件与隔离边界</a></li>
+    <li><a href="#tests">真实测试与验收</a></li>
+    <li><a href="#references">参考代码对应关系</a></li>
+  </ol>
+
+  <h2 id="scope">一、目标与边界</h2>
+  <h3>要解决的问题</h3>
+  <ul>
+    <li>已有 pure PPO policy 能基本行走，但没有利用 Parallelism 的避障运动学轨迹。</li>
+    <li>Parallelism 输出的是 <strong>state trajectory</strong>，不是力矩、关节 action，也不是动力学可执行控制序列。</li>
+    <li>AMP 的角色是给 policy 一个“真实执行状态窗口应接近 planner 状态窗口分布”的附加学习信号，不把 planner 输出直接监督成 action。</li>
+    <li>Parallelism 规划失败时，policy 应继续依靠原 PPO reward 学习或站立，不能被无意义的 AMP 信号惩罚。</li>
+  </ul>
+
+  <h3>明确不做</h3>
+  <ul>
+    <li>不把 terrain、semantic map、velocity command 或 policy action 输入判别器。</li>
+    <li>不把世界绝对 root XY 输入判别器，避免 D 记住地形 tile 或环境原点。</li>
+    <li>不把 Parallelism 24 帧当成 24 个 action target，不增加行为克隆 loss。</li>
+    <li>不修改 distillation 实验和 pure PPO 实验的现有训练语义。</li>
+    <li>不让部署 Actor 依赖 planner、判别器、AMP 历史或任一 Critic。</li>
+    <li>首版不加入足端、接触相位和障碍物语义；先验证 root + joint state window 是否有效。</li>
+  </ul>
+
+  <div class="warning">
+    <strong>运动学 expert 的限制</strong>
+    <p>Parallelism 只保证运动学与几何可行，不保证真实动力学可执行。基础 locomotion reward、接触仿真和已有 PPO checkpoint 仍负责动力学稳定性；AMP 权重必须作为附加项渐进引入，不能覆盖基础 PPO 目标。</p>
+  </div>
+
+  <h2 id="architecture">二、总体架构</h2>
+  <div class="flow">
+    <div><strong>Parallelism</strong>从真实 <code>s_t</code> 与地形规划 24 帧 expert state。</div>
+    <div><strong>AMP History</strong>逐步压入 expert <code>r_{t+1}</code> 与 agent <code>s_{t+1}</code>。</div>
+    <div><strong>Discriminator</strong>判断 24 帧 window 来自 expert 还是 policy。</div>
+    <div><strong>Dual Value PPO</strong>分别估计 base return 与 AMP return，再组合 Actor advantage。</div>
+    <div><strong>Deployment</strong>仅导出 Actor；其他训练模块全部移除。</div>
+  </div>
+
+  <pre><code>critic_obs_t ───────────────┬─&gt; V_base(s_t)
+                            └─&gt; stop-grad critic feature + AMP context ─&gt; V_amp(s_t)
+
+policy_obs_t ─&gt; Actor ─&gt; a_t ─&gt; Isaac physics ─&gt; s_{t+1} ─┐
+Parallelism(s_t, terrain) ────────────────&gt; r_{t+1} ───────┼─&gt; 24-frame paired history
+                                                           └─&gt; D(agent window) ─&gt; r_amp_t
+
+base env reward ─&gt; base GAE ─┐
+AMP reward + gate ─&gt; AMP GAE ├─&gt; A_actor = A_base + lambda_amp * A_amp ─&gt; PPO Actor update
+                              └─&gt; separate value losses</code></pre>
+
+  <h3>模块输入输出总表</h3>
+  <table>
+    <thead><tr><th>模块</th><th>输入</th><th>输出</th><th>持久状态</th></tr></thead>
+    <tbody>
+      <tr><td>Parallelism reference manager</td><td>真实 root/joint、command、terrain</td><td>冻结的下一帧 expert state、<code>step_plan_valid</code></td><td>24 帧 plan、phase、standstill latch</td></tr>
+      <tr><td>Parallelism AMP manager</td><td>冻结 expert frame、physics 后 agent state、done</td><td>expert/agent window、<code>amp_reward_active</code>、history ratio</td><td>每 env 两个 24 帧 ring buffer 与 valid count</td></tr>
+      <tr><td>AMP discriminator</td><td><code>[batch, 936]</code> normalized window</td><td><code>[batch, 1]</code> logit</td><td>网络参数</td></tr>
+      <tr><td>AMP normalizer</td><td>仅 active 的 expert/agent windows</td><td>normalized <code>[batch, 936]</code></td><td>running mean/variance/count</td></tr>
+      <tr><td>AMP Actor-Critic CNN</td><td>原 policy obs、原 critic obs、2 维 AMP context</td><td>action、<code>V_base</code>、<code>V_amp</code></td><td>Actor、base critic、AMP value head</td></tr>
+      <tr><td>Parallelism AMP storage</td><td>每步 PPO transition、base/AMP reward 与 gates</td><td>base/AMP returns、两个 advantages、mini-batch</td><td>只保留当前 40 步 rollout</td></tr>
+      <tr><td>AMP replay</td><td>仅 active 的 expert/agent windows</td><td>D mini-batch</td><td>跨 PPO iteration 的定长 ring buffer</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="state-contract">三、判别器状态契约</h2>
+  <h3>每帧 39 维</h3>
+  <table>
+    <thead><tr><th>字段</th><th>维数</th><th>expert 来源</th><th>agent 来源</th></tr></thead>
+    <tbody>
+      <tr><td><code>joint_pos</code></td><td>12</td><td>冻结的 planner target joint position</td><td>physics 后真实 joint position</td></tr>
+      <tr><td><code>joint_vel</code></td><td>12</td><td>相邻 planner frame 差分；replan 后用新 plan 的 frame 0 -&gt; 1</td><td>physics 后真实 joint velocity</td></tr>
+      <tr><td><code>root_pos_local</code></td><td>3</td><td>窗口末帧为局部原点</td><td>窗口末帧为局部原点</td></tr>
+      <tr><td><code>root_rot_6d_local</code></td><td>6</td><td>移除窗口末帧 heading 后的连续 6D rotation</td><td>同一变换规则</td></tr>
+      <tr><td><code>root_lin_vel_local</code></td><td>3</td><td>planner root 差分速度，旋转到窗口末 heading frame</td><td>真实 root linear velocity，旋转到窗口末 heading frame</td></tr>
+      <tr><td><code>root_ang_vel_local</code></td><td>3</td><td>planner orientation 差分角速度，旋转到局部 frame</td><td>真实 root angular velocity，旋转到局部 frame</td></tr>
+      <tr><th>合计</th><th>39</th><td colspan="2"><code>39 × 24 = 936</code> 维 discriminator observation</td></tr>
+    </tbody>
+  </table>
+
+  <h3>局部 root 变换</h3>
+  <pre><code>p_ref = root_pos[:, -1]
+yaw_ref = heading(root_rot[:, -1])
+R_ref = Rz(yaw_ref)
+
+root_pos_local[k]     = R_ref^T (root_pos[k] - p_ref)
+root_rot_local[k]     = R_ref^T R(root_rot[k])  -&gt; first two columns -&gt; 6D
+root_lin_vel_local[k] = R_ref^T root_lin_vel_world[k]
+root_ang_vel_local[k] = R_ref^T root_ang_vel_world[k]</code></pre>
+  <p>expert 与 agent 各自使用自己窗口的末帧建立局部 frame。这样 D 能看到避障轨迹的弯曲、横移和高度变化，但看不到世界绝对位置，也不需要 terrain 输入。</p>
+
+  <div class="contract">
+    <strong>禁止进入 D 的信息</strong>
+    <p><code>terrain</code>、semantic id、height map、command、action、plan id、<code>plan_valid</code>、<code>amp_active</code> 和 history ratio 均不拼入 936 维 D 输入。门控字段只服务算法和 AMP Critic，不能让 D 通过有效性标签投机分类。</p>
+  </div>
+
+  <h2 id="time-alignment">四、逐步时间对齐</h2>
+  <h3>一个 transition 的严格顺序</h3>
+  <pre><code>时刻 t，环境真实状态为 s_t
+
+1. Actor(policy_obs_t) 采样 a_t
+2. AMP Critic 读取 history 在 s_t 时刻的 context_t
+3. ParallelismReferenceManager.prepare_step_reference()
+   - 必要时先 replan
+   - 冻结下一控制目标 r_{t+1}
+   - 冻结本 transition 的 step_plan_valid
+4. physics(a_t) 得到 s_{t+1}
+5. 若 transition 有效：push(expert=r_{t+1}, agent=s_{t+1})
+6. 由更新后的 24 帧 agent window 计算 r_amp_t
+7. storage 写入属于 (s_t, a_t, s_{t+1}) 的 base reward、AMP reward 和 gates</code></pre>
+
+  <p>判别器比较的是同时刻的 <code>r_{t+1}</code> 与 <code>s_{t+1}</code>。不能把执行后的 <code>s_{t+1}</code> 与旧的 <code>r_t</code> 比较，也不能在 physics 后才决定本步使用哪个 reference。</p>
+
+  <h3>replan 边界</h3>
+  <pre><code>Plan A: A0 是实测状态，控制目标为 A1 ... A23
+Plan B: B0 是 step 23 后的新实测状态，控制目标为 B1 ... B23
+
+transition 23: push(A23, S23)
+transition 24: prepare 时 replan B，push(B1, S24)
+transition 40: push(B17, S40)
+
+step 40 的 expert window = [A17 ... A23, B1 ... B17]  共 7 + 17 = 24 帧
+step 40 的 agent  window = [S17 ................ S40]  共 24 帧</code></pre>
+  <p>历史不记录 plan id，也不因正常成功 replan 清空。它只表达连续执行时间，允许一个窗口跨越相邻 planning segment。新 plan 的 frame 0 只在 reset 或从 invalid 恢复时用于初始化历史；正常滚动 replan 不重复压入 B0。</p>
+
+  <h2 id="history">五、24 帧历史与 40 步 rollout</h2>
+  <h3>24 帧是 state window，不是 24 个 PPO action</h3>
+  <p>窗口包含 24 个状态采样点，时间跨度为 <code>(24 - 1) × 0.02s = 0.46s</code>。episode/reset 或 invalid 恢复时，frame 0 使用同一真实状态初始化 expert 与 agent，位置、姿态及速度都取当前实测值；随后每个 transition 追加一帧。</p>
+
+  <table>
+    <thead><tr><th>时刻</th><th>history 内容</th><th>valid_count</th><th>AMP reward</th></tr></thead>
+    <tbody>
+      <tr><td>reset/recovery 成功 plan</td><td><code>[r0=s0]</code> / <code>[s0]</code></td><td>1</td><td>0</td></tr>
+      <tr><td>transition 1 后</td><td><code>[r0,r1]</code> / <code>[s0,s1]</code></td><td>2</td><td>0</td></tr>
+      <tr><td>transition 22 后</td><td>23 帧</td><td>23</td><td>0</td></tr>
+      <tr><td>transition 23 后</td><td>完整 24 帧</td><td>24</td><td>启用</td></tr>
+      <tr><td>transition 24..40</td><td>ring buffer 每步丢最老帧、追加最新帧</td><td>24</td><td>保持启用</td></tr>
+    </tbody>
+  </table>
+
+  <h3>40 步 rollout 的含义</h3>
+  <div class="two-col">
+    <div class="panel">
+      <h4>第一个 PPO iteration</h4>
+      <p>从新 reset 开始，40 个 transition 全部存入 PPO storage。前 22 个 transition 只有 base PPO；第 23 到第 40 个 transition 有完整 24 帧窗口，共 18 个 AMP-active transition。</p>
+    </div>
+    <div class="panel">
+      <h4>后续 PPO iteration</h4>
+      <p>rollout storage 在 update 后清空，但 AMP manager 的 per-env ring buffer 不清空。若没有 done 或规划失败，下一个 40 步 rollout 从第 1 步起即可继续产生 AMP reward。</p>
+    </div>
+  </div>
+
+  <div class="notice">
+    <strong>4096 环境 memory guard</strong>
+    <p>现有 <code>scripts/train.py</code> 会把 4096 环境的 <code>num_steps_per_env</code> 从 40 改为 24。AMP history horizon 仍为 24，且跨 PPO iteration 保留；rollout 变短不会改变 D 的窗口长度，也不会要求在每个 rollout 内重新凑满历史。</p>
+  </div>
+
+  <h2 id="standstill">六、规划失败与 standstill 门控</h2>
+  <h3>状态机</h3>
+  <table>
+    <thead><tr><th>事件</th><th>history</th><th>算法行为</th></tr></thead>
+    <tbody>
+      <tr><td>正常成功 replan</td><td>保留，不按 plan id 分段</td><td>AMP 连续</td></tr>
+      <tr><td><code>plan_valid=False</code> 或 <code>standstill_latched=True</code></td><td>立即清空，<code>valid_count=0</code></td><td><code>r_amp=0</code>，不进 D/replay/normalizer，AMP GAE 截断</td></tr>
+      <tr><td>invalid 期间持续 standstill</td><td>保持空</td><td>只有 base PPO 继续训练</td></tr>
+      <tr><td>下一次 plan 恢复有效</td><td>用当前实测状态与新 plan frame 0 初始化为 count 1</td><td>继续收集，但 reward 仍为 0</td></tr>
+      <tr><td>恢复后 history 达到 24</td><td>完整 window</td><td>从当前 transition 恢复 AMP</td></tr>
+      <tr><td>episode done/reset</td><td>对应 env 行清空；新 episode frame 0 重新初始化</td><td>禁止跨 episode 拼 window；timeout 对 base PPO 保持原 bootstrap，对 AMP 视为边界并截断</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code>history_ratio = valid_count / 24
+
+amp_state_active = plan_valid
+                   AND NOT standstill_latched
+                   AND valid_count == 24
+
+amp_reward_active_t = step_plan_valid_t
+                      AND NOT standstill_latched_after_step
+                      AND valid_count_after_push == 24
+
+r_amp_t = amp_reward_active_t * AMPReward(D(agent_window_t))</code></pre>
+
+  <h3><code>amp_active</code> 与 <code>history_ratio</code> 的区别</h3>
+  <ul>
+    <li><code>amp_active</code> 是硬门：决定当前 transition 是否有 AMP reward、AMP advantage、AMP value loss 和 D 样本。</li>
+    <li><code>history_ratio</code> 是进度：告诉 AMP Critic 当前离完整有效窗口还有多远，使它能区分“刚恢复 1/24”和“即将恢复 23/24”。</li>
+    <li>两者都不输入 Actor 和 D；只作为 AMP value 分支的 critic context 与算法 mask。</li>
+  </ul>
+
+  <h2 id="dual-value">七、双价值通道</h2>
+  <h3>不是两个 Actor，而是两个 return estimator</h3>
+  <table>
+    <thead><tr><th>分支</th><th>预测目标</th><th>输入</th><th>训练范围</th></tr></thead>
+    <tbody>
+      <tr><td><code>V_base</code></td><td>原环境 locomotion/base reward return</td><td>现有 critic observation</td><td>全部 transition</td></tr>
+      <tr><td><code>V_amp</code></td><td>门控后的 AMP reward return</td><td>base critic feature 的 stop-gradient 副本 + <code>[amp_state_active, history_ratio]</code></td><td>仅 AMP-active transition</td></tr>
+    </tbody>
+  </table>
+
+  <p>代码上是一个 <code>AmpActorCriticCNN</code> 模块，保留现有 <code>actor</code>、<code>critic</code>、CNN 和 <code>std</code> 参数名，并新增 <code>amp_value_head</code>。AMP value loss 不反向更新 Actor、base critic 或 base critic CNN；这样 pure PPO checkpoint 可精确加载，AMP loss 也不会直接扰动基础价值分支。</p>
+
+  <h3>AMP GAE 的严格边界</h3>
+  <pre><code>m_t     = amp_reward_active_t
+m_next  = 下一状态是否仍处于完整有效 AMP 段
+terminal = done_t
+
+delta_amp_t = m_t * (
+    r_amp_t
+    + gamma * (1 - terminal) * m_next * V_amp(s_{t+1})
+    - V_amp(s_t)
+)
+
+A_amp_t = delta_amp_t
+          + gamma * lambda * (1 - terminal) * m_t * m_next * A_amp_{t+1}</code></pre>
+  <p>当本步 standstill 或下一步进入 standstill 时，递归立即断开。未来恢复后的 AMP reward 不会穿过 invalid 区间回传。</p>
+
+  <h3>Advantage 归一化与组合</h3>
+  <pre><code>A_base_norm = normalize(A_base, all rollout rows)
+A_amp_norm  = masked_normalize(A_amp, only m_t == 1 rows)
+A_amp_norm[m_t == 0] = 0
+
+A_actor = A_base_norm + lambda_amp(iteration) * A_amp_norm</code></pre>
+  <p>组合后不再做全局二次归一化。否则 AMP-active 样本改变全局 mean/std，会间接改变 standstill 行的 base advantage，破坏“standstill 不受 AMP 奖励作用”的要求。</p>
+
+  <div class="contract">
+    <strong>严格不变量</strong>
+    <p>对任意 <code>m_t=0</code> 的 transition，必须逐元素满足 <code>A_actor_t == A_base_norm_t</code>；其 AMP value loss、AMP reward、D sample weight 均为 0。</p>
+  </div>
+
+  <h2 id="algorithm">八、判别器与 PPO 更新</h2>
+  <h3>Discriminator</h3>
+  <ul>
+    <li>输入：flatten 后的 <code>[batch, 936]</code>。</li>
+    <li>网络：MLP <code>936 -&gt; 1024 -&gt; 512 -&gt; 256 -&gt; 1</code>，LeakyReLU，输出 logit。</li>
+    <li>标签：Parallelism expert window 为 1，policy agent/replay window 为 0。</li>
+    <li>loss：二元交叉熵 + expert/agent input gradient penalty + final logit weight L2。</li>
+    <li>首版参数参考 MimicKit Go2：<code>grad_penalty=5</code>、<code>logit_reg=0.01</code>、<code>reward_scale=2</code>。</li>
+  </ul>
+
+  <h3>AMP reward</h3>
+  <pre><code>p_expert = sigmoid(D(normalize(agent_window)))
+r_amp_raw = -log(max(1 - p_expert, 1e-4)) * 2.0
+r_amp = amp_reward_active * r_amp_raw</code></pre>
+  <p>该公式与 MimicKit <code>AMPAgent._calc_disc_rewards()</code> 对齐。首版 <code>lambda_amp</code> 从 0 线性升到 0.1，用 500 个 PPO iteration 完成 warm-up；基础 reward 权重保持 1.0。warm-up 防止随机初始化 D 在训练初期压过已有行走能力。</p>
+
+  <h3>每个 PPO iteration 的数据流</h3>
+  <ol>
+    <li>冻结 D 与 AMP normalizer，在 40 步 rollout 中逐步计算 active transition 的 AMP reward。</li>
+    <li>active expert/agent window 立即压入定长 AMP replay；inactive 行完全跳过。</li>
+    <li>rollout 完成后，分别计算 base GAE 与 masked AMP GAE。</li>
+    <li>使用组合 advantage 更新 Actor，同时分别更新 base value loss 与 masked AMP value loss。</li>
+    <li>只用本轮 active expert/agent 原始窗口更新 normalizer，再从最新样本与 replay 采样更新 D；更新后的 normalizer 与 D 从下一轮 rollout 开始用于 reward。</li>
+    <li>清 PPO rollout storage；不清 environment AMP history 和 D replay。</li>
+  </ol>
+
+  <h3>默认训练参数</h3>
+  <table>
+    <thead><tr><th>参数</th><th>首版值</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><code>num_steps_per_env</code></td><td>1024 env 为 40；4096 env guard 为 24</td><td>保持现有 PPO，history 独立</td></tr>
+      <tr><td><code>amp_window_frames</code></td><td>24</td><td>对齐 Parallelism horizon</td></tr>
+      <tr><td><code>amp_reward_weight</code></td><td>0.1，500 iterations 线性 warm-up</td><td>AMP 是运动学附加信号</td></tr>
+      <tr><td><code>disc_learning_rate</code></td><td>1e-4</td><td>独立于 PPO optimizer</td></tr>
+      <tr><td><code>disc_epochs</code></td><td>2 / PPO iteration</td><td>控制 D 过拟合与成本</td></tr>
+      <tr><td><code>disc_batch_size</code></td><td>4096</td><td>从所有 active env/step 与 replay 采样</td></tr>
+      <tr><td><code>disc_replay_capacity</code></td><td>32768 windows / class</td><td>定长 GPU ring buffer；raw window 用 float16 存储，送入 normalizer/D 前转 float32</td></tr>
+      <tr><td><code>amp_value_loss_coef</code></td><td>1.0</td><td>与 base value 独立计权</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="checkpoint">九、初始化、恢复与部署</h2>
+  <h3>从 pure PPO warm start</h3>
+  <ul>
+    <li>新参数 <code>--amp_init_checkpoint /absolute/path/model_x.pt</code> 只允许 AMP 新 run 使用。</li>
+    <li>精确加载 pure PPO 的 Actor、action std、Actor CNN、base Critic、base Critic CNN 和 observation normalizer。</li>
+    <li>不加载 pure PPO optimizer，不继承 pure PPO iteration；AMP run 从 iteration 0 和新 optimizer 开始。</li>
+    <li><code>amp_value_head</code>、D、D optimizer、AMP normalizer 与 replay 全部重新初始化。</li>
+    <li>加载时逐项报告 missing/unexpected keys；除明确的 AMP 新增 key 外，任何缺失都报错，禁止静默部分加载。</li>
+  </ul>
+
+  <h3>AMP run resume</h3>
+  <ul>
+    <li><code>--resume</code> 从 AMP 自己的 experiment log root 加载完整 Actor、两个 value 分支、D、两个 optimizer、normalizers 和 iteration。</li>
+    <li>不保存 simulator AMP history；resume 后新环境从 frame 0 重新积累，达到 24 帧再恢复 AMP。</li>
+    <li>首版不保存 replay buffer，避免 checkpoint 体积膨胀；resume 后 replay 重新填充。</li>
+  </ul>
+
+  <h3>部署导出</h3>
+  <p>play/export 仅调用 <code>act_inference(policy_obs)</code>。部署 checkpoint 可以只保留 Actor、Actor CNN、std/normalizer；不创建 Parallelism manager、AMP manager、D 或任一 value branch。</p>
+
+  <h2 id="files">十、新文件与现有文件改动</h2>
+  <h3>新增实现文件</h3>
+  <table>
+    <thead><tr><th>文件</th><th>唯一职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>Go2Pvcnn/tracking/parallelism_amp_env.py</code></td><td>在现有 reference 冻结与 physics 之后生成 AMP transition payload，不改变基础 reward。</td></tr>
+      <tr><td><code>Go2Pvcnn/tracking/parallelism_amp_cross_large_complex_env_cfg.py</code></td><td>独立 mixed-terrain AMP experiment 配置。</td></tr>
+      <tr><td><code>Go2Pvcnn/tracking/managers/parallelism_amp_manager.py</code></td><td>frame 编码、局部化、24 帧 paired ring buffer、reset/recovery/standstill 状态机。</td></tr>
+      <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/modules/amp_actor_critic_cnn.py</code></td><td>兼容 pure PPO 参数名的 Actor/base value，加 stop-gradient AMP value head。</td></tr>
+      <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/modules/amp_discriminator.py</code></td><td>D 网络、AMP normalizer 与 reward 计算。</td></tr>
+      <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/storage/parallelism_amp_storage.py</code></td><td>base/AMP rewards、values、masks、returns 与 masked mini-batch。</td></tr>
+      <tr><td><code>Go2Pvcnn/rsl_rl/rsl_rl/algorithms/parallelism_amp_ppo.py</code></td><td>双 GAE、组合 advantage、PPO loss、D update 与 replay。</td></tr>
+      <tr><td><code>Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh</code></td><td>要求 pure PPO init checkpoint 的独立启动脚本。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>仅做 additive/guarded 修改</h3>
+  <ul>
+    <li><code>Go2Pvcnn/agent/train_cfg.py</code>：新增 AMP experiment 配置，不修改两个旧 experiment 的返回值。</li>
+    <li><code>Go2Pvcnn/tracking/register_envs.py</code>：新增 Gym id <code>Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AMP-v0</code>。</li>
+    <li><code>Go2Pvcnn/scripts/train.py</code>：新增 AMP env map、init checkpoint 分支与仅 AMP 启用的 runner/context hook。</li>
+    <li><code>rsl_rl/modules|algorithms|storage/__init__.py</code>：只增加 exports。</li>
+    <li><code>on_policy_runner.py</code>：只识别 <code>ParallelismAMPPPO</code> 训练类型并传递最终 AMP context；普通 PPO 和 distillation 分支保持原调用路径。</li>
+  </ul>
+
+  <div class="contract">
+    <strong>实验隔离要求</strong>
+    <p><code>parallelism_tracking_cross_large_complex_distillation</code> 与 <code>cross_large_complex_ppo</code> 的 env class、policy class、algorithm class、observation groups、reward、launcher 和 checkpoint 语义必须保持不变。AMP 只能通过新 experiment name 启用。</p>
+  </div>
+
+  <h2 id="tests">十一、真实测试与验收</h2>
+  <div class="test-note">
+    <strong>“真实测试”的定义</strong>
+    <p>核心验收必须实例化并运行真实 tensor 模块、真实 optimizer、真实 Parallelism planner 或真实 Isaac Lab 环境。只读取源码并断言字符串存在的 static test 可以保留为注册防护，但不计入 AMP 功能通过。</p>
+  </div>
+
+  <h3>A. Tensor 行为测试</h3>
+  <table>
+    <thead><tr><th>测试文件</th><th>真实执行内容</th><th>关键断言</th></tr></thead>
+    <tbody>
+      <tr><td><code>test_parallelism_amp_history.py</code></td><td>在 CPU 与可用 CUDA 上创建真实 ring buffer，逐帧 push 50 次</td><td>顺序、wrap-around、per-env reset、跨 rollout 保留均数值正确</td></tr>
+      <tr><td><code>test_parallelism_amp_time_alignment.py</code></td><td>使用真实 <code>ParallelismReferenceManager</code> tensor 与递增编号 state</td><td>transition 23/24/40 分别得到 A23、B1、B17；step 40 window 精确等于 A17..A23+B1..B17</td></tr>
+      <tr><td><code>test_parallelism_amp_state_encoding.py</code></td><td>构造平移、旋转后的同一真实 24 帧 trajectory 并执行 encoder</td><td>局部观测平移/全局 yaw 不变；shape 为 936；所有值 finite</td></tr>
+      <tr><td><code>test_parallelism_amp_standstill.py</code></td><td>给真实 <code>plan_trajectory</code> 输入全 invalid terrain 产生失败，再恢复可行 terrain</td><td>失败立即 count 0；inactive 不入 replay/normalizer；恢复到第 24 帧才 active</td></tr>
+    </tbody>
+  </table>
+
+  <h3>B. 算法与梯度测试</h3>
+  <table>
+    <thead><tr><th>测试</th><th>过程</th><th>必须通过的证据</th></tr></thead>
+    <tbody>
+      <tr><td>双 GAE 数值测试</td><td>手算 8 步 base/AMP rewards，在第 3..5 步设 inactive</td><td>实现结果与手算相等；未来 AMP reward 不穿过 inactive 边界</td></tr>
+      <tr><td>inactive advantage 不变量</td><td>真实执行 masked normalization 与 advantage combine</td><td>所有 inactive 行逐元素 <code>A_actor == A_base_norm</code></td></tr>
+      <tr><td>AMP value 梯度隔离</td><td>只对真实 <code>V_amp</code> loss 调 <code>backward()</code></td><td>AMP head grad 非零；Actor/base critic/base CNN grad 为零</td></tr>
+      <tr><td>D optimizer step</td><td>真实 expert/agent batch 前向、gradient penalty、Adam step</td><td>loss finite；至少一个 D 参数改变；normalizer 只统计 active rows</td></tr>
+      <tr><td>AMP reward gate</td><td>同一 D logit 配 active/inactive mask</td><td>active reward 符合 MimicKit 公式；inactive 精确为 0</td></tr>
+      <tr><td>checkpoint warm start</td><td>保存真实 <code>ActorCriticCNN</code> checkpoint，再加载到 <code>AmpActorCriticCNN</code></td><td>Actor/base Critic/std 输出 bitwise 或容差内一致；AMP 新参数保持新初始化</td></tr>
+      <tr><td>一次完整 update</td><td>小 batch 真实收集张量，执行 PPO + 两 value losses + D update</td><td>所有 loss/grad finite，storage 正确 clear，history/replay 不被错误 clear</td></tr>
+    </tbody>
+  </table>
+
+  <h3>C. 配置隔离回归</h3>
+  <ul>
+    <li>实例化三个真实 train cfg，确认 AMP 使用 <code>ParallelismAMPPPO + AmpActorCriticCNN</code>，旧 pure PPO 仍为 <code>PPO + ActorCriticCNN</code>，distillation 仍为 <code>HybridDistillationPPO + StudentTeacherCNN</code>。</li>
+    <li>实例化三个真实 EnvCfg，确认只有 AMP env 创建 AMP manager/observation payload。</li>
+    <li>运行现有 pure PPO 与 distillation focused tests，禁止因新增 exports/runner branch 产生回归。</li>
+  </ul>
+
+  <h3>D. 真实 Isaac Lab headless smoke</h3>
+  <table>
+    <thead><tr><th>阶段</th><th>命令规模</th><th>验收信号</th></tr></thead>
+    <tbody>
+      <tr><td>单环境时序 probe</td><td>1 env，至少 50 control steps</td><td>实际启动 Isaac physics；transition 23 后 AMP active；经历正常 replan 后 history 不清；无 NaN/Inf</td></tr>
+      <tr><td>真实规划失败 probe</td><td>真实语义/高度输入制造不可规划区域，再进入可规划区域</td><td>日志出现 inactive 段；AMP reward 精确为 0；恢复后完整 24 帧才重新 active</td></tr>
+      <tr><td>训练 smoke</td><td>64 env，2 PPO iterations，真实 pure PPO checkpoint</td><td>两个 learning iteration 完成；Actor/base/AMP/D 参数按预期更新；checkpoint 可保存并 resume</td></tr>
+      <tr><td>目标规模 smoke</td><td>1024 env，至少 2 PPO iterations</td><td>无 OOM、NaN、Traceback；active ratio、D accuracy、base/AMP reward、两个 value loss 均写入 TensorBoard</td></tr>
+      <tr><td>4096 memory guard</td><td>4096 env，24 rollout steps，1 iteration</td><td>guard 生效；history horizon 仍为 24；跨 iteration 语义通过；若硬件不足必须明确记录为未验证，不能用 static test 替代</td></tr>
+    </tbody>
+  </table>
+
+  <h3>建议测试文件</h3>
+  <pre><code>Go2Pvcnn/tests/tracking/test_parallelism_amp_history.py
+Go2Pvcnn/tests/tracking/test_parallelism_amp_time_alignment.py
+Go2Pvcnn/tests/tracking/test_parallelism_amp_state_encoding.py
+Go2Pvcnn/tests/tracking/test_parallelism_amp_standstill.py
+Go2Pvcnn/tests/rsl_rl/test_parallelism_amp_dual_value.py
+Go2Pvcnn/tests/rsl_rl/test_parallelism_amp_discriminator.py
+Go2Pvcnn/tests/rsl_rl/test_parallelism_amp_checkpoint.py
+Go2Pvcnn/tests/tracking/test_parallelism_amp_isolation.py
+Go2Pvcnn/tests/tracking/parallelism_amp_runtime_probe.py
+Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py</code></pre>
+
+  <h3>分层执行命令</h3>
+  <pre><code># 真实 tensor/optimizer/planner tests
+/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
+  -m pytest Go2Pvcnn/tests/rsl_rl/test_parallelism_amp_*.py \
+            Go2Pvcnn/tests/tracking/test_parallelism_amp_*.py -q
+
+# 真实 Isaac 单环境时序
+/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
+  Go2Pvcnn/tests/tracking/parallelism_amp_runtime_probe.py \
+  --num-envs 1 --steps 50 --device cuda:0
+
+# 真实 64-env 两次训练更新
+/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
+  Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py \
+  --num-envs 64 --max-iterations 2 --device cuda:0 \
+  --amp-init-checkpoint /absolute/path/to/pure_ppo_checkpoint.pt
+
+# AMP 之外的回归
+/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
+  -m pytest Go2Pvcnn/tests/tracking/test_cross_large_complex_ppo_static.py \
+            Go2Pvcnn/tests/tracking/test_parallelism_distillation_*.py -q</code></pre>
+
+  <h3>训练健康指标</h3>
+  <table>
+    <thead><tr><th>类别</th><th>必须记录</th></tr></thead>
+    <tbody>
+      <tr><td>Gate</td><td><code>amp_active_ratio</code>、<code>amp_history_ratio_mean</code>、<code>amp_invalid_reset_count</code>、<code>amp_recovery_count</code></td></tr>
+      <tr><td>Reward</td><td><code>base_reward_mean</code>、<code>amp_reward_raw_mean</code>、<code>amp_reward_gated_mean</code>、当前 <code>lambda_amp</code></td></tr>
+      <tr><td>D</td><td>loss、gradient penalty、expert/agent accuracy、两个 logit mean、replay fill ratio</td></tr>
+      <tr><td>Value</td><td>base value loss、AMP value loss、active AMP advantage mean/std</td></tr>
+      <tr><td>Safety</td><td>NaN/Inf count、planner valid ratio、standstill ratio、原 locomotion/termination 指标</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="references">十二、与 MimicKit/当前代码的对应关系</h2>
+  <table>
+    <thead><tr><th>设计点</th><th>参考位置</th><th>采用或调整</th></tr></thead>
+    <tbody>
+      <tr><td>多帧 history</td><td><code>raw/MimicKit/mimickit/envs/amp_env.py</code> 的 <code>_build_disc_obs_buffers()</code> / <code>_update_disc_hist()</code></td><td>采用 circular history；窗口改为 Parallelism 的 24 帧 paired expert/agent</td></tr>
+      <tr><td>局部 root frame</td><td>同文件 <code>_update_disc_obs()</code>，以最后一帧 root 为 reference</td><td>采用末帧局部化，明确移除绝对 XY 与 heading</td></tr>
+      <tr><td>AMP reward</td><td><code>raw/MimicKit/mimickit/learning/amp_agent.py::_calc_disc_rewards()</code></td><td>采用 <code>-log(1-sigmoid(logit))</code> 与 scale 2</td></tr>
+      <tr><td>D loss</td><td><code>AMPAgent._compute_disc_loss()</code></td><td>采用 BCE、input gradient penalty、logit L2 与 replay</td></tr>
+      <tr><td>单 Critic 合并 reward</td><td><code>AMPAgent._compute_rewards()</code></td><td><span class="no">不采用</span>；当前需求要隔离 standstill，改为 base/AMP 双价值与双 GAE</td></tr>
+      <tr><td>24 帧下一目标</td><td><code>tracking/managers/parallelism_reference_manager.py::prepare_step_reference()</code></td><td>消费已冻结的 target position/rotation/joint 与 validity；expert root velocity 从同一 start/target 在 AMP manager 内计算，保持 <code>r_{t+1}</code> 对齐且不混入 policy frame</td></tr>
+      <tr><td>规划有效性</td><td>同 manager 的 <code>plan_valid</code>、<code>step_plan_valid</code>、<code>standstill_latched</code></td><td>作为 history/reward/GAE/D sample 的统一硬门</td></tr>
+      <tr><td>PPO 40 步</td><td><code>agent/train_cfg.py</code> 与 <code>on_policy_runner.py</code></td><td>保持 rollout；AMP history 生命周期与 PPO storage 解耦</td></tr>
+    </tbody>
+  </table>
+
+  <h2>十三、完成标准</h2>
+  <ul>
+    <li>AMP experiment 能从真实 pure PPO checkpoint 初始化，并完成真实 Isaac Lab PPO update。</li>
+    <li>D 输入严格为 <code>[N, 936]</code> state window，无 terrain/command/action。</li>
+    <li>step 40 的 24 帧跨 replan window 与本文示例逐帧一致。</li>
+    <li>standstill/inactive transition 的 AMP reward、AMP advantage、AMP value loss 与 D sample weight 精确为 0。</li>
+    <li>恢复后只有完整 24 帧有效 history 才重新启用 AMP。</li>
+    <li>pure PPO 与 distillation 原实验的真实配置和 focused regressions 保持通过。</li>
+    <li>部署 Actor 不需要 planner、D、history 或 Critic。</li>
+  </ul>
+
+  <p class="small">状态：设计已在对话中确认；本 HTML 用于最终规格复核。复核通过后再编写逐任务实现计划，并按测试先行顺序实施。</p>
+</main>
+</body>
+</html>
