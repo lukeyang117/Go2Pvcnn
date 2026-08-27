@@ -11,6 +11,7 @@ VALID_PLANNER_BACKENDS = ("mpc", "joint_mpc_rti")
 TRAJECTORY_MANAGER_EXPERIMENTS = (
     "teacher_elevation_trajectory_mpc_semantic",
     "teacher_elevation_trajectory_mpc_semantic_flat_small_avoidance",
+    "parallelism_tracking_cross_large_complex_amp",
 )
 
 

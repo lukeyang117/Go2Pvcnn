@@ -11,9 +11,9 @@ from collections import deque
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 import rsl_rl
-from rsl_rl.algorithms import HybridDistillationPPO, PPO, Distillation
+from rsl_rl.algorithms import HybridDistillationPPO, PPO, Distillation, ParallelismAMPPPO
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticCNN, ActorCriticRecurrent, EmpiricalNormalization, StudentTeacherCNN
+from rsl_rl.modules import ActorCritic, ActorCriticCNN, ActorCriticRecurrent, EmpiricalNormalization, StudentTeacherCNN, AmpActorCriticCNN
 from rsl_rl.utils import store_code_state
 
 
@@ -32,6 +32,8 @@ class OnPolicyRunner:
             self.training_type = "distillation"
         elif self.alg_cfg["class_name"] == "HybridDistillationPPO":
             self.training_type = "hybrid_distillation"
+        elif self.alg_cfg["class_name"] == "ParallelismAMPPPO":
+            self.training_type = "amp"
         else:
             raise ValueError(f"Unknown algorithm class: {self.alg_cfg['class_name']}")
 
@@ -280,7 +282,7 @@ class OnPolicyRunner:
                 # 阶段2: 计算returns（优势函数和回报）
                 # ========================================
                 start = stop
-                if self.training_type in ("rl", "hybrid_distillation"):
+                if self.training_type in ("rl", "hybrid_distillation", "amp"):
                     self.alg.compute_returns(critic_obs)  # 使用GAE计算优势函数和回报值
 
             # ========================================
@@ -293,6 +295,10 @@ class OnPolicyRunner:
                 mean_surrogate_loss = float(
                     loss_dict.get("surrogate_loss", loss_dict.get("behavior", 0.0))
                 )
+            elif self.training_type == "amp":
+                loss_dict = self.alg.update()
+                mean_value_loss = float(loss_dict.get("value_loss", 0.0))
+                mean_surrogate_loss = float(loss_dict.get("surrogate_loss", 0.0))
             else:
                 mean_value_loss, mean_surrogate_loss = self.alg.update()  # PPO策略更新
             stop = time.time()

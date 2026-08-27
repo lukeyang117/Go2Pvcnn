@@ -1,5 +1,7 @@
 """Training configuration for the active semantic MPC teacher experiment."""
 
+import copy
+
 
 def get_train_cfg(experiment_name: str) -> dict:
     """Return the RSL-RL config for the active semantic MPC experiment."""
@@ -13,6 +15,7 @@ def get_train_cfg(experiment_name: str) -> dict:
         "parallelism_tracking_cross_large_complex",
         "parallelism_tracking_cross_large_complex_distillation",
         "cross_large_complex_ppo",
+        "parallelism_tracking_cross_large_complex_amp",
     }
     if experiment_name not in supported:
         raise ValueError(f"Unknown experiment: {experiment_name}")
@@ -20,6 +23,8 @@ def get_train_cfg(experiment_name: str) -> dict:
         return _parallelism_distillation_train_cfg()
     if experiment_name == "cross_large_complex_ppo":
         return _cross_large_complex_ppo_train_cfg()
+    if experiment_name == "parallelism_tracking_cross_large_complex_amp":
+        return _parallelism_amp_train_cfg()
     return _teacher_elevation_trajectory_mpc_semantic_train_cfg()
 
 
@@ -136,6 +141,26 @@ def _cross_large_complex_ppo_train_cfg() -> dict:
             "critic": ["critic_elevation_semantic_map", "critic_state"],
         },
     }
+
+
+def _parallelism_amp_train_cfg() -> dict:
+    cfg = copy.deepcopy(_cross_large_complex_ppo_train_cfg())
+    cfg["experiment_name"] = "parallelism_tracking_cross_large_complex_amp"
+    cfg["algorithm"].update(
+        {
+            "class_name": "ParallelismAMPPPO",
+            "amp_window_frames": 24,
+            "amp_reward_weight": 0.1,
+            "amp_value_loss_coef": 1.0,
+            "disc_learning_rate": 1.0e-4,
+            "disc_epochs": 2,
+            "disc_batch_size": 4096,
+            "disc_replay_capacity": 32768,
+        }
+    )
+    cfg["policy"]["class_name"] = "AmpActorCriticCNN"
+    cfg["policy"]["amp_value_hidden_dims"] = [256, 128]
+    return cfg
 
 
 def _teacher_elevation_trajectory_mpc_semantic_train_cfg() -> dict:
