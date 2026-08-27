@@ -174,7 +174,7 @@ def test_amp_value_gradient_does_not_reach_base_network():
     obs = torch.randn(6, 8)
     active = torch.ones(6)
     ratio = torch.ones(6)
-    loss = model.evaluate_amp(obs, active, ratio).square().mean()
+    loss = model.evaluate_amp(obs, active, ratio).mean()
     loss.backward()
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.amp_value_head.parameters())
     assert all(p.grad is None for p in model.critic.parameters())
