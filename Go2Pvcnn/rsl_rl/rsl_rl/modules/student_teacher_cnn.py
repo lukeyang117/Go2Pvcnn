@@ -99,7 +99,7 @@ class StudentTeacherCNN(nn.Module):
             return self.teacher.act_inference(teacher_observations)
 
     def evaluate_value(self, critic_observations):
-        """Evaluate the trainable privileged critic on Parallelism observations."""
+        """Evaluate the trainable critic on PPO-compatible observations."""
 
         return self.student_critic.evaluate(critic_observations)
 
@@ -144,10 +144,31 @@ class StudentTeacherCNN(nn.Module):
         return False
 
     def load_student_state_dict(self, state_dict, keep_std=True):
-        """Load student and privileged critic weights without embedded teacher weights."""
+        """Load student actor and critic weights without embedded teacher weights."""
 
         state_dict = dict(state_dict)
         self._adapt_legacy_student_input_weights(state_dict)
+        has_student_namespace = any(
+            key.startswith("student.") or key.startswith("student_critic.")
+            for key in state_dict
+        )
+        if not has_student_namespace:
+            legacy_prefixes = (
+                ("actor.", "student.actor."),
+                ("actor_cnns.", "student.actor_cnns."),
+                ("critic.", "student_critic.critic."),
+                ("critic_cnns.", "student_critic.critic_cnns."),
+            )
+            legacy_state = {}
+            for key, value in state_dict.items():
+                if key == "std":
+                    legacy_state["student.std"] = value
+                    continue
+                for source_prefix, target_prefix in legacy_prefixes:
+                    if key.startswith(source_prefix):
+                        legacy_state[target_prefix + key[len(source_prefix):]] = value
+                        break
+            state_dict = legacy_state
         if not keep_std:
             state_dict.pop("student.std", None)
             state_dict.pop("student_critic.std", None)

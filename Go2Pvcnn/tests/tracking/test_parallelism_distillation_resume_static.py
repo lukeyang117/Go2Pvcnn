@@ -19,15 +19,16 @@ def test_distillation_config_defines_legacy_critic_groups() -> None:
 
 def test_resume_launcher_explicitly_selects_student_and_teacher_checkpoints() -> None:
     source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_distilation_resume.sh").read_text()
-    assert "--load_run 2026-08-18_21-38-36/6def073" in source
-    assert "--load_checkpoint model_5499.pt" in source
+    assert "STUDENT_CHECKPOINT=\"/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/cross_large_complex_ppo/2026-08-26_17-47-24/11d453a/model_19998.pt\"" in source
+    assert '--load_checkpoint "${STUDENT_CHECKPOINT}"' in source
+    assert "--load_run" not in source
     assert "--teacher_checkpoint" in source
     assert "2026-08-18_20-30-59/6def073/model_4999.pt" in source
 
 
 def test_fresh_launcher_uses_the_new_teacher_checkpoint() -> None:
     source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh").read_text()
-    assert "2026-08-18_20-30-59/6def073/model_4999.pt" in source
+    assert "2026-08-20_21-20-52/91b27a4/model_9899.pt" in source
 
 
 def test_resume_flow_prefers_explicit_teacher_checkpoint() -> None:

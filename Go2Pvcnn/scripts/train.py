@@ -921,10 +921,13 @@ def main() -> int:
                 resume_path = os.path.join(log_root_path, args_cli.load_run)
             else:
                 resume_path = find_latest_run_dir(log_root_path)
-            if resume_path is None:
+            if args_cli.load_checkpoint is not None and os.path.isabs(args_cli.load_checkpoint):
+                checkpoint_path = os.path.abspath(args_cli.load_checkpoint)
+            elif resume_path is None:
                 raise ValueError("No distillation run found to resume from!")
-            checkpoint_file = args_cli.load_checkpoint if args_cli.load_checkpoint is not None else "model_最新.pt"
-            checkpoint_path = os.path.join(resume_path, checkpoint_file)
+            else:
+                checkpoint_file = args_cli.load_checkpoint if args_cli.load_checkpoint is not None else "model_最新.pt"
+                checkpoint_path = os.path.join(resume_path, checkpoint_file)
             if not os.path.exists(checkpoint_path):
                 raise FileNotFoundError(f"Distillation checkpoint not found: {checkpoint_path}")
             if args_cli.teacher_checkpoint is not None:

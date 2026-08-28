@@ -17,6 +17,9 @@ from tracking.parallelism_cross_large_complex_env_cfg import (
     ParallelismTrackingCrossLargeComplexEnvCfg,
     ParallelismTrackingCrossLargeComplexEnvCfg_PLAY,
 )
+from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+    TeacherElevationTrajectoryMpcSemanticObservationsCfg,
+)
 from tracking.parallelism_small_obstacles_env_cfg import ParallelismSmallObstaclesRewardsCfg
 from tracking.parallelism_tracking_env_cfg import (
     ParallelismTrackingObservationsCfg,
@@ -56,12 +59,12 @@ class ParallelismTrackingDistillationObservationsCfg:
         parallelism_ref_root_rot = None
 
     @configclass
-    class CriticElevationSemanticMapCfg(ParallelismTrackingObservationsCfg.CriticElevationSemanticMapCfg):
+    class CriticElevationSemanticMapCfg(TeacherElevationTrajectoryMpcSemanticObservationsCfg.CriticElevationSemanticMapCfg):
         pass
 
     @configclass
-    class CriticStateCfg(ParallelismTrackingObservationsCfg.CriticStateCfg):
-        velocity_commands = None
+    class CriticStateCfg(TeacherElevationTrajectoryMpcSemanticObservationsCfg.CriticStateCfg):
+        pass
 
     @configclass
     class DistillationContextCfg(ObsGroup):

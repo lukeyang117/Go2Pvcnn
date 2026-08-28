@@ -625,3 +625,40 @@ def test_hybrid_schedule_config_and_fresh_launcher():
     assert "--resume" not in launcher
     assert "--load_run" not in launcher
     assert "--load_checkpoint" not in launcher
+
+
+def test_legacy_ppo_checkpoint_loads_actor_and_critic_into_student_modules():
+    from rsl_rl.modules import StudentTeacherCNN
+
+    model = _make_small_student_teacher_policy()
+    legacy_state = {}
+    expected = {}
+    for key, value in model.student.state_dict().items():
+        if key.startswith("actor.") or key.startswith("actor_cnns."):
+            legacy_key = key
+            expected["student." + key] = value.detach().clone() + 1.0
+            legacy_state[legacy_key] = expected["student." + key]
+    for key, value in model.student_critic.state_dict().items():
+        if key.startswith("critic.") or key.startswith("critic_cnns."):
+            legacy_key = key
+            expected["student_critic." + key] = value.detach().clone() + 2.0
+            legacy_state[legacy_key] = expected["student_critic." + key]
+    expected["student.std"] = model.student.std.detach().clone() + 3.0
+    legacy_state["std"] = expected["student.std"]
+    original_teacher = model.teacher.actor[0].weight.detach().clone()
+
+    model.load_student_state_dict(legacy_state, keep_std=True)
+
+    assert torch.allclose(model.student.actor[0].weight, expected["student.actor.0.weight"])
+    assert torch.allclose(
+        model.student_critic.critic[0].weight,
+        expected["student_critic.critic.0.weight"],
+    )
+    assert torch.allclose(model.student.std, expected["student.std"])
+    assert torch.allclose(model.teacher.actor[0].weight, original_teacher)
+
+
+def test_distillation_resume_accepts_absolute_student_checkpoint_path():
+    source = Path("Go2Pvcnn/scripts/train.py").read_text()
+
+    assert "os.path.isabs(args_cli.load_checkpoint)" in source
