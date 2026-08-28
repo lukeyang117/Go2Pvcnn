@@ -6,7 +6,10 @@ The isolated `parallelism_tracking_cross_large_complex_amp` experiment is
 implemented on branch `parallelism-amp`. It adds a 39-D joint/root state frame,
 23-transition batched history for a 24-frame discriminator window, `B0 -> B1`
 replan alignment, standstill/reset gating, dual value channels, discriminator
-replay/update, and legacy/full checkpoint resume.
+replay/update, and legacy/full checkpoint resume. AMP Critic and discriminator
+training start at iteration 0; Actor AMP guidance stays at zero through
+iteration 500, ramps linearly to 0.1 by iteration 600, and remains 0.1 after
+that.
 
 ## Open Children
 
@@ -21,12 +24,13 @@ replay/update, and legacy/full checkpoint resume.
 ## Related Logs
 
 - [2026-08-27 AMP batched transition and smoke](../log/2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md)
+- [2026-08-28 AMP warm-up and real smoke](../log/2026-08-28-parallelism-amp-warmup-real-smoke.md)
 
 ## Git Refs
 
 - Current work ref: `parallelism-amp`
-- Last feature commit: `b8b6ab4`
-- Last verified ref: `b8b6ab4`; focused `22 passed`
+- Last feature commit: `7242c08`
+- Last verified ref: `7242c08`; focused `24 passed`; real `1024 env x 4 iterations` smoke exit `0`
 
 ## Next Step
 

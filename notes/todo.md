@@ -4,7 +4,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Start Here
 
-- 2026-08-27 Parallelism AMP is implemented on `parallelism-amp`: 39-D state frames, 23-transition batch ring, `B0 -> B1` replan alignment, standstill gating, dual values, discriminator replay/update, legacy/full checkpoint resume, and a real `1024 env x 4 iteration` smoke (exit `0`). See [AMP smoke evidence](log/2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md) and the [Chinese HTML design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html).
+- 2026-08-28 Parallelism AMP actor guidance now warms up after the existing AMP Critic/discriminator path: actor AMP weight is `0` through iteration `500`, ramps to `0.1` by `600`, and then stays fixed. The real `1024 env x 4 iteration` resume smoke and focused `24`-test suite pass without NaN/Inf/Traceback/OOM. See [warm-up verification](log/2026-08-28-parallelism-amp-warmup-real-smoke.md), [AMP smoke evidence](log/2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md), and the [Chinese HTML design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html).
 
   Branch details: [T304 Parallelism AMP](todo/T304-parallelism-amp.md).
 

@@ -4,6 +4,8 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-08-28 | Parallelism AMP actor warm-up and NaN regression | AMP PPO schedule / masked GAE / real Isaac resume | pass | focused `24 passed`; real `1024 env x 4 iterations` exit `0`; AMP metrics and `amp_actor_reward_weight` present for steps `0..3`; no OOM/NaN/Inf/Traceback | [T304](../todo/T304-parallelism-amp.md) | [warm-up verification](2026-08-28-parallelism-amp-warmup-real-smoke.md) |
+
 | 2026-08-27 | Parallelism AMP batched transition and 1024-env smoke | AMP transition/replay/PPO integration | pass | focused `22 passed`; real 1024 env x 4 iterations exit `0`; TensorBoard AMP steps `0..3`; no OOM/NaN/Traceback | [AMP design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html) | [evidence](2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md) |
 
 | 2026-07-27 | Parallelism flat foot planner | self-contained GPU/batched foot planner | pass; real viewer smoke follow-up open | `14 passed`; import smoke `24`; 24-frame trot, 50 candidates per foot, torch single-pass filter/score, viewer backend route | [T303](../todo/T303-parallelism-flat-foot-planner.md) | [2026-07-27-parallelism-flat-foot-planner-implementation.md](2026-07-27-parallelism-flat-foot-planner-implementation.md) |
