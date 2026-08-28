@@ -425,7 +425,7 @@ A_actor = A_base_norm + lambda_amp(iteration) * A_amp_norm</code></pre>
   <pre><code>p_expert = sigmoid(D(normalize(agent_window)))
 r_amp_raw = -log(max(1 - p_expert, 1e-4)) * 2.0
 r_amp = amp_reward_active * r_amp_raw</code></pre>
-  <p>该公式与 MimicKit <code>AMPAgent._calc_disc_rewards()</code> 对齐。首版 <code>lambda_amp</code> 从 0 线性升到 0.1，用 500 个 PPO iteration 完成 warm-up；基础 reward 权重保持 1.0。warm-up 防止随机初始化 D 在训练初期压过已有行走能力。</p>
+  <p>该公式与 MimicKit <code>AMPAgent._calc_disc_rewards()</code> 对齐。AMP Critic 与判别器从第 0 个 PPO iteration 开始训练，但前 500 个 iteration 不把 AMP advantage 送入 Actor；第 500 个 iteration 的 Actor AMP 权重仍为 0，随后在 <code>500..600</code> 线性升到 0.1，之后保持 0.1。基础 reward 权重保持 1.0，避免随机初始化 D 在训练初期压过已有行走能力。</p>
 
   <h3>每个 PPO iteration 的数据流</h3>
   <ol>
@@ -443,7 +443,7 @@ r_amp = amp_reward_active * r_amp_raw</code></pre>
     <tbody>
       <tr><td><code>num_steps_per_env</code></td><td>1024 env 为 40；4096 env guard 为 24</td><td>保持现有 PPO，history 独立</td></tr>
       <tr><td><code>amp_window_frames</code></td><td>24</td><td>对齐 Parallelism horizon</td></tr>
-      <tr><td><code>amp_reward_weight</code></td><td>0.1，500 iterations 线性 warm-up</td><td>AMP 是运动学附加信号</td></tr>
+      <tr><td><code>amp_reward_weight</code></td><td>目标 0.1；iteration &lt;500 为 0，500..600 线性 ramp，之后为 0.1</td><td>Critic/D 先学习，Actor 后接收 AMP guidance</td></tr>
       <tr><td><code>disc_learning_rate</code></td><td>1e-4</td><td>独立于 PPO optimizer</td></tr>
       <tr><td><code>disc_epochs</code></td><td>2 / PPO iteration</td><td>控制 D 过拟合与成本</td></tr>
       <tr><td><code>disc_batch_size</code></td><td>4096</td><td>从所有 active env/step 与 replay 采样</td></tr>

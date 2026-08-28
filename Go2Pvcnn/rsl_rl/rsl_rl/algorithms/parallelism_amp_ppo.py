@@ -11,11 +11,28 @@ from .ppo import PPO
 
 
 class ParallelismAMPPPO(PPO):
-    def __init__(self, actor_critic, amp_reward_weight=0.1, amp_value_loss_coef=1.0, amp_window_frames=24, disc_learning_rate=1.0e-4, disc_epochs=2, disc_batch_size=4096, disc_replay_capacity=32768, **kwargs):
+    def __init__(
+        self,
+        actor_critic,
+        amp_reward_weight=0.1,
+        amp_value_loss_coef=1.0,
+        amp_window_frames=24,
+        amp_warmup_iterations=500,
+        amp_weight_ramp_iterations=100,
+        disc_learning_rate=1.0e-4,
+        disc_epochs=2,
+        disc_batch_size=4096,
+        disc_replay_capacity=32768,
+        **kwargs,
+    ):
         super().__init__(actor_critic, **kwargs)
         self.amp_reward_weight = float(amp_reward_weight)
         self.amp_value_loss_coef = float(amp_value_loss_coef)
         self.amp_window_frames = int(amp_window_frames)
+        self.amp_warmup_iterations = max(int(amp_warmup_iterations), 0)
+        self.amp_weight_ramp_iterations = max(int(amp_weight_ramp_iterations), 0)
+        self._iteration = 0
+        self._actor_amp_reward_weight = 0.0
         self.disc_epochs = int(disc_epochs)
         self.disc_batch_size = int(disc_batch_size)
         self.disc_replay_capacity = int(disc_replay_capacity)
@@ -24,6 +41,29 @@ class ParallelismAMPPPO(PPO):
         self._history_ratio = torch.zeros(1, device=self.device)
         self._amp_replay_expert = None
         self._amp_replay_agent = None
+
+    @property
+    def actor_amp_reward_weight(self) -> float:
+        """Current AMP advantage weight used by the actor update."""
+
+        return self._actor_amp_reward_weight
+
+    def set_iteration(self, iteration: int, *_args, **_kwargs) -> None:
+        """Update the global AMP-to-actor schedule, including resumed runs."""
+
+        self._iteration = max(int(iteration), 0)
+        if self._iteration < self.amp_warmup_iterations:
+            self._actor_amp_reward_weight = 0.0
+            return
+        if self.amp_weight_ramp_iterations == 0:
+            self._actor_amp_reward_weight = self.amp_reward_weight
+            return
+        progress = min(
+            1.0,
+            (self._iteration - self.amp_warmup_iterations)
+            / float(self.amp_weight_ramp_iterations),
+        )
+        self._actor_amp_reward_weight = self.amp_reward_weight * progress
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = ParallelismAMPStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
@@ -119,7 +159,12 @@ class ParallelismAMPPPO(PPO):
                 log_prob = self.actor_critic.get_actions_log_prob(actions_mb).reshape(-1, 1)
                 base_value = self.actor_critic.evaluate(critic_mb)
                 amp_value = self.actor_critic.evaluate_amp(critic_mb, active_mb, ratio_mb)
-                combined = combine_advantages(advantages_mb, amp_adv_mb, active_mb, self.amp_reward_weight)
+                combined = combine_advantages(
+                    advantages_mb,
+                    amp_adv_mb,
+                    active_mb,
+                    self.actor_amp_reward_weight,
+                )
                 prob_ratio = torch.exp(log_prob - old_log_mb)
                 surrogate = -combined * prob_ratio
                 clipped = -combined * torch.clamp(prob_ratio, 1.0 - self.clip_param, 1.0 + self.clip_param)
@@ -143,6 +188,7 @@ class ParallelismAMPPPO(PPO):
             "value_loss": total_value / denominator,
             "amp_value_loss": total_amp_value / denominator,
             "surrogate_loss": total_surrogate / denominator,
+            "amp_actor_reward_weight": self.actor_amp_reward_weight,
             **discriminator_metrics,
         }
 

@@ -19,3 +19,15 @@ def test_inactive_rows_keep_exact_base_actor_advantage():
     mask = torch.tensor([[1.0], [0.0], [1.0]])
     combined = combine_advantages(base, amp, mask, 0.1)
     assert combined[1] == base[1]
+
+
+def test_amp_advantage_normalization_stays_finite_with_one_active_sample():
+    storage = ParallelismAMPStorage(2, 4, [1], [1], [1], "cpu")
+    storage.amp_active.zero_()
+    storage.amp_active[0, 0, 0] = 1.0
+    storage.amp_rewards.zero_()
+    storage.amp_rewards[0, 0, 0] = 1.0
+
+    storage.compute_returns(torch.zeros(2, 1), torch.zeros(2, 1), 0.99, 0.95)
+
+    assert torch.isfinite(storage.amp_advantages).all()

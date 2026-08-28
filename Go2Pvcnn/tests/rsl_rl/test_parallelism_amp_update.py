@@ -5,6 +5,30 @@ from rsl_rl.modules.amp_actor_critic_cnn import AmpActorCriticCNN
 from rsl_rl.modules.amp_discriminator import AMPDiscriminator
 
 
+def test_amp_actor_weight_warms_up_after_global_iteration_500():
+    model = AmpActorCriticCNN(8, 8, 2, use_cost_map=False, actor_hidden_dims=[16], critic_hidden_dims=[16])
+    alg = ParallelismAMPPPO(
+        model,
+        amp_reward_weight=0.1,
+        amp_warmup_iterations=500,
+        amp_weight_ramp_iterations=100,
+        device="cpu",
+    )
+
+    alg.set_iteration(0, 700)
+    assert alg.actor_amp_reward_weight == 0.0
+    alg.set_iteration(499, 700)
+    assert alg.actor_amp_reward_weight == 0.0
+    alg.set_iteration(500, 700)
+    assert alg.actor_amp_reward_weight == 0.0
+    alg.set_iteration(550, 700)
+    assert alg.actor_amp_reward_weight == 0.05
+    alg.set_iteration(600, 700)
+    assert alg.actor_amp_reward_weight == 0.1
+    alg.set_iteration(900, 1000)
+    assert alg.actor_amp_reward_weight == 0.1
+
+
 def test_one_update_is_finite_and_clears_rollout_only():
     model = AmpActorCriticCNN(8, 8, 2, use_cost_map=False, actor_hidden_dims=[16], critic_hidden_dims=[16])
     alg = ParallelismAMPPPO(model, num_learning_epochs=1, num_mini_batches=1, learning_rate=1e-3, device="cpu")

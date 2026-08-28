@@ -152,6 +152,8 @@ def _parallelism_amp_train_cfg() -> dict:
             "amp_window_frames": 24,
             "amp_reward_weight": 0.1,
             "amp_value_loss_coef": 1.0,
+            "amp_warmup_iterations": 500,
+            "amp_weight_ramp_iterations": 100,
             "disc_learning_rate": 1.0e-4,
             "disc_epochs": 2,
             "disc_batch_size": 4096,

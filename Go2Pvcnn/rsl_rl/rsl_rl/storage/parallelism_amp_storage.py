@@ -67,8 +67,9 @@ class ParallelismAMPStorage(RolloutStorage):
         active = self.amp_active.bool()
         if bool(active.any()):
             values = self.amp_advantages[active]
-            mean, std = values.mean(), values.std()
+            # Population statistics remain defined when only one environment
+            # has a valid AMP window in the rollout.
+            mean, std = values.mean(), values.std(unbiased=False)
             self.amp_advantages = torch.where(active, (self.amp_advantages - mean) / (std + 1.0e-8), torch.zeros_like(self.amp_advantages))
         else:
             self.amp_advantages.zero_()
-
