@@ -112,7 +112,7 @@
 </head>
 <body>
 <main>
-  <p class="eyebrow">设计规格 · 2026-08-27 · 待用户复核</p>
+  <p class="eyebrow">设计规格 · 2026-08-31 · 待用户复核</p>
   <h1>Parallelism Joint AMP 训练</h1>
   <p class="subtitle">把 Parallelism 生成的 24 帧运动学可行状态轨迹作为 AMP expert 数据，让已有基本行走能力的纯 PPO policy 学习规划轨迹的局部运动模式；规划失败进入 standstill 时，AMP 奖励、AMP GAE、判别器样本和归一化统计均停止作用。</p>
 
@@ -427,6 +427,21 @@ r_amp_raw = -log(max(1 - p_expert, 1e-4)) * 2.0
 r_amp = amp_reward_active * r_amp_raw</code></pre>
   <p>该公式与 MimicKit <code>AMPAgent._calc_disc_rewards()</code> 对齐。AMP Critic 与判别器从第 0 个 PPO iteration 开始训练，但前 500 个 iteration 不把 AMP advantage 送入 Actor；第 500 个 iteration 的 Actor AMP 权重仍为 0，随后在 <code>500..600</code> 线性升到 0.1，之后保持 0.1。基础 reward 权重保持 1.0，避免随机初始化 D 在训练初期压过已有行走能力。</p>
 
+  <h3>与普通 PPO 的训练配置对齐</h3>
+  <p>AMP 不是另一套 PPO。<code>base critic</code> 与 <code>AMP critic</code> 都挂在同一个 <code>actor_critic</code> optimizer 上，使用同一学习率、epoch/minibatch 划分、clipped value loss 和全局 <code>max_grad_norm</code>；AMP 只额外增加 masked target。Actor 的 adaptive-KL 和 action-std 下限也沿用普通 PPO，同一 minibatch 更新后共同生效。</p>
+  <table>
+    <thead><tr><th>共享配置</th><th>AMP 首版值</th><th>约束方式</th></tr></thead>
+    <tbody>
+      <tr><td><code>num_steps_per_env</code> / <code>num_learning_epochs</code> / <code>num_mini_batches</code></td><td><code>40 / 5 / 4</code></td><td>同一 rollout storage 与同一 generator</td></tr>
+      <tr><td><code>learning_rate</code> / <code>clip_param</code></td><td><code>1e-3 / 0.2</code></td><td>同一 optimizer；同一 ratio/value clipping</td></tr>
+      <tr><td><code>gamma</code> / <code>lam</code></td><td><code>0.99 / 0.95</code></td><td>base 与 AMP GAE 使用同值，AMP 额外乘 active mask</td></tr>
+      <tr><td><code>value_loss_coef</code> / <code>amp_value_loss_coef</code></td><td><code>1.0 / 1.0</code></td><td>同一 optimizer 的两个 value loss 相加；AMP loss 只统计 active 行</td></tr>
+      <tr><td><code>entropy_coef</code> / <code>max_grad_norm</code></td><td><code>0.01 / 1.0</code></td><td>Actor-Critic 合并后统一裁剪到 1.0</td></tr>
+      <tr><td><code>schedule</code> / <code>desired_kl</code></td><td><code>adaptive / 0.01</code></td><td>按普通 PPO 的 old/current policy KL 调整共同学习率</td></tr>
+      <tr><td><code>clip_min_std</code></td><td>沿用普通 PPO</td><td>每个 update 结束调用同一 <code>clip_std()</code>；不单独限制 AMP critic</td></tr>
+    </tbody>
+  </table>
+
   <h3>每个 PPO iteration 的数据流</h3>
   <ol>
     <li>冻结 D 与 AMP normalizer，在 40 步 rollout 中逐步计算 active transition 的 AMP reward。</li>
@@ -606,7 +621,7 @@ bash Go2Pvcnn/scripts/train_parallelism_amp_cross_large_complex_headless.sh \
       <tr><td>单环境时序 probe</td><td>1 env，至少 50 control steps</td><td>实际启动 Isaac physics；transition 23 后 AMP active；经历正常 replan 后 history 不清；无 NaN/Inf</td></tr>
       <tr><td>真实规划失败 probe</td><td>真实语义/高度输入制造不可规划区域，再进入可规划区域</td><td>日志出现 inactive 段；AMP reward 精确为 0；恢复后完整 24 帧才重新 active</td></tr>
       <tr><td>训练 smoke</td><td>用新 shell 脚本启动 64 env、2 PPO iterations，传真实 pure PPO checkpoint</td><td>日志识别 legacy warm-start；AMP head 初始化；两个 iteration 完成；checkpoint 可再由同一脚本完整 resume</td></tr>
-      <tr><td>目标规模 smoke</td><td>通过 AMP launcher 启动真实 Isaac Lab，1024 env，完整 4 PPO iterations</td><td>进程退出码必须为 <code>0</code>；日志必须出现 iteration 1、2、3、4 的完成记录，且无 OOM、NaN/Inf 或 Traceback；active ratio、D accuracy、base/AMP reward、两个 value loss 均写入 TensorBoard；增量提取/重建走 batch Torch 路径并记录耗时/峰值显存。不能用 static test、dry-run 或少于 4 次 iteration 的替代。</td></tr>
+      <tr><td>目标规模 smoke</td><td>通过 AMP launcher 启动真实 Isaac Lab，<code>NUM_ENVS=1024</code>，完整 4 PPO iterations，恢复给定 pure PPO checkpoint</td><td>进程退出码必须为 <code>0</code>；日志必须出现 iteration 1、2、3、4 的完成记录，且无 OOM、NaN/Inf 或 Traceback；active ratio、D accuracy、base/AMP reward、两个 value loss、KL、actor/critic grad norm 均写入 TensorBoard；增量提取/重建走 batch Torch 路径并记录耗时/峰值显存。不能用 static test、dry-run 或少于 4 次 iteration 的替代。</td></tr>
       <tr><td>4096 memory guard</td><td>4096 env，24 rollout steps，1 iteration</td><td>guard 生效；history horizon 仍为 24；跨 iteration 语义通过；若硬件不足必须明确记录为未验证，不能用 static test 替代</td></tr>
     </tbody>
   </table>
@@ -622,6 +637,21 @@ Go2Pvcnn/tests/rsl_rl/test_parallelism_amp_checkpoint.py
 Go2Pvcnn/tests/tracking/test_parallelism_amp_isolation.py
 Go2Pvcnn/tests/tracking/parallelism_amp_runtime_probe.py
 Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py</code></pre>
+
+  <h3>1024 真实测试的可执行契约</h3>
+  <p><code>test_parallelism_amp_training_smoke_probe.py</code> 保留为轻量入口检查；真正的环境测试由同目录 probe 执行，默认不纳入普通 pytest。只有显式设置 <code>RUN_REAL_AMP_1024=1</code> 才启动 Isaac Lab，防止静态回归测试意外占用 GPU。</p>
+  <pre><code>CHECKPOINT=/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/cross_large_complex_ppo/2026-08-26_17-47-24/11d453a/model_19998.pt
+
+RUN_REAL_AMP_1024=1 NUM_ENVS=1024 MAX_ITERATIONS=4 \
+  /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python \
+  Go2Pvcnn/tests/tracking/parallelism_amp_training_smoke_probe.py \
+  "${CHECKPOINT}" --num-envs 1024 --max-iterations 4 \
+  --log-file /tmp/parallelism_amp_1024_iter4.log
+
+# 通过条件：shell/probe 返回码为 0；日志含 4 个完成 iteration；
+# 日志和 TensorBoard event 中不存在 traceback、OOM、nan、inf；
+# amp_active_ratio、amp_history_ratio、base/AMP value loss、D loss 和 KL 存在。</code></pre>
+  <p>probe 必须将 stdout/stderr 原样写入日志，并在失败时返回非零码。测试结果还要记录 GPU 型号、Torch/Isaac Lab 版本、每次 collection/update 耗时与峰值显存，便于区分 planner、AMP history、D update 和 PPO update 的性能瓶颈。</p>
 
   <h3>分层执行命令</h3>
   <pre><code># 真实 tensor/optimizer/planner tests
@@ -691,7 +721,7 @@ NUM_ENVS=1024 MAX_ITERATIONS=4 \
     <li>部署 Actor 不需要 planner、D、history 或 Critic。</li>
   </ul>
 
-  <p class="small">状态：设计已在对话中确认；本 HTML 用于最终规格复核。复核通过后再编写逐任务实现计划，并按测试先行顺序实施。</p>
+  <p class="small">状态：设计已在对话中确认，新增 1024 环境真实 smoke 契约；本 HTML 用于最终规格复核。复核通过后再编写逐任务实现计划，并按测试先行顺序实施。</p>
 </main>
 </body>
 </html>
