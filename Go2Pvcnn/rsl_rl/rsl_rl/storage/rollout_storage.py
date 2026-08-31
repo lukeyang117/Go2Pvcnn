@@ -29,6 +29,7 @@ class RolloutStorage:
             # Optional Parallelism AMP transition payload. These fields stay
             # on the transition so AMP remains additive to legacy PPO.
             self.amp_reward = None
+            self.amp_reward_raw = None
             self.amp_value = None
             self.amp_active = None
             self.history_ratio = None

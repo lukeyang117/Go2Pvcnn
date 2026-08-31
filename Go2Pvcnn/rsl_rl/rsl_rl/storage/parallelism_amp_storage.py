@@ -18,6 +18,7 @@ class ParallelismAMPStorage(RolloutStorage):
         super().__init__(num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device)
         shape = (num_transitions_per_env, num_envs, 1)
         self.amp_rewards = torch.zeros(shape, device=device)
+        self.amp_raw_rewards = torch.zeros(shape, device=device)
         self.amp_values = torch.zeros(shape, device=device)
         self.amp_active = torch.zeros(shape, device=device)
         self.history_ratio = torch.zeros(shape, device=device)
@@ -30,7 +31,7 @@ class ParallelismAMPStorage(RolloutStorage):
     def add_transitions(self, transition: RolloutStorage.Transition):
         super().add_transitions(transition)
         index = self.step - 1
-        for name, target in (("amp_reward", self.amp_rewards), ("amp_value", self.amp_values), ("amp_active", self.amp_active), ("history_ratio", self.history_ratio)):
+        for name, target in (("amp_reward", self.amp_rewards), ("amp_reward_raw", self.amp_raw_rewards), ("amp_value", self.amp_values), ("amp_active", self.amp_active), ("history_ratio", self.history_ratio)):
             value = getattr(transition, name, None)
             if value is not None:
                 target[index].copy_(torch.as_tensor(value, device=self.device).reshape(-1, 1))

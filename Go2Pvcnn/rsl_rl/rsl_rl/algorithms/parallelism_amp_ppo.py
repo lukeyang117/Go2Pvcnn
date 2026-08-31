@@ -105,12 +105,17 @@ class ParallelismAMPPPO(PPO):
             if "expert_window" in amp_info and "agent_window" in amp_info:
                 self.transition.amp_expert_window = amp_info["expert_window"]
                 self.transition.amp_agent_window = amp_info["agent_window"]
-                self.transition.amp_reward = self.amp_discriminator.reward(
-                    self.transition.amp_agent_window, active
+                self.transition.amp_reward_raw = self.amp_discriminator.raw_reward(self.transition.amp_agent_window)
+                self.transition.amp_reward = torch.where(
+                    active,
+                    self.transition.amp_reward_raw,
+                    torch.zeros_like(self.transition.amp_reward_raw),
                 )
             else:
+                self.transition.amp_reward_raw = torch.zeros_like(ratio)
                 self.transition.amp_reward = torch.zeros_like(ratio)
         else:
+            self.transition.amp_reward_raw = torch.zeros_like(torch.as_tensor(rewards, device=self.device).reshape(-1).float())
             self.transition.amp_reward = torch.zeros_like(torch.as_tensor(rewards, device=self.device).reshape(-1).float())
         super().process_env_step(rewards, dones, infos)
 
@@ -128,6 +133,8 @@ class ParallelismAMPPPO(PPO):
         critic_obs = storage.privileged_observations.reshape(batch_size, -1) if storage.privileged_observations is not None else observations
         actions = storage.actions.reshape(batch_size, -1)
         old_log_prob = storage.actions_log_prob.reshape(batch_size, 1)
+        old_mu = storage.mu.reshape(batch_size, -1)
+        old_sigma = storage.sigma.reshape(batch_size, -1)
         old_values = storage.values.reshape(batch_size, 1)
         returns = storage.returns.reshape(batch_size, 1)
         advantages = storage.advantages.reshape(batch_size, 1)
@@ -144,7 +151,14 @@ class ParallelismAMPPPO(PPO):
             agent_flat = agent_windows.reshape(batch_size, -1)
             if bool(flat_active.any()):
                 self._append_amp_replay(expert_flat[flat_active], agent_flat[flat_active])
-        total_value, total_surrogate, total_amp_value, updates = 0.0, 0.0, 0.0, 0
+        total_value, total_surrogate, total_amp_value = 0.0, 0.0, 0.0
+        total_kl, total_grad_norm, total_clipped_grad_norm = 0.0, 0.0, 0.0
+        updates = 0
+        amp_active_count = int(storage.amp_active.bool().sum().item())
+        amp_active_ratio = amp_active_count / float(max(1, batch_size))
+        amp_history_ratio_mean = float(storage.history_ratio.float().mean().detach())
+        amp_reward_raw_mean = float(storage.amp_raw_rewards.float().mean().detach())
+        amp_reward_gated_mean = float(storage.amp_rewards.float().mean().detach())
         for _ in range(self.num_learning_epochs):
             permutation = torch.randperm(batch_size, device=self.device)
             mini_batch_size = max(1, batch_size // self.num_mini_batches)
@@ -152,13 +166,44 @@ class ParallelismAMPPPO(PPO):
                 indices = permutation[start : min(start + mini_batch_size, batch_size)]
                 obs_mb, critic_mb, actions_mb = observations[indices], critic_obs[indices], actions[indices]
                 old_log_mb, old_values_mb = old_log_prob[indices], old_values[indices]
+                old_mu_mb, old_sigma_mb = old_mu[indices], old_sigma[indices]
                 returns_mb, advantages_mb = returns[indices], advantages[indices]
                 amp_adv_mb, amp_returns_mb = amp_advantages[indices], amp_returns[indices]
                 active_mb, ratio_mb = active[indices], ratio[indices]
                 self.actor_critic.act(obs_mb)
                 log_prob = self.actor_critic.get_actions_log_prob(actions_mb).reshape(-1, 1)
+                mu_mb = self.actor_critic.action_mean
+                sigma_mb = self.actor_critic.action_std
                 base_value = self.actor_critic.evaluate(critic_mb)
                 amp_value = self.actor_critic.evaluate_amp(critic_mb, active_mb, ratio_mb)
+
+                # Keep adaptive-KL behavior identical to ordinary PPO. The
+                # old distribution is the one captured during rollout.
+                kl_mean = torch.zeros((), device=self.device)
+                if self.desired_kl is not None and self.schedule == "adaptive":
+                    with torch.inference_mode():
+                        current_sigma = sigma_mb.clamp_min(1.0e-8)
+                        previous_sigma = old_sigma_mb.clamp_min(1.0e-8)
+                        kl = torch.sum(
+                            torch.log(current_sigma / previous_sigma)
+                            + (torch.square(previous_sigma) + torch.square(old_mu_mb - mu_mb))
+                            / (2.0 * torch.square(current_sigma))
+                            - 0.5,
+                            dim=-1,
+                        )
+                        kl_mean = kl.mean()
+                    if self.distributed:
+                        kl_tensor = kl_mean.detach().reshape(1).clone()
+                        self.dist.all_reduce(kl_tensor, op=self.dist.ReduceOp.SUM)
+                        kl_mean = (kl_tensor / self.world_size).squeeze(0)
+                    kl_value = float(kl_mean.detach())
+                    if kl_value > self.desired_kl * 2.0:
+                        self.learning_rate = max(1.0e-5, self.learning_rate / 1.5)
+                    elif 0.0 < kl_value < self.desired_kl / 2.0:
+                        self.learning_rate = min(1.0e-2, self.learning_rate * 1.5)
+                    for param_group in self.optimizer.param_groups:
+                        param_group["lr"] = self.learning_rate
+
                 combined = combine_advantages(
                     advantages_mb,
                     amp_adv_mb,
@@ -169,25 +214,60 @@ class ParallelismAMPPPO(PPO):
                 surrogate = -combined * prob_ratio
                 clipped = -combined * torch.clamp(prob_ratio, 1.0 - self.clip_param, 1.0 + self.clip_param)
                 surrogate_loss = torch.max(surrogate, clipped).mean()
-                value_clipped = old_values_mb + (base_value - old_values_mb).clamp(-self.clip_param, self.clip_param)
-                base_loss = torch.max((base_value - returns_mb).square(), (value_clipped - returns_mb).square()).mean()
-                amp_loss = ((amp_value - amp_returns_mb).square() * active_mb).sum() / active_mb.sum().clamp_min(1.0)
+                if self.use_clipped_value_loss:
+                    value_clipped = old_values_mb + (base_value - old_values_mb).clamp(
+                        -self.clip_param, self.clip_param
+                    )
+                    base_loss = torch.max(
+                        (base_value - returns_mb).square(),
+                        (value_clipped - returns_mb).square(),
+                    ).mean()
+                    amp_value_clipped = amp_values[indices] + (amp_value - amp_values[indices]).clamp(
+                        -self.clip_param, self.clip_param
+                    )
+                    amp_losses = torch.max(
+                        (amp_value - amp_returns_mb).square(),
+                        (amp_value_clipped - amp_returns_mb).square(),
+                    )
+                else:
+                    base_loss = (returns_mb - base_value).square().mean()
+                    amp_losses = (amp_value - amp_returns_mb).square()
+                amp_loss = (amp_losses * active_mb).sum() / active_mb.sum().clamp_min(1.0)
                 loss = surrogate_loss + self.value_loss_coef * base_loss + self.amp_value_loss_coef * amp_loss - self.entropy_coef * self.actor_critic.entropy.mean()
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                grad_norm = nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
+                grad_value = float(torch.as_tensor(grad_norm).detach())
+                total_grad_norm += grad_value
+                total_clipped_grad_norm += min(grad_value, float(self.max_grad_norm))
+                total_kl += float(kl_mean.detach())
                 total_value += float(base_loss.detach())
                 total_amp_value += float(amp_loss.detach())
                 total_surrogate += float(surrogate_loss.detach())
                 updates += 1
         discriminator_metrics = self._update_discriminator()
         storage.clear()
+        if hasattr(self.actor_critic, "clip_std"):
+            self.actor_critic.clip_std(min=self.clip_min_std)
         denominator = max(1, updates)
         return {
             "value_loss": total_value / denominator,
             "amp_value_loss": total_amp_value / denominator,
             "surrogate_loss": total_surrogate / denominator,
+            "approx_kl": total_kl / denominator,
+            "actor_critic_grad_norm": total_grad_norm / denominator,
+            "actor_critic_grad_norm_clipped": total_clipped_grad_norm / denominator,
+            "amp_active_count": float(amp_active_count),
+            "amp_active_ratio": amp_active_ratio,
+            "amp_history_ratio_mean": amp_history_ratio_mean,
+            "amp_reward_raw_mean": amp_reward_raw_mean,
+            "amp_reward_gated_mean": amp_reward_gated_mean,
+            "amp_replay_fill_ratio": float(
+                0.0
+                if self._amp_replay_expert is None
+                else min(1.0, self._amp_replay_expert.shape[0] / float(max(1, self.disc_replay_capacity)))
+            ),
             "amp_actor_reward_weight": self.actor_amp_reward_weight,
             **discriminator_metrics,
         }

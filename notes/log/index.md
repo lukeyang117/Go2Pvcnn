@@ -4,6 +4,10 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-08-31 | Parallelism AMP PPO 对齐与 1024 真实 smoke | adaptive-KL / 双 value clipping / shared gradient / real Isaac smoke | pass | focused `28 + 44 passed`; 1024 env x 4 iterations exit `0`, `118.80s`, TensorBoard `576` scalars; active ratio `0.4316 -> 0.9732`, AMP value loss `116.3 -> 21.6`, D loss `1.17 -> 0.62`, std `0.391 -> 0.385`, no OOM/NaN/Inf/Traceback | [T304](../todo/T304-parallelism-amp.md) | [evidence](2026-08-31-parallelism-amp-ppo-alignment-1024-smoke.md) |
+
+| 2026-08-31 | Parallelism AMP latest long-run diagnosis | TensorBoard behavior/stability attribution | partial; collapse root cause narrowed | run `2026-08-28_18-54-54/4161d7b`, 3500 steps; std `0.39 -> 13.66 -> 4.99`, `valid_bad_orientation` final `0.963`, base `AMP/value_loss` max `1.13e6`, AMP critic max `167.7`, D accuracy ~`1.0`; all checkpoint tensors finite | [T304](../todo/T304-parallelism-amp.md) | [diagnosis](2026-08-31-parallelism-amp-long-run-diagnosis.md) |
+
 | 2026-08-28 | Parallelism AMP actor warm-up and NaN regression | AMP PPO schedule / masked GAE / real Isaac resume | pass | focused `24 passed`; real `1024 env x 4 iterations` exit `0`; AMP metrics and `amp_actor_reward_weight` present for steps `0..3`; no OOM/NaN/Inf/Traceback | [T304](../todo/T304-parallelism-amp.md) | [warm-up verification](2026-08-28-parallelism-amp-warmup-real-smoke.md) |
 
 | 2026-08-27 | Parallelism AMP batched transition and 1024-env smoke | AMP transition/replay/PPO integration | pass | focused `22 passed`; real 1024 env x 4 iterations exit `0`; TensorBoard AMP steps `0..3`; no OOM/NaN/Traceback | [AMP design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html) | [evidence](2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md) |

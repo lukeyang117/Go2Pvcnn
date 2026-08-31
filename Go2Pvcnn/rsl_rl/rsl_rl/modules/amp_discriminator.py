@@ -77,13 +77,23 @@ class AMPDiscriminator(nn.Module):
         return self.normalizer.mean.device
 
     def reward(self, agent_windows: Tensor, active: Tensor | None = None) -> Tensor:
+        rewards = self.raw_reward(agent_windows)
+        if active is None:
+            return rewards
+        mask = torch.as_tensor(active, device=rewards.device, dtype=torch.bool).reshape(-1)
+        if mask.numel() != rewards.shape[0]:
+            raise ValueError("AMP active mask must match agent windows")
+        return torch.where(mask, rewards, torch.zeros_like(rewards))
+
+    def raw_reward(self, agent_windows: Tensor) -> Tensor:
+        """Return the discriminator reward before the AMP activity mask."""
+
         values = torch.as_tensor(agent_windows, device=self.mean_device, dtype=torch.float32)
-        mask = torch.ones(values.shape[0], dtype=torch.bool, device=values.device) if active is None else torch.as_tensor(active, device=values.device, dtype=torch.bool).reshape(-1)
         with torch.no_grad():
             flat = values.reshape(values.shape[0], -1)
             logits = self(self.normalizer.normalize(flat))
             rewards = -F.logsigmoid(-logits) * self.reward_scale
-        return torch.where(mask, rewards, torch.zeros_like(rewards))
+        return rewards
 
     def update(self, expert_windows: Tensor, agent_windows: Tensor, active: Tensor) -> dict[str, float]:
         expert = torch.as_tensor(expert_windows, device=self.mean_device, dtype=torch.float32).reshape(expert_windows.shape[0], -1)
