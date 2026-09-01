@@ -40,6 +40,44 @@ def test_update_camera_accepts_requires_grad_tensors():
     assert len(env.sim.calls) == 1
 
 
+def test_initialize_camera_does_not_overwrite_manual_viewport_drag():
+    env = _FakeEnv()
+    root_pos = torch.tensor([1.0, 2.0, 0.3])
+    root_yaw = torch.tensor([0.2])
+
+    initialized = viewer._initialize_viewer_camera(
+        env,
+        initialized=False,
+        root_pos=root_pos,
+        root_yaw=root_yaw,
+        distance=3.2,
+        height=1.6,
+    )
+    initialized = viewer._initialize_viewer_camera(
+        env,
+        initialized=initialized,
+        root_pos=root_pos + 10.0,
+        root_yaw=root_yaw + 1.0,
+        distance=3.2,
+        height=1.6,
+    )
+
+    assert initialized is True
+    assert len(env.sim.calls) == 1
+
+
+def test_camera_drag_keeps_alt_pan_translation_separate_from_rmb_look():
+    eye = (0.0, -3.0, 2.0)
+    target = (0.0, 0.0, 0.5)
+    look_eye, look_target = viewer._camera_drag_pose(eye, target, 80.0, 0.0, pan=False, width=800.0, height=500.0)
+    pan_eye, pan_target = viewer._camera_drag_pose(eye, target, 80.0, 0.0, pan=True, width=800.0, height=500.0)
+
+    assert look_target == target
+    assert pan_target != target
+    assert look_eye != eye
+    torch.testing.assert_close(torch.tensor(pan_eye) - torch.tensor(pan_target), torch.tensor(eye) - torch.tensor(target))
+
+
 def test_adapt_mpc_result_detaches_autograd_graph():
     batch = 1
     horizon = 4

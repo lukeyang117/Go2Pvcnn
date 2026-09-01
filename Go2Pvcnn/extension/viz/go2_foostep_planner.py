@@ -245,6 +245,8 @@ def _apply_test_terminal_command(command: torch.Tensor, state: ViewerTestTermina
         dtype=command.dtype,
         device=command.device,
     )
+    if not bool(torch.any(values.abs() > 1.0e-9)):
+        return command
     return values.expand_as(command).clone()
 
 
@@ -403,6 +405,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--camera-distance", type=float, default=3.2, help="Follow-camera distance behind the robot.")
     parser.add_argument("--camera-height", type=float, default=1.6, help="Follow-camera height offset.")
+    parser.add_argument(
+        "--camera-input-test",
+        action="store_true",
+        default=False,
+        help="Run the real viewport RMB/Alt+RMB camera input test and exit.",
+    )
     parser.add_argument("--warmup-steps", type=int, default=6, help="Number of zero-action warmup steps before visualization.")
     parser.add_argument(
         "--scripted-command",
@@ -829,7 +837,76 @@ def _viewer_should_drain_before_zero_replan(
     return _viewer_plan_has_motion(result)
 
 
-def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int, robot_backend=None) -> None:
+def _playback_frame_derivative(values: torch.Tensor, *, frame_idx: int, dt: float) -> torch.Tensor:
+    values = torch.as_tensor(values, dtype=torch.float32)
+    if values.ndim < 2 or int(values.shape[1]) < 2 or float(dt) <= 0.0:
+        return torch.zeros_like(values[:, int(frame_idx)])
+    frame = max(0, min(int(frame_idx), int(values.shape[1]) - 1))
+    if frame == 0:
+        return (values[:, 1] - values[:, 0]) / float(dt)
+    if frame == int(values.shape[1]) - 1:
+        return (values[:, -1] - values[:, -2]) / float(dt)
+    return (values[:, frame + 1] - values[:, frame - 1]) / (2.0 * float(dt))
+
+
+def _quat_multiply_wxyz(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
+    lw, lx, ly, lz = lhs.unbind(dim=-1)
+    rw, rx, ry, rz = rhs.unbind(dim=-1)
+    return torch.stack(
+        (
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+        ),
+        dim=-1,
+    )
+
+
+def _quat_conjugate_wxyz(quat: torch.Tensor) -> torch.Tensor:
+    return torch.cat((quat[..., :1], -quat[..., 1:]), dim=-1)
+
+
+def _quat_delta_angular_velocity_wxyz(
+    start: torch.Tensor,
+    end: torch.Tensor,
+    *,
+    dt: float,
+) -> torch.Tensor:
+    start = start / torch.linalg.vector_norm(start, dim=-1, keepdim=True).clamp_min(1.0e-8)
+    end = end / torch.linalg.vector_norm(end, dim=-1, keepdim=True).clamp_min(1.0e-8)
+    delta = _quat_multiply_wxyz(end, _quat_conjugate_wxyz(start))
+    delta = torch.where(delta[..., :1] < 0.0, -delta, delta)
+    sin_half = torch.linalg.vector_norm(delta[..., 1:], dim=-1)
+    angle = 2.0 * torch.atan2(sin_half, delta[..., :1].clamp_min(0.0).squeeze(-1))
+    scale = torch.where(sin_half > 1.0e-6, angle / sin_half, torch.full_like(sin_half, 2.0))
+    return delta[..., 1:] * scale[..., None] / float(dt)
+
+
+def _playback_frame_angular_velocity_wxyz(quat: torch.Tensor, *, frame_idx: int, dt: float) -> torch.Tensor:
+    quat = torch.as_tensor(quat, dtype=torch.float32)
+    if quat.ndim < 2 or int(quat.shape[1]) < 2 or float(dt) <= 0.0:
+        return torch.zeros_like(quat[:, int(frame_idx), 1:])
+    frame = max(0, min(int(frame_idx), int(quat.shape[1]) - 1))
+    if frame == 0:
+        return _quat_delta_angular_velocity_wxyz(quat[:, 0], quat[:, 1], dt=float(dt))
+    if frame == int(quat.shape[1]) - 1:
+        return _quat_delta_angular_velocity_wxyz(quat[:, -2], quat[:, -1], dt=float(dt))
+    return _quat_delta_angular_velocity_wxyz(
+        quat[:, frame - 1],
+        quat[:, frame + 1],
+        dt=2.0 * float(dt),
+    )
+
+
+def _apply_direct_playback_to_robot(
+    robot,
+    result,
+    *,
+    frame_idx: int,
+    playback_dt: float | None = None,
+    robot_backend=None,
+) -> None:
     """Write the planner frame pose/joints into the displayed robot.
 
     Isaac Lab is not available in unit tests, so we keep this duck-typed and
@@ -845,13 +922,46 @@ def _apply_direct_playback_to_robot(robot, result, *, frame_idx: int, robot_back
         joint_pos = merge_planner_joints_into_robot(current_joint_pos, planner_joint_pos, robot_backend, robot=robot)
     else:
         joint_pos = _joint_pos_planner_to_robot(robot, planner_joint_pos)
-    joint_vel = torch.zeros_like(joint_pos)
+    m1_playback = (
+        robot_backend is not None
+        and str(robot_backend.name).lower() == "m1"
+        and playback_dt is not None
+        and float(playback_dt) > 0.0
+    )
+    if m1_playback:
+        planner_joint_vel = _playback_frame_derivative(
+            result.joint_angles,
+            frame_idx=frame,
+            dt=float(playback_dt),
+        )
+        joint_vel = merge_planner_joints_into_robot(
+            torch.zeros_like(joint_pos),
+            planner_joint_vel,
+            robot_backend,
+            robot=robot,
+        )
+        root_lin_vel = _playback_frame_derivative(
+            result.root_pos_w,
+            frame_idx=frame,
+            dt=float(playback_dt),
+        )
+        root_ang_vel = _playback_frame_angular_velocity_wxyz(
+            result.root_quat_w,
+            frame_idx=frame,
+            dt=float(playback_dt),
+        )
+        root_velocity = torch.cat((root_lin_vel, root_ang_vel), dim=-1)
+    else:
+        joint_vel = torch.zeros_like(joint_pos)
+        root_velocity = torch.zeros((root_pos_w.shape[0], 6), dtype=root_pos_w.dtype, device=root_pos_w.device)
 
     if hasattr(robot, "write_root_pose_to_sim"):
         robot.write_root_pose_to_sim(root_pose_wxyz)
     elif hasattr(robot, "write_root_state_to_sim"):
-        zeros = torch.zeros((root_pos_w.shape[0], 6), dtype=root_pos_w.dtype, device=root_pos_w.device)
-        robot.write_root_state_to_sim(torch.cat([root_pose_wxyz, zeros], dim=-1))
+        robot.write_root_state_to_sim(torch.cat([root_pose_wxyz, root_velocity], dim=-1))
+
+    if m1_playback and hasattr(robot, "write_root_velocity_to_sim"):
+        robot.write_root_velocity_to_sim(root_velocity)
 
     if hasattr(robot, "write_joint_state_to_sim"):
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
@@ -971,11 +1081,20 @@ def _viewer_ground_robot_from_scanner(
     return float(z_shift[0, 0].item())
 
 
-def _viewer_direct_playback_step(base_env, result, *, frame_idx: int, sync_scene: bool = True, robot_backend=None) -> str:
+def _viewer_direct_playback_step(
+    base_env,
+    result,
+    *,
+    frame_idx: int,
+    sync_scene: bool = True,
+    playback_dt: float | None = None,
+    robot_backend=None,
+) -> str:
     _apply_direct_playback_to_robot(
         base_env.scene["robot"],
         result,
         frame_idx=int(frame_idx),
+        playback_dt=playback_dt,
         robot_backend=robot_backend,
     )
     if sync_scene and hasattr(base_env.scene, "write_data_to_sim"):
@@ -1017,21 +1136,18 @@ def _launch_app(args_cli: argparse.Namespace):
     return app_launcher, app_launcher.app
 
 
-_VIEWER_VIEWPORT_SELECTION_HANDLE = None
 _VIEWER_CAMERA_BINDINGS = {
-    "PanGesture": "LeftButton",
-    "TumbleGesture": "Alt LeftButton",
-    "ZoomGesture": "Alt RightButton",
-    "LookGesture": "RightButton",
+    "PanGesture": "Alt RightButton",
+    "TumbleGesture": "RightButton",
 }
 
 
 def _rebuild_viewport_camera_bindings() -> bool:
-    """Replace an already-built viewport camera manipulator with explicit bindings."""
+    """Install mutually exclusive right-button tumble and Alt+right pan gestures."""
 
     try:
-        from omni.kit.viewport.utility import get_active_viewport, get_active_viewport_window
         from omni.kit.manipulator.camera import ViewportCameraManipulator
+        from omni.kit.viewport.utility import get_active_viewport, get_active_viewport_window
 
         viewport = get_active_viewport()
         window = get_active_viewport_window()
@@ -1061,33 +1177,15 @@ def _rebuild_viewport_camera_bindings() -> bool:
 
 
 def _configure_viewport_mouse_bindings() -> bool:
-    """Use the left mouse button for viewport panning in this viewer."""
+    """Configure Alt+RMB pan and RMB look without changing left-button selection."""
 
     try:
         from omni.kit.manipulator.camera import gestures
     except ImportError:
         return False
 
-    # Keep Alt+LMB tumble while making an unmodified LMB drag pan.  The
-    # assignment must happen before the viewport camera manipulator is built.
     gestures.kDefaultKeyBindings = dict(_VIEWER_CAMERA_BINDINGS)
-    _rebuild_viewport_camera_bindings()
-
-    global _VIEWER_VIEWPORT_SELECTION_HANDLE
-    if _VIEWER_VIEWPORT_SELECTION_HANDLE is None:
-        try:
-            from omni.kit.viewport.utility import disable_selection, get_active_viewport
-
-            viewport = get_active_viewport()
-            if viewport is not None:
-                # Keep this handle alive for the whole viewer session.  The
-                # utility restores selection as soon as the handle is deleted.
-                _VIEWER_VIEWPORT_SELECTION_HANDLE = disable_selection(viewport)
-        except ImportError:
-            print("[Viewer] Viewport selection utility is unavailable; left-drag selection may remain active.", flush=True)
-        except Exception as exc:
-            print(f"[Viewer] Could not disable viewport selection: {exc}", flush=True)
-    return True
+    return _rebuild_viewport_camera_bindings()
 
 
 def _attach_reference_manager_if_enabled(env, env_cfg):
@@ -1881,6 +1979,7 @@ def _reset_viewer_env(
     scanner=None,
     reset_snapshot: ViewerResetSnapshot | None = None,
     foot_ids=None,
+    foot_contact_offset: float | None = None,
 ) -> torch.Tensor:
     preserved_root_pos = None
     preserved_root_quat = None
@@ -1916,6 +2015,11 @@ def _reset_viewer_env(
         grounding_root_pos_xy = preserved_root_pos[:, :2] if preserved_root_pos is not None else None
         grounding_root_quat_w = preserved_root_quat if preserved_root_quat is not None else None
         from extension.parallelism import ParallelismCfg
+        grounding_contact_offset = (
+            float(ParallelismCfg.foot_contact_offset_m)
+            if foot_contact_offset is None
+            else float(foot_contact_offset)
+        )
 
         _viewer_ground_robot_from_scanner(
             base_env,
@@ -1923,7 +2027,7 @@ def _reset_viewer_env(
             foot_ids,
             root_pos_xy=grounding_root_pos_xy,
             root_quat_w=grounding_root_quat_w,
-            foot_contact_offset=float(ParallelismCfg.foot_contact_offset_m),
+            foot_contact_offset=grounding_contact_offset,
         )
     if scanner is not None:
         _refresh_viewer_scanner(
@@ -2290,6 +2394,13 @@ def _make_zero_actions(env) -> torch.Tensor:
 
 
 def _update_camera(env, *, root_pos: torch.Tensor, root_yaw: torch.Tensor, distance: float, height: float) -> None:
+    camera_position, target_position = _camera_follow_pose(
+        root_pos=root_pos, root_yaw=root_yaw, distance=distance, height=height
+    )
+    env.sim.set_camera_view(camera_position, target_position)
+
+
+def _camera_follow_pose(*, root_pos: torch.Tensor, root_yaw: torch.Tensor, distance: float, height: float):
     yaw_val = float(root_yaw[0].item())
     camera_offset = torch.tensor(
         [-distance * math.cos(yaw_val), -distance * math.sin(yaw_val), height],
@@ -2298,7 +2409,191 @@ def _update_camera(env, *, root_pos: torch.Tensor, root_yaw: torch.Tensor, dista
     )
     camera_position = (root_pos + camera_offset).detach().cpu().numpy()
     target_position = (root_pos + torch.tensor([0.0, 0.0, 0.35], device=root_pos.device)).detach().cpu().numpy()
-    env.sim.set_camera_view(camera_position, target_position)
+    return camera_position, target_position
+
+
+def _initialize_viewer_camera(
+    env,
+    *,
+    initialized: bool,
+    root_pos: torch.Tensor,
+    root_yaw: torch.Tensor,
+    distance: float,
+    height: float,
+) -> bool:
+    """Set the initial follow view once, then leave the viewport to the user."""
+
+    if initialized:
+        return True
+    _update_camera(
+        env,
+        root_pos=root_pos,
+        root_yaw=root_yaw,
+        distance=distance,
+        height=height,
+    )
+    return True
+
+
+def _camera_drag_pose(eye, target, dx, dy, *, pan, width, height):
+    """Apply one pixel drag while keeping pan and look mutually exclusive."""
+    def sub(a, b): return tuple(x - y for x, y in zip(a, b))
+    def add(a, b): return tuple(x + y for x, y in zip(a, b))
+    def mul(a, s): return tuple(x * s for x in a)
+    def dot(a, b): return sum(x * y for x, y in zip(a, b))
+    def cross(a, b): return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    def unit(a):
+        scale = math.sqrt(max(1.0e-12, dot(a, a)))
+        return mul(a, 1.0 / scale)
+    def rotate(value, axis, angle):
+        axis = unit(axis)
+        c, s = math.cos(angle), math.sin(angle)
+        return add(add(mul(value, c), mul(cross(axis, value), s)), mul(axis, dot(axis, value) * (1.0 - c)))
+
+    offset = sub(eye, target)
+    distance = math.sqrt(max(1.0e-12, dot(offset, offset)))
+    forward = unit(sub(target, eye))
+    right = cross(forward, (0.0, 0.0, 1.0))
+    if dot(right, right) <= 1.0e-10:
+        right = (1.0, 0.0, 0.0)
+    right = unit(right)
+    camera_up = unit(cross(right, forward))
+    if pan:
+        scale = distance * 1.5
+        shift = add(mul(right, -dx / max(width, 1.0) * scale), mul(camera_up, dy / max(height, 1.0) * scale))
+        return add(eye, shift), add(target, shift)
+    rotated = rotate(offset, (0.0, 0.0, 1.0), -dx / max(width, 1.0) * math.pi)
+    rotated = rotate(rotated, right, dy / max(height, 1.0) * math.pi)
+    return add(target, rotated), target
+
+
+class _ViewerCameraInputController:
+    """Translate real Kit mouse events into camera pose updates."""
+
+    def __init__(self, set_camera_view, eye, target, viewport_size):
+        import carb.input
+        import omni.appwindow
+
+        self._set_camera_view = set_camera_view
+        self._eye, self._target = tuple(eye), tuple(target)
+        self._width, self._height = (float(value) for value in viewport_size)
+        self._right_down = False
+        self._last_pos = None
+        self.event_count = 0
+        self.update_count = 0
+        self._input = carb.input.acquire_input_interface()
+        self._mouse = omni.appwindow.get_default_app_window().get_mouse()
+        self._subscription = self._input.subscribe_to_mouse_events(self._mouse, self._on_mouse_event)
+
+    def close(self):
+        if self._subscription is not None:
+            self._input.unsubscribe_to_mouse_events(self._mouse, self._subscription)
+            self._subscription = None
+
+    def _on_mouse_event(self, event):
+        import carb.input
+
+        self.event_count += 1
+        if event.type == carb.input.MouseEventType.RIGHT_BUTTON_DOWN:
+            self._right_down = True
+            self._last_pos = self._input.get_mouse_coords_pixel(self._mouse)
+        elif event.type == carb.input.MouseEventType.RIGHT_BUTTON_UP:
+            self._right_down = False
+            self._last_pos = None
+
+    def poll(self):
+        """Process current input state, covering buffered UI-test events too."""
+        import carb.input
+
+        pressed = self._input.get_mouse_value(self._mouse, carb.input.MouseInput.RIGHT_BUTTON) > 0
+        if not pressed:
+            self._right_down = False
+            self._last_pos = None
+            return
+        current = self._input.get_mouse_coords_pixel(self._mouse)
+        if not self._right_down:
+            self._right_down = True
+            self._last_pos = current
+            return
+        if self._last_pos is None:
+            self._last_pos = current
+            return
+        dx = float(current[0] - self._last_pos[0])
+        dy = float(current[1] - self._last_pos[1])
+        self._last_pos = current
+        modifiers = self._input.get_modifier_flags(device_types=[carb.input.DeviceType.KEYBOARD])
+        pan = bool(int(modifiers) & carb.input.KEYBOARD_MODIFIER_FLAG_ALT)
+        if abs(dx) <= 1.0e-6 and abs(dy) <= 1.0e-6:
+            return
+        self._eye, self._target = _camera_drag_pose(
+            self._eye, self._target, dx, dy, pan=pan, width=self._width, height=self._height
+        )
+        self.update_count += 1
+        self._set_camera_view(self._eye, self._target)
+
+
+async def _run_camera_input_test(camera_controller) -> dict[str, float]:
+    """Exercise the real viewport gestures through Kit's input provider."""
+
+    import carb.input
+    import omni.kit.ui_test as ui_test
+    from omni.kit.viewport.utility import get_active_viewport, get_active_viewport_window
+    from omni.kit.ui_test.common import wait_n_updates_internal
+    from omni.kit.ui_test.input import KeyDownScope, emulate_mouse_drag_and_drop
+
+    await wait_n_updates_internal(5)
+    viewport = get_active_viewport()
+    if viewport is None:
+        raise RuntimeError("active viewport is unavailable")
+
+    def view_signature() -> tuple[float, ...]:
+        matrix = viewport.view
+        return tuple(float(matrix[row][col]) for row in range(4) for col in range(4))
+
+    window = get_active_viewport_window()
+    if window is None:
+        raise RuntimeError("active viewport window is unavailable")
+    start = ui_test.Vec2(
+        float(window.position_x) + float(window.width) * 0.5,
+        float(window.position_y) + float(window.height) * 0.5,
+    )
+    end = start + ui_test.Vec2(80, 50)
+    print(
+        f"[Viewer][CameraInputTest] viewport={viewport.id} camera={viewport.camera_path} "
+        f"window=({window.position_x},{window.position_y},{window.width},{window.height}) "
+        f"drag=({start.x},{start.y})->({end.x},{end.y})",
+        flush=True,
+    )
+    await ui_test.emulate_mouse_move(start, human_delay_speed=1)
+    before_look = view_signature()
+    await emulate_mouse_drag_and_drop(start, end, right_click=True, human_delay_speed=1)
+    await wait_n_updates_internal(3)
+    after_look = view_signature()
+
+    await ui_test.emulate_mouse_move(start, human_delay_speed=1)
+    before_pan = view_signature()
+    from omni.kit.ui_test.input import emulate_keyboard
+    await emulate_keyboard(carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardInput.LEFT_ALT, carb.input.KEYBOARD_MODIFIER_FLAG_ALT)
+    try:
+        await emulate_mouse_drag_and_drop(start, end, right_click=True, human_delay_speed=1)
+    finally:
+        await emulate_keyboard(carb.input.KeyboardEventType.KEY_RELEASE, carb.input.KeyboardInput.LEFT_ALT, 0)
+    await wait_n_updates_internal(3)
+    after_pan = view_signature()
+
+    look_delta = max(abs(a - b) for a, b in zip(after_look, before_look))
+    pan_delta = max(abs(a - b) for a, b in zip(after_pan, before_pan))
+    print(
+        f"[Viewer][CameraInputTest] controller events={camera_controller.event_count} "
+        f"camera_updates={camera_controller.update_count}",
+        flush=True,
+    )
+    if look_delta <= 1.0e-7:
+        raise AssertionError(f"RMB look did not change viewport.view: delta={look_delta}")
+    if pan_delta <= 1.0e-7:
+        raise AssertionError(f"Alt+RMB pan did not change viewport.view: delta={pan_delta}")
+    print(f"[Viewer][CameraInputTest] RMB look delta={look_delta:.6g}; Alt+RMB pan delta={pan_delta:.6g}", flush=True)
+    return {"look_delta": look_delta, "pan_delta": pan_delta}
 
 
 def _mpc_state_from_env(env, foot_ids: list[int]):
@@ -2706,9 +3001,6 @@ def _print_help() -> None:
 def main() -> int:
     args_cli = _prepare_runtime_args(_parse_args())
     _, simulation_app = _launch_app(args_cli)
-    if _configure_viewport_mouse_bindings():
-        print("[Viewer] Viewport navigation: left-drag pans; Alt+left-drag tumbles.", flush=True)
-
     import gymnasium as gym
 
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -2728,6 +3020,8 @@ def main() -> int:
         cfg=env_cfg,
         render_mode="rgb_array" if getattr(args_cli, "livestream", -1) in (1, 2) else None,
     )
+    if _configure_viewport_mouse_bindings():
+        print("[Viewer] Viewport navigation: RMB look; Alt+RMB pan.", flush=True)
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
     trajectory_manager = _attach_reference_manager_if_enabled(base_env, env_cfg)
@@ -2759,6 +3053,7 @@ def main() -> int:
         terrain_col=int(args_cli.terrain_col),
         scanner=scanner,
         foot_ids=foot_ids,
+        foot_contact_offset=float(robot_backend.cfg.foot_contact_offset_m),
     )
     reset_snapshot = _viewer_capture_reset_snapshot(base_env)
     print(
@@ -2772,11 +3067,17 @@ def main() -> int:
     result = None
     playback_frame = 0
     last_cmd = None
+    camera_initialized = False
     last_show_mesh = None
     plan_cycle = 0
     scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
     scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
     step_gate = ViewerStepGate(enabled=False)
+    playback_dt = max(1.0e-4, float(args_cli.plan_dt))
+    playback_deadline = time.monotonic()
+    last_status_time = 0.0
+    camera_input_test_task = None
+    camera_controller = None
 
     with TerminalTeleop(
         device=base_env.device,
@@ -2792,6 +3093,18 @@ def main() -> int:
         last_kinematic_summary = None
         try:
             while True:
+                if hasattr(simulation_app, "is_running") and not simulation_app.is_running():
+                    break
+                simulation_app.update()
+                if camera_controller is not None:
+                    camera_controller.poll()
+                if camera_input_test_task is not None:
+                    import asyncio
+
+                    asyncio.get_event_loop().run_until_complete(asyncio.sleep(0))
+                    if camera_input_test_task.done():
+                        camera_input_test_task.result()
+                        break
                 teleop_cmd = teleop.poll()
                 active_cmd = teleop_cmd
                 if scripted_command is not None and scripted_cycles_remaining > 0:
@@ -2841,6 +3154,7 @@ def main() -> int:
                         terrain_col=int(args_cli.terrain_col),
                         scanner=scanner,
                         foot_ids=foot_ids,
+                        foot_contact_offset=float(robot_backend.cfg.foot_contact_offset_m),
                     )
                     print(
                         "[Viewer][PlatformReset] "
@@ -2852,6 +3166,7 @@ def main() -> int:
                     result = None
                     playback_frame = 0
                     last_cmd = None
+                    camera_initialized = False
                     plan_cycle = 0
 
                 if active_cmd.reset_requested:
@@ -2865,6 +3180,7 @@ def main() -> int:
                         scanner=scanner,
                         reset_snapshot=reset_snapshot,
                         foot_ids=foot_ids,
+                        foot_contact_offset=float(robot_backend.cfg.foot_contact_offset_m),
                     )
                     print(
                         "[Viewer][Reset] "
@@ -2876,6 +3192,7 @@ def main() -> int:
                     result = None
                     playback_frame = 0
                     last_cmd = None
+                    camera_initialized = False
                     plan_cycle = 0
 
                 need_replan = joint_backend or _viewer_loop_need_replan(
@@ -3012,6 +3329,7 @@ def main() -> int:
                         base_env,
                         result,
                         frame_idx=applied_frame,
+                        playback_dt=playback_dt,
                         robot_backend=robot_backend if parallel_backend else None,
                     )
                     if playback_path != last_playback_path:
@@ -3031,6 +3349,14 @@ def main() -> int:
                         _format_xyz(planner_frame.root_rpy[0]),
                     )
                     if actual_summary != last_actual_summary:
+                        if os.environ.get("PARALLELISM_DEBUG_KINEMATICS"):
+                            print(
+                                "[Viewer][ActualBase] "
+                                f"cycle={max(plan_cycle - 1, 0)} "
+                                f"actual_pos={actual_summary[0]} "
+                                f"plan_pos={actual_summary[4]}",
+                                flush=True,
+                            )
                         # print(
                         #     "[Viewer][ActualBase] "
                         #     f"cycle={max(plan_cycle - 1, 0)} "
@@ -3058,6 +3384,26 @@ def main() -> int:
                         float(foot_err_norm.mean().item()),
                     )
                     if kinematic_summary != last_kinematic_summary:
+                        if os.environ.get("PARALLELISM_DEBUG_KINEMATICS"):
+                            print(
+                                "[Viewer][ActualKinematics] "
+                                f"cycle={max(plan_cycle - 1, 0)} "
+                                f"joint_err_max={kinematic_summary[0]:0.6f} "
+                                f"joint_err_mean={kinematic_summary[1]:0.6f} "
+                                f"foot_err_max={kinematic_summary[2]:0.6f} "
+                                f"foot_err_mean={kinematic_summary[3]:0.6f}",
+                                flush=True,
+                            )
+                            if applied_frame in (0, result.num_frames - 1):
+                                print(
+                                    "[Viewer][ActualKinematicsDetail] "
+                                    f"frame={applied_frame} "
+                                    f"actual_joints={actual_kin['joint_pos_planner'][0].tolist()} "
+                                    f"planned_joints={planner_frame.joint_angles[0].tolist()} "
+                                    f"actual_feet={actual_kin['foot_pos_w'][0].tolist()} "
+                                    f"planned_feet={planner_frame.foot_pos[0].tolist()}",
+                                    flush=True,
+                                )
                         # print(
                         #     "[Viewer][ActualKinematics] "
                         #     f"cycle={max(plan_cycle - 1, 0)} "
@@ -3075,6 +3421,12 @@ def main() -> int:
                         continue
                     if drain_zero_replan:
                         continue
+                    playback_deadline += playback_dt
+                    sleep_s = playback_deadline - time.monotonic()
+                    if sleep_s > 0.0:
+                        time.sleep(sleep_s)
+                    else:
+                        playback_deadline = time.monotonic()
                 elif result is not None and playback_frame < result.num_frames and step_gate.enabled:
                     time.sleep(0.01)
 
@@ -3087,13 +3439,33 @@ def main() -> int:
                     )
                     planner_state = _planner_state_from_reference_result(result, frame_idx=display_frame)
                     root_yaw = planner_state.root_rpy[:, 2]
-                    _update_camera(
+                    camera_initialized = _initialize_viewer_camera(
                         base_env,
+                        initialized=camera_initialized,
                         root_pos=planner_state.root_pos[0],
                         root_yaw=root_yaw,
                         distance=float(args_cli.camera_distance),
                         height=float(args_cli.camera_height),
                     )
+                    if getattr(args_cli, "camera_input_test", False) and camera_controller is None:
+                        from omni.kit.viewport.utility import get_active_viewport_window
+
+                        camera_window = get_active_viewport_window()
+                        camera_position, target_position = _camera_follow_pose(
+                            root_pos=planner_state.root_pos[0],
+                            root_yaw=root_yaw,
+                            distance=float(args_cli.camera_distance),
+                            height=float(args_cli.camera_height),
+                        )
+                        camera_controller = _ViewerCameraInputController(
+                            base_env.sim.set_camera_view,
+                            camera_position,
+                            target_position,
+                            (camera_window.width, camera_window.height),
+                        )
+                        import asyncio
+
+                        camera_input_test_task = asyncio.ensure_future(_run_camera_input_test(camera_controller))
 
                     root_pos = planner_state.root_pos[0]
                     yaw_rate = float(active_cmd.values[0, 2].item())
@@ -3112,14 +3484,16 @@ def main() -> int:
                         f"actual_rpy_xyzw_dbg=({actual_rpy_xyzw[0]:+0.2f}, {actual_rpy_xyzw[1]:+0.2f}, {actual_rpy_xyzw[2]:+0.2f}) "
                         f"frame={display_frame}/{result.num_frames}"
                     )
-                    # if status != last_status:
-                    #     sys.stdout.write(status)
-                    #     sys.stdout.flush()
-                    #     last_status = status
+                    now = time.monotonic()
+                    if now - last_status_time >= 0.5:
+                        print(f"[Viewer][State] {status.lstrip()}", flush=True)
+                        last_status_time = now
         except KeyboardInterrupt:
             print("\n[Viewer] Ctrl-C received; shutting down.", flush=True)
         finally:
             print()
+            if camera_controller is not None:
+                camera_controller.close()
             env.close()
 
     simulation_app.close()

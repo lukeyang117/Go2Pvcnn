@@ -18,82 +18,33 @@ def test_viewer_source_has_robot_selector_and_bounded_cycle_option():
     assert "Isaac-M1-Parallelism-Viewer-v0" in registration
 
 
-def test_viewer_configures_left_drag_for_viewport_pan():
+def test_viewer_uses_mutually_exclusive_alt_right_pan_and_right_look():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
-    assert '"PanGesture": "LeftButton"' in source
-    assert '"TumbleGesture": "Alt LeftButton"' in source
+    assert '"PanGesture": "Alt RightButton"' in source
+    assert '"TumbleGesture": "RightButton"' in source
     assert "_configure_viewport_mouse_bindings()" in source
 
 
-def test_viewer_disables_selection_while_left_drag_pan_is_active(monkeypatch):
-    from extension.viz import go2_foostep_planner as viewer
+def test_viewer_configures_mouse_bindings_after_environment_creation():
+    from pathlib import Path
 
-    calls = []
-    camera_gestures = types.SimpleNamespace(kDefaultKeyBindings={})
-    camera_module = types.ModuleType("omni.kit.manipulator.camera")
-    camera_module.gestures = camera_gestures
-    utility_module = types.ModuleType("omni.kit.viewport.utility")
-    utility_module.get_active_viewport = lambda: "active-viewport"
-    utility_module.disable_selection = lambda viewport: calls.append(viewport) or "selection-handle"
-    monkeypatch.setitem(sys.modules, "omni.kit.manipulator.camera", camera_module)
-    monkeypatch.setitem(sys.modules, "omni.kit.viewport.utility", utility_module)
-
-    viewer._VIEWER_VIEWPORT_SELECTION_HANDLE = None
-    assert viewer._configure_viewport_mouse_bindings() is True
-
-    assert calls == ["active-viewport"]
-    assert viewer._VIEWER_VIEWPORT_SELECTION_HANDLE == "selection-handle"
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    env_index = source.index("env = gym.make(")
+    configure_index = source.rindex("_configure_viewport_mouse_bindings()")
+    assert configure_index > env_index
 
 
-def test_viewer_rebuilds_existing_camera_manipulator_with_explicit_bindings(monkeypatch):
-    from extension.viz import go2_foostep_planner as viewer
+def test_viewer_subscribes_to_active_viewport_mouse_events_for_camera_input():
+    from pathlib import Path
 
-    class Manipulator:
-        def __init__(self, viewport, bindings=None):
-            self.viewport = viewport
-            self.bindings = bindings
-            self.built = False
-            self.destroyed = False
-
-        def destroy(self):
-            self.destroyed = True
-
-        def on_build(self):
-            self.built = True
-
-    class CameraLayer:
-        def __init__(self):
-            self.manipulator = Manipulator("active-viewport")
-
-    class SceneItem:
-        def __init__(self):
-            self.layer = CameraLayer()
-
-    class Window:
-        def __init__(self):
-            self.camera = SceneItem()
-
-        def _find_viewport_layer(self, name, category):
-            assert (name, category) == ("Camera", "manipulator")
-            return self.camera
-
-    window = Window()
-    utility_module = types.ModuleType("omni.kit.viewport.utility")
-    utility_module.get_active_viewport = lambda: "active-viewport"
-    utility_module.get_active_viewport_window = lambda: window
-    monkeypatch.setitem(sys.modules, "omni.kit.viewport.utility", utility_module)
-
-    class CameraModule(types.ModuleType):
-        ViewportCameraManipulator = Manipulator
-
-    monkeypatch.setitem(sys.modules, "omni.kit.manipulator.camera", CameraModule("omni.kit.manipulator.camera"))
-    viewer._rebuild_viewport_camera_bindings()
-
-    assert window.camera.layer.manipulator.destroyed is False
-    assert window.camera.layer.manipulator.built is True
-    assert window.camera.layer.manipulator.bindings["PanGesture"] == "LeftButton"
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    assert "get_mouse_coords_pixel" in source
+    assert "RIGHT_BUTTON_DOWN" in source
+    assert "KEYBOARD_MODIFIER_FLAG_ALT" in source
+    assert "subscribe_to_mouse_events" in source
+    assert "get_mouse_value" in source
 
 
 def test_m1_playback_overwrites_only_12_leg_joints():
@@ -132,6 +83,51 @@ def test_m1_direct_playback_preserves_current_wheel_values():
 
     assert robot.written is not None
     torch.testing.assert_close(robot.written[0][:, [3, 7, 11, 15]], torch.tensor([[3.0, 7.0, 11.0, 15.0]]))
+
+
+def test_m1_direct_playback_writes_frame_consistent_velocity():
+    from extension.parallelism.robot_backend import get_robot_backend
+    from extension.viz import go2_foostep_planner as viewer
+
+    class Robot:
+        joint_names = list(get_robot_backend("m1").asset_joint_names)
+
+        def __init__(self):
+            self.data = SimpleNamespace(joint_pos=torch.zeros(1, 16))
+            self.root_velocity = None
+            self.written = None
+
+        def write_root_pose_to_sim(self, root_pose):
+            self.root_pose = root_pose.clone()
+
+        def write_root_velocity_to_sim(self, root_velocity):
+            self.root_velocity = root_velocity.clone()
+
+        def write_joint_state_to_sim(self, joint_pos, joint_vel):
+            self.written = (joint_pos.clone(), joint_vel.clone())
+
+    robot = Robot()
+    result = SimpleNamespace(
+        root_pos_w=torch.tensor([[[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [0.02, 0.0, 0.0]]]),
+        root_quat_w=torch.tensor([[[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]]),
+        joint_angles=torch.tensor(
+            [[[0.0, -0.15, 0.30] * 4], [[0.0, -0.15, 0.30] * 4], [[0.0, -0.15, 0.30] * 4]]
+        ).transpose(0, 1),
+    )
+
+    viewer._apply_direct_playback_to_robot(
+        robot,
+        result,
+        frame_idx=0,
+        playback_dt=0.02,
+        robot_backend=get_robot_backend("m1"),
+    )
+
+    assert robot.root_velocity is not None
+    torch.testing.assert_close(robot.root_velocity, torch.tensor([[0.5, 0.0, 0.0, 0.0, 0.0, 0.0]]))
+    assert robot.written is not None
+    torch.testing.assert_close(robot.written[1][:, :12], torch.zeros(1, 12))
+    torch.testing.assert_close(robot.written[1][:, [3, 7, 11, 15]], torch.zeros(1, 4))
 
 
 def test_m1_viewer_does_not_toggle_usd_mesh_visibility():
