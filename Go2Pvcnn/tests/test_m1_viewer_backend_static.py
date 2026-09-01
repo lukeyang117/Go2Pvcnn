@@ -47,6 +47,51 @@ def test_viewer_disables_selection_while_left_drag_pan_is_active(monkeypatch):
     assert viewer._VIEWER_VIEWPORT_SELECTION_HANDLE == "selection-handle"
 
 
+def test_viewer_rebuilds_existing_camera_manipulator_with_explicit_bindings(monkeypatch):
+    from extension.viz import go2_foostep_planner as viewer
+
+    class Manipulator:
+        def __init__(self, viewport, bindings=None):
+            self.viewport = viewport
+            self.bindings = bindings
+            self.built = False
+            self.destroyed = False
+
+        def destroy(self):
+            self.destroyed = True
+
+        def on_build(self):
+            self.built = True
+
+    class CameraLayer:
+        def __init__(self):
+            self.manipulator = Manipulator("active-viewport")
+
+    class Window:
+        def __init__(self):
+            self.camera = CameraLayer()
+
+        def _find_viewport_layer(self, name, category):
+            assert (name, category) == ("Camera", "manipulator")
+            return self.camera
+
+    window = Window()
+    utility_module = types.ModuleType("omni.kit.viewport.utility")
+    utility_module.get_active_viewport = lambda: "active-viewport"
+    utility_module.get_active_viewport_window = lambda: window
+    monkeypatch.setitem(sys.modules, "omni.kit.viewport.utility", utility_module)
+
+    class CameraModule(types.ModuleType):
+        ViewportCameraManipulator = Manipulator
+
+    monkeypatch.setitem(sys.modules, "omni.kit.manipulator.camera", CameraModule("omni.kit.manipulator.camera"))
+    viewer._rebuild_viewport_camera_bindings()
+
+    assert window.camera.manipulator.destroyed is False
+    assert window.camera.manipulator.built is True
+    assert window.camera.manipulator.bindings["PanGesture"] == "LeftButton"
+
+
 def test_m1_playback_overwrites_only_12_leg_joints():
     from extension.parallelism.robot_backend import get_robot_backend
     from extension.viz import go2_foostep_planner as viewer

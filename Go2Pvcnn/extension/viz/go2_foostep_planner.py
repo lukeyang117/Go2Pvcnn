@@ -1018,6 +1018,45 @@ def _launch_app(args_cli: argparse.Namespace):
 
 
 _VIEWER_VIEWPORT_SELECTION_HANDLE = None
+_VIEWER_CAMERA_BINDINGS = {
+    "PanGesture": "LeftButton",
+    "TumbleGesture": "Alt LeftButton",
+    "ZoomGesture": "Alt RightButton",
+    "LookGesture": "RightButton",
+}
+
+
+def _rebuild_viewport_camera_bindings() -> bool:
+    """Replace an already-built viewport camera manipulator with explicit bindings."""
+
+    try:
+        from omni.kit.viewport.utility import get_active_viewport, get_active_viewport_window
+        from omni.kit.manipulator.camera import ViewportCameraManipulator
+
+        viewport = get_active_viewport()
+        window = get_active_viewport_window()
+        if viewport is None or window is None:
+            return False
+        layer = window._find_viewport_layer("Camera", "manipulator")
+        old_manipulator = getattr(layer, "manipulator", None) if layer is not None else None
+        if old_manipulator is None:
+            return False
+
+        new_manipulator = ViewportCameraManipulator(viewport, bindings=dict(_VIEWER_CAMERA_BINDINGS))
+        new_manipulator.on_build()
+        old_manipulator.destroy()
+
+        private_name = next((name for name in vars(layer) if name.endswith("__manipulator")), None)
+        if private_name is not None:
+            setattr(layer, private_name, new_manipulator)
+        elif "manipulator" in vars(layer):
+            layer.manipulator = new_manipulator
+        else:
+            new_manipulator.destroy()
+            return False
+        return True
+    except (ImportError, AttributeError, RuntimeError):
+        return False
 
 
 def _configure_viewport_mouse_bindings() -> bool:
@@ -1030,12 +1069,8 @@ def _configure_viewport_mouse_bindings() -> bool:
 
     # Keep Alt+LMB tumble while making an unmodified LMB drag pan.  The
     # assignment must happen before the viewport camera manipulator is built.
-    gestures.kDefaultKeyBindings = {
-        "PanGesture": "LeftButton",
-        "TumbleGesture": "Alt LeftButton",
-        "ZoomGesture": "Alt RightButton",
-        "LookGesture": "RightButton",
-    }
+    gestures.kDefaultKeyBindings = dict(_VIEWER_CAMERA_BINDINGS)
+    _rebuild_viewport_camera_bindings()
 
     global _VIEWER_VIEWPORT_SELECTION_HANDLE
     if _VIEWER_VIEWPORT_SELECTION_HANDLE is None:
