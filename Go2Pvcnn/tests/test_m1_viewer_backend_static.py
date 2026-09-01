@@ -18,11 +18,11 @@ def test_viewer_source_has_robot_selector_and_bounded_cycle_option():
     assert "Isaac-M1-Parallelism-Viewer-v0" in registration
 
 
-def test_viewer_uses_mutually_exclusive_alt_right_pan_and_right_look():
+def test_viewer_uses_mutually_exclusive_ctrl_right_pan_and_right_look():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
-    assert '"PanGesture": "Alt RightButton"' in source
+    assert '"PanGesture": "Ctrl RightButton"' in source
     assert '"TumbleGesture": "RightButton"' in source
     assert "_configure_viewport_mouse_bindings()" in source
 
@@ -42,9 +42,10 @@ def test_viewer_subscribes_to_active_viewport_mouse_events_for_camera_input():
     source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
     assert "get_mouse_coords_pixel" in source
     assert "RIGHT_BUTTON_DOWN" in source
-    assert "KEYBOARD_MODIFIER_FLAG_ALT" in source
+    assert "KEYBOARD_MODIFIER_FLAG_CONTROL" in source
     assert "subscribe_to_mouse_events" in source
     assert "get_mouse_value" in source
+    assert "MouseEventType.MOVE" in source
 
 
 def test_m1_playback_overwrites_only_12_leg_joints():

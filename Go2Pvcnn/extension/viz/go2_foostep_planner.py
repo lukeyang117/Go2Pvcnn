@@ -409,7 +409,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--camera-input-test",
         action="store_true",
         default=False,
-        help="Run the real viewport RMB/Alt+RMB camera input test and exit.",
+        help="Run the real viewport RMB/Ctrl+RMB camera input test and exit.",
     )
     parser.add_argument("--warmup-steps", type=int, default=6, help="Number of zero-action warmup steps before visualization.")
     parser.add_argument(
@@ -1137,13 +1137,13 @@ def _launch_app(args_cli: argparse.Namespace):
 
 
 _VIEWER_CAMERA_BINDINGS = {
-    "PanGesture": "Alt RightButton",
+    "PanGesture": "Ctrl RightButton",
     "TumbleGesture": "RightButton",
 }
 
 
 def _rebuild_viewport_camera_bindings() -> bool:
-    """Install mutually exclusive right-button tumble and Alt+right pan gestures."""
+    """Install mutually exclusive right-button tumble and Ctrl+right pan gestures."""
 
     try:
         from omni.kit.manipulator.camera import ViewportCameraManipulator
@@ -1177,7 +1177,7 @@ def _rebuild_viewport_camera_bindings() -> bool:
 
 
 def _configure_viewport_mouse_bindings() -> bool:
-    """Configure Alt+RMB pan and RMB look without changing left-button selection."""
+    """Configure Ctrl+RMB pan and RMB look without changing left-button selection."""
 
     try:
         from omni.kit.manipulator.camera import gestures
@@ -2500,6 +2500,23 @@ class _ViewerCameraInputController:
         elif event.type == carb.input.MouseEventType.RIGHT_BUTTON_UP:
             self._right_down = False
             self._last_pos = None
+        elif event.type == carb.input.MouseEventType.MOVE and self._right_down:
+            current = self._input.get_mouse_coords_pixel(self._mouse)
+            if self._last_pos is None:
+                self._last_pos = current
+                return
+            dx = float(current[0] - self._last_pos[0])
+            dy = float(current[1] - self._last_pos[1])
+            self._last_pos = current
+            modifiers = int(getattr(event, "modifiers", 0))
+            pan = bool(modifiers & carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL)
+            if abs(dx) <= 1.0e-6 and abs(dy) <= 1.0e-6:
+                return
+            self._eye, self._target = _camera_drag_pose(
+                self._eye, self._target, dx, dy, pan=pan, width=self._width, height=self._height
+            )
+            self.update_count += 1
+            self._set_camera_view(self._eye, self._target)
 
     def poll(self):
         """Process current input state, covering buffered UI-test events too."""
@@ -2522,7 +2539,7 @@ class _ViewerCameraInputController:
         dy = float(current[1] - self._last_pos[1])
         self._last_pos = current
         modifiers = self._input.get_modifier_flags(device_types=[carb.input.DeviceType.KEYBOARD])
-        pan = bool(int(modifiers) & carb.input.KEYBOARD_MODIFIER_FLAG_ALT)
+        pan = bool(int(modifiers) & carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL)
         if abs(dx) <= 1.0e-6 and abs(dy) <= 1.0e-6:
             return
         self._eye, self._target = _camera_drag_pose(
@@ -2573,11 +2590,11 @@ async def _run_camera_input_test(camera_controller) -> dict[str, float]:
     await ui_test.emulate_mouse_move(start, human_delay_speed=1)
     before_pan = view_signature()
     from omni.kit.ui_test.input import emulate_keyboard
-    await emulate_keyboard(carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardInput.LEFT_ALT, carb.input.KEYBOARD_MODIFIER_FLAG_ALT)
+    await emulate_keyboard(carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardInput.LEFT_CONTROL, carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL)
     try:
         await emulate_mouse_drag_and_drop(start, end, right_click=True, human_delay_speed=1)
     finally:
-        await emulate_keyboard(carb.input.KeyboardEventType.KEY_RELEASE, carb.input.KeyboardInput.LEFT_ALT, 0)
+        await emulate_keyboard(carb.input.KeyboardEventType.KEY_RELEASE, carb.input.KeyboardInput.LEFT_CONTROL, 0)
     await wait_n_updates_internal(3)
     after_pan = view_signature()
 
@@ -2591,8 +2608,8 @@ async def _run_camera_input_test(camera_controller) -> dict[str, float]:
     if look_delta <= 1.0e-7:
         raise AssertionError(f"RMB look did not change viewport.view: delta={look_delta}")
     if pan_delta <= 1.0e-7:
-        raise AssertionError(f"Alt+RMB pan did not change viewport.view: delta={pan_delta}")
-    print(f"[Viewer][CameraInputTest] RMB look delta={look_delta:.6g}; Alt+RMB pan delta={pan_delta:.6g}", flush=True)
+        raise AssertionError(f"Ctrl+RMB pan did not change viewport.view: delta={pan_delta}")
+    print(f"[Viewer][CameraInputTest] RMB look delta={look_delta:.6g}; Ctrl+RMB pan delta={pan_delta:.6g}", flush=True)
     return {"look_delta": look_delta, "pan_delta": pan_delta}
 
 
@@ -3021,7 +3038,7 @@ def main() -> int:
         render_mode="rgb_array" if getattr(args_cli, "livestream", -1) in (1, 2) else None,
     )
     if _configure_viewport_mouse_bindings():
-        print("[Viewer] Viewport navigation: RMB look; Alt+RMB pan.", flush=True)
+        print("[Viewer] Viewport navigation: RMB look; Ctrl+RMB pan.", flush=True)
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
     trajectory_manager = _attach_reference_manager_if_enabled(base_env, env_cfg)
