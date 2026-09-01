@@ -1037,7 +1037,8 @@ def _rebuild_viewport_camera_bindings() -> bool:
         window = get_active_viewport_window()
         if viewport is None or window is None:
             return False
-        layer = window._find_viewport_layer("Camera", "manipulator")
+        layer_item = window._find_viewport_layer("Camera", "manipulator")
+        layer = getattr(layer_item, "layer", layer_item) if layer_item is not None else None
         old_manipulator = getattr(layer, "manipulator", None) if layer is not None else None
         if old_manipulator is None:
             return False

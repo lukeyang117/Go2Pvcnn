@@ -67,9 +67,13 @@ def test_viewer_rebuilds_existing_camera_manipulator_with_explicit_bindings(monk
         def __init__(self):
             self.manipulator = Manipulator("active-viewport")
 
+    class SceneItem:
+        def __init__(self):
+            self.layer = CameraLayer()
+
     class Window:
         def __init__(self):
-            self.camera = CameraLayer()
+            self.camera = SceneItem()
 
         def _find_viewport_layer(self, name, category):
             assert (name, category) == ("Camera", "manipulator")
@@ -87,9 +91,9 @@ def test_viewer_rebuilds_existing_camera_manipulator_with_explicit_bindings(monk
     monkeypatch.setitem(sys.modules, "omni.kit.manipulator.camera", CameraModule("omni.kit.manipulator.camera"))
     viewer._rebuild_viewport_camera_bindings()
 
-    assert window.camera.manipulator.destroyed is False
-    assert window.camera.manipulator.built is True
-    assert window.camera.manipulator.bindings["PanGesture"] == "LeftButton"
+    assert window.camera.layer.manipulator.destroyed is False
+    assert window.camera.layer.manipulator.built is True
+    assert window.camera.layer.manipulator.bindings["PanGesture"] == "LeftButton"
 
 
 def test_m1_playback_overwrites_only_12_leg_joints():
