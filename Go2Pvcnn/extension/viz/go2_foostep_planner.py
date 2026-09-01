@@ -1017,6 +1017,43 @@ def _launch_app(args_cli: argparse.Namespace):
     return app_launcher, app_launcher.app
 
 
+_VIEWER_VIEWPORT_SELECTION_HANDLE = None
+
+
+def _configure_viewport_mouse_bindings() -> bool:
+    """Use the left mouse button for viewport panning in this viewer."""
+
+    try:
+        from omni.kit.manipulator.camera import gestures
+    except ImportError:
+        return False
+
+    # Keep Alt+LMB tumble while making an unmodified LMB drag pan.  The
+    # assignment must happen before the viewport camera manipulator is built.
+    gestures.kDefaultKeyBindings = {
+        "PanGesture": "LeftButton",
+        "TumbleGesture": "Alt LeftButton",
+        "ZoomGesture": "Alt RightButton",
+        "LookGesture": "RightButton",
+    }
+
+    global _VIEWER_VIEWPORT_SELECTION_HANDLE
+    if _VIEWER_VIEWPORT_SELECTION_HANDLE is None:
+        try:
+            from omni.kit.viewport.utility import disable_selection, get_active_viewport
+
+            viewport = get_active_viewport()
+            if viewport is not None:
+                # Keep this handle alive for the whole viewer session.  The
+                # utility restores selection as soon as the handle is deleted.
+                _VIEWER_VIEWPORT_SELECTION_HANDLE = disable_selection(viewport)
+        except ImportError:
+            print("[Viewer] Viewport selection utility is unavailable; left-drag selection may remain active.", flush=True)
+        except Exception as exc:
+            print(f"[Viewer] Could not disable viewport selection: {exc}", flush=True)
+    return True
+
+
 def _attach_reference_manager_if_enabled(env, env_cfg):
     if str(getattr(env_cfg, "planner_backend", "mpc")).lower() == "parallelism":
         return None
@@ -2633,6 +2670,8 @@ def _print_help() -> None:
 def main() -> int:
     args_cli = _prepare_runtime_args(_parse_args())
     _, simulation_app = _launch_app(args_cli)
+    if _configure_viewport_mouse_bindings():
+        print("[Viewer] Viewport navigation: left-drag pans; Alt+left-drag tumbles.", flush=True)
 
     import gymnasium as gym
 

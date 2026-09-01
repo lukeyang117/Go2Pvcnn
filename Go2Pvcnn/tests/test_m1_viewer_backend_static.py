@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from types import SimpleNamespace
 
 import torch
@@ -14,6 +16,35 @@ def test_viewer_source_has_robot_selector_and_bounded_cycle_option():
     assert "M1ParallelismViewerEnvCfg" in source
     registration = (Path(__file__).resolve().parents[1] / "go2_pvcnn/tasks/register_envs.py").read_text()
     assert "Isaac-M1-Parallelism-Viewer-v0" in registration
+
+
+def test_viewer_configures_left_drag_for_viewport_pan():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    assert '"PanGesture": "LeftButton"' in source
+    assert '"TumbleGesture": "Alt LeftButton"' in source
+    assert "_configure_viewport_mouse_bindings()" in source
+
+
+def test_viewer_disables_selection_while_left_drag_pan_is_active(monkeypatch):
+    from extension.viz import go2_foostep_planner as viewer
+
+    calls = []
+    camera_gestures = types.SimpleNamespace(kDefaultKeyBindings={})
+    camera_module = types.ModuleType("omni.kit.manipulator.camera")
+    camera_module.gestures = camera_gestures
+    utility_module = types.ModuleType("omni.kit.viewport.utility")
+    utility_module.get_active_viewport = lambda: "active-viewport"
+    utility_module.disable_selection = lambda viewport: calls.append(viewport) or "selection-handle"
+    monkeypatch.setitem(sys.modules, "omni.kit.manipulator.camera", camera_module)
+    monkeypatch.setitem(sys.modules, "omni.kit.viewport.utility", utility_module)
+
+    viewer._VIEWER_VIEWPORT_SELECTION_HANDLE = None
+    assert viewer._configure_viewport_mouse_bindings() is True
+
+    assert calls == ["active-viewport"]
+    assert viewer._VIEWER_VIEWPORT_SELECTION_HANDLE == "selection-handle"
 
 
 def test_m1_playback_overwrites_only_12_leg_joints():
