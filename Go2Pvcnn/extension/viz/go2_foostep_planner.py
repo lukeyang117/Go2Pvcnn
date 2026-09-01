@@ -3545,10 +3545,12 @@ def main() -> int:
                         distance=float(args_cli.camera_distance),
                         height=float(args_cli.camera_height),
                     )
-                    if getattr(args_cli, "camera_input_test", False) and camera_controller is None:
+                    if camera_controller is None:
                         from omni.kit.viewport.utility import get_active_viewport_window
 
                         camera_window = get_active_viewport_window()
+                        if camera_window is None:
+                            raise RuntimeError("active viewport window is unavailable")
                         camera_position, target_position = _camera_follow_pose(
                             root_pos=planner_state.root_pos[0],
                             root_yaw=root_yaw,
@@ -3561,9 +3563,10 @@ def main() -> int:
                             target_position,
                             (camera_window.width, camera_window.height),
                         )
-                        import asyncio
+                        if getattr(args_cli, "camera_input_test", False):
+                            import asyncio
 
-                        camera_input_test_task = asyncio.ensure_future(_run_camera_input_test(camera_controller))
+                            camera_input_test_task = asyncio.ensure_future(_run_camera_input_test(camera_controller))
 
                     root_pos = planner_state.root_pos[0]
                     yaw_rate = float(active_cmd.values[0, 2].item())

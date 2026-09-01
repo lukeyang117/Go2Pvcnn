@@ -77,6 +77,15 @@ def test_viewer_tracks_ctrl_state_across_mouse_polling_frames():
     assert "self._ctrl_down" in source
 
 
+def test_viewer_attaches_camera_controller_without_test_mode_flag():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    # The automated input test is optional; manual camera controls are not.
+    assert 'if getattr(args_cli, "camera_input_test", False) and camera_controller is None:' not in source
+    assert "if camera_controller is None:" in source
+
+
 def test_m1_playback_overwrites_only_12_leg_joints():
     from extension.parallelism.robot_backend import get_robot_backend
     from extension.viz import go2_foostep_planner as viewer
