@@ -36,12 +36,20 @@ def test_viewer_configures_mouse_bindings_after_environment_creation():
     assert configure_index < env_index
 
 
+def test_viewer_configures_mouse_bindings_before_isaac_app_startup():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    assert source.rindex("_configure_viewport_mouse_bindings()") < source.index("_launch_app(args_cli)")
+
+
 def test_viewer_does_not_replace_isaac_camera_manipulator_private_state():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
     assert "old_manipulator.destroy()" not in source
-    assert "_find_viewport_layer" not in source
+    assert "disable_tumble" in source
+    assert "disable_look" in source
 
 
 def test_viewer_subscribes_to_active_viewport_mouse_events_for_camera_input():
@@ -55,6 +63,18 @@ def test_viewer_subscribes_to_active_viewport_mouse_events_for_camera_input():
     assert "get_mouse_value" in source
     assert "MouseEventType.MOVE" in source
     assert "get_keyboard_value" in source
+
+
+def test_viewer_tracks_ctrl_state_across_mouse_polling_frames():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    # Mouse MOVE events are sparse in Kit.  Ctrl must therefore be latched from
+    # keyboard events, otherwise polling can reinterpret Ctrl+RMB as RMB look.
+    assert "subscribe_to_keyboard_events" in source
+    assert "KEY_PRESS" in source
+    assert "KEY_RELEASE" in source
+    assert "self._ctrl_down" in source
 
 
 def test_m1_playback_overwrites_only_12_leg_joints():

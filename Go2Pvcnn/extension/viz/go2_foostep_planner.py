@@ -1147,10 +1147,27 @@ def _configure_viewport_mouse_bindings() -> bool:
 
     try:
         from omni.kit.manipulator.camera import gestures
+        from omni.kit.manipulator.camera import manipulator as camera_manipulator
     except ImportError:
         return False
 
     gestures.kDefaultKeyBindings = dict(_VIEWER_CAMERA_BINDINGS)
+
+    # ``manipulator.py`` imports ``build_gestures`` by value.  Replacing only
+    # gestures.kDefaultKeyBindings is therefore unreliable once Kit has loaded
+    # that module.  Pin the constructor's binding argument before the viewport
+    # camera factory creates its native manipulator.
+    default_build_gestures = camera_manipulator.build_gestures
+
+    def build_viewer_gestures(model, bindings=None, manager=None, configure_model=None):
+        return default_build_gestures(
+            model,
+            dict(_VIEWER_CAMERA_BINDINGS),
+            manager=manager,
+            configure_model=configure_model,
+        )
+
+    camera_manipulator.build_gestures = build_viewer_gestures
     return True
 
 
@@ -2445,18 +2462,57 @@ class _ViewerCameraInputController:
         self._width, self._height = (float(value) for value in viewport_size)
         self._right_down = False
         self._last_pos = None
+        self._ctrl_down = False
         self.event_count = 0
         self.update_count = 0
+        self.pan_update_count = 0
+        self.look_update_count = 0
         self._input = carb.input.acquire_input_interface()
         app_window = omni.appwindow.get_default_app_window()
         self._mouse = app_window.get_mouse()
         self._keyboard = app_window.get_keyboard()
         self._subscription = self._input.subscribe_to_mouse_events(self._mouse, self._on_mouse_event)
+        self._keyboard_subscription = self._input.subscribe_to_keyboard_events(
+            self._keyboard, self._on_keyboard_event
+        )
+        self._disable_native_rotation_gestures()
 
     def close(self):
         if self._subscription is not None:
             self._input.unsubscribe_to_mouse_events(self._mouse, self._subscription)
             self._subscription = None
+        if self._keyboard_subscription is not None:
+            self._input.unsubscribe_to_keyboard_events(self._keyboard, self._keyboard_subscription)
+            self._keyboard_subscription = None
+
+    def _on_keyboard_event(self, event):
+        import carb.input
+
+        if event.input not in (
+            carb.input.KeyboardInput.LEFT_CONTROL,
+            carb.input.KeyboardInput.RIGHT_CONTROL,
+        ):
+            return
+        if event.type == carb.input.KeyboardEventType.KEY_PRESS:
+            self._ctrl_down = True
+        elif event.type == carb.input.KeyboardEventType.KEY_RELEASE:
+            self._ctrl_down = False
+
+    def _disable_native_rotation_gestures(self):
+        """Keep Kit's camera layer, but prevent it from competing with this controller."""
+        try:
+            from omni.kit.viewport.utility import get_active_viewport_window
+
+            window = get_active_viewport_window()
+            layer = window._find_viewport_layer("Camera", "manipulator") if window is not None else None
+            native = getattr(getattr(layer, "layer", None), "manipulator", None)
+            model = getattr(native, "model", None)
+            if model is not None:
+                model.set_ints("disable_tumble", [1])
+                model.set_ints("disable_look", [1])
+        except (AttributeError, ImportError, ReferenceError):
+            # The controller still works in headless/unit-test contexts.
+            return
 
     def _on_mouse_event(self, event):
         import carb.input
@@ -2484,12 +2540,16 @@ class _ViewerCameraInputController:
                 self._eye, self._target, dx, dy, pan=pan, width=self._width, height=self._height
             )
             self.update_count += 1
+            if pan:
+                self.pan_update_count += 1
+            else:
+                self.look_update_count += 1
             self._set_camera_view(self._eye, self._target)
 
     def _control_down(self):
         import carb.input
 
-        return bool(
+        return self._ctrl_down or bool(
             self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.LEFT_CONTROL)
             or self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.RIGHT_CONTROL)
         )
@@ -2498,6 +2558,7 @@ class _ViewerCameraInputController:
         """Process current input state, covering buffered UI-test events too."""
         import carb.input
 
+        self._disable_native_rotation_gestures()
         pressed = self._input.get_mouse_value(self._mouse, carb.input.MouseInput.RIGHT_BUTTON) > 0
         if not pressed:
             self._right_down = False
@@ -2522,6 +2583,10 @@ class _ViewerCameraInputController:
             self._eye, self._target, dx, dy, pan=pan, width=self._width, height=self._height
         )
         self.update_count += 1
+        if pan:
+            self.pan_update_count += 1
+        else:
+            self.look_update_count += 1
         self._set_camera_view(self._eye, self._target)
 
 
@@ -2542,6 +2607,18 @@ async def _run_camera_input_test(camera_controller) -> dict[str, float]:
     def view_signature() -> tuple[float, ...]:
         matrix = viewport.view
         return tuple(float(matrix[row][col]) for row in range(4) for col in range(4))
+
+    def view_rotation_delta(before, after) -> float:
+        return max(
+            abs(after[row * 4 + col] - before[row * 4 + col])
+            for row in range(3)
+            for col in range(3)
+        )
+
+    def view_translation_delta(before, after) -> float:
+        # Kit exposes the USD row-vector view matrix, whose translation is in
+        # the last row rather than the last column.
+        return max(abs(after[3 * 4 + col] - before[3 * 4 + col]) for col in range(3))
 
     window = get_active_viewport_window()
     if window is None:
@@ -2576,17 +2653,39 @@ async def _run_camera_input_test(camera_controller) -> dict[str, float]:
 
     look_delta = max(abs(a - b) for a, b in zip(after_look, before_look))
     pan_delta = max(abs(a - b) for a, b in zip(after_pan, before_pan))
+    pan_rotation_delta = view_rotation_delta(before_pan, after_pan)
+    pan_translation_delta = view_translation_delta(before_pan, after_pan)
     print(
         f"[Viewer][CameraInputTest] controller events={camera_controller.event_count} "
-        f"camera_updates={camera_controller.update_count}",
+        f"camera_updates={camera_controller.update_count} "
+        f"pan_updates={camera_controller.pan_update_count} "
+        f"look_updates={camera_controller.look_update_count}",
         flush=True,
     )
     if look_delta <= 1.0e-7:
         raise AssertionError(f"RMB look did not change viewport.view: delta={look_delta}")
     if pan_delta <= 1.0e-7:
         raise AssertionError(f"Ctrl+RMB pan did not change viewport.view: delta={pan_delta}")
-    print(f"[Viewer][CameraInputTest] RMB look delta={look_delta:.6g}; Ctrl+RMB pan delta={pan_delta:.6g}", flush=True)
-    return {"look_delta": look_delta, "pan_delta": pan_delta}
+    if pan_translation_delta <= 1.0e-7:
+        raise AssertionError(
+            f"Ctrl+RMB pan did not translate the camera: translation_delta={pan_translation_delta}"
+        )
+    if pan_rotation_delta > 1.0e-5:
+        raise AssertionError(
+            f"Ctrl+RMB pan rotated the camera instead of panning: rotation_delta={pan_rotation_delta}"
+        )
+    print(
+        f"[Viewer][CameraInputTest] RMB look delta={look_delta:.6g}; "
+        f"Ctrl+RMB pan delta={pan_delta:.6g} translation={pan_translation_delta:.6g} "
+        f"rotation={pan_rotation_delta:.6g}",
+        flush=True,
+    )
+    return {
+        "look_delta": look_delta,
+        "pan_delta": pan_delta,
+        "pan_translation_delta": pan_translation_delta,
+        "pan_rotation_delta": pan_rotation_delta,
+    }
 
 
 def _mpc_state_from_env(env, foot_ids: list[int]):
@@ -2993,6 +3092,9 @@ def _print_help() -> None:
 
 def main() -> int:
     args_cli = _prepare_runtime_args(_parse_args())
+    # The camera factory reads this table while the viewport extension is
+    # constructed, so it must be set before AppLauncher starts Isaac Sim.
+    camera_bindings_configured = _configure_viewport_mouse_bindings()
     _, simulation_app = _launch_app(args_cli)
     import gymnasium as gym
 
@@ -3007,7 +3109,6 @@ def main() -> int:
     parallel_backend = str(args_cli.planner_backend).lower() == "parallelism"
     mpc_planner_cfg = None if (joint_backend or parallel_backend) else _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
 
-    camera_bindings_configured = _configure_viewport_mouse_bindings()
     env_id = "Isaac-M1-Parallelism-Viewer-v0" if robot_backend.name == "m1" else "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0"
     env = gym.make(
         env_id,
@@ -3090,8 +3191,6 @@ def main() -> int:
                 if hasattr(simulation_app, "is_running") and not simulation_app.is_running():
                     break
                 simulation_app.update()
-                if camera_controller is not None:
-                    camera_controller.poll()
                 if camera_input_test_task is not None:
                     import asyncio
 
@@ -3099,6 +3198,11 @@ def main() -> int:
                     if camera_input_test_task.done():
                         camera_input_test_task.result()
                         break
+                # Process buffered UI-test/Kit input after the app update.  This
+                # lets our final pose write win over native RMB tumble handling
+                # when Ctrl+RMB is intended to emulate middle-button pan.
+                if camera_controller is not None:
+                    camera_controller.poll()
                 teleop_cmd = teleop.poll()
                 active_cmd = teleop_cmd
                 if scripted_command is not None and scripted_cycles_remaining > 0:
