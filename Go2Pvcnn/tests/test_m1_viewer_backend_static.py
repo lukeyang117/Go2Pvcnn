@@ -33,7 +33,15 @@ def test_viewer_configures_mouse_bindings_after_environment_creation():
     source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
     env_index = source.index("env = gym.make(")
     configure_index = source.rindex("_configure_viewport_mouse_bindings()")
-    assert configure_index > env_index
+    assert configure_index < env_index
+
+
+def test_viewer_does_not_replace_isaac_camera_manipulator_private_state():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    assert "old_manipulator.destroy()" not in source
+    assert "_find_viewport_layer" not in source
 
 
 def test_viewer_subscribes_to_active_viewport_mouse_events_for_camera_input():

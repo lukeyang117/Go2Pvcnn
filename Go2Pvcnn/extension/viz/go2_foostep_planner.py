@@ -1142,40 +1142,6 @@ _VIEWER_CAMERA_BINDINGS = {
 }
 
 
-def _rebuild_viewport_camera_bindings() -> bool:
-    """Install mutually exclusive right-button tumble and Ctrl+right pan gestures."""
-
-    try:
-        from omni.kit.manipulator.camera import ViewportCameraManipulator
-        from omni.kit.viewport.utility import get_active_viewport, get_active_viewport_window
-
-        viewport = get_active_viewport()
-        window = get_active_viewport_window()
-        if viewport is None or window is None:
-            return False
-        layer_item = window._find_viewport_layer("Camera", "manipulator")
-        layer = getattr(layer_item, "layer", layer_item) if layer_item is not None else None
-        old_manipulator = getattr(layer, "manipulator", None) if layer is not None else None
-        if old_manipulator is None:
-            return False
-
-        new_manipulator = ViewportCameraManipulator(viewport, bindings=dict(_VIEWER_CAMERA_BINDINGS))
-        new_manipulator.on_build()
-        old_manipulator.destroy()
-
-        private_name = next((name for name in vars(layer) if name.endswith("__manipulator")), None)
-        if private_name is not None:
-            setattr(layer, private_name, new_manipulator)
-        elif "manipulator" in vars(layer):
-            layer.manipulator = new_manipulator
-        else:
-            new_manipulator.destroy()
-            return False
-        return True
-    except (ImportError, AttributeError, RuntimeError):
-        return False
-
-
 def _configure_viewport_mouse_bindings() -> bool:
     """Configure Ctrl+RMB pan and RMB look without changing left-button selection."""
 
@@ -1185,7 +1151,7 @@ def _configure_viewport_mouse_bindings() -> bool:
         return False
 
     gestures.kDefaultKeyBindings = dict(_VIEWER_CAMERA_BINDINGS)
-    return _rebuild_viewport_camera_bindings()
+    return True
 
 
 def _attach_reference_manager_if_enabled(env, env_cfg):
@@ -3031,13 +2997,14 @@ def main() -> int:
     parallel_backend = str(args_cli.planner_backend).lower() == "parallelism"
     mpc_planner_cfg = None if (joint_backend or parallel_backend) else _build_mpc_planner_cfg(env_cfg, args_cli=args_cli)
 
+    camera_bindings_configured = _configure_viewport_mouse_bindings()
     env_id = "Isaac-M1-Parallelism-Viewer-v0" if robot_backend.name == "m1" else "Isaac-Teacher-Elevation-Trajectory-Mpc-Semantic-Go2-Play-v0"
     env = gym.make(
         env_id,
         cfg=env_cfg,
         render_mode="rgb_array" if getattr(args_cli, "livestream", -1) in (1, 2) else None,
     )
-    if _configure_viewport_mouse_bindings():
+    if camera_bindings_configured:
         print("[Viewer] Viewport navigation: RMB look; Ctrl+RMB pan.", flush=True)
     assert isinstance(env.unwrapped, ManagerBasedRLEnv)
     base_env = env.unwrapped
