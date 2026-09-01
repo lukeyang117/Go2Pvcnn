@@ -54,6 +54,7 @@ def test_viewer_subscribes_to_active_viewport_mouse_events_for_camera_input():
     assert "subscribe_to_mouse_events" in source
     assert "get_mouse_value" in source
     assert "MouseEventType.MOVE" in source
+    assert "get_keyboard_value" in source
 
 
 def test_m1_playback_overwrites_only_12_leg_joints():

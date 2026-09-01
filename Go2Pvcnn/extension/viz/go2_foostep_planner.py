@@ -2448,7 +2448,9 @@ class _ViewerCameraInputController:
         self.event_count = 0
         self.update_count = 0
         self._input = carb.input.acquire_input_interface()
-        self._mouse = omni.appwindow.get_default_app_window().get_mouse()
+        app_window = omni.appwindow.get_default_app_window()
+        self._mouse = app_window.get_mouse()
+        self._keyboard = app_window.get_keyboard()
         self._subscription = self._input.subscribe_to_mouse_events(self._mouse, self._on_mouse_event)
 
     def close(self):
@@ -2475,7 +2477,7 @@ class _ViewerCameraInputController:
             dy = float(current[1] - self._last_pos[1])
             self._last_pos = current
             modifiers = int(getattr(event, "modifiers", 0))
-            pan = bool(modifiers & carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL)
+            pan = bool(modifiers & carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL) or self._control_down()
             if abs(dx) <= 1.0e-6 and abs(dy) <= 1.0e-6:
                 return
             self._eye, self._target = _camera_drag_pose(
@@ -2483,6 +2485,14 @@ class _ViewerCameraInputController:
             )
             self.update_count += 1
             self._set_camera_view(self._eye, self._target)
+
+    def _control_down(self):
+        import carb.input
+
+        return bool(
+            self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.LEFT_CONTROL)
+            or self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.RIGHT_CONTROL)
+        )
 
     def poll(self):
         """Process current input state, covering buffered UI-test events too."""
@@ -2505,7 +2515,7 @@ class _ViewerCameraInputController:
         dy = float(current[1] - self._last_pos[1])
         self._last_pos = current
         modifiers = self._input.get_modifier_flags(device_types=[carb.input.DeviceType.KEYBOARD])
-        pan = bool(int(modifiers) & carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL)
+        pan = bool(int(modifiers) & carb.input.KEYBOARD_MODIFIER_FLAG_CONTROL) or self._control_down()
         if abs(dx) <= 1.0e-6 and abs(dy) <= 1.0e-6:
             return
         self._eye, self._target = _camera_drag_pose(
