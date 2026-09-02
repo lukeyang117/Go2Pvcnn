@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M1 Parallelism 小障碍与轮式滑行设计</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f5f6;
+      --surface: #fff;
+      --ink: #18201d;
+      --muted: #5f6c66;
+      --line: #d5ddda;
+      --green: #19764a;
+      --green-soft: #e7f3ec;
+      --blue: #2563a8;
+      --blue-soft: #eaf1f9;
+      --amber: #a35b00;
+      --amber-soft: #fff2dc;
+      --red: #a63b32;
+      --code: #202825;
+      --code-ink: #edf4f0;
+      --radius: 6px;
+      --content: 1180px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+      letter-spacing: 0;
+    }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code, .code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: .92em;
+    }
+    .top-band { background: var(--surface); border-bottom: 1px solid var(--line); }
+    .top-inner { max-width: var(--content); margin: 0 auto; padding: 30px 24px 25px; }
+    h1, h2, h3 { margin-top: 0; letter-spacing: 0; }
+    h1 { margin-bottom: 8px; font-size: clamp(27px, 4vw, 40px); line-height: 1.25; font-weight: 500; }
+    h2 { margin-bottom: 17px; font-size: 23px; line-height: 1.35; font-weight: 500; }
+    h3 { margin-bottom: 9px; font-size: 17px; line-height: 1.45; font-weight: 500; }
+    p { margin: 0 0 14px; }
+    .subtitle { max-width: 860px; margin: 0; color: var(--muted); font-size: 16px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 17px; color: var(--muted); font-size: 13px; }
+    .meta strong { color: var(--ink); font-weight: 500; }
+    .page { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 30px; max-width: var(--content); margin: 0 auto; padding: 28px 24px 72px; }
+    nav { position: sticky; top: 18px; align-self: start; border-left: 2px solid var(--line); padding-left: 14px; }
+    nav a { display: block; padding: 5px 0; color: var(--muted); text-decoration: none; line-height: 1.35; }
+    nav a:hover { color: var(--ink); }
+    main { min-width: 0; }
+    section { padding: 30px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 18px; }
+    section:first-child { padding-top: 0; }
+    .summary-grid, .two-col, .three-col { display: grid; gap: 14px; }
+    .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .fact, .panel, .diagram, .table-wrap { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    .fact { min-height: 112px; padding: 16px; }
+    .fact .value { display: block; margin-bottom: 5px; color: var(--green); font-size: 24px; line-height: 1.25; font-weight: 500; }
+    .fact .label { color: var(--muted); line-height: 1.4; }
+    .panel { padding: 18px; }
+    .panel.green { border-left: 4px solid var(--green); }
+    .panel.blue { border-left: 4px solid var(--blue); }
+    .panel.amber { border-left: 4px solid var(--amber); }
+    .panel.red { border-left: 4px solid var(--red); }
+    .panel p:last-child, .panel ul:last-child, .panel ol:last-child { margin-bottom: 0; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li + li { margin-top: 5px; }
+    .decision-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--line); }
+    .decision-list div { min-height: 72px; padding: 13px 15px; background: var(--surface); }
+    .decision-list strong { display: block; margin-bottom: 3px; font-weight: 500; }
+    .flow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); align-items: stretch; gap: 8px; margin: 16px 0; }
+    .flow .node { display: grid; place-items: center; min-height: 78px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); text-align: center; line-height: 1.35; }
+    .flow .node.accent { border-color: #9fcbb4; background: var(--green-soft); }
+    .flow .node.warning { border-color: #e4c389; background: var(--amber-soft); }
+    .flow .arrow { display: grid; place-items: center; color: var(--muted); font-size: 20px; }
+    .table-wrap { overflow-x: auto; margin: 14px 0 18px; }
+    table { width: 100%; min-width: 680px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #edf1ef; font-weight: 500; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    .code-block { overflow-x: auto; margin: 14px 0; padding: 15px 17px; border-radius: var(--radius); background: var(--code); color: var(--code-ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; line-height: 1.65; white-space: pre; }
+    .note, .warning { margin: 16px 0; padding: 13px 15px; border-left: 4px solid; background: var(--surface); }
+    .note { border-color: var(--blue); }
+    .warning { border-color: var(--amber); }
+    .note strong, .warning strong { font-weight: 500; }
+    .file-tree { overflow-x: auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; line-height: 1.7; white-space: pre; }
+    .status { color: var(--green); font-weight: 500; }
+    .tag { display: inline-block; margin-right: 5px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    footer { padding: 22px 24px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); text-align: center; font-size: 13px; }
+    @media (max-width: 920px) {
+      .page { grid-template-columns: 1fr; }
+      nav { position: static; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 12px; border-left: 0; border-bottom: 1px solid var(--line); padding: 0 0 18px; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .three-col { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .top-inner, .page { padding-left: 16px; padding-right: 16px; }
+      nav, .summary-grid, .two-col, .decision-list { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .flow .arrow { min-height: 24px; transform: rotate(90deg); }
+      .fact { min-height: 0; }
+    }
+    @media print {
+      body { background: #fff; }
+      nav { display: none; }
+      .page { display: block; max-width: none; }
+      section, .panel, .fact, .diagram, .table-wrap { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top-band">
+    <div class="top-inner">
+      <h1>M1 Parallelism 小障碍与轮式滑行设计</h1>
+      <p class="subtitle">在不改变 Go2 默认执行路径的前提下，让 M1 复用同一套规划接口：平地以轮式滚动为主，只有被最终选中的候选轨迹确实穿过小障碍时才触发单腿 swing；大障碍继续沿用绕行。</p>
+      <div class="meta">
+        <span><strong>日期</strong> 2026-09-02</span>
+        <span><strong>状态</strong> 方案已确认，待实现计划</span>
+        <span><strong>目标机器人</strong> M1 / ZJ_V3</span>
+        <span><strong>选择参数</strong> <code>--robot {go2,m1}</code></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="page">
+    <nav aria-label="设计章节">
+      <a href="#summary">设计结论</a>
+      <a href="#boundary">边界与不变项</a>
+      <a href="#pipeline">规划流程</a>
+      <a href="#swing">小障碍 swing</a>
+      <a href="#geometry">M1 几何包络</a>
+      <a href="#kinematics">FK / 解析 IK</a>
+      <a href="#terrain">地形与 Root</a>
+      <a href="#backend">机器人后端</a>
+      <a href="#viewer">Isaac Sim Viewer</a>
+      <a href="#files">文件结构</a>
+      <a href="#validation">验证与验收</a>
+    </nav>
+
+    <main>
+      <section id="summary">
+        <h2>设计结论</h2>
+        <div class="summary-grid">
+          <div class="fact"><span class="value">50 / 腿</span><span class="label">每条腿固定生成 50 个候选落点</span></div>
+          <div class="fact"><span class="value">按轨迹</span><span class="label">候选点对应的整条 XY 轨迹单独判定 swing</span></div>
+          <div class="fact"><span class="value">12 DOF</span><span class="label">只规划 ABAD、HIP、KNEE，不关心轮轴关节</span></div>
+          <div class="fact"><span class="value">0.095958 m</span><span class="label">M1 轮半径进入 clearance 和碰撞包络</span></div>
+        </div>
+        <div class="panel green">
+          <h3>一句话规则</h3>
+          <p>候选点先通过可达性、落地高度和碰撞验证；之后只读取最终选中候选的 <code>needs_swing</code>。选中且为真才 swing，选中且为假就保持当前腿角随 Root 滚动，其他候选和其他腿互不影响。</p>
+        </div>
+      </section>
+
+      <section id="boundary">
+        <h2>边界与不变项</h2>
+        <div class="decision-list">
+          <div><strong>Go2 默认行为不变</strong>不传 <code>--robot</code> 时仍使用 Go2 backend、Go2 FK/IK、Go2 配置和原有规划行为。</div>
+          <div><strong>统一规划接口</strong>候选生成、Root rollout、评分、fallback、轨迹输出结构继续由通用 Parallelism 使用。</div>
+          <div><strong>M1 独立几何</strong>M1 单独提供 USD 对齐参数、12/16 DOF 映射、解析 FK/IK、关节限位和碰撞 primitive。</div>
+          <div><strong>轮轴默认不动</strong>四个 <code>*_FOOT_JOINT</code> 不作为 planner 输入或输出，也不参与关节限位和误差评分。</div>
+          <div><strong>平地滑行</strong><code>flat</code> 与 <code>flatDense</code> 的 Root 高度固定，正常情况下不主动抬轮。</div>
+          <div><strong>非平地抬腿</strong>rough、坡面、台阶或小障碍地形可根据最终候选轨迹触发单腿 swing。</div>
+          <div><strong>大障碍绕行</strong>大障碍不升级为普通 swing，继续使用当前侧向绕行和候选拒绝逻辑。</div>
+          <div><strong>不检测 BASE</strong>与 Go2 当前边界一致，不新增 BASE 碰撞点和 link 间 self-collision。</div>
+          <div><strong>不改 RL</strong>Parallelism 只输出现有轨迹 schema；下游如何消费轨迹不在本设计范围。</div>
+          <div><strong>先验证后固化</strong>viewer 的 slider 只是临时 override，确认后的参数才写入 M1 配置。</div>
+        </div>
+        <div class="warning"><strong>明确不做：</strong>重新设计 trot/rolling gait、让 Parallelism 规划轮子转速、修改 Go2 公式、接入训练流程或用统一的 M1/Go2 碰撞尺寸代替各自 USD 几何。</div>
+      </section>
+
+      <section id="pipeline">
+        <h2>规划主流程</h2>
+        <div class="flow" aria-label="M1 Parallelism 主流程">
+          <div class="node">读取 Root、腿角<br>和地形扫描</div>
+          <div class="arrow">→</div>
+          <div class="node">每腿 50 个候选<br>落点与候选轨迹</div>
+          <div class="arrow">→</div>
+          <div class="node accent">逐腿逐候选<br>语义 + swing 标记</div>
+          <div class="arrow">→</div>
+          <div class="node">M1 解析 IK<br>FK / 碰撞验证</div>
+        </div>
+        <div class="flow">
+          <div class="node">候选评分<br>选出 index[B,4]</div>
+          <div class="arrow">→</div>
+          <div class="node warning">只读取<br>needs_swing[B,4,index]</div>
+          <div class="arrow">→</div>
+          <div class="node">逐腿生成 rolling<br>或 swing 轨迹</div>
+          <div class="arrow">→</div>
+          <div class="node accent">输出 12 DOF<br>及 Root 轨迹</div>
+        </div>
+        <div class="two-col">
+          <div class="panel blue">
+            <h3>Candidate 层</h3>
+            <ul>
+              <li>语义检查针对每一条“当前轮心到候选落点”的 XY 轨迹。</li>
+              <li>碰撞检查继续检查整条 swing 过程的 M1 几何采样点。</li>
+              <li>候选是否合法与候选是否需要 swing 是两个字段，不能互相替代。</li>
+            </ul>
+          </div>
+          <div class="panel green">
+            <h3>Selected 层</h3>
+            <ul>
+              <li>先按原有 score 选出每条腿的唯一候选。</li>
+              <li>只有 selected candidate 的标记可以控制这条腿。</li>
+              <li>未选中的候选即使穿过障碍，也不会使该腿 swing。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="swing">
+        <h2>小障碍的单腿 swing 规则</h2>
+        <p>本设计把“是否需要抬腿”和“是否发生碰撞”分成两层。语义层负责识别某条候选轨迹是否经过小障碍，几何层负责确认生成的腿部和轮子形状是否真的安全。</p>
+
+        <h3>候选轨迹定义</h3>
+        <div class="code-block">for leg in {FL, FR, RL, RR}:
+    for candidate in 50 candidates:
+        xy_path = interpolate(current_wheel_center.xy,
+                              candidate_foot.xy,
+                              path_samples)
+        path_has_small_obstacle[leg, candidate] =
+            any(semantic(xy_path) == SMALL_OBSTACLE)
+
+        needs_swing[leg, candidate] =
+            path_has_small_obstacle[leg, candidate]
+            or terrain_profile_requires_swing
+
+selected = argmin(valid_score, dim=candidate)
+leg_swing = needs_swing.gather(candidate=selected)</div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>阶段</th><th>输入</th><th>输出</th><th>约束</th></tr></thead>
+            <tbody>
+              <tr><td>候选生成</td><td>当前轮心、命令、候选半径</td><td><code>candidate_w[B,4,50,3]</code></td><td>四条腿独立，固定 50 个点</td></tr>
+              <tr><td>轨迹语义</td><td>当前轮心 XY、候选 XY、semantic map</td><td><code>needs_swing[B,4,50]</code></td><td>检查整条路径，不只检查端点</td></tr>
+              <tr><td>候选验证</td><td>Root rollout、M1 FK/IK、terrain</td><td><code>candidate_valid[B,4,50]</code></td><td>不可达、越限、碰撞、落点非法均拒绝</td></tr>
+              <tr><td>选择后执行</td><td><code>selected_index[B,4]</code></td><td><code>leg_swing[B,4]</code></td><td>只读取选中项，不回看落选项</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>执行分支</h3>
+        <div class="two-col">
+          <div class="panel green">
+            <h3><code>leg_swing == true</code></h3>
+            <p>该腿使用当前轮心到 selected foothold 的 XY 轨迹，并按照局部地形最高值加轮子包络和 clearance 生成 Z apex。落地后回到 selected foothold。</p>
+          </div>
+          <div class="panel blue">
+            <h3><code>leg_swing == false</code></h3>
+            <p>该腿保持当前腿关节角或当前轮心相对 Root 的滚动关系，随 Root 前进，不额外制造摆腿高度。它不会被另一条腿的障碍轨迹联动。</p>
+          </div>
+        </div>
+        <div class="note"><strong>关键区别：</strong>“语义轨迹命中小障碍”不是“碰撞检测已经通过”。前者仅产生 <code>needs_swing</code>；候选仍必须经过完整 M1 碰撞近似和落点验证。反过来，候选若最终没有被选中，也不会触发 swing。</div>
+
+        <h3>大障碍处理</h3>
+        <p>semantic ID 为 large obstacle 时，不设置普通 swing 标记；候选沿用现有大障碍绕行策略。若绕行候选仍全部无效，保持当前 standstill fallback，并保留 reject bits 供 viewer 诊断。</p>
+      </section>
+
+      <section id="geometry">
+        <h2>M1 USD 几何与安全包络</h2>
+        <p>M1 的规划参考点是轮心，而不是轮子最低点。轮子圆盘的半径必须在高程和碰撞判断中显式补偿，否则小障碍会被候选拒绝，最终表现为 Root 不移动或 standstill。</p>
+
+        <div class="summary-grid">
+          <div class="fact"><span class="value">r = 0.095958 m</span><span class="label">轮子半径</span></div>
+          <div class="fact"><span class="value">w = 0.04650 m</span><span class="label">轮子厚度</span></div>
+          <div class="fact"><span class="value">+0.003 m</span><span class="label">碰撞余量</span></div>
+          <div class="fact"><span class="value">0.1192 m</span><span class="label">半径加半厚度的水平保守范围</span></div>
+        </div>
+
+        <h3>摆腿高度</h3>
+        <div class="code-block">local_max_height = max(heightmap over wheel projected footprint)
+wheel_envelope = wheel_radius_m + collision_margin_m
+swing_z = local_max_height + wheel_envelope + swing_extra_clearance_m
+
+M1 initial effective clearance ≈ 0.105 m
+flat / flatDense: no active swing by default, Root Z fixed</div>
+        <p>高程查询至少覆盖半径加半厚度的水平范围，约 <code>0.1192 m</code>；对于离散高程图，可使用局部窗口最大值。摆腿轨迹的 apex 不再只取中心线高程，必须包含轮子的垂向包络。最终碰撞检测仍保留，作为数值安全闸门。</p>
+
+        <h3>对称碰撞 primitive</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>部件</th><th>每腿数量</th><th>近似形状</th><th>采样</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr><td>ABAD link</td><td>1</td><td>box</td><td>26 个边界点</td><td>腿上段碰撞</td></tr>
+              <tr><td>HIP link</td><td>1</td><td>box</td><td>26 个边界点</td><td>髋部连杆碰撞</td></tr>
+              <tr><td>KNEE link</td><td>1</td><td>box</td><td>26 个边界点</td><td>小腿碰撞</td></tr>
+              <tr><td>Wheel</td><td>1</td><td>绕 Y 轴 cylinder</td><td>3 层 × 12 角 + 2 端面中心 = 38 点</td><td>轮盘、侧面和轮底接触</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>四条腿共 16 个 primitive；每腿 116 个表面采样点，共 464 个点。不加入 BASE。左右腿通过符号对称生成，保留 M1 USD 的 link 尺寸和左右 ABAD 限位差异。</p>
+
+        <h3>碰撞点判定</h3>
+        <div class="code-block">terrain_height(point.xy) >= point.world_z - collision_margin_m
+    => collision
+
+ordinary terrain + wheel-bottom support point + contact
+    => tolerate contact
+
+semantic obstacle hit, swing frame, wheel side/top/front hit
+    => never tolerate</div>
+        <div class="warning"><strong>轮底规则：</strong>只有轮子圆周最低方向的三个宽度层采样点，可以在普通地形接触状态下被容忍；障碍物语义、摆动帧和轮子其他方向的点仍按碰撞处理。</div>
+      </section>
+
+      <section id="kinematics">
+        <h2>解析 FK / IK 与站姿</h2>
+        <p>M1 使用独立解析运动学，规划点是四个轮心。轮轴角度不参与 FK/IK；轮轴在 Isaac Sim 回放时保留当前值。</p>
+        <div class="code-block">Root
+  → BASE-to-ABAD translation
+  → RotX(ABAD)
+  → ABAD-to-HIP translation
+  → RotY(HIP)
+  → HIP-to-KNEE translation
+  → RotY(KNEE)
+  → KNEE-to-wheel-center translation</div>
+        <div class="two-col">
+          <div class="panel blue">
+            <h3>FK</h3>
+            <ul>
+              <li>输入 Root pose 和 12 个腿关节。</li>
+              <li>输出四轮心、髋、膝、小腿采样点和 wheel frame。</li>
+              <li>碰撞 primitive 使用 FK 后的 link frame 转到世界坐标。</li>
+            </ul>
+          </div>
+          <div class="panel green">
+            <h3>解析 IK</h3>
+            <ul>
+              <li>输入 Root pose 和四个轮心目标。</li>
+              <li>按 M1 的侧向偏移和两段长度解算 ABAD/HIP/KNEE。</li>
+              <li>解析结果必须经过 joint limit、finite 和 FK residual 检查。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>项目</th><th>M1 设计值</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>planner 顺序</td><td><code>FBL, FAR, RBL, RAR</code> × ABAD/HIP/KNEE</td><td>12 DOF；映射到 FL/FR/RL/RR</td></tr>
+              <tr><td>默认腿站姿</td><td>ABAD = 0, HIP = -0.15, KNEE = 0.30 rad</td><td>避免当前全零姿态过直</td></tr>
+              <tr><td>轮轴默认</td><td>保持 USD / 当前状态</td><td>不复制、不清零、不规划</td></tr>
+              <tr><td>平地 Root Z</td><td>由默认站姿和轮半径计算</td><td>当前约 <code>0.6299 m</code>，以 <code>M1_ROOT_Z_M</code> 为准，flat 固定</td></tr>
+              <tr><td>限位</td><td>ABAD 左右不对称；HIP/KNEE 使用 M1 USD 对齐范围</td><td>越限候选直接拒绝</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note"><strong>Go2 隔离：</strong>Go2 的解析 FK/IK 和现有数值不搬入 M1 公式；planner 只依赖统一 backend 接口，因此 M1 分支不会改变 Go2 路径。</div>
+      </section>
+
+      <section id="terrain">
+        <h2>地形列、Root 高度与姿态</h2>
+        <p>通过 terrain 的 subterrain column 选择 profile。Root 只在明确允许跟随地形的 family 中变化；flat 与 flatDense 保持由 <code>M1_ROOT_Z_M</code> 给出的固定高度，不因局部障碍把机身整体抬高。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>地形列 / family</th><th>Root Z</th><th>Root 姿态</th><th>腿部策略</th></tr></thead>
+            <tbody>
+              <tr><td>flat</td><td>固定约 0.6299 m</td><td>水平</td><td>滚动为主，不主动 swing</td></tr>
+              <tr><td>flatDense / small obstacles</td><td>固定</td><td>水平</td><td>只对最终选中且轨迹命中小障碍的腿 swing</td></tr>
+              <tr><td>random_rough</td><td>跟随局部高程，低频滤波</td><td>有限 roll/pitch</td><td>按局部高程和语义决定</td></tr>
+              <tr><td>pyramid slope</td><td>跟随地形趋势</td><td>跟随坡度但限幅</td><td>按坡面高程生成 swing</td></tr>
+              <tr><td>boxes / stairs</td><td>跟随台面高度</td><td>保持默认站姿趋势，避免追随离散法向</td><td>大障碍绕行，小障碍可 swing</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="two-col">
+          <div class="panel blue">
+            <h3>random_rough 与 box 的区别</h3>
+            <p><code>random_rough</code> 是连续或随机高程扰动，重点是 Root 高度和姿态的平滑跟随；<code>box</code> 是离散凸起障碍，重点是障碍语义、候选绕行和轮子几何是否越障。</p>
+          </div>
+          <div class="panel amber">
+            <h3>未知 column</h3>
+            <p>使用保守 profile 并记录诊断，不默认为 flat；这样新地形不会意外关闭 clearance 或 Root 跟随。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="backend">
+        <h2>机器人后端与兼容性</h2>
+        <div class="flow">
+          <div class="node">CLI<br><code>--robot</code></div>
+          <div class="arrow">→</div>
+          <div class="node">Backend registry</div>
+          <div class="arrow">→</div>
+          <div class="node accent">Go2 / M1 backend</div>
+          <div class="arrow">→</div>
+          <div class="node">通用 planner</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>统一能力</th><th>Go2 backend</th><th>M1 backend</th></tr></thead>
+            <tbody>
+              <tr><td>候选和评分</td><td>复用当前行为</td><td>复用当前行为</td></tr>
+              <tr><td>规划关节</td><td>Go2 12 DOF</td><td>M1 12 DOF，排除 4 个轮轴</td></tr>
+              <tr><td>FK / IK</td><td>现有 Go2 解析实现</td><td>M1 独立解析实现</td></tr>
+              <tr><td>落点语义</td><td>Go2 足端</td><td>M1 轮心；轮盘半径进安全计算</td></tr>
+              <tr><td>碰撞</td><td>现有 Go2 specs</td><td>16 shapes / 464 points / 不含 BASE</td></tr>
+              <tr><td>默认配置</td><td>保持 <code>ParallelismCfg()</code></td><td>继承后覆盖 M1 几何和 terrain profile</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>backend 必须提供统一的 <code>fk</code>、<code>ik</code>、<code>joint_limit_mask</code>、<code>collision_specs</code>、<code>planner_to_asset_joints</code> 和 terrain/swing profile 能力。planner 不直接判断机器人名称，不在通用公式内增加 M1 条件分支。</p>
+        <div class="warning"><strong>资产一致性：</strong>创建 viewer 环境后立即校验 USD 的 joint names、body names、轮心 support body 和 planner 顺序。名称或 DOF 不匹配时直接报错，不静默退回 Go2。</div>
+      </section>
+
+      <section id="viewer">
+        <h2>Isaac Sim Viewer 设计</h2>
+        <p><code>Go2Pvcnn/extension/viz/go2_foostep_planner.py</code> 根据 <code>--robot</code> 同时选择 USD、Isaac Lab 环境配置、backend、body selector 和 16 DOF 回放映射。调参面板仍参考 Go2，但初值来自当前机器人和 terrain profile。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>模式</th><th>资产 / 环境</th><th>规划输出</th><th>回放行为</th></tr></thead>
+            <tbody>
+              <tr><td><code>--robot go2</code></td><td>现有 Go2 USD 与 viewer 配置</td><td>现有 Go2 轨迹</td><td>保持原行为</td></tr>
+              <tr><td><code>--robot m1</code></td><td>M1 USD 与 M1 viewer env cfg</td><td>12 DOF 腿关节 + Root</td><td>写入 16 DOF 腿关节，轮轴保留当前值</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>M1 逐帧回放</h3>
+        <div class="code-block">q16_next = q16_current.clone()
+q16_next[m1_leg_joint_indices] = q12_planned
+q16_next[m1_wheel_joint_indices] = q16_current[m1_wheel_joint_indices]
+
+write(root_pose_planned, q16_next)</div>
+        <p>Viewer 直接回放 Parallelism 规划的 Root 和腿关节，不接入 RL policy。轮轴既不被 planner 改写，也不作为 swing 的触发条件。显示内容包括 Root 轨迹、四轮心轨迹、候选圆、最终落点、semantic map、M1 collision points、selected index 和每个候选的 reject bits。</p>
+        <h3>推荐启动形式</h3>
+        <div class="code-block">python Go2Pvcnn/extension/viz/go2_foostep_planner.py \
+  --planner-backend parallelism \
+  --robot m1 \
+  --terrain task \
+  --terrain-row 0 --terrain-col 0 \
+  --num-envs 1 --n-frames 30 --plan-dt 0.02</div>
+        <p>真实 Isaac Sim smoke 需要使用项目约定的 Isaac Sim Python、<code>DISPLAY</code>、CUDA 和 VirtualGL 环境。设计阶段不把具体机器上的动态库路径固化进代码。</p>
+        <div class="note"><strong>面板调参：</strong><code>swing_clearance</code>、candidate radius、semantic margin、Root follow 开关和显示开关都是本次 viewer 的 override；关闭 viewer 后不修改 Go2 或 M1 默认配置。</div>
+      </section>
+
+      <section id="files">
+        <h2>文件结构</h2>
+        <div class="file-tree">Go2Pvcnn/
+├── go2_pvcnn/assets/
+│   └── m1.py                         # M1 USD / Isaac Lab asset config
+├── tracking/
+│   └── m1_parallelism_viewer_env_cfg.py
+│                                      # M1 viewer 的 scene、scanner、body selector
+├── extension/viz/
+│   └── go2_foostep_planner.py         # CLI、环境选择、调参和逐帧回放
+└── extension/parallelism/
+    ├── planner.py                     # 通用候选、选择、轨迹流程
+    ├── swing.py                       # 通用轨迹生成，接收 profile / needs_swing
+    ├── candidates.py                  # 每腿 50 个候选
+    ├── collision.py                   # 通用碰撞查询框架
+    ├── m1_kinematics.py               # M1 解析 FK/IK、限位、几何常量
+    └── robots/                         # 后续可选的 backend registry / protocol
+        ├── protocol.py
+        ├── registry.py
+        ├── go2_backend.py
+        └── m1_backend.py</div>
+        <div class="two-col">
+          <div class="panel green">
+            <h3>可复用</h3>
+            <ul>
+              <li>候选生成和 score 结构</li>
+              <li>semantic map 查询接口</li>
+              <li>Root rollout、fallback、诊断输出</li>
+              <li>viewer 的交互和可视化框架</li>
+            </ul>
+          </div>
+          <div class="panel amber">
+            <h3>必须独立</h3>
+            <ul>
+              <li>M1 关节和 body 映射</li>
+              <li>M1 解析 FK/IK 和初始站姿</li>
+              <li>M1 USD collision primitive / wheel envelope</li>
+              <li>M1 terrain profile 与 viewer asset 配置</li>
+            </ul>
+          </div>
+        </div>
+        <p>实现时优先在现有模块边界内增加 backend 参数；若需要新文件，按上面的 M1 独立职责放置。不要为了 M1 直接改写 Go2 常量或把 M1 名称硬编码到 Go2 公式中。</p>
+      </section>
+
+      <section id="validation">
+        <h2>验证与验收</h2>
+        <div class="three-col">
+          <div class="panel green">
+            <h3>逻辑单元测试</h3>
+            <ul>
+              <li>每腿候选 shape 固定为 <code>[B,4,50]</code>。</li>
+              <li>单条 XY 轨迹命中小障碍时只标记对应 leg/candidate。</li>
+              <li>落选候选的 <code>needs_swing</code> 不影响执行。</li>
+              <li>selected false 时腿保持 rolling，不生成 swing apex。</li>
+            </ul>
+          </div>
+          <div class="panel blue">
+            <h3>M1 几何测试</h3>
+            <ul>
+              <li>USD joint/body name 与映射顺序一致。</li>
+              <li>默认站姿不再是全零导致的过直姿态。</li>
+              <li>解析 IK → FK residual 在容差内。</li>
+              <li>轮轴不进入 planner 输出，轮半径进入 clearance。</li>
+            </ul>
+          </div>
+          <div class="panel amber">
+            <h3>碰撞与回归测试</h3>
+            <ul>
+              <li>16 shapes、464 surface points、无 BASE point。</li>
+              <li>轮底普通接触可容忍，障碍接触不可容忍。</li>
+              <li>小障碍 clearance 不足时可复现 reject/standstill。</li>
+              <li>补偿后候选可通过并在 viewer 中跨越。</li>
+            </ul>
+          </div>
+        </div>
+        <h3>Isaac Sim smoke 矩阵</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>场景</th><th>命令 / terrain</th><th>检查</th><th>通过条件</th></tr></thead>
+            <tbody>
+              <tr><td>Go2 回归</td><td>不传 <code>--robot</code>，flat</td><td>启动、规划、显示</td><td>与改动前行为一致</td></tr>
+              <tr><td>M1 平地</td><td><code>--robot m1</code>，flat</td><td>站姿、Root 高度、轮轴</td><td>固定 Root，不主动抬腿，轮轴不被改写</td></tr>
+              <tr><td>M1 小障碍</td><td>flatDense / small obstacle</td><td>候选轨迹和选中标记</td><td>只有选中且命中障碍的腿 swing</td></tr>
+              <tr><td>M1 rough</td><td>random_rough</td><td>Root 高度、局部 apex</td><td>Root 平滑跟随，轮子包络不穿地形</td></tr>
+              <tr><td>M1 大障碍</td><td>boxes / stairs</td><td>绕行与 fallback</td><td>不把大障碍误当普通 swing</td></tr>
+              <tr><td>映射回放</td><td>任意 M1 地形</td><td>12 → 16 DOF</td><td>腿关节匹配，四轮关节保持原值</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note"><strong>验收标准：</strong>M1 能在 Isaac Sim 中正确加载自己的 USD 和 scanner；平地以滑行为主；小障碍仅在最终选中轨迹命中时单腿抬越；轮子半径参与高度和碰撞安全判断；大障碍继续绕行；Go2 默认入口和现有测试不受影响。</div>
+        <p class="status">下一步：用户审核本 HTML 后，再编写实现计划；本设计文档本身不包含代码实现。</p>
+      </section>
+    </main>
+  </div>
+
+  <footer>M1 Parallelism 小障碍与轮式滑行设计 · Go2 默认行为保持不变</footer>
+</body>
+</html>
