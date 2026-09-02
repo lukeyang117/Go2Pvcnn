@@ -2143,6 +2143,7 @@ def _update_camera(env, *, root_pos: torch.Tensor, root_yaw: torch.Tensor, dista
     camera_position = (root_pos + camera_offset).detach().cpu().numpy()
     target_position = (root_pos + torch.tensor([0.0, 0.0, 0.35], device=root_pos.device)).detach().cpu().numpy()
     env.sim.set_camera_view(camera_position, target_position)
+    return camera_position, target_position
 
 
 def _mpc_state_from_env(env, foot_ids: list[int]):
@@ -2499,6 +2500,9 @@ def _print_help() -> None:
 
 def main() -> int:
     args_cli = _prepare_runtime_args(_parse_args())
+    from extension.viz.camera_controls import CameraInputController, configure_camera_bindings
+
+    camera_bindings_configured = configure_camera_bindings()
     _, simulation_app = _launch_app(args_cli)
 
     import gymnasium as gym
@@ -2565,6 +2569,7 @@ def main() -> int:
     scripted_cycles_remaining = max(0, int(args_cli.scripted_command_cycles))
     scripted_command = _parse_scripted_command(args_cli.scripted_command, device=base_env.device)
     step_gate = ViewerStepGate(enabled=False)
+    camera_controller = None
 
     with TerminalTeleop(
         device=base_env.device,
@@ -2856,13 +2861,29 @@ def main() -> int:
                     )
                     planner_state = _planner_state_from_reference_result(result, frame_idx=display_frame)
                     root_yaw = planner_state.root_rpy[:, 2]
-                    _update_camera(
-                        base_env,
-                        root_pos=planner_state.root_pos[0],
-                        root_yaw=root_yaw,
-                        distance=float(args_cli.camera_distance),
-                        height=float(args_cli.camera_height),
-                    )
+                    if camera_controller is None:
+                        camera_position, target_position = _update_camera(
+                            base_env,
+                            root_pos=planner_state.root_pos[0],
+                            root_yaw=root_yaw,
+                            distance=float(args_cli.camera_distance),
+                            height=float(args_cli.camera_height),
+                        )
+                        from omni.kit.viewport.utility import get_active_viewport_window
+
+                        camera_window = get_active_viewport_window()
+                        if camera_window is None:
+                            raise RuntimeError("active viewport window is unavailable")
+                        camera_controller = CameraInputController(
+                            base_env.sim.set_camera_view,
+                            camera_position,
+                            target_position,
+                            (camera_window.width, camera_window.height),
+                        )
+                        if camera_bindings_configured:
+                            print("[Viewer] Viewport navigation: RMB look; Alt+RMB pan.", flush=True)
+                    else:
+                        camera_controller.poll()
 
                     root_pos = planner_state.root_pos[0]
                     yaw_rate = float(active_cmd.values[0, 2].item())
@@ -2889,6 +2910,8 @@ def main() -> int:
             print("\n[Viewer] Ctrl-C received; shutting down.", flush=True)
         finally:
             print()
+            if camera_controller is not None:
+                camera_controller.close()
             env.close()
 
     simulation_app.close()

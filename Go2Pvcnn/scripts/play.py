@@ -1469,6 +1469,9 @@ def _attach_reference_manager_if_enabled(env, env_cfg, experiment_name: str) -> 
 
 def main() -> int:
     args_cli = _prepare_runtime_args(_parse_args())
+    from extension.viz.camera_controls import CameraInputController, configure_camera_bindings
+
+    camera_bindings_configured = configure_camera_bindings()
     debug = _LivestreamDebug(enabled=bool(args_cli.debug_livestream))
     if args_cli.debug_livestream:
         _print_runtime_debug_snapshot(args_cli)
@@ -1706,6 +1709,22 @@ def main() -> int:
                 _parallelism_joint_error_data(base_env, _parallelism_visual_frame(parallelism_manager))
             )
     timestep = 0
+    from omni.kit.viewport.utility import get_active_viewport_window
+
+    camera_window = get_active_viewport_window()
+    camera_controller = None
+    if camera_window is not None:
+        robot_pos = base_env.scene["robot"].data.root_pos_w[0].detach().cpu().numpy()
+        camera_position, target_position = _compute_follow_camera_pose(robot_pos)
+        base_env.sim.set_camera_view(camera_position, target_position)
+        camera_controller = CameraInputController(
+            base_env.sim.set_camera_view,
+            camera_position,
+            target_position,
+            (camera_window.width, camera_window.height),
+        )
+        if camera_bindings_configured:
+            print("[Play] Viewport navigation: RMB look; Alt+RMB pan.", flush=True)
     camera_interval = _livestream_camera_update_interval(getattr(args_cli, "livestream", 0))
     debug.mark_startup("first observations")
     debug.print_startup_summary()
@@ -1855,18 +1874,10 @@ def main() -> int:
                             _parallelism_joint_error_data(base_env, _parallelism_visual_frame(parallelism_manager))
                         )
 
-                camera_s = 0.0
-                if _should_update_follow_camera(
-                    timestep=timestep,
-                    num_envs=args_cli.num_envs,
-                    livestream=getattr(args_cli, "livestream", 0),
-                    interval=camera_interval,
-                ):
-                    camera_start = perf_counter()
-                    robot_pos = base_env.scene["robot"].data.root_pos_w[0].detach().cpu().numpy()
-                    camera_position, target_position = _compute_follow_camera_pose(robot_pos)
-                    base_env.sim.set_camera_view(camera_position, target_position)
-                    camera_s = perf_counter() - camera_start
+                camera_start = perf_counter()
+                if camera_controller is not None:
+                    camera_controller.poll()
+                camera_s = perf_counter() - camera_start
 
                 total_s = perf_counter() - step_start
                 debug.add_loop_sample(
@@ -1902,6 +1913,8 @@ def main() -> int:
         print(f"Play Complete - Timesteps: {timestep}")
         print(f"{'=' * 80}\n")
         debug.print_loop_summary(prefix="[debug-livestream][final]")
+        if camera_controller is not None:
+            camera_controller.close()
         wrapped_env.env.close()
         simulation_app.close()
 
