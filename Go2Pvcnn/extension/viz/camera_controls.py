@@ -6,7 +6,7 @@ import math
 
 
 VIEWER_CAMERA_BINDINGS = {
-    "PanGesture": "Alt RightButton",
+    "PanGesture": "Ctrl RightButton",
     "TumbleGesture": "RightButton",
 }
 
@@ -91,7 +91,7 @@ class CameraInputController:
         self._width, self._height = (float(value) for value in viewport_size)
         self._right_down = False
         self._last_pos = None
-        self._alt_down = False
+        self._ctrl_down = False
         self._input = carb.input.acquire_input_interface()
         app_window = omni.appwindow.get_default_app_window()
         self._mouse = app_window.get_mouse()
@@ -116,19 +116,22 @@ class CameraInputController:
     def _on_keyboard_event(self, event):
         import carb.input
 
-        if event.input not in (carb.input.KeyboardInput.LEFT_ALT, carb.input.KeyboardInput.RIGHT_ALT):
+        if event.input not in (
+            carb.input.KeyboardInput.LEFT_CONTROL,
+            carb.input.KeyboardInput.RIGHT_CONTROL,
+        ):
             return
         if event.type == carb.input.KeyboardEventType.KEY_PRESS:
-            self._alt_down = True
+            self._ctrl_down = True
         elif event.type == carb.input.KeyboardEventType.KEY_RELEASE:
-            self._alt_down = False
+            self._ctrl_down = False
 
-    def _alt_is_down(self):
+    def _pan_modifier_is_down(self):
         import carb.input
 
-        return self._alt_down or bool(
-            self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.LEFT_ALT)
-            or self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.RIGHT_ALT)
+        return self._ctrl_down or bool(
+            self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.LEFT_CONTROL)
+            or self._input.get_keyboard_value(self._keyboard, carb.input.KeyboardInput.RIGHT_CONTROL)
         )
 
     def _disable_native_rotation_gestures(self):
@@ -142,6 +145,7 @@ class CameraInputController:
             if model is not None:
                 model.set_ints("disable_tumble", [1])
                 model.set_ints("disable_look", [1])
+                model.set_ints("disable_pan", [1])
         except (AttributeError, ImportError, ReferenceError):
             return
 
@@ -154,7 +158,7 @@ class CameraInputController:
         self._last_pos = current
         if abs(dx) <= 1.0e-6 and abs(dy) <= 1.0e-6:
             return
-        pan = self._alt_is_down()
+        pan = self._pan_modifier_is_down()
         self._eye, self._target = camera_drag_pose(
             self._eye, self._target, dx, dy, pan=pan, width=self._width, height=self._height
         )

@@ -1724,7 +1724,7 @@ def main() -> int:
             (camera_window.width, camera_window.height),
         )
         if camera_bindings_configured:
-            print("[Play] Viewport navigation: RMB look; Alt+RMB pan.", flush=True)
+            print("[Play] Viewport navigation: RMB look; Ctrl+RMB pan.", flush=True)
     camera_interval = _livestream_camera_update_interval(getattr(args_cli, "livestream", 0))
     debug.mark_startup("first observations")
     debug.print_startup_summary()

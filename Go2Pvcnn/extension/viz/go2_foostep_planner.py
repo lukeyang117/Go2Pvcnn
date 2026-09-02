@@ -2881,7 +2881,7 @@ def main() -> int:
                             (camera_window.width, camera_window.height),
                         )
                         if camera_bindings_configured:
-                            print("[Viewer] Viewport navigation: RMB look; Alt+RMB pan.", flush=True)
+                            print("[Viewer] Viewport navigation: RMB look; Ctrl+RMB pan.", flush=True)
                     else:
                         camera_controller.poll()
 

@@ -8,7 +8,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_alt_right_drag_is_translation_and_plain_right_drag_is_rotation():
+def test_ctrl_right_drag_is_translation_and_plain_right_drag_is_rotation():
     from extension.viz.camera_controls import camera_drag_pose
 
     eye = (0.0, -3.0, 2.0)
@@ -41,7 +41,16 @@ def test_viz_and_play_install_manual_camera_controls_without_follow_reset():
     assert "extension.viz.camera_controls import" in play
 
 
-def test_camera_bindings_use_alt_right_for_pan():
+def test_camera_bindings_use_ctrl_right_for_pan():
     source = (ROOT / "extension/viz/camera_controls.py").read_text()
-    assert '"PanGesture": "Alt RightButton"' in source
+    assert '"PanGesture": "Ctrl RightButton"' in source
     assert '"TumbleGesture": "RightButton"' in source
+
+
+def test_ctrl_right_drag_is_supported_as_a_pan_alias():
+    source = (ROOT / "extension/viz/camera_controls.py").read_text()
+    assert "KeyboardInput.LEFT_CONTROL" in source
+    assert "KeyboardInput.RIGHT_CONTROL" in source
+    assert "_pan_modifier_is_down" in source
+    assert "KeyboardInput.LEFT_ALT" not in source
+    assert "KeyboardInput.RIGHT_ALT" not in source
