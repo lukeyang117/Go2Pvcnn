@@ -93,6 +93,7 @@ class CameraInputController:
         self._right_down = False
         self._last_pos = None
         self._ctrl_down = False
+        self._camera_path = self._active_camera_path()
         self._input = carb.input.acquire_input_interface()
         app_window = omni.appwindow.get_default_app_window()
         self._mouse = app_window.get_mouse()
@@ -121,7 +122,37 @@ class CameraInputController:
             self._update_subscription = None
 
     def _on_app_update(self, _event):
+        self._sync_active_camera()
         self.poll()
+
+    def _active_camera_path(self):
+        try:
+            from omni.kit.viewport.utility import get_active_viewport
+
+            viewport = get_active_viewport()
+            return str(viewport.camera_path) if viewport is not None else None
+        except (AttributeError, ImportError, ReferenceError):
+            return None
+
+    def _sync_active_camera(self):
+        """Adopt a camera created/switched through Create From View."""
+        try:
+            from omni.kit.viewport.utility import get_active_viewport
+            from omni.kit.viewport.utility.camera_state import ViewportCameraState
+
+            viewport = get_active_viewport()
+            path = str(viewport.camera_path) if viewport is not None else None
+            if not path or path == self._camera_path:
+                return
+            state = ViewportCameraState(camera_path=path, viewport=viewport)
+            eye = state.position_world
+            target = state.target_world
+            self._eye = tuple(float(value) for value in eye)
+            self._target = tuple(float(value) for value in target)
+            self._camera_path = path
+            self._native_camera_model = None
+        except (AttributeError, ImportError, ReferenceError, RuntimeError, TypeError):
+            return
 
     def _on_keyboard_event(self, event):
         import carb.input
@@ -163,6 +194,7 @@ class CameraInputController:
             return
 
     def _apply_drag(self, current):
+        self._sync_active_camera()
         if self._last_pos is None:
             self._last_pos = current
             return
@@ -180,7 +212,14 @@ class CameraInputController:
             self.pan_update_count += 1
         else:
             self.look_update_count += 1
-        self._set_camera_view(self._eye, self._target)
+        try:
+            self._set_camera_view(
+                self._eye,
+                self._target,
+                camera_prim_path=self._camera_path,
+            )
+        except TypeError:
+            self._set_camera_view(self._eye, self._target)
 
     def _on_mouse_event(self, event):
         import carb.input

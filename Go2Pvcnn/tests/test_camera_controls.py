@@ -61,3 +61,11 @@ def test_camera_controller_is_driven_by_kit_updates_not_policy_loop_only():
     assert "get_update_event_stream" in source
     assert "create_subscription_to_pop" in source
     assert "_on_app_update" in source
+
+
+def test_camera_controller_follows_create_from_view_active_camera():
+    source = (ROOT / "extension/viz/camera_controls.py").read_text()
+    assert "camera_path" in source
+    assert "ViewportCameraState" in source
+    assert "camera_prim_path" in source
+    assert "_sync_active_camera" in source
