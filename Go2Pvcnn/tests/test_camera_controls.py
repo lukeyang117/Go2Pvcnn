@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import torch
 
@@ -69,3 +70,52 @@ def test_camera_controller_follows_create_from_view_active_camera():
     assert "ViewportCameraState" in source
     assert "camera_prim_path" in source
     assert "_sync_active_camera" in source
+
+
+def test_create_from_view_without_center_of_interest_uses_camera_forward_direction(monkeypatch):
+    from extension.viz.camera_controls import _camera_pose_from_viewport
+
+    class FakeTransform:
+        def Transform(self, value):
+            if tuple(value) == (0.0, 0.0, 0.0):
+                return (10.0, 20.0, 30.0)
+            return (10.0, 20.0, 29.0)
+
+        def TransformDir(self, value):
+            assert tuple(value) == (0.0, 0.0, -1.0)
+            return (0.0, 0.0, -1.0)
+
+    class FakeCamera:
+        def ComputeLocalToWorldTransform(self, _time):
+            return FakeTransform()
+
+    class FakeState:
+        def __init__(self, camera_path, viewport):
+            assert camera_path == "/World/CreatedFromView"
+            assert viewport is not None
+            self.usd_camera = FakeCamera()
+            self.position_world = (10.0, 20.0, 30.0)
+
+        @property
+        def target_world(self):
+            raise RuntimeError("center of interest is not authored")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "omni.kit.viewport.utility.camera_state",
+        type("CameraStateModule", (), {"ViewportCameraState": FakeState}),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pxr",
+        type(
+            "PxrModule",
+            (),
+            {"Usd": type("UsdModule", (), {"TimeCode": type("TimeCode", (), {"Default": staticmethod(object)})})},
+        ),
+    )
+
+    eye, target = _camera_pose_from_viewport("/World/CreatedFromView", object())
+
+    assert eye == (10.0, 20.0, 30.0)
+    assert target == (10.0, 20.0, 29.0)

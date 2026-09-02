@@ -79,6 +79,30 @@ def camera_drag_pose(eye, target, dx, dy, *, pan, width, height):
     return add(target, rotated), target
 
 
+def _camera_pose_from_viewport(camera_path, viewport, *, fallback_target_distance=1.0):
+    """Read a viewport camera, including cameras without an authored center of interest."""
+    from omni.kit.viewport.utility.camera_state import ViewportCameraState
+
+    state = ViewportCameraState(camera_path=camera_path, viewport=viewport)
+    eye = tuple(float(value) for value in state.position_world)
+    try:
+        target = tuple(float(value) for value in state.target_world)
+    except (AttributeError, RuntimeError, TypeError):
+        from pxr import Usd
+
+        transform = state.usd_camera.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        forward = transform.TransformDir((0.0, 0.0, -1.0))
+        length = math.sqrt(sum(float(value) * float(value) for value in forward))
+        if length <= 1.0e-12:
+            raise RuntimeError(f"camera {camera_path} has no usable forward direction")
+        distance = max(float(fallback_target_distance), 1.0e-3)
+        target = tuple(
+            eye[index] + float(forward[index]) / length * distance
+            for index in range(3)
+        )
+    return eye, target
+
+
 class CameraInputController:
     """Translate physical Kit input into mutually exclusive camera actions."""
 
@@ -138,17 +162,19 @@ class CameraInputController:
         """Adopt a camera created/switched through Create From View."""
         try:
             from omni.kit.viewport.utility import get_active_viewport
-            from omni.kit.viewport.utility.camera_state import ViewportCameraState
 
             viewport = get_active_viewport()
             path = str(viewport.camera_path) if viewport is not None else None
             if not path or path == self._camera_path:
                 return
-            state = ViewportCameraState(camera_path=path, viewport=viewport)
-            eye = state.position_world
-            target = state.target_world
-            self._eye = tuple(float(value) for value in eye)
-            self._target = tuple(float(value) for value in target)
+            current_distance = math.sqrt(
+                sum((self._eye[index] - self._target[index]) ** 2 for index in range(3))
+            )
+            self._eye, self._target = _camera_pose_from_viewport(
+                path,
+                viewport,
+                fallback_target_distance=current_distance,
+            )
             self._camera_path = path
             self._native_camera_model = None
         except (AttributeError, ImportError, ReferenceError, RuntimeError, TypeError):
