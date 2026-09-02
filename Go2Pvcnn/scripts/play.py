@@ -1874,10 +1874,7 @@ def main() -> int:
                             _parallelism_joint_error_data(base_env, _parallelism_visual_frame(parallelism_manager))
                         )
 
-                camera_start = perf_counter()
-                if camera_controller is not None:
-                    camera_controller.poll()
-                camera_s = perf_counter() - camera_start
+                camera_s = 0.0
 
                 total_s = perf_counter() - step_start
                 debug.add_loop_sample(

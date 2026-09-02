@@ -54,3 +54,10 @@ def test_ctrl_right_drag_is_supported_as_a_pan_alias():
     assert "_pan_modifier_is_down" in source
     assert "KeyboardInput.LEFT_ALT" not in source
     assert "KeyboardInput.RIGHT_ALT" not in source
+
+
+def test_camera_controller_is_driven_by_kit_updates_not_policy_loop_only():
+    source = (ROOT / "extension/viz/camera_controls.py").read_text()
+    assert "get_update_event_stream" in source
+    assert "create_subscription_to_pop" in source
+    assert "_on_app_update" in source

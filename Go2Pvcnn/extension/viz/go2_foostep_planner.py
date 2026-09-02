@@ -2882,8 +2882,6 @@ def main() -> int:
                         )
                         if camera_bindings_configured:
                             print("[Viewer] Viewport navigation: RMB look; Ctrl+RMB pan.", flush=True)
-                    else:
-                        camera_controller.poll()
 
                     root_pos = planner_state.root_pos[0]
                     yaw_rate = float(active_cmd.values[0, 2].item())

@@ -84,6 +84,7 @@ class CameraInputController:
 
     def __init__(self, set_camera_view, eye, target, viewport_size):
         import carb.input
+        import omni.kit.app
         import omni.appwindow
 
         self._set_camera_view = set_camera_view
@@ -100,6 +101,10 @@ class CameraInputController:
         self._keyboard_subscription = self._input.subscribe_to_keyboard_events(
             self._keyboard, self._on_keyboard_event
         )
+        self._update_subscription = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
+            self._on_app_update
+        )
+        self._native_camera_model = None
         self.update_count = 0
         self.pan_update_count = 0
         self.look_update_count = 0
@@ -112,6 +117,11 @@ class CameraInputController:
         if self._keyboard_subscription is not None:
             self._input.unsubscribe_to_keyboard_events(self._keyboard, self._keyboard_subscription)
             self._keyboard_subscription = None
+        if self._update_subscription is not None:
+            self._update_subscription = None
+
+    def _on_app_update(self, _event):
+        self.poll()
 
     def _on_keyboard_event(self, event):
         import carb.input
@@ -138,10 +148,13 @@ class CameraInputController:
         try:
             from omni.kit.viewport.utility import get_active_viewport_window
 
-            window = get_active_viewport_window()
-            layer = window._find_viewport_layer("Camera", "manipulator") if window is not None else None
-            native = getattr(getattr(layer, "layer", None), "manipulator", None)
-            model = getattr(native, "model", None)
+            model = self._native_camera_model
+            if model is None:
+                window = get_active_viewport_window()
+                layer = window._find_viewport_layer("Camera", "manipulator") if window is not None else None
+                native = getattr(getattr(layer, "layer", None), "manipulator", None)
+                model = getattr(native, "model", None)
+                self._native_camera_model = model
             if model is not None:
                 model.set_ints("disable_tumble", [1])
                 model.set_ints("disable_look", [1])
