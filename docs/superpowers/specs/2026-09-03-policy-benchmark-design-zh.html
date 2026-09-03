@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parallelism AMP / Distillation / PPO 统一策略评测设计</title>
+  <style>
+    :root {
+      --ink: #17212a;
+      --muted: #5b6a74;
+      --line: #d5dfe5;
+      --paper: #ffffff;
+      --page: #edf1f3;
+      --blue: #155f91;
+      --blue-soft: #eaf3f9;
+      --green: #216844;
+      --green-soft: #eaf6ef;
+      --amber: #805800;
+      --amber-soft: #fff5d8;
+      --red: #8a3030;
+      --red-soft: #fcecec;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font: 16px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 32px auto 64px;
+      padding: 42px 52px 58px;
+      background: var(--paper);
+      box-shadow: 0 8px 28px rgba(28, 47, 64, .08);
+    }
+    h1, h2, h3 { line-height: 1.3; letter-spacing: 0; }
+    h1 { margin: 0 0 10px; font-size: 34px; }
+    h2 { margin: 42px 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--line); font-size: 24px; }
+    h3 { margin: 25px 0 8px; font-size: 19px; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 5px 0; }
+    .eyebrow { color: var(--blue); font-weight: 700; }
+    .subtitle { margin: 0 0 26px; color: var(--muted); }
+    .decision, .notice, .warning, .contract {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 4px solid;
+    }
+    .decision { border-color: var(--green); background: var(--green-soft); }
+    .notice { border-color: var(--blue); background: var(--blue-soft); }
+    .warning { border-color: var(--amber); background: var(--amber-soft); }
+    .contract { border-color: var(--red); background: var(--red-soft); }
+    code {
+      padding: 1px 5px;
+      color: #12344e;
+      background: #f0f4f7;
+      border-radius: 3px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: .92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 16px 18px;
+      color: #eaf0f4;
+      background: #17212b;
+      border-radius: 5px;
+      font: 14px/1.62 "SFMono-Regular", Consolas, monospace;
+    }
+    table { width: 100%; margin: 14px 0; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f3f6f8; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+    .flow div { padding: 14px; border: 1px solid var(--line); background: #fafcfd; }
+    .flow strong { display: block; color: var(--blue); }
+    .small { color: var(--muted); font-size: 14px; }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li { position: relative; padding-left: 24px; }
+    .checklist li::before { content: "OK"; position: absolute; left: 0; color: var(--green); font-weight: 700; font-size: 12px; }
+    @media (max-width: 760px) {
+      main { width: 100%; margin: 0; padding: 28px 20px 42px; }
+      h1 { font-size: 28px; }
+      .flow { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">实验设计 · 2026-09-03 · 已获用户批准</p>
+  <h1>Parallelism AMP / Distillation / PPO 统一策略评测</h1>
+  <p class="subtitle">目标：在完全相同的仿真布局、速度命令和统计协议下，比较 AMP、Distillation、Pure PPO，并以 Teacher 作为使用规划特权信息的性能上界。</p>
+
+  <div class="decision">
+    <strong>核心结论</strong>
+    <p>评测只做仿真。四个权重分别启动、分别加载、分别完成全部 benchmark；不在同一个 Isaac 进程中切换模型，也不进行训练。AMP、Distillation student 和 Pure PPO 使用相同的 1069 维部署观测。Teacher 输入 1103 维规划特权观测，只标为 <code>planner-conditioned upper bound</code>。</p>
+  </div>
+
+  <h2>一、研究问题与比较边界</h2>
+  <ul>
+    <li>复杂地形和大小障碍同时存在时，AMP 是否比 Distillation 和 Pure PPO 具有更低的碰撞率、跌倒率和更大的通过位移。</li>
+    <li>在平地大障碍跑道上，策略能否绕开障碍并到达终点。</li>
+    <li>在平地小障碍跑道上，策略能否跨越小障碍且不发生任何接触。</li>
+    <li>AMP 和 Distillation 是否更接近 Parallelism 规划出的 24 帧 state 轨迹。</li>
+  </ul>
+
+  <div class="notice">
+    <strong>不把训练 reward 当作论文指标</strong>
+    <p>训练 TensorBoard 只用于选择和诊断 checkpoint，论文结果来自独立固定 manifest 的仿真评测。行为指标统计全回合；只有 planner tracking MSE 使用 valid-only 过滤。统计协议参考 <a href="../../../raw/watch-your-step.md">Watch Your Step 记录</a>，但不机械复刻其语义地图消融。</p>
+  </div>
+
+  <h2>二、模型与 checkpoint 契约</h2>
+  <table>
+    <thead><tr><th>模型</th><th>启动类型</th><th>Actor 输入</th><th>评测定位</th><th>Checkpoint 输入</th></tr></thead>
+    <tbody>
+      <tr><td>Parallelism AMP</td><td><code>amp</code></td><td>1069</td><td>主要方法</td><td><code>/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex_amp/2026-08-31_22-29-10/4234fbe/model_*.pt</code></td></tr>
+      <tr><td>Distillation student</td><td><code>distillation</code></td><td>1069</td><td>planner-to-policy 对照</td><td><code>/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex_distillation/2026-08-28_18-29-13/cecbc73/model_22997.pt</code></td></tr>
+      <tr><td>Pure PPO</td><td><code>ppo</code></td><td>1069</td><td>无规划监督基线</td><td><code>/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/cross_large_complex_ppo/2026-08-26_17-47-24/11d453a/model_19998.pt</code></td></tr>
+      <tr><td>Parallelism Teacher</td><td><code>teacher</code></td><td>1103</td><td>规划特权上界</td><td><code>/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-20_21-20-52/91b27a4/model_9899.pt</code></td></tr>
+    </tbody>
+  </table>
+  <p class="small">AMP 输入给脚本时必须从上述 run 目录中明确选择一个 <code>model_*.pt</code>，不能把目录当作隐式 checkpoint。</p>
+  <p>模型加载沿用 [play.py](../../../Go2Pvcnn/scripts/play.py) 的配置选择、RSL-RL wrapper 和 <code>OnPolicyRunner.load(..., load_optimizer=False)</code> 约定，但评测入口不引入窗口、键盘、相机或视频逻辑。</p>
+
+  <h2>三、三套 benchmark</h2>
+  <table>
+    <thead><tr><th>Suite</th><th>场景</th><th>命令</th><th>回合协议</th><th>主要结论</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>complex_mixed</code></td>
+        <td>继承训练课程的非平地 terrain family、difficulty range，以及每个布局的 5 小障碍 + 2 大障碍。</td>
+        <td>120 组 mixed velocity</td>
+        <td>每回合开始确定一组命令，20 s 内不改变。</td>
+        <td>大小障碍碰撞、跌倒和通过位移。</td>
+      </tr>
+      <tr>
+        <td><code>large_runway</code></td>
+        <td>10×2 m 平地跑道，中间 8×2 m 障碍区，4/6/8/10 个大障碍，尺寸沿用训练配置。</td>
+        <td>每回合从 0.25/0.5/1.0 m/s 中抽取 <code>vx</code>，<code>vy=0</code>，<code>yaw</code> 由终点方向控制器生成。</td>
+        <td>目标距离 10 m，<code>Tmax=1.5×10/vx</code>。</td>
+        <td>绕障到达率与无碰撞到达率。</td>
+      </tr>
+      <tr>
+        <td><code>small_runway</code></td>
+        <td>同样的 10×2 m 平地跑道，小障碍密度 2.5/5/7.5/10 obstacles/m²，即 40/80/120/160 个。</td>
+        <td>与大障碍跑道相同。</td>
+        <td>同样的目标距离与自适应超时。</td>
+        <td>无接触跨越率和 step collision rate。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>复杂混合 suite 的 manifest 只取包含大小障碍的非平地课程列；<code>flat</code> 和 <code>flat_dense_small_obstacles</code> 的原始映射保留在配置中，但不作为该 suite 的 mixed terrain 样本。</p>
+
+  <div class="warning">
+    <strong>课程冻结</strong>
+    <p>复杂场景继承课程生成规则，但评测期间冻结 terrain level。不能根据不同模型的表现自动升降级，否则碰撞率和位移不再是配对比较。</p>
+  </div>
+
+  <h2>四、速度命令与 Parallelism 时间对齐</h2>
+  <h3>复杂混合场景的 120 组命令</h3>
+  <pre>vx   = {-1, -0.5, -0.25, 0.25, 0.5, 1}
+vy   = {-0.5, -0.25, 0.25, 0.5}
+yaw  = {-1, -0.5, 0, 0.5, 1}
+总数 = 6 × 4 × 5 = 120</pre>
+  <p><code>vx</code> 和 <code>vy</code> 都去掉 0；<code>yaw</code> 保留 0。每个 episode reset 时确定一组速度，20 s 内保持不变。每个速度组合与 500 个固定 layouts 配对。</p>
+
+  <h3>专项跑道的目标点控制</h3>
+  <p>专项跑道只给平移的 <code>vx</code>，不直接给 <code>vy</code>。目标点为跑道终点，方向由当前位置实时计算：</p>
+  <pre>theta_target = atan2(y_goal - y, x_goal - x)
+heading_error = wrap_to_pi(theta_target - robot_heading)
+command = [vx, 0, clip(k_theta * heading_error, -1, 1)]</pre>
+  <p>每个 density 初始化 500 个固定布局。连续执行三轮，每轮将 0.25、0.5、1.0 m/s 重新均衡打乱；每个 layout 在三轮中分别使用一次，每档 vx 共 500 条。</p>
+
+  <h3>24 帧轨迹与 23 个 transition</h3>
+  <pre>Parallelism horizon = 24 states: B0, B1, ..., B23
+replan interval   = 23 transitions: B0→B1 ... B22→B23
+
+reset / replan
+  → 生成 B0...B23
+  → 执行 23 个 control steps
+  → 第 23 步之前重新计算终点方向
+  → 更新 [vx, 0, yaw]
+  → 只触发一次下一段规划</pre>
+  <p>如果每 24 步才更新，Parallelism 会先在第 23 步因 timer 触发旧命令规划，又在第 24 步因 command change 再规划一次，造成重复规划。因此方向更新锁定在真实的 23-transition 边界。</p>
+
+  <h2>五、环境初始化与并行数据流</h2>
+  <p>每次评测只初始化一次 vectorized environment，布局在环境生命周期内固定；不同 checkpoint 由不同进程顺序运行，但使用同一 manifest 重建完全相同的场景。</p>
+  <div class="flow">
+    <div><strong>Manifest</strong>固定 seed、terrain、障碍位置、command 和 goal。</div>
+    <div><strong>500-env scene</strong>一次创建 500 个并行布局，不在 episode 内重建地形。</div>
+    <div><strong>Policy</strong>单个 checkpoint 的 deterministic actor mean。</div>
+    <div><strong>Metrics</strong>GPU batch 更新状态、碰撞、valid window 和结果 shard。</div>
+  </div>
+  <pre>condition manifest
+      ↓
+一次初始化 500-env Isaac 场景
+      ↓
+reset robot / command / episode accumulators
+      ↓
+obs[t] → policy.act_deterministic(obs[t]) → env.step(action[t])
+      ↓                         ↓
+实际 state Bk              shadow Parallelism reference
+      └──────────────→ 对齐、碰撞、跌倒、位移、MSE
+      ↓
+原子写入 episode shard → progress.json → summary</pre>
+  <p>shadow planner 对 AMP、Distillation 和 PPO 只用于生成评测参考与 MSE，不写入它们的 policy observation；Teacher 才允许读取规划观测。planner 的在线参考从每个模型当前真实状态开始，因此 MSE 表示“对当前可行局部计划的跟随能力”，不是对一条已经物理错位的离线轨迹做比较。</p>
+
+  <h2>六、指标定义</h2>
+  <h3>复杂混合场景</h3>
+  <table>
+    <thead><tr><th>指标</th><th>公式/定义</th><th>统计范围</th></tr></thead>
+    <tbody>
+      <tr><td><code>large_collision_episode_rate</code></td><td>至少触碰一次大障碍的回合数 / 总回合数。</td><td>全部回合</td></tr>
+      <tr><td><code>small_collision_episode_rate</code></td><td>至少触碰一次小障碍的回合数 / 总回合数。</td><td>全部回合</td></tr>
+      <tr><td><code>fall_rate</code></td><td>发生跌倒终止的回合数 / 总回合数。</td><td>全部回合</td></tr>
+      <tr><td><code>traversed_path_m</code></td><td>终止前水平 root 路径长度：Σ‖p<sup>xy</sup><sub>t+1</sub>−p<sup>xy</sup><sub>t</sub>‖。</td><td>全部回合</td></tr>
+      <tr><td><code>command_progress_m</code></td><td>实际速度在当前期望运动方向上的投影累计，作为位移的补充，防止原地绕圈虚增路径长度。</td><td>全部回合</td></tr>
+      <tr><td><code>contact_step_rate</code></td><td>发生接触的有效步数 / 总有效步数。</td><td>全部回合</td></tr>
+    </tbody>
+  </table>
+  <p>120 个 command 分别统计，再做等权 macro average。速度为零的组合已从 <code>vx/vy</code> 移除，因此不存在“无平移速度却被纳入位移均值”的情况。</p>
+
+  <h3>大障碍专项跑道</h3>
+  <ul>
+    <li><code>goal_reach_rate</code>：到达终点的回合比例。</li>
+    <li><code>collision_free_goal_success_rate</code>：到达终点且没有大障碍接触。</li>
+    <li><code>large_collision_episode_rate</code>：回合中至少一次触碰大障碍。</li>
+    <li><code>distance_to_failure_m</code>：终止时沿跑道方向的有效进度。</li>
+    <li><code>path_efficiency</code>：有效前进距离 / 实际 root 路径长度。</li>
+    <li>到达时间、最小障碍间距、跌倒率和越界率作为补充指标。</li>
+  </ul>
+
+  <h3>小障碍专项跑道</h3>
+  <ul>
+    <li><code>contact_free_goal_success_rate</code>：到达终点且任何机器人部位均未接触小障碍。</li>
+    <li><code>small_collision_episode_rate</code>：回合中至少一次触碰小障碍。</li>
+    <li><code>step_collision_rate</code>：发生接触的独立跨越事件数 / 实际遇到的小障碍事件数。</li>
+    <li><code>foot_over_rate</code>、<code>touchdown_on_small_rate</code> 和摆动足最小净空。</li>
+    <li>到达率、失败距离和跌倒率作为补充指标。</li>
+  </ul>
+
+  <h3>Planner tracking MSE</h3>
+  <table>
+    <thead><tr><th>指标</th><th>单位</th><th>valid 条件</th></tr></thead>
+    <tbody>
+      <tr><td>joint position MSE</td><td>rad²</td><td rowspan="6">完整且连续的 B0...B23；所有 transition planner-valid；窗口内无 reset；plan_id 一致。</td></tr>
+      <tr><td>joint velocity MSE</td><td>(rad/s)²</td></tr>
+      <tr><td>root position RMSE</td><td>m</td></tr>
+      <tr><td>root rotation geodesic error</td><td>rad</td></tr>
+      <tr><td>root linear/angular velocity MSE</td><td>(m/s)²、(rad/s)²</td></tr>
+      <tr><td>active swing-foot RMSE</td><td>m</td></tr>
+    </tbody>
+  </table>
+  <p>实际轨迹与规划轨迹统一锚定到本规划段的实测 <code>B0</code> 局部坐标系，避免重规划时世界坐标跳变。无效窗口不写成零误差，而是从 MSE 分母中排除，并单独报告：</p>
+  <pre>valid_window_ratio = 完整且有效的 24 帧窗口数 / 发起的规划窗口数</pre>
+  <div class="contract"><strong>关键统计边界：</strong>碰撞率、跌倒率、通过位移统计全部回合；只有轨迹跟随 MSE 统计 valid-only。否则规划失败的困难样本会被删除，造成虚假的低误差和高通过性。</div>
+
+  <h2>七、样本、统计与公平性</h2>
+  <table>
+    <thead><tr><th>场景</th><th>布局数量</th><th>条件数量</th><th>单模型 episode 数</th></tr></thead>
+    <tbody>
+      <tr><td>复杂混合</td><td>500 个固定 layouts</td><td>120 组 command</td><td>60,000</td></tr>
+      <tr><td>大障碍跑道</td><td>每个 density 500 个 layouts</td><td>4 densities × 3 vx，每个 density 1500 回合</td><td>6,000</td></tr>
+      <tr><td>小障碍跑道</td><td>每个 density 500 个 layouts</td><td>4 densities × 3 vx，每个 density 1500 回合</td><td>6,000</td></tr>
+      <tr><th colspan="3">每个模型总计</th><th>约 72,000</th></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>所有模型使用相同 layout seed、障碍位置、command 顺序和目标点。</li>
+    <li>成功率、碰撞率和跌倒率使用 layout-level bootstrap 95% CI。</li>
+    <li>连续指标报告 mean、median 和 95% CI。</li>
+    <li>相同 layout 上做 paired bootstrap 或 Wilcoxon；二值配对结果使用 McNemar；多重比较采用 Holm 校正。</li>
+    <li>主文重点报告 AMP 相对 Distillation 和 Pure PPO 的差异；Teacher 仅报告为上界。</li>
+  </ul>
+
+  <h2>八、代码文件边界</h2>
+  <table>
+    <thead><tr><th>文件</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>evaluation/model_adapters.py</code></td><td>按类型选择 env cfg、observation wrapper、runner 和 deterministic policy。</td></tr>
+      <tr><td><code>evaluation/condition_manifest.py</code></td><td>固定 layout seed、terrain、障碍、command、goal、timeout，并校验哈希。</td></tr>
+      <tr><td><code>evaluation/command_protocols.py</code></td><td>生成 120 组 mixed velocity、专项 vx 均衡抽样和 23-transition 目标方向更新。</td></tr>
+      <tr><td><code>evaluation/benchmark_suites.py</code></td><td>三套场景的初始化、reset、成功和终止条件。</td></tr>
+      <tr><td><code>evaluation/metrics.py</code></td><td>碰撞、跌倒、位移、goal、crossing 和 valid-only MSE。</td></tr>
+      <tr><td><code>evaluation/result_writer.py</code></td><td>JSONL shard、progress、原子写入和恢复。</td></tr>
+      <tr><td><code>tracking/parallelism_policy_benchmark_env_cfg.py</code></td><td>评测专用环境配置，不改训练配置。</td></tr>
+      <tr><td><code>scripts/policy_benchmark.py</code></td><td>单权重统一评测入口。</td></tr>
+      <tr><td><code>scripts/run_policy_benchmark.sh</code></td><td>接收 experiment type、checkpoint、suite 和并行参数。</td></tr>
+      <tr><td><code>scripts/summarize_policy_benchmark.py</code></td><td>合并四次单权重运行，输出论文表格和统计结果。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>九、启动与结果恢复</h2>
+  <pre>bash scripts/run_policy_benchmark.sh \
+  --experiment-type amp \
+  --checkpoint /absolute/path/to/model_3499.pt \
+  --suite all \
+  --num-envs 500 \
+  --layout-manifest results/policy_benchmark/manifests/v1.jsonl</pre>
+  <p>其它模型只替换 <code>--experiment-type</code> 和 <code>--checkpoint</code>，按 AMP、Distillation、PPO、Teacher 顺序分别运行。脚本不接受目录作为隐式权重，必须传入明确的 <code>model_*.pt</code>。</p>
+  <pre>results/policy_benchmark/&lt;benchmark-id&gt;/&lt;model-id&gt;/
+├── run_manifest.json
+├── episodes/*.jsonl
+├── progress.json
+└── summary.json</pre>
+  <ul>
+    <li>每完成一个 condition batch 就原子写入 shard 和 progress。</li>
+    <li>重启时跳过已完成 <code>condition_id</code>，不重复计数。</li>
+    <li>checkpoint、manifest 或配置哈希变化时拒绝混写，要求新建 run。</li>
+    <li>单个 env 出现 NaN 时标记 <code>numerical_failure</code> 并隔离该 env；不让整个 500-env batch 崩溃。</li>
+    <li>评测结果目录加入 <code>.gitignore</code>；代码、schema 和设计文档由 Git 跟踪。</li>
+  </ul>
+
+  <h2>十、测试与验收</h2>
+  <h3>不依赖 Isaac 的单元测试</h3>
+  <ul class="checklist">
+    <li>命令协议生成 120 组，<code>vx/vy</code> 均不含 0，yaw 含 0。</li>
+    <li>专项每个 density 的 1500 条 episode 中三档 vx 各 500 条，并且顺序由固定 seed 打乱。</li>
+    <li>目标方向只在 reset 和 23、46、69... transition 边界更新。</li>
+    <li>24 帧窗口的 B0...B23 索引、valid mask 和 MSE 分母正确。</li>
+    <li>大、小障碍 episode rate 只对同类障碍计数，重复接触不会重复计 episode。</li>
+    <li>manifest、原子写入和 resume 不重复、不丢失 condition。</li>
+    <li>指标累加器不含逐 env Python 热循环。</li>
+  </ul>
+
+  <h3>真实 Isaac 验收</h3>
+  <ol>
+    <li>四个 checkpoint 分别执行 16-env smoke：真实加载 observation、deterministic action、env.step、shadow planner 和 JSONL 写入；断言 action/state/metric 无 NaN。</li>
+    <li>四个 checkpoint 分别执行 500-env 并行验收，至少运行 48 transitions；确认环境只初始化一次、Parallelism 批量规划正常、首个完整 valid 24 帧窗口产生 MSE，并正常退出。</li>
+    <li>单个模型执行三套 suite 的缩小版完整 episode，覆盖成功、碰撞、跌倒、位移、goal timeout 和 resume。</li>
+    <li>记录 policy、planner、env step、metric 和 I/O 耗时，输出 env-steps/s；不设置依赖机器负载的硬性能阈值。</li>
+  </ol>
+  <p class="small">Smoke 输出设置 <code>is_smoke_test=true</code>，汇总工具拒绝把 smoke 结果混入论文正式结果。</p>
+
+  <h2>十一、已确认决策清单</h2>
+  <ul class="checklist">
+    <li>只做仿真，不做真实机器人定量实验。</li>
+    <li>采用统一 benchmark harness；四个权重顺序运行。</li>
+    <li>复杂混合场景与大小障碍同时存在，速度回合内固定。</li>
+    <li>复杂场景使用去掉 0 的 120 组 mixed velocity。</li>
+    <li>专项跑道为 10×2 m 平地，目标点计算方向，<code>vy=0</code>，yaw 由目标控制器生成。</li>
+    <li>Parallelism 使用 24 帧 horizon、23-transition replan；专项方向在该边界更新。</li>
+    <li>环境一次初始化，500 个 layouts 并行，episode 只 reset 状态和 command。</li>
+    <li>行为指标统计全回合，轨迹 MSE 只统计完整 planner-valid 窗口。</li>
+    <li>固定 manifest、配对 seeds、deterministic inference、bootstrap CI 和 paired tests。</li>
+  </ul>
+
+  <div class="decision">
+    <strong>下一步</strong>
+    <p>本设计文档提交后进入自检和用户审阅；用户确认文档无修改后，再调用 writing-plans 创建实现计划。当前不修改评测代码，不启动仿真评测。</p>
+  </div>
+</main>
+</body>
+</html>

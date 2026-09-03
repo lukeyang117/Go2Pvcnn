@@ -4,6 +4,10 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 ## Recent Logs
 
+| 2026-09-03 | 统一策略 benchmark harness 与 1024-env smoke | AMP / Distillation / PPO / Teacher 单权重评测、24 帧 valid-only MSE、固定 manifest | pass | unit `20 passed`; real AMP `1024 x 48`, `5683.82 env-steps/s`, `6 episodes`, `27 valid_windows`, no NaN/Inf/OOM/Traceback | [T305](../todo/T305-policy-benchmark.md) | [implementation and smoke](2026-09-03-policy-benchmark-implementation-and-smoke.md) |
+
+| 2026-09-03 | AMP / Distillation / PPO 统一策略评测设计 | 中文 HTML 规格、三套仿真 suite、500-env 固定布局、120 组 mixed velocity、valid-only MSE、单权重顺序运行 | design approved; implementation pending | HTML 361 lines; `git diff --check` pass; no runtime test started | [T305](../todo/T305-policy-benchmark.md) | [design](2026-09-03-policy-benchmark-design.md) |
+
 | 2026-08-31 | Parallelism AMP PPO 对齐与 1024 真实 smoke | adaptive-KL / 双 value clipping / shared gradient / real Isaac smoke | pass | focused `28 + 44 passed`; 1024 env x 4 iterations exit `0`, `118.80s`, TensorBoard `576` scalars; active ratio `0.4316 -> 0.9732`, AMP value loss `116.3 -> 21.6`, D loss `1.17 -> 0.62`, std `0.391 -> 0.385`, no OOM/NaN/Inf/Traceback | [T304](../todo/T304-parallelism-amp.md) | [evidence](2026-08-31-parallelism-amp-ppo-alignment-1024-smoke.md) |
 
 | 2026-08-31 | Parallelism AMP latest long-run diagnosis | TensorBoard behavior/stability attribution | partial; collapse root cause narrowed | run `2026-08-28_18-54-54/4161d7b`, 3500 steps; std `0.39 -> 13.66 -> 4.99`, `valid_bad_orientation` final `0.963`, base `AMP/value_loss` max `1.13e6`, AMP critic max `167.7`, D accuracy ~`1.0`; all checkpoint tensors finite | [T304](../todo/T304-parallelism-amp.md) | [diagnosis](2026-08-31-parallelism-amp-long-run-diagnosis.md) |

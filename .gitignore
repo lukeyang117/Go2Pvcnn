@@ -38,3 +38,8 @@ data/*/
 .DS_Store
 Thumbs.db
 onlyReference/
+results/policy_benchmark/
+results/policy_benchmark_smoke/
+results/policy_benchmark_smoke_*/
+results/diag_*/
+results/tmp_benchmark/
