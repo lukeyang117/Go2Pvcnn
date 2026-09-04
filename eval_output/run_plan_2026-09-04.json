@@ -1,0 +1,35 @@
+{
+  "requested_at": "2026-09-04",
+  "suite_protocol": ["complex_mixed", "large_runway", "small_runway"],
+  "num_envs": 1024,
+  "weights": [
+    {
+      "label": "amp",
+      "experiment_type": "amp",
+      "rl_task": "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AMP-v0",
+      "checkpoint": "/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex_amp/2026-08-31_22-29-10/4234fbe/model_300.pt",
+      "output_dir": "auto:eval_output/<timestamp>_amp_<weight>_<sha256>/"
+    },
+    {
+      "label": "student",
+      "experiment_type": "distillation",
+      "rl_task": "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-Distillation-v0",
+      "checkpoint": "/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex_distillation/2026-08-28_18-29-13/cecbc73/model_22997.pt",
+      "output_dir": "auto:eval_output/<timestamp>_distillation_<weight>_<sha256>/"
+    },
+    {
+      "label": "ppo",
+      "experiment_type": "ppo",
+      "rl_task": "Isaac-Go2-Cross-Large-Complex-PPO-v0",
+      "checkpoint": "/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/cross_large_complex_ppo/2026-08-26_17-47-24/11d453a/model_19998.pt",
+      "output_dir": "auto:eval_output/<timestamp>_ppo_<weight>_<sha256>/"
+    },
+    {
+      "label": "teacher",
+      "experiment_type": "teacher",
+      "rl_task": "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0",
+      "checkpoint": "/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-20_21-20-52/91b27a4/model_9899.pt",
+      "output_dir": "auto:eval_output/<timestamp>_teacher_<weight>_<sha256>/"
+    }
+  ]
+}

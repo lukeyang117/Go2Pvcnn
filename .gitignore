@@ -43,3 +43,6 @@ results/policy_benchmark_smoke/
 results/policy_benchmark_smoke_*/
 results/diag_*/
 results/tmp_benchmark/
+eval_output/*/
+!eval_output/README.md
+!eval_output/run_index.jsonl
