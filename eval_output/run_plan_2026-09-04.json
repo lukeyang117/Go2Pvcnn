@@ -7,7 +7,7 @@
       "label": "amp",
       "experiment_type": "amp",
       "rl_task": "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AMP-v0",
-      "checkpoint": "/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex_amp/2026-08-31_22-29-10/4234fbe/model_300.pt",
+      "checkpoint": "/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex_amp/2026-09-03_19-36-38/2439f70/model_300.pt",
       "output_dir": "auto:eval_output/<timestamp>_amp_<weight>_<sha256>/"
     },
     {
