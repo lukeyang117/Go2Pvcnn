@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go2 AME 六通道基线训练设计</title>
+  <style>
+    :root { --ink:#172033; --muted:#526176; --line:#d8e0eb; --blue:#185abc; --blue-bg:#eef5ff; --green:#1d6b45; --green-bg:#edf9f2; --amber:#8a5a00; --amber-bg:#fff8e6; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#f5f7fb; font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif; line-height:1.65; }
+    header { background:#10243e; color:#fff; padding:32px max(24px,calc((100% - 1100px)/2)); }
+    header h1 { margin:0 0 8px; font-size:28px; letter-spacing:0; }
+    header p { margin:0; color:#dbeafe; }
+    main { max-width:1100px; margin:0 auto; padding:28px 24px 56px; }
+    section { background:#fff; border:1px solid var(--line); border-radius:7px; padding:22px 24px; margin:0 0 20px; }
+    h2 { margin:0 0 12px; font-size:21px; }
+    h3 { margin:20px 0 8px; font-size:17px; }
+    p { margin:8px 0 13px; }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    code { background:#f0f3f8; padding:1px 4px; border-radius:3px; }
+    pre { background:#101a2b; color:#e5eefc; padding:15px; border-radius:5px; overflow:auto; line-height:1.5; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+    th, td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+    th { background:#f3f6fa; }
+    .summary { background:var(--blue-bg); border-color:#a9c7f5; }
+    .success { background:var(--green-bg); border-color:#a7d8bd; }
+    .warning { background:var(--amber-bg); border-color:#eed18b; }
+    .flow { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin:14px 0; }
+    .flow div { border:1px solid #b9cbe6; background:#f7faff; padding:11px; border-radius:5px; text-align:center; }
+    .flow .arrow { border:0; background:transparent; font-size:22px; padding-top:28px; }
+    .small { color:var(--muted); font-size:13px; }
+    li { margin:4px 0; }
+    @media (max-width:700px) { header h1 { font-size:23px; } main { padding:18px 12px 40px; } section { padding:17px 15px; } .flow { grid-template-columns:1fr; } .flow .arrow { padding:0; transform:rotate(90deg); } table { display:block; overflow-x:auto; white-space:nowrap; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Go2 AME 六通道基线训练设计</h1>
+    <p>在现有 Go2 PPO 复杂混合任务上加入 AME 网络架构，建立不使用 Parallelism 数据的对比实验。</p>
+  </header>
+  <main>
+    <section class="summary">
+      <h2>一、已确认结论</h2>
+      <ul>
+        <li>环境、机器人、动作空间、terrain、障碍物课程和 reward 使用现有 <code>cross_large_complex_ppo</code>。</li>
+        <li>算法使用 Go2 当前 PPO 配置；只把策略网络替换成 AME 编码器，避免 PPO 超参数成为额外变量。</li>
+        <li>AME 不读取 Parallelism reference、planner validity、AMP discriminator、teacher action 或 24 帧轨迹。</li>
+        <li>AME 的地图输入扩展为六通道：<code>[x_local,y_local,z_local,terrain,small_obstacle,large_obstacle]</code>。</li>
+        <li>所有 AME observation 不加噪声；保留有限值处理和确定性的裁剪。</li>
+        <li>所有代码通过新增文件实现，不修改现有 PPO、AMP、Distillation、Teacher 的源文件和配置。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>二、AME 原版依据</h2>
+      <p>参考仓库 <code>raw/AME_Locomotion</code> 的 <code>ray_hits_s()</code> 与 <code>ActorCriticEncoder</code>：</p>
+      <ul>
+        <li>射线命中点由 world frame 转换为传感器 local frame，得到每个网格点的 <code>(x,y,z)</code>。</li>
+        <li>原版默认 <code>map_scan_dim=(33,21,3)</code>，CNN 第一层为 <code>Conv2d(3,16,kernel_size=5,stride=2)</code>。</li>
+        <li>CNN 输出 64 维局部 token，state 投影为 64 维 query，再经过 <code>MultiheadAttention(64,16)</code>。</li>
+        <li>Actor 和 Critic 采用独立的 state projection，MLP 均为 <code>[512,256,128]</code>，激活函数为 ELU。</li>
+        <li>AME 原版没有 semantic channel；本实验的后三个通道是 Go2 语义信息扩展。</li>
+      </ul>
+      <div class="warning"><strong>论文表述约束：</strong>六通道版本应称为“AME with semantic augmentation”或“AME-XYZ-Semantic”，不能称为未经修改的原版 AME。它与 PPO 的差异包含输入表示和编码器结构两部分。</div>
+    </section>
+
+    <section>
+      <h2>三、六通道观测定义</h2>
+      <table>
+        <thead><tr><th>通道</th><th>内容</th><th>来源</th><th>处理</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>x_local</code></td><td>semantic height scanner 的 ray hit</td><td>world 点减 sensor position，再做 local inverse rotation；有限值检查</td></tr>
+          <tr><td>1</td><td><code>y_local</code></td><td>同上</td><td>与 AME 相同的局部坐标定义；不加噪声</td></tr>
+          <tr><td>2</td><td><code>z_local</code></td><td>同上</td><td>保留 AME 的局部高度语义；确定性裁剪，不加噪声</td></tr>
+          <tr><td>3</td><td>terrain one-hot</td><td>semantic id = 0</td><td>固定类别 mask，max-pool 到 16×16</td></tr>
+          <tr><td>4</td><td>small obstacle one-hot</td><td>semantic id = 1</td><td>固定类别 mask，max-pool 到 16×16</td></tr>
+          <tr><td>5</td><td>large obstacle one-hot</td><td>semantic id = 2</td><td>固定类别 mask，max-pool 到 16×16</td></tr>
+        </tbody>
+      </table>
+      <p>输出张量为 <code>[N,6,16,16]</code>。xyz 使用 area pooling，语义 mask 使用 max pooling，避免小障碍在下采样时被平均为背景。Actor 和 Critic 使用相同的空间排列，但分别来自 policy 与 critic observation group。</p>
+      <p>传感器姿态处理遵循 AME：当 scanner 为 yaw alignment 时使用 yaw-only quaternion；不把 world root position 作为策略输入。</p>
+    </section>
+
+    <section>
+      <h2>四、网络结构</h2>
+      <div class="flow">
+        <div>Go2 state<br><code>state_dim</code></div>
+        <div class="arrow">+</div>
+        <div>six-channel map<br><code>[6,16,16]</code></div>
+        <div>state projection<br><code>Linear(state_dim,64)</code></div>
+        <div class="arrow">query/key/value</div>
+        <div>AME terrain encoder<br><code>64-d token</code></div>
+      </div>
+      <pre>shared map encoder:
+  Conv2d(6, 16, kernel_size=5, stride=2, padding=2)
+  ReLU -> BatchNorm2d(16)
+  Conv2d(16, 64, kernel_size=3, stride=1, padding=1)
+  ReLU -> BatchNorm2d(64)
+
+shared attention:
+  MultiheadAttention(embed_dim=64, num_heads=16, batch_first=True)
+
+actor / critic heads, each independent:
+  concat(attention_output[64], raw_state)
+  Linear(...,512) -> ELU
+  Linear(512,256) -> ELU
+  Linear(256,128) -> ELU
+  Actor: Linear(128,12)
+  Critic: Linear(128,1)</pre>
+      <p>AME 原版 CNN 使用 ReLU；AME Actor/Critic MLP 使用配置中的 ELU。六通道只改变第一层的输入通道数，后续宽度和 attention 配置保持不变。action noise 使用可学习的 12 维向量，初始值 <code>1.0</code>。</p>
+    </section>
+
+    <section>
+      <h2>五、训练配置与环境隔离</h2>
+      <table>
+        <thead><tr><th>项目</th><th>AME baseline 配置</th></tr></thead>
+        <tbody>
+          <tr><td>环境</td><td><code>Isaac-Go2-Cross-Large-Complex-PPO-v0</code>，创建时传入独立 AME env cfg</td></tr>
+          <tr><td>算法</td><td><code>PPO</code></td></tr>
+          <tr><td>rollout</td><td><code>num_steps_per_env=40</code></td></tr>
+          <tr><td>PPO update</td><td><code>num_learning_epochs=5</code>，<code>num_mini_batches=4</code></td></tr>
+          <tr><td>优化</td><td><code>learning_rate=1e-3</code>，<code>max_grad_norm=1.0</code></td></tr>
+          <tr><td>目标</td><td><code>clip_param=0.2</code>，<code>gamma=0.99</code>，<code>lam=0.95</code></td></tr>
+          <tr><td>value / entropy</td><td><code>value_loss_coef=1.0</code>，<code>entropy_coef=0.01</code>，clipped value loss</td></tr>
+          <tr><td>KL</td><td><code>schedule=adaptive</code>，<code>desired_kl=0.01</code></td></tr>
+          <tr><td>observation noise</td><td>policy map、critic map、policy state、critic state 全部关闭</td></tr>
+          <tr><td>日志</td><td><code>logs/rsl_rl/cross_large_complex_ame/</code></td></tr>
+        </tbody>
+      </table>
+      <p>现有 PPO task 的配置文件不被修改。AME 入口在运行时导入并复用现有 task 的 terrain/reward/command 定义，然后注入自己的 observation 配置。通过直接传入 cfg，而不是新增全局 Gym 注册，避免影响其他实验。</p>
+    </section>
+
+    <section>
+      <h2>六、数据流和时间顺序</h2>
+      <pre>reset()
+  -> semantic scanner 更新 ray_hits_w / semantic_map
+  -> ame_xyz_semantic_scan() 生成 [N,6,16,16]
+  -> AME runner 获取 policy_obs 与 critic_obs
+
+for rollout step t = 0 ... 39:
+  1. policy_obs_t -> ActorCriticAME.act() -> action_t
+  2. env.step(action_t)
+  3. 收集 reward_t, done_t, critic_obs_{t+1}
+  4. PPO storage 写入 observation_t, action_t, log_prob_t, value_t, reward_t, done_t
+
+after 40 steps:
+  5. critic_obs_40 -> evaluate() 得到 bootstrap value
+  6. PPO 按 gamma=0.99, lambda=0.95 计算 GAE/return
+  7. 5 epochs × 4 minibatches 更新 Actor、Critic 和共享 AME encoder
+  8. 清空 rollout storage，进入下一轮采样</pre>
+      <p>AME 没有历史轨迹缓存。每个 PPO transition 是单帧 state/map 输入；AME 的 attention 只在当前帧的地图 token 与当前 state query 之间计算。40 步只决定 PPO 的采样批次，不改变 AME 的地图帧数。</p>
+    </section>
+
+    <section>
+      <h2>七、新增文件清单</h2>
+      <table>
+        <thead><tr><th>文件</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td><code>ame_baseline/ame_observations.py</code></td><td>从 semantic scanner 生成 local xyz + semantic one-hot 六通道地图。</td></tr>
+          <tr><td><code>ame_baseline/ame_env_cfg.py</code></td><td>继承 PPO 环境语义，替换 AME policy/critic observation，并关闭全部 observation noise。</td></tr>
+          <tr><td><code>ame_baseline/actor_critic_ame.py</code></td><td>AME CNN、BatchNorm、Attention、Actor/Critic MLP 和 action distribution。</td></tr>
+          <tr><td><code>ame_baseline/ame_env_wrapper.py</code></td><td>独立 RSL-RL VecEnv wrapper，维持现有 policy/critic observation group 接口。</td></tr>
+          <tr><td><code>ame_baseline/ame_runner.py</code></td><td>独立 PPO runner 适配器，使用现有 PPO/storage/GAE 逻辑，不修改现有 runner。</td></tr>
+          <tr><td><code>scripts/train_cross_large_complex_ame.py</code></td><td>AME 训练入口，支持 num envs、seed、max iterations、resume/checkpoint。</td></tr>
+          <tr><td><code>scripts/train_cross_large_complex_ame_headless.sh</code></td><td>固定 IsaacLab 环境变量的 headless 启动脚本。</td></tr>
+          <tr><td><code>scripts/play_cross_large_complex_ame.py</code></td><td>AME checkpoint 播放和观测/动作 shape 检查入口。</td></tr>
+          <tr><td><code>tests/ame_baseline/test_ame_observations.py</code></td><td>坐标转换、one-hot、下采样、有限值和通道顺序测试。</td></tr>
+          <tr><td><code>tests/ame_baseline/test_actor_critic_ame.py</code></td><td>网络初始化、act/evaluate/inference、distribution 和梯度 finite 测试。</td></tr>
+          <tr><td><code>tests/ame_baseline/test_ame_entrypoint_static.py</code></td><td>确认不引用 Parallelism/AMP/Distillation 数据，不改现有 task 文件。</td></tr>
+          <tr><td><code>tests/ame_baseline/run_ame_isaac_smoke.sh</code></td><td>真实 IsaacLab 1024 env、4 iteration 验收脚本。</td></tr>
+        </tbody>
+      </table>
+      <p class="small">上述目录和文件均为设计目标；实现阶段只新增这些边界内的文件，不编辑现有 PPO/AMP/Distillation/Teacher 源文件。</p>
+    </section>
+
+    <section>
+      <h2>八、Checkpoint 与恢复</h2>
+      <ul>
+        <li>AME checkpoint 独立保存完整 ActorCriticAME、PPO optimizer 和训练迭代号。</li>
+        <li>不能从现有 PPO/AMP/Distillation/Teacher checkpoint 直接恢复，因为网络参数名、CNN 输入通道和内部结构不同。</li>
+        <li>AME 自己的 checkpoint 可以通过显式路径 resume；恢复时校验 observation dimension、action dimension 和 AME architecture signature。</li>
+        <li>训练目录和 TensorBoard run name 使用 <code>cross_large_complex_ame</code>，不与既有日志目录复用。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>九、测试与验收</h2>
+      <table>
+        <thead><tr><th>级别</th><th>验收条件</th></tr></thead>
+        <tbody>
+          <tr><td>静态</td><td>AME 入口不导入 Parallelism reference、AMP discriminator、Distillation teacher；现有 PPO 文件内容不变。</td></tr>
+          <tr><td>单元</td><td>六通道输出严格为 <code>[N,6,16,16]</code>；语义 one-hot 每个 cell 至多一个类别；xyz 坐标变换与 AME 公式一致。</td></tr>
+          <tr><td>网络</td><td>Actor 输出 <code>[N,12]</code>，Critic 输出 <code>[N,1]</code>；action mean/std/value、loss 和梯度均为 finite。</td></tr>
+          <tr><td>真实 smoke</td><td>1024 env、4 PPO iteration 正常完成，至少生成一个 AME checkpoint，并在退出后无 IsaacSim 残留进程。</td></tr>
+          <tr><td>正式实验</td><td>使用与其他权重相同的 complex_mixed、large_runway、small_runway 评测，统计碰撞率、跌倒率、跑满率、位移和有效轨迹 MSE。</td></tr>
+        </tbody>
+      </table>
+      <div class="success"><strong>成功标准：</strong>AME smoke 的 observation shape、PPO update、checkpoint 保存和进程清理全部通过；正式训练 TensorBoard 中无 NaN，action std 和 value loss 保持 finite。</div>
+    </section>
+
+    <section>
+      <h2>十、风险与论文解释</h2>
+      <ul>
+        <li>六通道 AME 与两通道 PPO 不是纯架构 ablation。论文需要把输入差异单独写清楚，并可增加“AME encoder + 两通道输入”的附加 ablation。</li>
+        <li>xyz area pooling 可能弱化局部尖锐几何；语义 max pooling 用于保留障碍存在性，但不保证精确边界。</li>
+        <li>关闭所有 observation noise 会改变当前 PPO 的训练分布。若论文要求严格复现 PPO 训练分布，应另做一组 AME-with-PPO-noise 对照；本设计的主 AME 实验遵循用户确认的无噪声口径。</li>
+        <li>AME 的 BatchNorm 在训练和 play 必须正确切换 <code>train()</code>/<code>eval()</code>，否则评测结果不可比较。</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
