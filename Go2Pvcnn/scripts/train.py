@@ -34,7 +34,8 @@ import torch
 THIS_FILE = Path(__file__).resolve()
 GO2PVCNN_ROOT = THIS_FILE.parent.parent
 RSL_RL_ROOT = GO2PVCNN_ROOT / "rsl_rl"
-for _path in (GO2PVCNN_ROOT, RSL_RL_ROOT):
+REPO_ROOT = GO2PVCNN_ROOT.parent
+for _path in (GO2PVCNN_ROOT, RSL_RL_ROOT, REPO_ROOT):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
@@ -187,6 +188,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "parallelism_tracking_cross_large_complex",
             "parallelism_tracking_cross_large_complex_distillation",
             "cross_large_complex_ppo",
+            "cross_large_complex_semloco",
             "parallelism_tracking_cross_large_complex_amp",
         ],
         help="Experiment: semantic MPC teacher or flat-small avoidance continuation.",
@@ -631,6 +633,10 @@ def main() -> int:
         "cross_large_complex_ppo": (
             CrossLargeComplexPpoEnvCfg,
             "Isaac-Go2-Cross-Large-Complex-PPO-v0",
+        ),
+        "cross_large_complex_semloco": (
+            __import__("semloco.semloco_env_cfg", fromlist=["SemlocoCrossLargeComplexEnvCfg"]).SemlocoCrossLargeComplexEnvCfg,
+            "Isaac-Go2-Cross-Large-Complex-SemLoco-v0",
         ),
         "parallelism_tracking_cross_large_complex_amp": (
             ParallelismAmpCrossLargeComplexEnvCfg,

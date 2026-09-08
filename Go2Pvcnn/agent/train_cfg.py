@@ -15,6 +15,7 @@ def get_train_cfg(experiment_name: str) -> dict:
         "parallelism_tracking_cross_large_complex",
         "parallelism_tracking_cross_large_complex_distillation",
         "cross_large_complex_ppo",
+        "cross_large_complex_semloco",
         "parallelism_tracking_cross_large_complex_amp",
     }
     if experiment_name not in supported:
@@ -23,6 +24,10 @@ def get_train_cfg(experiment_name: str) -> dict:
         return _parallelism_distillation_train_cfg()
     if experiment_name == "cross_large_complex_ppo":
         return _cross_large_complex_ppo_train_cfg()
+    if experiment_name == "cross_large_complex_semloco":
+        cfg = _cross_large_complex_ppo_train_cfg()
+        cfg["experiment_name"] = "cross_large_complex_semloco"
+        return cfg
     if experiment_name == "parallelism_tracking_cross_large_complex_amp":
         return _parallelism_amp_train_cfg()
     return _teacher_elevation_trajectory_mpc_semantic_train_cfg()

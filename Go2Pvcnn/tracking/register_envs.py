@@ -14,6 +14,8 @@ from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
 from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg
 from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg
 from tracking.parallelism_amp_cross_large_complex_env_cfg import ParallelismAmpCrossLargeComplexEnvCfg
+from semloco.semloco_env import SemlocoEnv
+from semloco.semloco_env_cfg import SemlocoCrossLargeComplexEnvCfg
 
 
 gym.register(
@@ -63,6 +65,13 @@ gym.register(
         "env_cfg_entry_point": CrossLargeComplexPpoEnvCfg,
         "rsl_rl_cfg_entry_point": None,
     },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Isaac-Go2-Cross-Large-Complex-SemLoco-v0",
+    entry_point="semloco.semloco_env:SemlocoEnv",
+    kwargs={"env_cfg_entry_point": SemlocoCrossLargeComplexEnvCfg, "rsl_rl_cfg_entry_point": None},
     disable_env_checker=True,
 )
 
