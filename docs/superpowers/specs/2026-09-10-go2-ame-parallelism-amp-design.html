@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go2 AME + Parallelism AMP 续训设计</title>
+  <style>
+    :root {
+      --ink:#172033; --muted:#536174; --line:#d7dee8; --navy:#10243e;
+      --blue:#185abc; --blue-bg:#eef5ff; --green:#17643f; --green-bg:#edf9f2;
+      --amber:#805400; --amber-bg:#fff7e3; --red:#9b2c2c; --red-bg:#fff1f1;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#f5f7fa; font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif; line-height:1.65; }
+    header { background:var(--navy); color:#fff; padding:32px max(24px,calc((100% - 1120px)/2)); }
+    header h1 { margin:0 0 7px; font-size:28px; letter-spacing:0; }
+    header p { margin:0; color:#d9e7f8; }
+    main { max-width:1120px; margin:0 auto; padding:28px 24px 56px; }
+    section { background:#fff; border:1px solid var(--line); border-radius:7px; padding:22px 24px; margin:0 0 20px; }
+    h2 { margin:0 0 12px; font-size:21px; letter-spacing:0; }
+    h3 { margin:19px 0 8px; font-size:17px; letter-spacing:0; }
+    p { margin:8px 0 13px; }
+    ul, ol { margin:9px 0 13px; padding-left:24px; }
+    li { margin:5px 0; }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    code { background:#f0f3f7; padding:1px 4px; border-radius:3px; }
+    pre { background:#101a2b; color:#e8eef8; padding:15px; border-radius:5px; overflow:auto; line-height:1.5; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+    th, td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+    th { background:#f1f4f8; }
+    .summary { background:var(--blue-bg); border-color:#adc9ed; }
+    .success { background:var(--green-bg); border:1px solid #a8d8bd; padding:12px 14px; }
+    .warning { background:var(--amber-bg); border:1px solid #e9cd83; padding:12px 14px; }
+    .danger { background:var(--red-bg); border:1px solid #efb6b6; padding:12px 14px; }
+    .flow { display:grid; grid-template-columns:1fr 42px 1fr 42px 1fr; gap:8px; align-items:stretch; margin:14px 0; }
+    .flow div { border:1px solid #b7c8df; background:#f8fbff; padding:12px; border-radius:5px; text-align:center; }
+    .flow .arrow { border:0; background:transparent; display:flex; align-items:center; justify-content:center; font-size:22px; }
+    .small { color:var(--muted); font-size:13px; }
+    @media (max-width:760px) {
+      header h1 { font-size:23px; }
+      main { padding:18px 12px 40px; }
+      section { padding:17px 15px; }
+      .flow { grid-template-columns:1fr; }
+      .flow .arrow { min-height:24px; transform:rotate(90deg); }
+      table { display:block; overflow-x:auto; white-space:nowrap; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Go2 AME + Parallelism AMP 续训设计</h1>
+    <p>从已训练的 AME 策略 warm-start，复用现有 Parallelism AMP 数据与算法，进行 3500 个独立 AMP iteration。</p>
+  </header>
+  <main>
+    <section class="summary">
+      <h2>一、目标与已确认结论</h2>
+      <ul>
+        <li>源模型固定为 <code>/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/cross_large_complex_ame/2026-09-08_15-40-23/bfb8b7f/model_19999.pt</code>。</li>
+        <li>保留 AME 的六通道地图、CNN、BatchNorm、MultiheadAttention、Actor、base Critic 和当前 action std。</li>
+        <li>AMP expert 继续来自现有 Parallelism planner；不使用 AME 自身轨迹充当 expert，也不引入外部动作数据集。</li>
+        <li>AMP 算法、双 GAE、24 帧缓冲、standstill/无解屏蔽、discriminator 和 replay 逻辑直接复用当前实现。</li>
+        <li>只创建新的 AME-AMP 适配文件，不修改现有 AME、PPO、Parallelism AMP、Distillation 或 Teacher 源文件。</li>
+        <li>本次训练是独立的 AMP 阶段，iteration 从 0 重新计数，训练 3500 轮，最终权重名为 <code>model_3499.pt</code>。</li>
+      </ul>
+      <div class="warning"><strong>实验命名：</strong>该模型应称为 <code>AME-XYZ-Semantic + Parallelism-AMP</code>。它不是原版 AME，也不是不使用 planner 数据的 AME baseline。</div>
+    </section>
+
+    <section>
+      <h2>二、复用边界与新增边界</h2>
+      <table>
+        <thead><tr><th>层级</th><th>直接复用</th><th>新建适配</th></tr></thead>
+        <tbody>
+          <tr><td>环境</td><td><code>ParallelismAmpEnv</code> 的 step/reset 行为</td><td>AME 六通道 observation 与 planner-owned 配置组合</td></tr>
+          <tr><td>轨迹</td><td><code>ParallelismAmpManager</code> 的 24 帧环形缓冲与局部化</td><td>无</td></tr>
+          <tr><td>算法</td><td><code>ParallelismAMPPPO</code>，不复制、不重写 update</td><td>把策略类替换为 <code>AmpActorCriticAME</code></td></tr>
+          <tr><td>存储</td><td><code>ParallelismAMPStorage</code> 与 <code>combine_advantages</code></td><td>无</td></tr>
+          <tr><td>判别器</td><td><code>AMPDiscriminator</code>，输入 936 维</td><td>无</td></tr>
+          <tr><td>运行器</td><td>现有 <code>OnPolicyRunner.learn/log/save</code> 主流程</td><td>AME warm-start、AME-AMP full resume、网络类注入与来源校验</td></tr>
+        </tbody>
+      </table>
+      <p>独立训练入口在运行时注册自己的 Gym id，并直接调用公共 trajectory manager factory。这样无需编辑 <code>tracking/register_envs.py</code>、<code>scripts/train.py</code> 或任何现有配置分支。</p>
+    </section>
+
+    <section>
+      <h2>三、网络结构与输入输出</h2>
+      <h3>AME Actor 与 base Critic</h3>
+      <table>
+        <thead><tr><th>模块</th><th>输入</th><th>输出</th></tr></thead>
+        <tbody>
+          <tr><td>Actor map</td><td><code>[N,6,16,16]</code>，共 1536 维</td><td>AME CNN 的 64 维空间 token</td></tr>
+          <tr><td>Actor state</td><td>45 维</td><td>64 维 attention query</td></tr>
+          <tr><td>Actor</td><td>总 observation 1581 维</td><td>12 维 action mean</td></tr>
+          <tr><td>base Critic state</td><td>48 维</td><td>64 维 attention query</td></tr>
+          <tr><td>base Critic</td><td>总 observation 1584 维</td><td>1 维环境价值 <code>V_base</code></td></tr>
+        </tbody>
+      </table>
+      <p>源 checkpoint 已验证为 AME signature <code>ame_xyz_semantic_v1_c6_s16_mha64_h16</code>，包含 39 个模型张量；当前 12 维 std 的范围约为 <code>0.2953-0.3883</code>。</p>
+
+      <h3>新增 AMP value head</h3>
+      <pre>AME critic observation [1584]
+  -> shared AME CNN + BatchNorm + MHA
+  -> concat(attention[64], raw critic state[48]) = critic feature[112]
+  -> detach
+  -> concat(amp_active[1], history_ratio[1]) = [114]
+  -> Linear(114,256) -> ELU
+  -> Linear(256,128) -> ELU
+  -> Linear(128,1) = V_amp</pre>
+      <p>AMP head 与现有 <code>AmpActorCriticCNN</code> 一致：Linear 层采用 orthogonal 初始化，最终层 weight/bias 初始化为 0，因此 warm-start 时 <code>V_amp=0</code>。</p>
+    </section>
+
+    <section>
+      <h2>四、梯度与 BatchNorm 边界</h2>
+      <table>
+        <thead><tr><th>损失</th><th>允许更新</th><th>禁止更新</th></tr></thead>
+        <tbody>
+          <tr><td>PPO surrogate</td><td>AME map encoder、attention、Actor、std</td><td>AMP discriminator</td></tr>
+          <tr><td>base value loss</td><td>AME map encoder、attention、base Critic</td><td>AMP discriminator</td></tr>
+          <tr><td>AMP value loss</td><td>仅 <code>amp_value_head</code></td><td>AME encoder、attention、base Critic</td></tr>
+          <tr><td>discriminator loss</td><td>仅 D 与 D normalizer</td><td>整个 Actor-Critic</td></tr>
+        </tbody>
+      </table>
+      <p>Actor、base Critic 与 AMP head 使用一个新的 Adam optimizer，初始学习率 <code>1e-3</code>，共同受 <code>max_grad_norm=1.0</code> 约束。D 使用独立 Adam，学习率 <code>1e-4</code>，保持现有 D 的梯度裁剪行为。</p>
+      <p>AME 的共享 encoder 含 BatchNorm。<code>evaluate()</code> 计算 critic feature 后缓存一个 detached 版本，紧接着的 <code>evaluate_amp()</code> 复用该 feature。这样一个 rollout/minibatch 不会因 base Critic 和 AMP Critic 对同一输入重复前向而额外更新一次 running mean/variance。</p>
+      <div class="danger"><strong>禁止：</strong>不能让 AMP value loss 反向进入 AME encoder，也不能为了计算 <code>V_amp</code> 对同一 critic batch 再独立执行一次训练态 BatchNorm。</div>
+    </section>
+
+    <section>
+      <h2>五、24 帧 expert/agent 数据定义</h2>
+      <p>每帧保持现有固定 39 维布局，discriminator 的窗口输入为 <code>24 x 39 = 936</code> 维：</p>
+      <table>
+        <thead><tr><th>范围</th><th>内容</th><th>维数</th></tr></thead>
+        <tbody>
+          <tr><td>0:12</td><td>12 个 joint position</td><td>12</td></tr>
+          <tr><td>12:24</td><td>12 个 joint velocity</td><td>12</td></tr>
+          <tr><td>24:27</td><td>root position</td><td>3</td></tr>
+          <tr><td>27:33</td><td>root rotation 6D</td><td>6</td></tr>
+          <tr><td>33:36</td><td>body-frame root linear velocity</td><td>3</td></tr>
+          <tr><td>36:39</td><td>body-frame root angular velocity</td><td>3</td></tr>
+        </tbody>
+      </table>
+      <p>agent frame 来自实际 Go2 状态；expert frame 来自 Parallelism 当前有效规划。窗口重建后，以末帧 root 为平移原点并消除末朝向，因此不会把绝对世界位置作为 D 的捷径。</p>
+    </section>
+
+    <section>
+      <h2>六、逐步时间对齐</h2>
+      <pre>每个环境 step t:
+  1. 记录 robot agent_start_t
+  2. AME policy(obs_t) -> action_t
+  3. ParallelismAmpEnv.step(action_t)
+  4. 得到 robot agent_target_t 和 planner expert_target_t
+  5. 写入 agent/expert transition delta
+  6. 重建截至当前时刻的 24 帧窗口
+  7. 写入 infos["amp"]
+
+每个 PPO iteration:
+  step 0 ... 39: 收集 40 个 transition
+  -> base GAE 与 masked AMP GAE 分开计算
+  -> 5 epochs x 4 minibatches 更新
+  -> AMP 环形历史不随 PPO storage 清空</pre>
+      <ul>
+        <li>重新规划时，新段第一条 transition 固定为 <code>B0 -> B1</code>，不产生旧段 <code>A23 -> B1</code> 的位置跳变。</li>
+        <li>第一条有效 transition 同时提供 anchor 和 target，即 2 帧；累计到连续 24 帧后才令 <code>amp_active=1</code>。</li>
+        <li><code>history_ratio=valid_count/24</code> 在 0 到 1 之间，告诉 AMP Critic 当前历史完整程度；它不替代 <code>amp_active</code>。</li>
+        <li>40 步只是 PPO rollout 长度。24 帧 ring 跨 rollout 保留，所以第 40 步之后继续使用新规划或当前规划产生的真实连续 transition。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>七、planner 无解与 standstill</h2>
+      <p>沿用当前 AMP manager 的严格连续有效策略：</p>
+      <ol>
+        <li>只要当前规划 transition 无效，对应环境立即清空 agent/expert ring、<code>valid_count</code> 和 write index。</li>
+        <li>该时刻 <code>amp_active=0</code>，AMP reward 被 gate 为 0，AMP GAE 和 actor 中的 AMP advantage 也为 0。</li>
+        <li>base PPO 的环境 reward、base value 和 base advantage 继续训练，因此机器人 standstill 时不会停止整个 policy 学习。</li>
+        <li>planner 恢复后从新的有效 transition 重新累计，只有重新达到 24 帧才恢复 AMP。</li>
+        <li>episode reset 同样清空该环境的 AMP history，禁止跨 episode 拼接。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>八、PPO、AMP 与 warm-up 参数</h2>
+      <table>
+        <thead><tr><th>配置</th><th>值</th></tr></thead>
+        <tbody>
+          <tr><td>rollout</td><td><code>num_steps_per_env=40</code></td></tr>
+          <tr><td>PPO update</td><td><code>num_learning_epochs=5</code>，<code>num_mini_batches=4</code></td></tr>
+          <tr><td>PPO</td><td><code>clip=0.2</code>，<code>gamma=0.99</code>，<code>lam=0.95</code>，<code>entropy=0.01</code></td></tr>
+          <tr><td>adaptive KL</td><td><code>schedule=adaptive</code>，<code>desired_kl=0.01</code></td></tr>
+          <tr><td>AMP reward/value</td><td><code>amp_reward_weight=0.1</code>，<code>amp_value_loss_coef=1.0</code></td></tr>
+          <tr><td>AMP window</td><td><code>24</code> 帧，<code>dt=0.02</code> 秒</td></tr>
+          <tr><td>D</td><td>lr <code>1e-4</code>，epochs <code>2</code>，batch <code>4096</code>，replay <code>32768</code></td></tr>
+          <tr><td>AMP schedule</td><td>warm-up <code>500</code>，linear ramp <code>100</code></td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>AMP-local iteration</th><th>D</th><th>AMP Critic</th><th>base PPO</th><th>actor AMP weight</th></tr></thead>
+        <tbody>
+          <tr><td>0-499</td><td>训练</td><td>训练</td><td>训练</td><td>0</td></tr>
+          <tr><td>500</td><td>训练</td><td>训练</td><td>训练</td><td>0</td></tr>
+          <tr><td>550</td><td>训练</td><td>训练</td><td>训练</td><td>0.05</td></tr>
+          <tr><td>600-3499</td><td>训练</td><td>训练</td><td>训练</td><td>0.1</td></tr>
+        </tbody>
+      </table>
+      <p>这与当前 AMP PPO 一致：warm-up 不是停止 AMP 数据或 D/AMP Critic 训练，而是暂时不把 AMP advantage 加入 actor。</p>
+    </section>
+
+    <section>
+      <h2>九、Checkpoint 生命周期</h2>
+      <h3>首次 AME warm-start</h3>
+      <ol>
+        <li>校验源文件存在、AME architecture signature、actor/critic/action 维度。</li>
+        <li>逐 key 严格加载 std、CNN、BatchNorm 参数与 running statistics、state projection、MHA、Actor 和 base Critic。</li>
+        <li>不加载源 PPO optimizer；为增加了 AMP head 的完整 Actor-Critic 创建新 Adam。</li>
+        <li>AMP head、D、D optimizer、AMP replay 从新状态开始；AMP-local iteration 置 0。</li>
+      </ol>
+
+      <h3>完整 AME-AMP resume</h3>
+      <ol>
+        <li>严格恢复 AME 网络、AMP head、std、Actor-Critic optimizer、D 和 D optimizer。</li>
+        <li>恢复 AMP-local iteration，从该 iteration 继续调度与编号。</li>
+        <li>与当前 AMP 一致，device-local replay queue 不写入 checkpoint，resume 后由新有效窗口重新填充。</li>
+      </ol>
+      <p>所有新 checkpoint 记录 AME-AMP signature、源 checkpoint 绝对路径、SHA256、源 iteration <code>19999</code>、观测维度和动作维度。普通 AME checkpoint、普通 PPO checkpoint和 CNN-AMP checkpoint 均不能误作为完整 AME-AMP resume。</p>
+    </section>
+
+    <section>
+      <h2>十、新增文件</h2>
+      <table>
+        <thead><tr><th>文件</th><th>单一职责</th></tr></thead>
+        <tbody>
+          <tr><td><code>Go2Pvcnn/ame_baseline/amp_actor_critic_ame.py</code></td><td>AME 网络上的 AMP value head、critic feature 缓存和公共权重加载。</td></tr>
+          <tr><td><code>Go2Pvcnn/ame_baseline/ame_amp_env_cfg.py</code></td><td>组合 AME observation 与 planner-owned AMP 环境字段。</td></tr>
+          <tr><td><code>Go2Pvcnn/ame_baseline/ame_amp_train_cfg.py</code></td><td>复用当前 AMP PPO 超参数并指定 AME-AMP policy。</td></tr>
+          <tr><td><code>Go2Pvcnn/ame_baseline/ame_amp_runner.py</code></td><td>warm-start、full resume、保存 signature 与来源元数据。</td></tr>
+          <tr><td><code>Go2Pvcnn/scripts/train_cross_large_complex_ame_amp.py</code></td><td>运行时 Gym 注册、planner attach、训练与资源清理。</td></tr>
+          <tr><td><code>Go2Pvcnn/scripts/train_cross_large_complex_ame_amp_headless.sh</code></td><td>默认 checkpoint、1024 env、3500 iteration 的启动命令。</td></tr>
+          <tr><td><code>Go2Pvcnn/scripts/play_cross_large_complex_ame_amp.py</code></td><td>严格加载完整 AME-AMP checkpoint 并以 eval 模式推理。</td></tr>
+          <tr><td><code>Go2Pvcnn/tests/ame_baseline/test_amp_actor_critic_ame.py</code></td><td>网络结构、梯度边界、BN 单次更新和 finite 检查。</td></tr>
+          <tr><td><code>Go2Pvcnn/tests/ame_baseline/test_ame_amp_checkpoint.py</code></td><td>真实 AME warm-start、full resume 与错误 checkpoint 拒绝。</td></tr>
+          <tr><td><code>Go2Pvcnn/tests/ame_baseline/test_ame_amp_config.py</code></td><td>环境组合、AMP 参数、schedule 和隔离性。</td></tr>
+          <tr><td><code>Go2Pvcnn/tests/ame_baseline/test_ame_amp_entrypoints.py</code></td><td>训练/play/shell 参数、路径与进程清理约束。</td></tr>
+          <tr><td><code>Go2Pvcnn/tests/ame_baseline/run_ame_amp_isaac_smoke.sh</code></td><td>1024 env、4 iteration 的真实 Isaac Lab 验收。</td></tr>
+        </tbody>
+      </table>
+      <p class="small">实现阶段不得通过修改现有文件来增加 import、注册项或 experiment choice；所有连接均由新入口在运行时完成。</p>
+    </section>
+
+    <section>
+      <h2>十一、测试与验收</h2>
+      <table>
+        <thead><tr><th>级别</th><th>必须证明的结果</th></tr></thead>
+        <tbody>
+          <tr><td>checkpoint</td><td>源 AME 的 39 个张量逐个 <code>torch.equal</code>；std 不重置；AMP head 初始输出为 0。</td></tr>
+          <tr><td>梯度</td><td>base loss 能更新 AME encoder；AMP value loss 不能更新 encoder；D 梯度不进入 Actor-Critic。</td></tr>
+          <tr><td>BatchNorm</td><td>同一 critic batch 的 <code>evaluate + evaluate_amp</code> 只执行一次训练态 encoder 前向，各 BatchNorm 的 <code>num_batches_tracked</code> 只增加 1。</td></tr>
+          <tr><td>schedule</td><td>iteration 0/499/500/550/600 的 actor AMP weight 分别为 0/0/0/0.05/0.1。</td></tr>
+          <tr><td>mask</td><td>无解、standstill、reset 后 AMP reward/GAE 为 0；恢复后连续满 24 帧才 active。</td></tr>
+          <tr><td>真实 smoke</td><td>加载指定 <code>model_19999.pt</code>，完成 <code>1024 env x 4 iteration x 40 step</code>，正常退出并生成 <code>model_3.pt</code>。</td></tr>
+          <tr><td>数值</td><td>action mean/std、base value、AMP value、D loss、两路 advantage 和全部 checkpoint tensor 均 finite。</td></tr>
+          <tr><td>运行清理</td><td>训练结束后无该入口启动的 Isaac/Kit 残留进程。</td></tr>
+          <tr><td>回归</td><td>现有 AME smoke、Parallelism AMP 单测和普通 PPO 静态测试继续通过。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>十二、启动与输出约定</h2>
+      <pre>cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn
+MAX_ITERATIONS=3500 NUM_ENVS=1024 \
+bash Go2Pvcnn/scripts/train_cross_large_complex_ame_amp_headless.sh</pre>
+      <p>脚本默认加载本设计指定的 AME <code>model_19999.pt</code>；也允许通过环境变量显式覆盖 checkpoint。输出固定写入：</p>
+      <pre>logs/rsl_rl/parallelism_tracking_cross_large_complex_ame_amp/
+  &lt;YYYY-MM-DD_HH-MM-SS&gt;/
+    &lt;git-short-hash&gt;/
+      env_cfg.yaml
+      train_cfg.yaml
+      source_checkpoint.json
+      events.out.tfevents.*
+      model_0.pt
+      ...
+      model_3499.pt</pre>
+      <div class="success"><strong>完成标准：</strong>3500 轮训练从 AME policy 正确 warm-start，前 500 轮不向 actor 注入 AMP advantage，之后按现有 AMP schedule 启用；所有日志和 checkpoint 与原 AME、原 AMP 实验完全隔离。</div>
+    </section>
+  </main>
+</body>
+</html>
