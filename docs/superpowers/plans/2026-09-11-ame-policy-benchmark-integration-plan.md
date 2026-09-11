@@ -371,7 +371,7 @@ Run: `git diff -- evaluation/model_adapters.py scripts/policy_benchmark.py scrip
 
 Expected: 只包含本设计范围内变更，并保留这些文件中已存在的相关 benchmark 修改。
 
-- [ ] **Step 2: 只暂存明确文件并提交**
+- [x] **Step 2: 只暂存明确文件并提交**
 
 ```bash
 git add evaluation/model_adapters.py scripts/policy_benchmark.py scripts/run_policy_benchmark.sh scripts/run_policy_benchmark_batch.sh tests/evaluation/test_model_adapters.py tests/evaluation/test_policy_benchmark_static.py tests/evaluation/run_policy_benchmark_1024_smoke.py docs/superpowers/plans/2026-09-11-ame-policy-benchmark-integration-plan.md
@@ -379,7 +379,7 @@ git diff --cached --check
 git commit -m "feat: benchmark AME policy variants"
 ```
 
-- [ ] **Step 3: 交付 AME 正式 batch 命令**
+- [x] **Step 3: 交付 AME 正式 batch 命令**
 
 ```bash
 cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn && \
@@ -392,7 +392,7 @@ scripts/run_policy_benchmark_batch.sh \
   --headless
 ```
 
-- [ ] **Step 4: 交付 AME-AMP 正式 batch 命令**
+- [x] **Step 4: 交付 AME-AMP 正式 batch 命令**
 
 ```bash
 cd /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn && \
