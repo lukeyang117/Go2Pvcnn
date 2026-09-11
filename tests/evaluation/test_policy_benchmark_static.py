@@ -45,6 +45,17 @@ def test_launchers_support_ame_and_ame_amp() -> None:
     assert "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AME-Go2-v0" in single
 
 
+def test_launchers_support_semloco() -> None:
+    benchmark = (ROOT / "scripts/policy_benchmark.py").read_text(encoding="utf-8")
+    single = (ROOT / "scripts/run_policy_benchmark.sh").read_text(encoding="utf-8")
+    batch = (ROOT / "scripts/run_policy_benchmark_batch.sh").read_text(encoding="utf-8")
+    smoke = (ROOT / "tests/evaluation/run_policy_benchmark_1024_smoke.py").read_text(encoding="utf-8")
+
+    for source in (benchmark, single, batch, smoke):
+        assert "semloco" in source
+    assert "Isaac-Go2-Cross-Large-Complex-SemLoco-v0" in single
+
+
 def test_batch_run_script_shares_one_timestamped_output_directory() -> None:
     source = (ROOT / "scripts/run_policy_benchmark_batch.sh").read_text(encoding="utf-8")
     assert "timestamp=\"$(date +%Y%m%d_%H%M%S)\"" in source

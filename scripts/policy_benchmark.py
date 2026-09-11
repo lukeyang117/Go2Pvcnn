@@ -33,7 +33,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--experiment-type",
         required=True,
-        choices=("amp", "distillation", "ppo", "teacher", "ame", "ame_amp"),
+        choices=("amp", "distillation", "ppo", "teacher", "ame", "ame_amp", "semloco"),
     )
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--suite", required=True, choices=("complex_mixed", "large_runway", "small_runway"))

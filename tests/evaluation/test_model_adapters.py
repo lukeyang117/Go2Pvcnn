@@ -41,6 +41,20 @@ def test_resolve_model_spec_maps_ame_adapters(tmp_path) -> None:
     assert isinstance(build_benchmark_adapter(resolve_model_spec("ppo", checkpoint)), DefaultBenchmarkAdapter)
 
 
+def test_resolve_model_spec_maps_semloco_to_default_adapter(tmp_path) -> None:
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"checkpoint")
+
+    semloco = resolve_model_spec("semloco", checkpoint)
+
+    assert semloco.experiment == "cross_large_complex_semloco"
+    assert semloco.task_id == "Isaac-Go2-Cross-Large-Complex-SemLoco-v0"
+    assert semloco.observation_kind == "deployment"
+    assert semloco.requires_reference_manager is True
+    assert semloco.adapter_kind == "default"
+    assert isinstance(build_benchmark_adapter(semloco), DefaultBenchmarkAdapter)
+
+
 def test_ame_amp_adapter_rejects_non_full_resume() -> None:
     with pytest.raises(ValueError, match="complete AME-AMP checkpoint"):
         AmeAmpBenchmarkAdapter.require_full_amp_resume("legacy_policy_warm_start")

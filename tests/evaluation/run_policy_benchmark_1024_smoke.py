@@ -14,7 +14,7 @@ def main() -> int:
     parser.add_argument(
         "--experiment-type",
         required=True,
-        choices=("amp", "distillation", "ppo", "teacher", "ame", "ame_amp"),
+        choices=("amp", "distillation", "ppo", "teacher", "ame", "ame_amp", "semloco"),
     )
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--num-envs", type=int, default=1024)

@@ -33,6 +33,7 @@ _MODEL_TABLE = {
     "teacher": ("parallelism_tracking_cross_large_complex", "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0", "teacher", True, "default"),
     "ame": ("cross_large_complex_ame", "Isaac-Go2-Cross-Large-Complex-PPO-v0", "ame", True, "ame"),
     "ame_amp": ("parallelism_tracking_cross_large_complex_ame_amp", "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AME-Go2-v0", "ame", True, "ame_amp"),
+    "semloco": ("cross_large_complex_semloco", "Isaac-Go2-Cross-Large-Complex-SemLoco-v0", "deployment", True, "default"),
 }
 
 
@@ -56,6 +57,7 @@ def build_play_mapping() -> dict[str, tuple[object, str]]:
     from tracking.parallelism_cross_large_complex_env_cfg import ParallelismTrackingCrossLargeComplexEnvCfg
     from ame_baseline.ame_amp_env_cfg import AmeParallelismAmpCrossLargeComplexEnvCfg
     from ame_baseline.ame_env_cfg import AmeCrossLargeComplexEnvCfg_PLAY
+    from semloco.semloco_env_cfg import SemlocoCrossLargeComplexEnvCfg_PLAY
 
     return {
         "amp": (ParallelismAmpCrossLargeComplexEnvCfg, _MODEL_TABLE["amp"][1]),
@@ -64,6 +66,7 @@ def build_play_mapping() -> dict[str, tuple[object, str]]:
         "teacher": (ParallelismTrackingCrossLargeComplexEnvCfg, _MODEL_TABLE["teacher"][1]),
         "ame": (AmeCrossLargeComplexEnvCfg_PLAY, _MODEL_TABLE["ame"][1]),
         "ame_amp": (AmeParallelismAmpCrossLargeComplexEnvCfg, _MODEL_TABLE["ame_amp"][1]),
+        "semloco": (SemlocoCrossLargeComplexEnvCfg_PLAY, _MODEL_TABLE["semloco"][1]),
     }
 
 

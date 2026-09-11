@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 usage: run_policy_benchmark_batch.sh \
-  --experiment-type {amp|distillation|ppo|teacher|ame|ame_amp} \
+  --experiment-type {amp|distillation|ppo|teacher|ame|ame_amp|semloco} \
   --checkpoint FILE \
   [--suites complex_mixed,large_runway,small_runway] \
   [--suite-timeout SECONDS] [--gpu-release-timeout SECONDS] [benchmark args...]
@@ -56,8 +56,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$experiment_type" =~ ^(amp|distillation|ppo|teacher|ame|ame_amp)$ ]] || {
-  echo "--experiment-type must be amp, distillation, ppo, teacher, ame, or ame_amp" >&2
+[[ "$experiment_type" =~ ^(amp|distillation|ppo|teacher|ame|ame_amp|semloco)$ ]] || {
+  echo "--experiment-type must be amp, distillation, ppo, teacher, ame, ame_amp, or semloco" >&2
   exit 2
 }
 [[ -n "$checkpoint" && -f "$checkpoint" ]] || {
