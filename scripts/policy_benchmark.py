@@ -30,7 +30,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description="Evaluate one policy checkpoint on the paper benchmark.")
-    parser.add_argument("--experiment-type", required=True, choices=("amp", "distillation", "ppo", "teacher"))
+    parser.add_argument(
+        "--experiment-type",
+        required=True,
+        choices=("amp", "distillation", "ppo", "teacher", "ame", "ame_amp"),
+    )
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--suite", required=True, choices=("complex_mixed", "large_runway", "small_runway"))
     parser.add_argument("--num-envs", type=int, default=1024)
@@ -67,17 +71,59 @@ def _finite(*values) -> bool:
     return all(bool(torch.isfinite(torch.as_tensor(value)).all().item()) for value in values)
 
 
+def _close_simulation_app(simulation_app) -> None:
+    """Close IsaacLab without replacing an exception with SystemExit(0)."""
+
+    exception_active = sys.exc_info()[0] is not None
+    try:
+        simulation_app.close()
+    except SystemExit:
+        if not exception_active:
+            raise
+
+
 def _condition_batch(conditions, start: int, count: int, device: torch.device) -> torch.Tensor:
     rows = [conditions[(start + index) % len(conditions)].command for index in range(count)]
     return torch.as_tensor(rows, dtype=torch.float32, device=device)
 
 
+def _collision_force_threshold(base_env) -> float:
+    cfg = getattr(base_env, "cfg", None)
+    curriculum = getattr(cfg, "semantic_obstacle_curriculum", None)
+    return float(getattr(curriculum, "collision_force_threshold", 1.0))
+
+
+def _sensor_contact_mask(base_env, sensor_name: str, num_envs: int, device: torch.device) -> torch.Tensor | None:
+    scene = getattr(base_env, "scene", None)
+    sensors = getattr(scene, "sensors", None)
+    sensor = sensors.get(sensor_name) if isinstance(sensors, dict) else None
+    if sensor is None:
+        try:
+            sensor = scene[sensor_name]
+        except (KeyError, TypeError, AttributeError):
+            sensor = None
+    force_matrix = getattr(getattr(sensor, "data", None), "force_matrix_w", None)
+    if force_matrix is None:
+        return None
+    forces = torch.as_tensor(force_matrix, dtype=torch.float32, device=device)
+    if forces.ndim < 2 or int(forces.shape[0]) != int(num_envs) or int(forces.shape[-1]) != 3:
+        return None
+    norm = torch.linalg.vector_norm(forces.reshape(num_envs, -1, 3), dim=-1)
+    return norm.gt(_collision_force_threshold(base_env)).any(dim=-1)
+
+
 def _contact_masks(base_env, num_envs: int, device: torch.device):
-    """Best-effort collision/fall masks; unavailable semantic sensors stay false."""
+    """Read semantic contact forces and termination masks without Python env loops."""
 
     large = torch.zeros(num_envs, dtype=torch.bool, device=device)
     small = torch.zeros_like(large)
     fallen = torch.zeros_like(large)
+    sensor_large = _sensor_contact_mask(base_env, "semantic_contact_large", num_envs, device)
+    sensor_small = _sensor_contact_mask(base_env, "semantic_contact_small", num_envs, device)
+    if sensor_large is not None:
+        large |= sensor_large
+    if sensor_small is not None:
+        small |= sensor_small
     termination = getattr(base_env, "termination_manager", None)
     term_dones = getattr(termination, "_term_dones", None)
     if isinstance(term_dones, dict):
@@ -92,57 +138,95 @@ def _contact_masks(base_env, num_envs: int, device: torch.device):
         value = getattr(base_env, attr, None)
         if value is not None:
             target |= torch.as_tensor(value, dtype=torch.bool, device=device).reshape(-1)
+    state = getattr(base_env, "_semantic_obstacle_curriculum_state", None)
+    state_small = getattr(state, "episode_had_small_collision", None)
+    if state_small is not None:
+        small |= torch.as_tensor(state_small, dtype=torch.bool, device=device).reshape(-1)
     return large, small, fallen
+
+
+def _install_pre_reset_collision_capture(base_env) -> None:
+    """Save contact masks before IsaacLab resets terminated environments."""
+
+    device = torch.device(base_env.device)
+    num_envs = int(base_env.num_envs)
+    base_env._benchmark_pending_large_collision = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    base_env._benchmark_pending_small_collision = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    original_reset_idx = base_env._reset_idx
+
+    def capture_reset(env_ids):
+        large, small, _ = _contact_masks(base_env, num_envs, device)
+        if isinstance(env_ids, slice):
+            ids = torch.arange(num_envs, device=device, dtype=torch.long)[env_ids]
+        else:
+            raw_ids = torch.as_tensor(env_ids, device=device)
+            ids = raw_ids.nonzero(as_tuple=False).flatten() if raw_ids.dtype == torch.bool else raw_ids.to(dtype=torch.long).reshape(-1)
+        if int(ids.numel()):
+            base_env._benchmark_pending_large_collision[ids] |= large[ids]
+            base_env._benchmark_pending_small_collision[ids] |= small[ids]
+        return original_reset_idx(env_ids)
+
+    base_env._reset_idx = capture_reset
+
+
+def _enable_benchmark_contact_sensors(env_cfg) -> None:
+    """Enable semantic contact sensors only for benchmark processes."""
+
+    from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+        SEMANTIC_COURSE_LARGE_ROOT,
+        SEMANTIC_COURSE_SMALL_ROOT,
+        _semantic_global_contact_sensor,
+    )
+
+    scene = env_cfg.scene
+    if getattr(scene, "semantic_contact_small", None) is None:
+        scene.semantic_contact_small = _semantic_global_contact_sensor(SEMANTIC_COURSE_SMALL_ROOT)
+    if getattr(scene, "semantic_contact_large", None) is None:
+        scene.semantic_contact_large = _semantic_global_contact_sensor(SEMANTIC_COURSE_LARGE_ROOT)
 
 
 def _run_rollout(args, simulation_app) -> int:
     import gymnasium as gym
     from isaaclab.envs import ManagerBasedRLEnv
-    from rsl_rl.env import VecEnv
-    from tensordict import TensorDict
 
     import go2_pvcnn.tasks.register_envs  # noqa: F401
     import tracking.register_envs  # noqa: F401
-    from agent import get_train_cfg
     from evaluation.benchmark_suites import build_suite_config
-    from evaluation.manifest import read_manifest
     from evaluation.metrics import EpisodeAccumulator
-    from evaluation.model_adapters import build_play_mapping, resolve_model_spec
+    from evaluation.model_adapters import build_benchmark_adapter, resolve_model_spec
     from evaluation.result_writer import ResultWriter
     from evaluation.trajectory_alignment import ValidWindowBuffer, tracking_mse
     from tracking.managers.parallelism_reference_manager import get_parallelism_reference_manager
     from tracking.amp_env import _frame_from_robot, _reference_frame
     from tracking.env import ParallelismTrackingEnv
-    from Go2Pvcnn.scripts.play import _make_env_wrapper
 
     spec = resolve_model_spec(args.experiment_type, args.checkpoint)
+    adapter = build_benchmark_adapter(spec)
     conditions = _load_conditions(args)
     if not conditions or any(condition.suite != args.suite for condition in conditions):
         raise ValueError("layout manifest contains no conditions for the requested suite")
-    cfg_cls, task_id = build_play_mapping()[args.experiment_type]
-    env_cfg = cfg_cls()
+    env_cfg = adapter.create_env_cfg(spec)
     env_cfg.scene.num_envs = int(args.num_envs)
     env_cfg.sim.device = args.device
     if hasattr(env_cfg, "seed"):
         env_cfg.seed = int(args.seed)
     env_cfg = build_suite_config(args.suite, env_cfg, conditions[0])
+    _enable_benchmark_contact_sensors(env_cfg)
     # Reference trajectories are diagnostics only and are not added to actor obs.
-    if spec.requires_reference_manager:
+    if spec.requires_reference_manager and not adapter.preserve_planner_owned_reference_cache:
         env_cfg.planner_owned_reference_cache = False
 
-    print(f"[benchmark] creating {task_id} with {args.num_envs} envs", flush=True)
-    env = gym.make(task_id, cfg=env_cfg, render_mode=None)
+    print(f"[benchmark] creating {spec.task_id} with {args.num_envs} envs", flush=True)
+    runtime = adapter.create_runtime(spec, env_cfg, gym)
+    env = runtime.env
+    base_env = runtime.base_env
+    wrapped_env = runtime.wrapped_env
+    policy = runtime.policy
+    obs = runtime.observations
     if not isinstance(env.unwrapped, ManagerBasedRLEnv):
         raise TypeError(f"unexpected environment type: {type(env.unwrapped)!r}")
-    base_env = env.unwrapped
+    _install_pre_reset_collision_capture(base_env)
     manager = get_parallelism_reference_manager(base_env)
-    wrapped_env = _make_env_wrapper(base_env, gym_module=gym, vec_env_cls=VecEnv, tensor_dict_cls=TensorDict, clip_actions=100.0)
-    runner = __import__("rsl_rl.runners", fromlist=["OnPolicyRunner"]).OnPolicyRunner(
-        wrapped_env, get_train_cfg(spec.experiment), log_dir=None, device=env_cfg.sim.device
-    )
-    runner.load(str(spec.checkpoint), load_optimizer=False)
-    policy = runner.get_inference_policy(device=wrapped_env.device)
-    obs, _ = wrapped_env.consume_initial_observations()
     device = wrapped_env.device
     num_envs = int(args.num_envs)
     metrics = EpisodeAccumulator(num_envs, device)
@@ -194,6 +278,12 @@ def _run_rollout(args, simulation_app) -> int:
             values = tracking_mse(windows.actual, windows.reference, window_mask[:, None].expand(-1, 24), windows.actual[:, :1, 24:27])
             valid_mse.append({key: float(value.detach().cpu().item()) for key, value in values.items()})
         large, small, fallen = _contact_masks(base_env, num_envs, device)
+        pending_large = getattr(base_env, "_benchmark_pending_large_collision", None)
+        pending_small = getattr(base_env, "_benchmark_pending_small_collision", None)
+        if pending_large is not None:
+            large |= pending_large
+        if pending_small is not None:
+            small |= pending_small
         metrics.update(base_env.scene["robot"].data.root_pos_w, base_env.command_manager.get_command("base_velocity")[:, :3], large, small, fallen, done_mask, valid)
         done_ids = torch.nonzero(done_mask, as_tuple=False).flatten()
         if int(done_ids.numel()):
@@ -201,6 +291,10 @@ def _run_rollout(args, simulation_app) -> int:
                 record["condition_id"] = conditions[(step * num_envs + int(record["env_id"])) % len(conditions)].condition_id
                 completed.append(record)
             logical_plan_ids[done_ids] = -1
+            if pending_large is not None:
+                pending_large[done_ids] = False
+            if pending_small is not None:
+                pending_small[done_ids] = False
         if args.smoke_test and step + 1 >= max_steps:
             break
     elapsed = max(time.perf_counter() - started, 1.0e-9)
@@ -226,7 +320,7 @@ def main() -> int:
     try:
         return _run_rollout(args, app_launcher.app)
     finally:
-        app_launcher.app.close()
+        _close_simulation_app(app_launcher.app)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,11 @@ from pathlib import Path
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment-type", required=True, choices=("amp", "distillation", "ppo", "teacher"))
+    parser.add_argument(
+        "--experiment-type",
+        required=True,
+        choices=("amp", "distillation", "ppo", "teacher", "ame", "ame_amp"),
+    )
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--num-envs", type=int, default=1024)
     parser.add_argument("--transitions", type=int, default=48)

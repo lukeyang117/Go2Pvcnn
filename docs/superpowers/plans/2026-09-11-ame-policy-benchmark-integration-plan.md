@@ -32,7 +32,7 @@
 - Consumes: `ModelSpec`、现有四类 `build_play_mapping()`、AME/AME-AMP 独立 play 入口中的 cfg/wrapper/runner/load 契约。
 - Produces: `BenchmarkRuntime(env, base_env, wrapped_env, policy, observations)`、`DefaultBenchmarkAdapter`、`AmeBenchmarkAdapter`、`AmeAmpBenchmarkAdapter`、`build_benchmark_adapter(spec)`。
 
-- [ ] **Step 1: 写 metadata 和 adapter 选择的失败测试**
+- [x] **Step 1: 写 metadata 和 adapter 选择的失败测试**
 
 ```python
 from evaluation.model_adapters import (
@@ -63,13 +63,13 @@ def test_ame_amp_adapter_rejects_non_full_resume():
         AmeAmpBenchmarkAdapter.require_full_amp_resume("legacy_policy_warm_start")
 ```
 
-- [ ] **Step 2: 运行测试确认因新类型和类缺失而失败**
+- [x] **Step 2: 运行测试确认因新类型和类缺失而失败**
 
 Run: `/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python -m pytest -q tests/evaluation/test_model_adapters.py`
 
 Expected: FAIL，错误指向 `AmeBenchmarkAdapter`、`AmeAmpBenchmarkAdapter` 或 `ame` metadata 尚不存在。
 
-- [ ] **Step 3: 实现统一 runtime 与三类 adapter**
+- [x] **Step 3: 实现统一 runtime 与三类 adapter**
 
 ```python
 @dataclass
@@ -146,7 +146,7 @@ class AmeAmpBenchmarkAdapter(AmeBenchmarkAdapter):
 
 `AmeAmpBenchmarkAdapter.create_runtime()` 还必须按独立 play 入口幂等注册 `AME_AMP_ENV_ID`，调用 `attach_trajectory_manager_if_enabled()`，使用 `AmeRslRlEnvWrapper`、`AmeAmpOnPolicyRunner` 和 `get_ame_amp_train_cfg()`，并把 `load_amp_checkpoint(..., keep_std=True)` 返回值交给 `require_full_amp_resume()`。
 
-- [ ] **Step 4: 运行 focused tests 确认通过**
+- [x] **Step 4: 运行 focused tests 确认通过**
 
 Run: `/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python -m pytest -q tests/evaluation/test_model_adapters.py`
 
@@ -162,7 +162,7 @@ Expected: PASS，至少覆盖六类 metadata、三类 adapter 选择和 AME-AMP 
 - Consumes: `build_benchmark_adapter(spec)` 和 `BenchmarkRuntime`。
 - Produces: 六类 CLI 选择；模型初始化后统一获得 `env`、`base_env`、`wrapped_env`、`policy`、`obs`。
 
-- [ ] **Step 1: 写 CLI 和调用边界的失败测试**
+- [x] **Step 1: 写 CLI 和调用边界的失败测试**
 
 ```python
 def test_policy_benchmark_supports_ame_adapters():
@@ -174,13 +174,13 @@ def test_policy_benchmark_supports_ame_adapters():
     assert "adapter.create_runtime" in source
 ```
 
-- [ ] **Step 2: 运行测试确认共享脚本尚未使用 adapter**
+- [x] **Step 2: 运行测试确认共享脚本尚未使用 adapter**
 
 Run: `/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python -m pytest -q tests/evaluation/test_policy_benchmark_static.py::test_policy_benchmark_supports_ame_adapters`
 
 Expected: FAIL，缺少新 choices 或 adapter 调用。
 
-- [ ] **Step 3: 修改 `_run_rollout()` 的模型初始化段**
+- [x] **Step 3: 修改 `_run_rollout()` 的模型初始化段**
 
 ```python
 spec = resolve_model_spec(args.experiment_type, args.checkpoint)
@@ -202,7 +202,7 @@ obs = runtime.observations
 
 保留后续 `_install_pre_reset_collision_capture()`、`get_parallelism_reference_manager()`、24 帧 `ValidWindowBuffer`、碰撞/跌倒/位移累计与 `ResultWriter` 路径不变。删除脚本中不再需要的通用 runner/wrapper imports。
 
-- [ ] **Step 4: 运行静态和 model adapter tests**
+- [x] **Step 4: 运行静态和 model adapter tests**
 
 Run: `/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python -m pytest -q tests/evaluation/test_model_adapters.py tests/evaluation/test_policy_benchmark_static.py`
 
@@ -220,7 +220,7 @@ Expected: PASS。
 - Consumes: `--experiment-type ame|ame_amp` 和显式 checkpoint 文件。
 - Produces: 自动目录 `eval_output/<timestamp>_<experiment-type>_<weight>_<sha256>/`、对应 RL task 的 `run_index.jsonl` 记录、单 suite smoke 命令。
 
-- [ ] **Step 1: 写 launcher 允许列表和 task 映射的失败测试**
+- [x] **Step 1: 写 launcher 允许列表和 task 映射的失败测试**
 
 ```python
 def test_launchers_support_ame_and_ame_amp():
@@ -234,13 +234,13 @@ def test_launchers_support_ame_and_ame_amp():
     assert "Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AME-Go2-v0" in single
 ```
 
-- [ ] **Step 2: 运行测试确认 launcher 尚不接受新类型**
+- [x] **Step 2: 运行测试确认 launcher 尚不接受新类型**
 
 Run: `/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python -m pytest -q tests/evaluation/test_policy_benchmark_static.py::test_launchers_support_ame_and_ame_amp`
 
 Expected: FAIL。
 
-- [ ] **Step 3: 扩展三处允许列表和 single launcher task case**
+- [x] **Step 3: 扩展三处允许列表和 single launcher task case**
 
 ```bash
 case "$experiment_type" in
@@ -256,7 +256,7 @@ esac
 
 batch regex 和 smoke argparse choices 同步扩展为六类；不加入 `--smoke-test` 或 `--max-steps` 默认值，保持 batch 默认全量三 suite。
 
-- [ ] **Step 4: 运行 shell syntax 和 focused tests**
+- [x] **Step 4: 运行 shell syntax 和 focused tests**
 
 Run: `bash -n scripts/run_policy_benchmark.sh scripts/run_policy_benchmark_batch.sh`
 
@@ -275,7 +275,7 @@ Expected: PASS。
 - Consumes: 两个固定 checkpoint 和所有 evaluation/AME tests。
 - Produces: checkpoint iteration/signature/head/discriminator/finite 证据与回归测试结果。
 
-- [ ] **Step 1: 检查 AME checkpoint**
+- [x] **Step 1: 检查 AME checkpoint**
 
 Run:
 
@@ -285,7 +285,7 @@ Run:
 
 Expected: 第一列打印 `19999`，第二列打印实际模型 state 字典项数，并 exit 0。
 
-- [ ] **Step 2: 检查 AME-AMP checkpoint**
+- [x] **Step 2: 检查 AME-AMP checkpoint**
 
 Run:
 
@@ -295,7 +295,7 @@ Run:
 
 Expected: 第一列打印 `3499`，后两列分别打印实际模型和 discriminator state 字典项数，并 exit 0。
 
-- [ ] **Step 3: 运行完整相关测试**
+- [x] **Step 3: 运行完整相关测试**
 
 Run:
 
@@ -314,27 +314,29 @@ Expected: 0 failures。
 - Consumes: 固定 AME/AME-AMP checkpoint、`complex_mixed` suite、1024 env、48 transitions。
 - Produces: 每个模型的 episode shards、`progress.json`、`run_manifest.json`、`summary.json` 和无残留进程证据。
 
-- [ ] **Step 1: 运行 AME smoke**
+- [x] **Step 1: 运行 AME smoke**
 
 Run:
 
 ```bash
+export PATH=/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin:$PATH
 /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python tests/evaluation/run_policy_benchmark_1024_smoke.py --experiment-type ame --checkpoint logs/rsl_rl/cross_large_complex_ame/2026-09-08_15-40-23/bfb8b7f/model_19999.pt --num-envs 1024 --transitions 48 --output-dir eval_output/ame_integration_smoke_20260911/ame --device cuda:0
 ```
 
 Expected: exit 0，`valid_windows >= 1`，日志无 traceback/OOM/NaN/Inf。
 
-- [ ] **Step 2: 清理并确认 AME 进程退出后运行 AME-AMP smoke**
+- [x] **Step 2: 清理并确认 AME 进程退出后运行 AME-AMP smoke**
 
 Run:
 
 ```bash
+export PATH=/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin:$PATH
 /share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python tests/evaluation/run_policy_benchmark_1024_smoke.py --experiment-type ame_amp --checkpoint logs/rsl_rl/parallelism_tracking_cross_large_complex_ame_amp/2026-09-10_15-42-10/f234425/model_3499.pt --num-envs 1024 --transitions 48 --output-dir eval_output/ame_integration_smoke_20260911/ame_amp --device cuda:0
 ```
 
 Expected: exit 0，checkpoint mode 为 `full_amp_resume`，`valid_windows >= 1`，日志无 traceback/OOM/NaN/Inf。
 
-- [ ] **Step 3: 验证同 schema 结果和数值有限**
+- [x] **Step 3: 验证同 schema 结果和数值有限**
 
 Run:
 
@@ -344,7 +346,7 @@ Run:
 
 Expected: 打印两个 `(episodes, valid_windows, env_steps_per_second)` 元组并 exit 0。
 
-- [ ] **Step 4: 检查无 benchmark Isaac/Kit 残留进程**
+- [x] **Step 4: 检查无 benchmark Isaac/Kit 残留进程**
 
 Run: `pgrep -af 'policy_benchmark.py|run_policy_benchmark|isaac-sim|kit'`
 
@@ -359,7 +361,7 @@ Expected: 不出现本次两个 smoke 创建的进程。
 - Consumes: 所有测试和 smoke 结果。
 - Produces: 一个范围明确的 Git 提交以及两条不带 `--smoke-test` 的完整三 suite 命令。
 
-- [ ] **Step 1: 检查 diff 与格式**
+- [x] **Step 1: 检查 diff 与格式**
 
 Run: `git diff --check`
 

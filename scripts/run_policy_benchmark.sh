@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 4 ]]; then
-  echo "usage: $0 --experiment-type {amp|distillation|ppo|teacher} --checkpoint FILE [benchmark args...]" >&2
+  echo "usage: $0 --experiment-type {amp|distillation|ppo|teacher|ame|ame_amp} --checkpoint FILE [benchmark args...]" >&2
   exit 2
 fi
 
@@ -37,6 +37,8 @@ case "$experiment_type" in
   distillation) task_id="Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-Distillation-v0" ;;
   ppo) task_id="Isaac-Go2-Cross-Large-Complex-PPO-v0" ;;
   teacher) task_id="Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-v0" ;;
+  ame) task_id="Isaac-Go2-Cross-Large-Complex-PPO-v0" ;;
+  ame_amp) task_id="Isaac-Go2-Parallelism-Tracking-Cross-Large-Complex-AME-Go2-v0" ;;
   *) echo "unknown experiment type: $experiment_type" >&2; exit 2 ;;
 esac
 
