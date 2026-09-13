@@ -29,11 +29,14 @@ class ParallelismCfg:
     candidates_per_leg: int = 50
     hip_lateral_bias_m: float = 0.0955
     foothold_step_gain: float = 1.5
+    root_motion_scale: float = 1.0
     root_clearance_m: float = 0.30
     flat_base_z_m: float = 0.0
     flat_root_clearance_m: float = 0.30
     swing_clearance_m: float = 0.05
     min_swing_apex_m: float = 0.08
+    swing_profile: str = "parabolic"
+    swing_terrain_query_radius_m: float = 0.0
     landing_tolerance_m: float = 0.025
     collision_margin_m: float = 0.003
     semantic_touchdown_margin_m: float = 0.12
@@ -45,6 +48,10 @@ class ParallelismCfg:
     terrain_following_root_z_smoothing: float = 0.75
     terrain_following_root_z_rate_limit_m: float = 0.080
     terrain_following_root_height_deadband_m: float = 0.005
+    terrain_following_root_max_drop_m: float = float("inf")
+    terrain_following_hold_support_on_large_obstacles: bool = False
+    terrain_following_root_footprint_offsets_m: tuple[tuple[float, float], ...] = ()
+    terrain_following_root_leading_footprint_only: bool = False
     terrain_following_pitch_sample_range_m: float = 0.35
     terrain_following_pitch_sample_count: int = 7
     terrain_following_roll_sample_range_m: float = 0.35
@@ -79,6 +86,9 @@ class ParallelismCfg:
     sphere_surface_points: int = 6
     contact_tolerant_collision_shape_names: tuple[str, ...] = ("calf_lower_cylinder", "foot_sphere")
     contact_tolerant_collision_point_indices: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    contact_tolerant_support_shape_names: tuple[str, ...] = ()
+    swing_start_tolerant_collision_shape_names: tuple[str, ...] = ()
+    swing_collision_start_ignore_frames: int = 0
 
     @property
     def flat_root_z_target_m(self) -> float:

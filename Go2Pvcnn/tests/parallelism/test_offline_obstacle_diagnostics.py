@@ -43,7 +43,7 @@ def test_scene_builds_known_semantic_and_height_map():
 
 @pytest.mark.parametrize(
     ("command_index", "expected_per_leg_valid"),
-    ((0, [0, 28, 41, 0]), (1, [0, 35, 39, 0])),
+    ((0, [0, 31, 46, 0]), (1, [0, 40, 44, 0])),
 )
 def test_front_center_obstacle_reproduces_parallelism_standstill(command_index, expected_per_leg_valid):
     scene = load_scene(SCENE_FILE, "front_center_high_small")

@@ -226,8 +226,9 @@ def _smooth_rate_limit(
 
 def _rollout_xy_yaw(root0: Tensor, rpy0: Tensor, command: Tensor, cfg: ParallelismCfg) -> tuple[Tensor, Tensor]:
     half = _half_profile(cfg, dtype=root0.dtype, device=root0.device)
-    disp_half = command[:, :2] * (float(cfg.half_cycle) * float(cfg.dt))
-    yaw_half = command[:, 2] * (float(cfg.half_cycle) * float(cfg.dt))
+    motion_scale = max(float(getattr(cfg, "root_motion_scale", 1.0)), 0.0)
+    disp_half = command[:, :2] * (float(cfg.half_cycle) * float(cfg.dt)) * motion_scale
+    yaw_half = command[:, 2] * (float(cfg.half_cycle) * float(cfg.dt)) * motion_scale
     first_xy_body = half[None, :, None] * disp_half[:, None, :]
     second_xy_body = disp_half[:, None, :] + half[None, :, None] * disp_half[:, None, :]
     xy_body = torch.cat((first_xy_body, second_xy_body), dim=1)
@@ -265,17 +266,94 @@ def _level_root_rpy(rpy0: Tensor, yaw: Tensor, cfg: ParallelismCfg) -> Tensor:
     return root_rpy
 
 
-def _terrain_following_root_z(root0: Tensor, root_xy: Tensor, terrain: ParallelismTerrain, cfg: ParallelismCfg) -> Tensor:
-    query = query_height_semantic_valid(terrain, root_xy.reshape(root_xy.shape[0], -1, 2))
-    terrain_z = query.height.reshape(root_xy.shape[0], int(cfg.horizon))
+def _terrain_following_root_z(
+    root0: Tensor,
+    root_xy: Tensor,
+    yaw: Tensor,
+    terrain: ParallelismTerrain,
+    cfg: ParallelismCfg,
+    support_foot_z: Tensor | None = None,
+    direction_body: Tensor | None = None,
+) -> Tensor:
+    batch = int(root_xy.shape[0])
+    horizon = int(root_xy.shape[1])
+    query = query_height_semantic_valid(terrain, root_xy.reshape(batch, -1, 2))
+    terrain_z = query.height.reshape(batch, horizon)
+    footprint_offsets = tuple(getattr(cfg, "terrain_following_root_footprint_offsets_m", ()))
+    if footprint_offsets:
+        offsets = torch.as_tensor(footprint_offsets, dtype=root_xy.dtype, device=root_xy.device)
+        if offsets.ndim != 2 or offsets.shape[-1] != 2:
+            raise ValueError("terrain_following_root_footprint_offsets_m must contain 2D offsets")
+        cosine = torch.cos(yaw).unsqueeze(-1)
+        sine = torch.sin(yaw).unsqueeze(-1)
+        offset_x = offsets[:, 0].view(1, 1, -1)
+        offset_y = offsets[:, 1].view(1, 1, -1)
+        footprint = torch.stack(
+            (cosine * offset_x - sine * offset_y, sine * offset_x + cosine * offset_y),
+            dim=-1,
+        ) + root_xy.unsqueeze(-2)
+        footprint_query = query_height_semantic_valid(
+            terrain,
+            footprint.reshape(batch, horizon * int(offsets.shape[0]), 2),
+        )
+        footprint_height = footprint_query.height.reshape(batch, horizon, -1)
+        obstacle_ids = torch.as_tensor(
+            tuple(cfg.obstacle_semantic_ids),
+            dtype=footprint_query.semantic.dtype,
+            device=footprint_query.semantic.device,
+        )
+        semantic = footprint_query.semantic.reshape(batch, horizon, -1)
+        is_obstacle = (semantic[..., None] == obstacle_ids.view(1, 1, 1, -1)).any(dim=-1)
+        footprint_valid = footprint_query.valid.reshape(batch, horizon, -1) & ~is_obstacle
+        if direction_body is not None and bool(getattr(cfg, "terrain_following_root_leading_footprint_only", False)):
+            direction = torch.as_tensor(direction_body, dtype=root_xy.dtype, device=root_xy.device)
+            direction_norm = torch.linalg.vector_norm(direction, dim=-1, keepdim=True)
+            has_direction = direction_norm > 1.0e-6
+            unit_direction = direction / direction_norm.clamp_min(1.0e-6)
+            offset_alignment = torch.matmul(offsets, unit_direction.transpose(0, 1)).transpose(0, 1)
+            leading = offset_alignment >= -1.0e-6
+            leading = torch.where(has_direction, leading, torch.ones_like(leading))
+            footprint_valid = footprint_valid & leading[:, None, :]
+        footprint_height = footprint_height.masked_fill(~footprint_valid, -torch.inf).amax(dim=-1)
+        terrain_z = torch.maximum(
+            terrain_z,
+            torch.where(torch.isfinite(footprint_height), footprint_height, terrain_z),
+        )
     target = terrain_z + float(cfg.terrain_following_root_clearance_m)
-    return _smooth_rate_limit(
+    if support_foot_z is not None and bool(getattr(cfg, "terrain_following_hold_support_on_large_obstacles", False)):
+        foot_z = torch.as_tensor(support_foot_z, dtype=root0.dtype, device=root0.device)
+        if foot_z.ndim != 2 or foot_z.shape[0] != root0.shape[0]:
+            raise ValueError("support_foot_z must have shape [B, leg_count]")
+        # Keep the body above the highest wheel in the current trot support
+        # pair during the first half of this rollout.  The other pair is
+        # about to swing, so its current wheel heights are stale for the
+        # second half: using them would raise the root again before the new
+        # touchdown has been selected.
+        frame = torch.arange(int(cfg.horizon), dtype=torch.long, device=root0.device)
+        half_cycle = max(int(cfg.half_cycle), 1)
+        first_half_support = torch.tensor((False, True, True, False), dtype=torch.bool, device=root0.device)
+        large_obstacle_present = (query.semantic == 2).any(dim=1)
+        support_active = (frame < half_cycle)[None, :] | large_obstacle_present[:, None]
+        support_mask = support_active[:, :, None] & first_half_support[None, None, :]
+        support_z = torch.where(support_mask, foot_z[:, None, :], torch.full_like(foot_z[:, None, :], -torch.inf))
+        phase_support_z = support_z.amax(dim=-1)
+        support_clearance = max(
+            float(cfg.terrain_following_root_clearance_m) - float(cfg.foot_contact_offset_m),
+            0.0,
+        )
+        support_floor = phase_support_z + support_clearance
+        target = torch.maximum(target, support_floor)
+    result = _smooth_rate_limit(
         target,
         root0[:, 2],
         smoothing=float(cfg.terrain_following_root_z_smoothing),
         rate_limit=float(cfg.terrain_following_root_z_rate_limit_m),
         deadband=float(cfg.terrain_following_root_height_deadband_m),
     )
+    max_drop = float(getattr(cfg, "terrain_following_root_max_drop_m", float("inf")))
+    if max_drop >= 0.0 and max_drop < float("inf"):
+        result = torch.maximum(result, root0[:, None, 2] - max_drop)
+    return result
 
 
 def _terrain_following_rpy(root_xy: Tensor, yaw: Tensor, rpy0: Tensor, terrain: ParallelismTerrain, cfg: ParallelismCfg) -> Tensor:
@@ -359,7 +437,18 @@ def rollout_root(
     command = torch.where(mask[:, None], terrain_command, flat_command)
     root_xy, yaw = _rollout_xy_yaw(root0, rpy0, command, cfg)
     flat_z = _flat_root_z(state, root0, rpy0, terrain, cfg)
-    terrain_z = _terrain_following_root_z(root0, root_xy, terrain, cfg)
+    support_foot_z = None
+    if state.foot_pos_w is not None:
+        support_foot_z = torch.as_tensor(state.foot_pos_w, dtype=root0.dtype, device=root0.device)[..., 2]
+    terrain_z = _terrain_following_root_z(
+        root0,
+        root_xy,
+        yaw,
+        terrain,
+        cfg,
+        support_foot_z=support_foot_z,
+        direction_body=command[:, :2],
+    )
     z = torch.where(mask[:, None], terrain_z, flat_z)
     root_pos = torch.cat((root_xy, z[..., None]), dim=-1)
     flat_rpy = _level_root_rpy(rpy0, yaw, cfg)

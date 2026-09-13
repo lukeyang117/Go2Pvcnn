@@ -184,6 +184,7 @@ def _official_group_collision(
     terrain_valid = query.valid.reshape(batch, leg_count, candidate_count, group_count, point_count)
     terrain_hit = terrain_h >= (points_w[..., 2] - float(cfg.collision_margin_m))
     tolerant_names = set(cfg.contact_tolerant_collision_shape_names)
+    support_names = set(getattr(cfg, "contact_tolerant_support_shape_names", ()))
     terrain_checked = torch.tensor(
         tuple(spec.name not in tolerant_names for spec in group_specs),
         dtype=torch.bool,
@@ -194,6 +195,17 @@ def _official_group_collision(
         indices_for_shape = point_tolerance.get(spec.name, ())
         if indices_for_shape:
             terrain_checked[..., group_idx, list(indices_for_shape)] = False
+        if spec.name in support_names:
+            point_z = points_w[..., group_idx, :, 2]
+            lowest_z = point_z.amin(dim=-1, keepdim=True)
+            angle_count = max(int(cfg.cylinder_angles), 4)
+            sample_gap = float(spec.radius_m) * (1.0 - math.cos(2.0 * math.pi / angle_count))
+            support_band = sample_gap + float(cfg.collision_margin_m)
+            support_point = point_z <= lowest_z + support_band
+            support_contact = support_point & terrain_valid[..., group_idx, :] & (
+                point_z <= terrain_h[..., group_idx, :] + float(cfg.collision_margin_m)
+            )
+            terrain_hit[..., group_idx, :] = terrain_hit[..., group_idx, :] & ~support_contact
     terrain_hit = terrain_hit & terrain_checked
     valid_point = point_mask.view(1, 1, 1, group_count, point_count)
     point_hit = valid_point & ((~terrain_valid) | terrain_hit)

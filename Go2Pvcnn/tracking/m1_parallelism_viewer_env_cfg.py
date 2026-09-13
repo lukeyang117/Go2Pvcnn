@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import field
 
 import isaaclab.sim as sim_utils
+from isaaclab.assets import AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -19,6 +20,7 @@ from extension.semantic_course import SemanticCourseLayoutCfg, SemanticCourseTer
 from extension.semantic_curriculum import SemanticObstacleCount, SemanticObstacleCurriculumCfg
 from go2_pvcnn.assets.m1 import M1_CFG
 from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
+    ISAAC_NUCLEUS_DIR,
     SEMANTIC_COURSE_LARGE_ROOT,
     SEMANTIC_COURSE_SMALL_ROOT,
 )
@@ -63,7 +65,13 @@ class M1ParallelismViewerSceneCfg(InteractiveSceneCfg):
         height_scan_offset=0.5,
         max_update_envs_per_call=512,
     )
-    sky_light = None
+    sky_light = AssetBaseCfg(
+        prim_path="/World/skyLight",
+        spawn=sim_utils.DomeLightCfg(
+            intensity=750.0,
+            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
 
 
 @configclass

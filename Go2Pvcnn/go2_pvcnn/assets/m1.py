@@ -6,15 +6,16 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
+from extension.parallelism.m1_kinematics import M1_DEFAULT_ASSET_JOINT_POS, M1_ROOT_Z_M
+
 
 M1_USD_PATH = Path(__file__).resolve().parents[4] / "m1" / "ZJ_V3_URDF_V1_0" / "ZJ_V3_URDF_V1_0.usd"
 M1_USD_JOINT_NAMES = (
-    "FBL_ABAD", "FBL_HIP", "FBL_KNEE", "FBL_FOOT_JOINT",
-    "FAR_ABAD", "FAR_HIP", "FAR_KNEE", "FAR_FOOT_JOINT",
-    "RBL_ABAD", "RBL_HIP", "RBL_KNEE", "RBL_FOOT_JOINT",
-    "RAR_ABAD", "RAR_HIP", "RAR_KNEE", "RAR_FOOT_JOINT",
+    "FBL_ABAD_JOINT", "FBL_HIP_JOINT", "FBL_KNEE_JOINT", "FBL_FOOT_JOINT",
+    "FAR_ABAD_JOINT", "FAR_HIP_JOINT", "FAR_KNEE_JOINT", "FAR_FOOT_JOINT",
+    "RBL_ABAD_JOINT", "RBL_HIP_JOINT", "RBL_KNEE_JOINT", "RBL_FOOT_JOINT",
+    "RAR_ABAD_JOINT", "RAR_HIP_JOINT", "RAR_KNEE_JOINT", "RAR_FOOT_JOINT",
 )
-
 M1_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=str(M1_USD_PATH),
@@ -36,8 +37,8 @@ M1_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.6358),
-        joint_pos={".*": 0.0},
+        pos=(0.0, 0.0, M1_ROOT_Z_M),
+        joint_pos=dict(zip(M1_USD_JOINT_NAMES, M1_DEFAULT_ASSET_JOINT_POS)),
         joint_vel={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.9,

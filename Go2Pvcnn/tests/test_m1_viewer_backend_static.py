@@ -86,6 +86,45 @@ def test_viewer_attaches_camera_controller_without_test_mode_flag():
     assert "if camera_controller is None:" in source
 
 
+def test_viewer_skips_viewport_camera_setup_in_headless_mode():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "extension/viz/go2_foostep_planner.py").read_text()
+    assert 'if not bool(getattr(args_cli, "headless", False)):' in source
+
+
+def test_viewer_reports_non_dri3_gui_display_before_isaac_startup():
+    from extension.viz import go2_foostep_planner as viewer
+
+    message = viewer._vulkan_x11_preflight_error(
+        headless=False,
+        livestream=0,
+        display=":1",
+        xdpyinfo_returncode=0,
+        xdpyinfo_output="name of display: :1\nPresent\nRANDR\nGLX\n",
+    )
+
+    assert message is not None
+    assert "DRI3" in message
+    assert "--headless --livestream 2" in message
+
+
+def test_viewer_skips_dri3_check_for_headless_or_webrtc():
+    from extension.viz import go2_foostep_planner as viewer
+
+    for headless, livestream in ((True, 0), (False, 2)):
+        assert (
+            viewer._vulkan_x11_preflight_error(
+                headless=headless,
+                livestream=livestream,
+                display=":1",
+                xdpyinfo_returncode=1,
+                xdpyinfo_output="",
+            )
+            is None
+        )
+
+
 def test_m1_playback_overwrites_only_12_leg_joints():
     from extension.parallelism.robot_backend import get_robot_backend
     from extension.viz import go2_foostep_planner as viewer

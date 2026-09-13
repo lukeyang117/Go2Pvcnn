@@ -130,6 +130,66 @@ def test_viewer_parallelism_reject_uses_collision_shape_names():
     assert "collision_detail(calf_mid_cylinder=200 foot_sphere=0)" in text
 
 
+def test_viewer_parallelism_reject_reports_selected_swing_state():
+    from extension.viz.go2_foostep_planner import _format_parallelism_reject_diagnostics
+
+    diagnostics = SimpleNamespace(
+        candidate_reject_bits=torch.zeros(1, 4, 50, 6, dtype=torch.bool),
+        candidate_valid=torch.ones(1, 4, 50, dtype=torch.bool),
+        candidate_collision_bits=torch.zeros(1, 4, 50, 1, dtype=torch.bool),
+        collision_shape_names=("m1_wheel",),
+        selected_needs_swing=torch.tensor([[True, False, True, False]]),
+    )
+
+    text = _format_parallelism_reject_diagnostics(
+        SimpleNamespace(parallelism_diagnostics=diagnostics)
+    )
+
+    assert "selected_swing=[1,0,1,0]" in text
+
+
+def test_viewer_parallelism_reject_reports_candidate_swing_counts():
+    from extension.viz.go2_foostep_planner import _format_parallelism_reject_diagnostics
+
+    diagnostics = SimpleNamespace(
+        candidate_reject_bits=torch.zeros(1, 4, 3, 6, dtype=torch.bool),
+        candidate_valid=torch.ones(1, 4, 3, dtype=torch.bool),
+        candidate_collision_bits=torch.zeros(1, 4, 3, 1, dtype=torch.bool),
+        collision_shape_names=("m1_wheel",),
+        candidate_needs_swing=torch.tensor(
+            [[[True, False, True], [False, False, False], [True, True, False], [False, True, True]]]
+        ),
+    )
+
+    text = _format_parallelism_reject_diagnostics(
+        SimpleNamespace(parallelism_diagnostics=diagnostics)
+    )
+
+    assert "candidate_swing=[2,0,2,2]" in text
+
+
+def test_viewer_parallelism_reject_reports_collision_sources():
+    from extension.viz.go2_foostep_planner import _format_parallelism_reject_diagnostics
+
+    touchdown = torch.zeros(1, 4, 3, 1, dtype=torch.bool)
+    path = torch.zeros_like(touchdown)
+    path[0, 3, :, 0] = True
+    diagnostics = SimpleNamespace(
+        candidate_reject_bits=torch.zeros(1, 4, 3, 6, dtype=torch.bool),
+        candidate_valid=torch.ones(1, 4, 3, dtype=torch.bool),
+        candidate_collision_bits=touchdown | path,
+        collision_shape_names=("RAR_wheel",),
+        touchdown_collision_bits=touchdown,
+        swing_collision_bits=path,
+    )
+
+    text = _format_parallelism_reject_diagnostics(
+        SimpleNamespace(parallelism_diagnostics=diagnostics)
+    )
+
+    assert "collision_source(touchdown=0 path=3)" in text
+
+
 def test_viewer_test_terminal_state_scales_command():
     from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _apply_test_terminal_command
 
@@ -137,6 +197,17 @@ def test_viewer_test_terminal_state_scales_command():
     command = _apply_test_terminal_command(torch.zeros(1, 3), state)
 
     assert torch.allclose(command, torch.tensor([[0.5, 0.25, 0.75]]))
+
+
+def test_viewer_test_terminal_zero_panel_preserves_keyboard_command():
+    from extension.viz.go2_foostep_planner import ViewerTestTerminalState, _apply_test_terminal_command
+
+    state = ViewerTestTerminalState(enabled=True)
+    keyboard_command = torch.tensor([[0.5, 0.0, 0.0]])
+
+    command = _apply_test_terminal_command(keyboard_command, state)
+
+    assert torch.allclose(command, keyboard_command)
 
 
 def test_test_terminal_command_supports_signed_velocity():

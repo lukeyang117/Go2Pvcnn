@@ -35,6 +35,7 @@ class RobotBackend:
     collision_shapes: tuple[OfficialCollisionShapeSpec, ...]
     surface_points_builder: Callable
     collision_mask: Callable
+    swing_semantic_ids: tuple[int, ...] = ()
 
 
 def _go2_joint_limit_mask(joint_pos: Tensor, _leg_indices: Tensor | None = None) -> Tensor:
@@ -58,6 +59,7 @@ def _go2_backend() -> RobotBackend:
         collision_shapes=tuple(cfg.official_collision_shapes),
         surface_points_builder=build_official_surface_points_l,
         collision_mask=official_collision_mask,
+        swing_semantic_ids=(),
     )
 
 
@@ -80,6 +82,7 @@ def _m1_backend() -> RobotBackend:
             cfg,
             surface_points_builder=build_m1_surface_points_l,
         ),
+        swing_semantic_ids=(1,),
     )
 
 

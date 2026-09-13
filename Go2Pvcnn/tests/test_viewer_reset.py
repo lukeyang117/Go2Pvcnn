@@ -713,9 +713,10 @@ def test_parallelism_reset_uses_foot_contact_offset_for_grounding(monkeypatch) -
         terrain_col=12,
         scanner=object(),
         foot_ids=[0, 1, 2, 3],
+        foot_contact_offset=0.095958,
     )
 
-    assert offsets == [pytest.approx(0.022)]
+    assert offsets == [pytest.approx(0.095958)]
 
 
 def test_viewer_step_mode_defers_command_replan_until_current_trajectory_finishes() -> None:
@@ -804,6 +805,15 @@ def test_viewer_selects_latched_command_while_step_mode_enabled() -> None:
     )
 
     torch.testing.assert_close(selected, latched)
+
+
+def test_viewer_main_pumps_isaac_app_and_paces_playback() -> None:
+    source = Path(viewer.__file__).read_text(encoding="utf-8")
+    main_source = source[source.index("def main()") :]
+
+    assert "simulation_app.update()" in main_source
+    assert "playback_deadline" in main_source
+    assert "float(args_cli.plan_dt)" in main_source
 
 
 def test_viewer_mpc_planning_keeps_body_frame_command() -> None:

@@ -44,6 +44,10 @@ class ParallelismDiagnostics:
     fk_touchdown_semantic: Tensor
     selected_index: Tensor
     candidate_radius_m: float = 0.24
+    candidate_needs_swing: Tensor | None = None
+    selected_needs_swing: Tensor | None = None
+    touchdown_collision_bits: Tensor | None = None
+    swing_collision_bits: Tensor | None = None
 
 
 @dataclass(frozen=True)

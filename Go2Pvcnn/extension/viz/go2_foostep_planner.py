@@ -14,6 +14,8 @@ import os
 import re
 import select
 import signal
+import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
@@ -434,7 +436,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--terrain-col",
         type=int,
         default=0,
-        help="Generated terrain column used for env0 reset/spawn targeting.",
+        help=(
+            "Generated terrain column used for env0 reset/spawn targeting; "
+            "the mixed Parallelism terrain uses col=0 for flat_dense_small_obstacles "
+            "and col=1 for flat."
+        ),
     )
     parser.add_argument(
         "--webrtc-public-ip",
@@ -530,6 +536,79 @@ def _prepare_runtime_args(args_cli: argparse.Namespace) -> argparse.Namespace:
         )
     _configure_webrtc_endpoint(args_cli)
     return args_cli
+
+
+def _vulkan_x11_preflight_error(
+    *,
+    headless: bool,
+    livestream: int,
+    display: str,
+    xdpyinfo_returncode: int,
+    xdpyinfo_output: str,
+) -> str | None:
+    """Return a launch error when GUI Vulkan cannot use the selected X server."""
+
+    if headless or int(livestream) in (1, 2):
+        return None
+    if not display:
+        return (
+            "[Viewer] GUI mode requires DISPLAY, but DISPLAY is unset. "
+            "Use --headless --livestream 2 for remote WebRTC visualization."
+        )
+    if int(xdpyinfo_returncode) != 0:
+        return (
+            f"[Viewer] Cannot query X11 display {display!r} with xdpyinfo. "
+            "Use a GPU-backed X server with Vulkan/DRI3, or use --headless --livestream 2."
+        )
+    if not re.search(r"(?m)^\s*DRI3\s*$", str(xdpyinfo_output)):
+        return (
+            f"[Viewer] X11 display {display!r} does not advertise DRI3. "
+            "Isaac Sim GUI uses Vulkan and cannot create a swapchain on this Xvnc display; "
+            "VirtualGL only proxies OpenGL/EGL. Use a GPU-backed X server with DRI3, "
+            "or run --headless --livestream 2 for remote WebRTC visualization."
+        )
+    return None
+
+
+def _validate_vulkan_x11_display(args_cli: argparse.Namespace) -> None:
+    """Fail clearly before Isaac Sim can segfault on an incompatible X11 server."""
+
+    headless = bool(getattr(args_cli, "headless", False))
+    livestream = int(getattr(args_cli, "livestream", -1))
+    if headless or livestream in (1, 2):
+        return
+
+    display = os.environ.get("DISPLAY", "").strip()
+    xdpyinfo = shutil.which("xdpyinfo")
+    if xdpyinfo is None:
+        raise RuntimeError(
+            "[Viewer] GUI mode requires the xdpyinfo utility to validate Vulkan/X11. "
+            "Install it or use --headless --livestream 2 for remote WebRTC visualization."
+        )
+    try:
+        probe = subprocess.run(
+            [xdpyinfo, "-display", display],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"[Viewer] Failed to query X11 display {display!r}. "
+            "Use a GPU-backed X server with Vulkan/DRI3, or use --headless --livestream 2."
+        ) from exc
+
+    message = _vulkan_x11_preflight_error(
+        headless=headless,
+        livestream=livestream,
+        display=display,
+        xdpyinfo_returncode=probe.returncode,
+        xdpyinfo_output=probe.stdout,
+    )
+    if message is not None:
+        raise RuntimeError(message)
 
 
 def _planner_state_from_reference_result(result, *, frame_idx: int):
@@ -2307,7 +2386,52 @@ def _format_parallelism_reject_diagnostics(result) -> str:
     per_leg_valid = valid_t.reshape(-1, valid_t.shape[-2], valid_t.shape[-1])[0].sum(dim=-1).to(torch.long).tolist()
     count_text = " ".join(f"{name}={int(count)}" for name, count in zip(names, counts))
     per_leg_text = ",".join(str(int(count)) for count in per_leg_valid)
+    reject_per_leg = reject_t.reshape(-1, 4, reject_t.shape[-2], reject_t.shape[-1])[0].sum(dim=1).to(torch.long)
+    reject_leg_text = ";".join(
+        "{}:{}".format(leg, ",".join(str(int(value)) for value in row.tolist()))
+        for leg, row in zip(("FL", "FR", "RL", "RR"), reject_per_leg)
+    )
+    selected_index = getattr(diagnostics, "selected_index", None)
+    selected_index_text = ""
+    if selected_index is not None:
+        selected_index_text = " selected_index=[{}]".format(
+            ",".join(str(int(value)) for value in torch.as_tensor(selected_index).reshape(-1, 4)[0].tolist())
+        )
+    selected_swing_text = ""
+    candidate_swing_text = ""
+    candidate_needs_swing = getattr(diagnostics, "candidate_needs_swing", None)
+    if candidate_needs_swing is not None:
+        candidate_swing = torch.as_tensor(candidate_needs_swing, dtype=torch.bool)
+        if candidate_swing.ndim == 3 and candidate_swing.shape[1] == 4:
+            candidate_swing_counts = candidate_swing.reshape(-1, 4, candidate_swing.shape[-1])[0].sum(dim=-1)
+            candidate_swing_text = " candidate_swing=[{}]".format(
+                ",".join(str(int(value)) for value in candidate_swing_counts.tolist())
+            )
+    selected_needs_swing = getattr(diagnostics, "selected_needs_swing", None)
+    if selected_needs_swing is not None:
+        selected_swing = torch.as_tensor(selected_needs_swing, dtype=torch.bool).reshape(-1, 4)[0]
+        selected_swing_text = " selected_swing=[{}]".format(",".join(str(int(value)) for value in selected_swing.tolist()))
     collision_text = ""
+    collision_source_text = ""
+    touchdown_collision_bits = getattr(diagnostics, "touchdown_collision_bits", None)
+    swing_collision_bits = getattr(diagnostics, "swing_collision_bits", None)
+    if touchdown_collision_bits is not None and swing_collision_bits is not None:
+        touchdown_source = torch.as_tensor(touchdown_collision_bits, dtype=torch.bool)
+        swing_source = torch.as_tensor(swing_collision_bits, dtype=torch.bool)
+        if touchdown_source.shape == swing_source.shape:
+            touchdown_per_leg = touchdown_source.reshape(-1, 4, touchdown_source.shape[-2], touchdown_source.shape[-1])[0].sum(dim=(1, 2))
+            swing_per_leg = swing_source.reshape(-1, 4, swing_source.shape[-2], swing_source.shape[-1])[0].sum(dim=(1, 2))
+            source_leg_text = ";".join(
+                "{}:{}/{}".format(leg, int(touchdown), int(path))
+                for leg, touchdown, path in zip(
+                    ("FL", "FR", "RL", "RR"), touchdown_per_leg.tolist(), swing_per_leg.tolist()
+                )
+            )
+            collision_source_text = (
+                f" collision_source(touchdown={int(touchdown_source.sum().item())} "
+                f"path={int(swing_source.sum().item())})"
+                f" collision_source_per_leg({source_leg_text})"
+            )
     if collision_bits is not None:
         collision_t = torch.as_tensor(collision_bits, dtype=torch.bool)
         collision_names = tuple(getattr(diagnostics, "collision_shape_names", ()))
@@ -2329,6 +2453,11 @@ def _format_parallelism_reject_diagnostics(result) -> str:
         f"valid={int(valid_t.sum().item())}/{int(valid_t.numel())} "
         f"per_leg_valid=[{per_leg_text}] "
         f"{count_text}"
+        f" reject_per_leg({reject_leg_text})"
+        f"{selected_index_text}"
+        f"{candidate_swing_text}"
+        f"{selected_swing_text}"
+        f"{collision_source_text}"
         f"{collision_text}"
         ")"
     )
@@ -3033,6 +3162,18 @@ def _plan_parallelism_viewer_trajectory(
         terrain_following_mask=terrain_following_mask,
         robot_backend=robot_backend,
     )
+    snapshot_path = os.environ.get("M1_PARALLELISM_SNAPSHOT")
+    if snapshot_path and str(robot_backend.name).lower() == "m1":
+        torch.save(
+            {
+                "state": state,
+                "terrain": terrain,
+                "command": torch.as_tensor(command).detach().cpu(),
+                "cfg": cfg,
+                "trajectory": trajectory,
+            },
+            snapshot_path,
+        )
     return parallelism_trajectory_to_viewer_result(trajectory, robot_backend=robot_backend), ray_hits
 
 
@@ -3151,10 +3292,15 @@ def main() -> int:
         foot_contact_offset=float(robot_backend.cfg.foot_contact_offset_m),
     )
     reset_snapshot = _viewer_capture_reset_snapshot(base_env)
+    selected_terrain_name = _viewer_selected_terrain_name(
+        base_env.scene,
+        terrain_col=int(args_cli.terrain_col),
+    )
     print(
         "[Viewer] Terrain tile override: "
         f"row={int(args_cli.terrain_row)} "
         f"col={int(args_cli.terrain_col)} "
+        f"name={selected_terrain_name or 'unknown'} "
         f"origin={_format_xyz(selected_origin)}",
         flush=True,
     )
@@ -3254,10 +3400,15 @@ def main() -> int:
                         foot_ids=foot_ids,
                         foot_contact_offset=float(robot_backend.cfg.foot_contact_offset_m),
                     )
+                    selected_terrain_name = _viewer_selected_terrain_name(
+                        base_env.scene,
+                        terrain_col=int(args_cli.terrain_col),
+                    )
                     print(
                         "[Viewer][PlatformReset] "
                         f"row={int(args_cli.terrain_row)} "
                         f"col={int(args_cli.terrain_col)} "
+                        f"name={selected_terrain_name or 'unknown'} "
                         f"origin={_format_xyz(selected_origin)}",
                         flush=True,
                     )
@@ -3280,10 +3431,15 @@ def main() -> int:
                         foot_ids=foot_ids,
                         foot_contact_offset=float(robot_backend.cfg.foot_contact_offset_m),
                     )
+                    selected_terrain_name = _viewer_selected_terrain_name(
+                        base_env.scene,
+                        terrain_col=int(args_cli.terrain_col),
+                    )
                     print(
                         "[Viewer][Reset] "
                         f"row={int(args_cli.terrain_row)} "
                         f"col={int(args_cli.terrain_col)} "
+                        f"name={selected_terrain_name or 'unknown'} "
                         f"origin={_format_xyz(selected_origin)}",
                         flush=True,
                     )
@@ -3537,36 +3693,37 @@ def main() -> int:
                     )
                     planner_state = _planner_state_from_reference_result(result, frame_idx=display_frame)
                     root_yaw = planner_state.root_rpy[:, 2]
-                    camera_initialized = _initialize_viewer_camera(
-                        base_env,
-                        initialized=camera_initialized,
-                        root_pos=planner_state.root_pos[0],
-                        root_yaw=root_yaw,
-                        distance=float(args_cli.camera_distance),
-                        height=float(args_cli.camera_height),
-                    )
-                    if camera_controller is None:
-                        from omni.kit.viewport.utility import get_active_viewport_window
-
-                        camera_window = get_active_viewport_window()
-                        if camera_window is None:
-                            raise RuntimeError("active viewport window is unavailable")
-                        camera_position, target_position = _camera_follow_pose(
+                    if not bool(getattr(args_cli, "headless", False)):
+                        camera_initialized = _initialize_viewer_camera(
+                            base_env,
+                            initialized=camera_initialized,
                             root_pos=planner_state.root_pos[0],
                             root_yaw=root_yaw,
                             distance=float(args_cli.camera_distance),
                             height=float(args_cli.camera_height),
                         )
-                        camera_controller = _ViewerCameraInputController(
-                            base_env.sim.set_camera_view,
-                            camera_position,
-                            target_position,
-                            (camera_window.width, camera_window.height),
-                        )
-                        if getattr(args_cli, "camera_input_test", False):
-                            import asyncio
+                        if camera_controller is None:
+                            from omni.kit.viewport.utility import get_active_viewport_window
 
-                            camera_input_test_task = asyncio.ensure_future(_run_camera_input_test(camera_controller))
+                            camera_window = get_active_viewport_window()
+                            if camera_window is None:
+                                raise RuntimeError("active viewport window is unavailable")
+                            camera_position, target_position = _camera_follow_pose(
+                                root_pos=planner_state.root_pos[0],
+                                root_yaw=root_yaw,
+                                distance=float(args_cli.camera_distance),
+                                height=float(args_cli.camera_height),
+                            )
+                            camera_controller = _ViewerCameraInputController(
+                                base_env.sim.set_camera_view,
+                                camera_position,
+                                target_position,
+                                (camera_window.width, camera_window.height),
+                            )
+                            if getattr(args_cli, "camera_input_test", False):
+                                import asyncio
+
+                                camera_input_test_task = asyncio.ensure_future(_run_camera_input_test(camera_controller))
 
                     root_pos = planner_state.root_pos[0]
                     yaw_rate = float(active_cmd.values[0, 2].item())

@@ -68,7 +68,7 @@ def test_invalid_map_makes_trajectory_invalid_single_pass():
     from extension.parallelism import ParallelismCfg
     from extension.parallelism.planner import plan_trajectory
 
-    traj = plan_trajectory(_state(), torch.zeros(1, 3), _terrain(invalid=True), ParallelismCfg())
+    traj = plan_trajectory(_state(), torch.tensor([[0.2, 0.0, 0.0]]), _terrain(invalid=True), ParallelismCfg())
 
     assert not bool(traj.valid[0])
     assert not traj.diagnostics.candidate_valid.any()
@@ -140,7 +140,7 @@ def test_obstacle_semantic_touchdowns_are_hard_rejected():
     from extension.parallelism.planner import plan_trajectory
 
     for semantic_id in (1, 2):
-        traj = plan_trajectory(_state(), torch.zeros(1, 3), _semantic_terrain(semantic_id=semantic_id), ParallelismCfg())
+        traj = plan_trajectory(_state(), torch.tensor([[0.2, 0.0, 0.0]]), _semantic_terrain(semantic_id=semantic_id), ParallelismCfg())
 
         assert not bool(traj.valid[0])
         assert not traj.diagnostics.candidate_valid.any()
@@ -170,13 +170,13 @@ def test_semantic_touchdown_margin_rejects_nearby_obstacle_cells():
 
     no_margin = plan_trajectory(
         _state(),
-        torch.zeros(1, 3),
+        torch.tensor([[0.2, 0.0, 0.0]]),
         terrain,
         ParallelismCfg(semantic_touchdown_margin_m=0.0),
     )
     with_margin = plan_trajectory(
         _state(),
-        torch.zeros(1, 3),
+        torch.tensor([[0.2, 0.0, 0.0]]),
         terrain,
         ParallelismCfg(semantic_touchdown_margin_m=0.2),
     )

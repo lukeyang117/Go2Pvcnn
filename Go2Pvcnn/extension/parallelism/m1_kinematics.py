@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from math import cos
 
 import torch
 from torch import Tensor
@@ -13,17 +14,44 @@ M1_LEG_NAMES = ("FL", "FR", "RL", "RR")
 M1_PLANNER_JOINT_NAMES = tuple(
     name
     for prefix in ("FBL", "FAR", "RBL", "RAR")
-    for name in (f"{prefix}_ABAD", f"{prefix}_HIP", f"{prefix}_KNEE")
+    for name in (f"{prefix}_ABAD_JOINT", f"{prefix}_HIP_JOINT", f"{prefix}_KNEE_JOINT")
 )
 M1_ASSET_JOINT_NAMES = tuple(
     name
     for prefix in ("FBL", "FAR", "RBL", "RAR")
-    for name in (f"{prefix}_ABAD", f"{prefix}_HIP", f"{prefix}_KNEE", f"{prefix}_FOOT_JOINT")
+    for name in (
+        f"{prefix}_ABAD_JOINT",
+        f"{prefix}_HIP_JOINT",
+        f"{prefix}_KNEE_JOINT",
+        f"{prefix}_FOOT_JOINT",
+    )
 )
 M1_WHEEL_JOINT_NAMES = tuple(name for name in M1_ASSET_JOINT_NAMES if name.endswith("FOOT_JOINT"))
 
-M1_ROOT_Z_M = 0.6358
 M1_WHEEL_RADIUS_M = 0.095958
+M1_WHEEL_THICKNESS_M = 0.04650
+M1_WHEEL_HORIZONTAL_ENVELOPE_M = M1_WHEEL_RADIUS_M + M1_WHEEL_THICKNESS_M / 2.0
+M1_SWING_CLEARANCE_M = 0.105
+M1_ROOT_FOOTPRINT_OFFSETS_M = tuple(
+    (x, y)
+    for x in (-0.45, -0.225, 0.0, 0.225, 0.45)
+    for y in (-0.45, -0.225, 0.0, 0.225, 0.45)
+)
+M1_DEFAULT_HIP_ANGLE_RAD = -0.15
+M1_DEFAULT_KNEE_ANGLE_RAD = 1.10
+M1_DEFAULT_JOINT_POS = tuple(
+    value
+    for _ in range(4)
+    for value in (0.0, M1_DEFAULT_HIP_ANGLE_RAD, M1_DEFAULT_KNEE_ANGLE_RAD)
+)
+M1_DEFAULT_ASSET_JOINT_POS = tuple(
+    value
+    for _ in range(4)
+    for value in (0.0, M1_DEFAULT_HIP_ANGLE_RAD, M1_DEFAULT_KNEE_ANGLE_RAD, 0.0)
+)
+M1_ROOT_Z_M = M1_WHEEL_RADIUS_M + 0.26 * cos(M1_DEFAULT_HIP_ANGLE_RAD) + 0.28 * cos(
+    M1_DEFAULT_HIP_ANGLE_RAD + M1_DEFAULT_KNEE_ANGLE_RAD
+)
 M1_ABAD_LOWER = (-0.523, -0.697, -0.523, -0.697)
 M1_ABAD_UPPER = (0.697, 0.523, 0.697, 0.523)
 M1_HIP_LOWER = (-2.443,) * 4
@@ -172,29 +200,67 @@ def m1_ik(root_pos_w: Tensor, root_rpy_w: Tensor, foot_target_w: Tensor) -> tupl
     root_flat = root_pos.reshape(flat_count, 3)
     rpy_flat = root_rpy.reshape(flat_count, 3)
     target_flat = target.reshape(flat_count, 4, 3)
-    joint = torch.zeros(flat_count, 12, dtype=root_pos.dtype, device=root_pos.device)
+    rotation = rpy_to_rotation_matrix(rpy_flat)
+    target_body = torch.einsum(
+        "nij,nlj->nli",
+        rotation.transpose(-1, -2),
+        target_flat - root_flat[:, None, :],
+    )
+
+    front = _constants(root_flat, (1.0, 1.0, -1.0, -1.0)).view(1, 4)
+    side = _constants(root_flat, (1.0, -1.0, 1.0, -1.0)).view(1, 4)
+    base_to_abad = torch.stack(
+        (0.272 * front, 0.065 * side, torch.zeros_like(front)),
+        dim=-1,
+    )
+    target_from_abad = target_body - base_to_abad
+
+    # After removing the ABAD rotation, the two planar links have a fixed
+    # lateral offset and lengths of 0.26 m and 0.28 m.
+    py = target_from_abad[..., 1]
+    pz = target_from_abad[..., 2]
+    lateral_offset = 0.1424 * side
+    lateral_sq = py.square() + pz.square() - lateral_offset.square()
+    lateral = lateral_sq.clamp_min(0.0).sqrt()
+    lateral_norm = (py.square() + pz.square()).clamp_min(1.0e-12).sqrt()
+    abad = torch.atan2(pz, py) + torch.acos(
+        (lateral_offset / lateral_norm).clamp(-1.0, 1.0)
+    )
+
+    cosine = torch.cos(abad)
+    sine = torch.sin(abad)
+    planar_x = target_from_abad[..., 0] - 0.0575 * front
+    planar_z = -sine * py + cosine * pz
+    reach_sq = planar_x.square() + planar_z.square()
+    knee_cosine = (reach_sq - 0.26**2 - 0.28**2) / (2.0 * 0.26 * 0.28)
+    knee = torch.acos(knee_cosine.clamp(-1.0, 1.0))
+    target_angle = torch.atan2(-planar_x, -planar_z)
+    hip = target_angle - torch.atan2(
+        0.28 * torch.sin(knee),
+        0.26 + 0.28 * torch.cos(knee),
+    )
+
+    joint_by_leg = torch.stack((abad, hip, knee), dim=-1)
+    joint = joint_by_leg.reshape(flat_count, 12)
     lower, upper = _m1_joint_limits(joint)
-    eps = 1.0e-4
-    for _ in range(6):
-        current = m1_fk(root_flat, rpy_flat, joint).foot_pos_w
-        error = target_flat - current
-        updates = []
-        for leg_idx in range(4):
-            jac_columns = []
-            for dof_idx in range(3):
-                perturbed = joint.clone()
-                perturbed[:, leg_idx * 3 + dof_idx] += eps
-                jac_columns.append((m1_fk(root_flat, rpy_flat, perturbed).foot_pos_w[:, leg_idx] - current[:, leg_idx]) / eps)
-            jacobian = torch.stack(jac_columns, dim=-1)
-            lhs = torch.matmul(jacobian.transpose(-1, -2), jacobian) + 1.0e-5 * torch.eye(3, dtype=joint.dtype, device=joint.device)
-            rhs = torch.matmul(jacobian.transpose(-1, -2), error[:, leg_idx, :, None]).squeeze(-1)
-            updates.append(torch.linalg.solve(lhs, rhs))
-        joint = torch.cat(updates, dim=-1)
-        joint = torch.maximum(torch.minimum(joint, upper), lower)
-    residual = torch.linalg.vector_norm(m1_fk(root_flat, rpy_flat, joint).foot_pos_w - target_flat, dim=-1)
-    joint_by_leg = joint.reshape(flat_count, 4, 3)
-    reachable = (residual <= 2.0e-3) & torch.isfinite(joint_by_leg).all(dim=-1) & m1_joint_limit_mask(joint_by_leg)
-    return joint.reshape(*target.shape[:-2], 4, 3), reachable.reshape(*target.shape[:-2], 4)
+    joint_in_limits = ((joint >= lower) & (joint <= upper)).reshape(flat_count, 4, 3).all(dim=-1)
+    tolerance = 2.0e-3
+    reach = reach_sq.clamp_min(0.0).sqrt()
+    reachable = (
+        (lateral_sq >= -(tolerance**2))
+        & (reach >= (0.28 - 0.26) - tolerance)
+        & (reach <= (0.28 + 0.26) + tolerance)
+        & torch.isfinite(joint_by_leg).all(dim=-1)
+        & joint_in_limits
+    )
+
+    # Keep a single FK check as the final geometric and numerical guard.
+    residual = torch.linalg.vector_norm(
+        m1_fk(root_flat, rpy_flat, joint).foot_pos_w - target_flat,
+        dim=-1,
+    )
+    reachable = reachable & (residual <= 2.0e-3)
+    return joint_by_leg.reshape(*target.shape[:-2], 4, 3), reachable.reshape(*target.shape[:-2], 4)
 
 
 def _m1_specs() -> tuple[OfficialCollisionShapeSpec, ...]:
@@ -207,7 +273,7 @@ def _m1_specs() -> tuple[OfficialCollisionShapeSpec, ...]:
                 OfficialCollisionShapeSpec(f"{prefix}_abad_box", leg, "thigh", (0.044875, 0.003375 * side, 0.0), (1.0, 0.0, 0.0, 0.0), "box", size_l=(0.08975, 0.07125, 0.084187)),
                 OfficialCollisionShapeSpec(f"{prefix}_hip_box", leg, "hip", (0.0, 0.056 * side, -0.12875), (1.0, 0.0, 0.0, 0.0), "box", size_l=(0.096987, 0.1246, 0.3545)),
                 OfficialCollisionShapeSpec(f"{prefix}_knee_box", leg, "calf", (0.0, 0.0323 * side, -0.1375), (1.0, 0.0, 0.0, 0.0), "box", size_l=(0.09999, 0.0966, 0.375)),
-                OfficialCollisionShapeSpec(f"{prefix}_wheel", leg, "foot", (0.0, 0.0073 * side, 0.0), (1.0, 0.0, 0.0, 0.0), "cylinder", radius_m=M1_WHEEL_RADIUS_M, height_m=0.04650),
+                OfficialCollisionShapeSpec(f"{prefix}_wheel", leg, "foot", (0.0, 0.0073 * side, 0.0), (1.0, 0.0, 0.0, 0.0), "cylinder", radius_m=M1_WHEEL_RADIUS_M, height_m=M1_WHEEL_THICKNESS_M),
             )
         )
     return tuple(specs)
@@ -216,13 +282,42 @@ def _m1_specs() -> tuple[OfficialCollisionShapeSpec, ...]:
 M1_CFG = replace(
     ParallelismCfg(),
     flat_root_clearance_m=M1_ROOT_Z_M,
+    root_motion_scale=0.60,
+    # M1's hip/knee envelope is wider than Go2's.  Keep the Go2 avoidance
+    # rule, but give the M1 root enough lateral authority to clear a box.
+    vy_limit=1.5,
+    large_obstacle_lateral_speed_max_mps=1.5,
+    # Match the terrain-relative root offset used by the M1 asset.  The root
+    # is sampled at the centerline, as in Go2; taking the maximum over the
+    # whole body footprint makes a descending stair lift the root from a rear
+    # step and can move the front legs outside their IK workspace.
     terrain_following_root_clearance_m=0.34,
+    terrain_following_root_max_drop_m=0.06,
+    terrain_following_hold_support_on_large_obstacles=True,
+    terrain_following_root_footprint_offsets_m=M1_ROOT_FOOTPRINT_OFFSETS_M,
+    terrain_following_root_leading_footprint_only=True,
+    swing_clearance_m=M1_SWING_CLEARANCE_M,
+    min_swing_apex_m=0.0,
+    swing_profile="minimum_clearance",
+    swing_terrain_query_radius_m=M1_WHEEL_HORIZONTAL_ENVELOPE_M,
     foot_contact_offset_m=M1_WHEEL_RADIUS_M,
+    # The M1 touchdown is validated against its wheel/body geometry below;
+    # the inherited Go2 semantic expansion otherwise removes valid nearby landings.
+    semantic_touchdown_margin_m=0.0,
     collision_margin_m=0.003,
     box_surface_points=26,
     cylinder_layers=3,
     cylinder_angles=12,
     contact_tolerant_collision_shape_names=(),
-    contact_tolerant_collision_point_indices=tuple((f"{prefix}_wheel", (11, 23, 35)) for prefix in ("FBL", "FAR", "RBL", "RAR")),
+    contact_tolerant_collision_point_indices=(),
+    contact_tolerant_support_shape_names=tuple(
+        f"{prefix}_wheel" for prefix in ("FBL", "FAR", "RBL", "RAR")
+    ),
+    swing_start_tolerant_collision_shape_names=tuple(
+        name
+        for prefix in ("FBL", "FAR", "RBL", "RAR")
+        for name in (f"{prefix}_wheel", f"{prefix}_knee_box")
+    ),
+    swing_collision_start_ignore_frames=12,
     official_collision_shapes=_m1_specs(),
 )
