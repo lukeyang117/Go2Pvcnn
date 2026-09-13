@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M1 RL AME / AME-AMP Agent 实施设计</title>
+  <style>
+    :root{--ink:#17202a;--muted:#59636e;--line:#d9e0e6;--blue:#155eef;--blue-bg:#eef4ff;--amber:#9a6700;--amber-bg:#fff8e6;--green:#087443;--green-bg:#edfdf4;--red:#b42318;--red-bg:#fff1f0}*{box-sizing:border-box}body{margin:0;color:var(--ink);background:#f6f8fa;font:15px/1.7 system-ui,-apple-system,"Segoe UI","Noto Sans CJK SC",sans-serif}main{max-width:1120px;margin:0 auto;padding:36px 24px 72px}header{background:#132238;color:#fff;padding:30px 34px;border-radius:8px}h1{margin:0 0 8px;font-size:30px;line-height:1.25}h2{margin:38px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--line);font-size:23px}h3{margin:24px 0 8px;font-size:18px}p{margin:8px 0 12px}code{padding:2px 5px;border-radius:4px;background:#eef1f4;font:0.92em ui-monospace,SFMono-Regular,Consolas,monospace}header code{background:#263b58}pre{overflow:auto;padding:15px 17px;border-radius:6px;background:#17202a;color:#edf2f7;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}table{width:100%;border-collapse:collapse;margin:12px 0 18px;background:#fff}th,td{padding:9px 11px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:#eef2f6}.box{margin:14px 0;padding:14px 17px;border-left:4px solid var(--blue);background:var(--blue-bg)}.warn{border-left-color:#d99000;background:var(--amber-bg)}.ok{border-left-color:var(--green);background:var(--green-bg)}.danger{border-left-color:var(--red);background:var(--red-bg)}.small{color:#d2d9e1;font-size:13px}li{margin:5px 0}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:16px 0}.flow div{padding:12px 9px;min-height:88px;border:1px solid #bfd0ea;border-radius:6px;background:#fff;text-align:center}.flow b{display:block;color:var(--blue)}@media(max-width:760px){main{padding:18px 12px 48px}header{padding:22px 20px}h1{font-size:25px}.flow{grid-template-columns:1fr}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <h1>M1 RL：AME / AME-AMP Agent 实施设计</h1>
+    <p>目标分支：<code>m1_rl</code>，基于当前已推送的 <code>m1</code>。本文档供 Agent 直接执行，要求 M1 适配不改变 <code>parallelism-amp</code> 的强化学习算法。</p>
+    <p class="small">版本：2026-09-14　|　M1 基线：844c72d　|　算法参考：parallelism-amp</p>
+  </header>
+
+  <h2>1. 任务结论</h2>
+  <div class="box ok"><b>必须实现：</b>在 M1 上新增 AME baseline 与 AME_AMP 两套训练入口。算法、Runner、Policy、AMP critic、判别器、PPO/GAE 更新和 checkpoint/resume 语义必须完整复现 <code>parallelism-amp</code>；M1 只替换机器人资产、观测映射、奖励几何参数和 Parallelism backend。</div>
+  <div class="box danger"><b>不可误解：</b>M1 的 RL action 保持 16 维。Parallelism 只提供 12 个腿部关节参考，4 个轮子 action 完全由 RL 学习。轮子 joint position/velocity 不进入 policy state、AMP critic/context 或 ParallelismState。</div>
+
+  <h2>2. 硬性约束</h2>
+  <table><thead><tr><th>范围</th><th>要求</th><th>验收</th></tr></thead><tbody>
+    <tr><td>分支</td><td>主目录保持 <code>m1</code>；实现仅进入远程 <code>m1_rl</code>。</td><td>主目录 <code>git branch --show-current</code> 仍为 m1。</td></tr>
+    <tr><td>Action</td><td>M1 USD 16 关节：12 腿部 + 4 轮子。</td><td>policy action shape 为 <code>[B,16]</code>。</td></tr>
+    <tr><td>Parallelism</td><td>只读写 12 腿部关节；不规划、不共享轮子关节。</td><td>planner state/reference joint 最后一维固定为 12。</td></tr>
+    <tr><td>Policy state</td><td>不输入轮子角度、角速度或轮子 action history；policy 输出仍为 16。</td><td>观测 term 显式按名字选择 12 腿部关节。</td></tr>
+    <tr><td>AMP critic</td><td>AMP critic/context/window 不含轮子 joint state。</td><td>AMP schema 固定维度测试证明 wheel columns 不存在。</td></tr>
+    <tr><td>奖励</td><td>涉及 joint、foot、contact、root、clearance、air-time、速度和姿态的参数必须按 M1 尺寸核验。</td><td>每个新值记录单位、来源和对应测试。</td></tr>
+    <tr><td>算法</td><td>AME 与 AME_AMP 完全复用参考分支的算法类、参数与更新语义。</td><td>参数快照和行为测试与参考分支一致。</td></tr>
+    <tr><td>性能</td><td>保持 batch Torch/GPU 路径，禁止逐 env/逐腿 Python planner 调用。</td><td>1024 env 短训练无 CPU 同步、OOM 或 NaN。</td></tr>
+    <tr><td>Go2</td><td>M1 改动不得改变现有 Go2 AME/AME_AMP/Parallelism 行为。</td><td>Go2 原测试与 smoke 继续通过。</td></tr>
+  </tbody></table>
+
+  <h2>3. 参考实现映射</h2>
+  <table><thead><tr><th>能力</th><th>parallelism-amp 参考文件</th><th>M1 处理</th></tr></thead><tbody>
+    <tr><td>AME 环境/观测</td><td><code>Go2Pvcnn/ame_baseline/ame_env_cfg.py</code></td><td>保留分组与语义，替换 M1 scene 和 selectors。</td></tr>
+    <tr><td>AME-AMP 环境</td><td><code>ame_baseline/ame_amp_env_cfg.py</code></td><td>接入 M1 Parallelism reference cache。</td></tr>
+    <tr><td>AME PPO</td><td><code>ame_baseline/ame_train_cfg.py</code></td><td>原样复用配置和 ActorCriticAME。</td></tr>
+    <tr><td>AME-AMP PPO</td><td><code>ame_baseline/ame_amp_train_cfg.py</code></td><td>原样复用 ParallelismAMPPPO 与 AmpActorCriticAME。</td></tr>
+    <tr><td>Runner</td><td><code>ame_runner.py</code>、<code>ame_amp_runner.py</code></td><td>import 复用，不复制或简化算法。</td></tr>
+    <tr><td>训练入口</td><td><code>scripts/train_cross_large_complex_ame*.py/.sh</code></td><td>复制入口格式，换 M1 env id/experiment name。</td></tr>
+    <tr><td>M1 资产</td><td><code>go2_pvcnn/assets/m1.py</code> 与 M1 USD</td><td>joint/body 名称、初始姿态、actuator 以 USD 为准。</td></tr>
+    <tr><td>M1 Planner</td><td><code>extension/parallelism/</code></td><td>复用 <code>get_robot_backend("m1")</code>、M1 FK/IK/碰撞。</td></tr>
+  </tbody></table>
+
+  <h2>4. M1 数据契约</h2>
+  <h3>4.1 关节顺序</h3>
+  <pre>Asset 16:
+FBL_ABAD_JOINT, FBL_HIP_JOINT, FBL_KNEE_JOINT, FBL_FOOT_JOINT,
+FAR_ABAD_JOINT, FAR_HIP_JOINT, FAR_KNEE_JOINT, FAR_FOOT_JOINT,
+RBL_ABAD_JOINT, RBL_HIP_JOINT, RBL_KNEE_JOINT, RBL_FOOT_JOINT,
+RAR_ABAD_JOINT, RAR_HIP_JOINT, RAR_KNEE_JOINT, RAR_FOOT_JOINT
+
+Planner 12: 每条腿只保留 ABAD/HIP/KNEE
+Wheel 4: FBL/FAR/RBL/RAR_FOOT_JOINT</pre>
+  <p>必须使用 <code>M1_ASSET_JOINT_NAMES</code>、<code>M1_PLANNER_JOINT_NAMES</code>、<code>M1_WHEEL_JOINT_NAMES</code> 按名字构造索引。禁止按“每四个取前三个”这种隐式位置假设。</p>
+
+  <h3>4.2 足端几何</h3>
+  <table><thead><tr><th>定义</th><th>当前值</th><th>用途</th></tr></thead><tbody>
+    <tr><td><code>M1_WHEEL_RADIUS_M</code></td><td>0.095958 m</td><td>接触 offset、root 高度、垂向 clearance。</td></tr>
+    <tr><td><code>M1_WHEEL_THICKNESS_M</code></td><td>0.04650 m</td><td>轮盘碰撞与水平包络。</td></tr>
+    <tr><td><code>M1_WHEEL_HORIZONTAL_ENVELOPE_M</code></td><td>radius + thickness/2</td><td>扫描与 swing path 的几何膨胀。</td></tr>
+    <tr><td><code>M1_ROOT_Z_M</code></td><td>由默认站姿和轮半径计算</td><td>平地 root 初始/参考高度。</td></tr>
+    <tr><td>support bodies</td><td>FBL/FAR/RBL/RAR_FOOT_LINK</td><td>轮心位置、接触和 foot reward。</td></tr>
+  </tbody></table>
+
+  <h2>5. 运行时数据流</h2>
+  <div class="flow"><div><b>Isaac Lab</b>M1 USD<br>16 action</div><div><b>M1 Adapter</b>按名字抽取<br>12 planner joints</div><div><b>Parallelism</b>12维 FK/IK<br>root/轮心/terrain</div><div><b>Reference Cache</b>24帧窗口<br>12维关节参考</div><div><b>AME/AME-AMP</b>算法复用<br>输出16维 action</div></div>
+  <p>每个 step 的顺序与 Go2 参考一致：先准备 Parallelism reference，再构造观测，再由 policy 输出 16 维 action，最后进入 Isaac Lab step。轮子 action 不经过 reference merge，也不被 Parallelism 覆盖。</p>
+
+  <h2>6. 建议文件结构</h2>
+  <pre>Go2Pvcnn/
+├── ame_baseline/
+│   ├── m1_ame_env_cfg.py
+│   ├── m1_ame_amp_env_cfg.py
+│   ├── m1_ame_train_cfg.py
+│   └── m1_ame_amp_train_cfg.py
+├── tracking/managers/parallelism_reference_manager.py  # backend 化
+├── scripts/
+│   ├── train_m1_cross_large_complex_ame.py
+│   ├── train_m1_cross_large_complex_ame_amp.py
+│   ├── train_m1_cross_large_complex_ame_headless.sh
+│   └── train_m1_cross_large_complex_ame_amp_headless.sh
+├── go2_pvcnn/tasks/register_envs.py
+└── tests/
+    ├── test_m1_ame_config_static.py
+    ├── test_m1_ame_amp_contract.py
+    ├── test_m1_parallelism_rl_adapter.py
+    └── test_m1_rl_reward_geometry.py</pre>
+  <div class="box warn">环境配置只能有一个 owner。推荐放在 <code>ame_baseline/m1_*</code>；manager 只负责 reference cache，训练算法继续由现有 AME 模块提供。</div>
+
+  <h2>7. 环境与观测设计</h2>
+  <h3>7.1 AME baseline</h3>
+  <ul>
+    <li>继承 AME 的 map/state 分组、corruption 设置与 <code>ActorCriticAME</code> 输入 contract。</li>
+    <li>scene.robot 替换为 <code>M1_CFG</code>；scanner prim path 和 contact selectors 使用 M1 USD 名称。</li>
+    <li>joint position、joint velocity、last action history 均显式 slice 为 12 个腿部关节，不含 wheel state/history。</li>
+    <li>policy action head 仍为 16 维，并按 M1 asset joint order 输出。</li>
+  </ul>
+  <h3>7.2 AME-AMP</h3>
+  <ul>
+    <li>复用 AME observation contract、AMP window、Runner 和 checkpoint 生命周期。</li>
+    <li>AMP critic/context 的 joint state 固定 12 维；禁止拼接 wheel joint position/velocity。</li>
+    <li>允许使用轮心位置、轮子接触和 terrain map：它们是足端/环境几何，不是轮子关节状态。</li>
+    <li><code>ParallelismState.joint_pos</code> 为 12 维，<code>foot_pos_w</code> 是按 M1 support body 名字排序的四个轮心。</li>
+  </ul>
+
+  <h2>8. Parallelism 接入</h2>
+  <ol>
+    <li>给 reference manager 注入 <code>RobotBackend</code>，按 <code>env.cfg.robot_name</code> 选择 <code>get_robot_backend("m1")</code>；Go2 默认路径不变。</li>
+    <li>从 16 维 robot state 按名字抽取 12 维 planner state，禁止 wheel joint 进入 <code>m1_fk</code> 或 <code>plan_trajectory</code>。</li>
+    <li>足端查找由 backend.support_body_names 驱动，不能保留 Go2 的 <code>.*_foot</code> 和 <code>_PLANNER_FOOT_ORDER</code> 假设。</li>
+    <li>reference cache 的 joint pos/vel 固定 12 维。RL policy 的 16 维 action 直接进入 M1 actuator，Parallelism 仅作为 reference/AMP 信号。</li>
+    <li>每步只执行一次 batch plan；不得为 wheel action 增加候选搜索或 planner 分支。</li>
+  </ol>
+  <pre>asset_joint_16 = read_robot_joint_state(env)
+planner_index_12 = backend.asset_to_planner_indices(robot)
+planner_joint_12 = asset_joint_16.index_select(-1, planner_index_12)
+state = ParallelismState(root_pos_w, root_rpy_w, planner_joint_12, wheel_centers_w)
+reference_12 = plan_trajectory(state, command, terrain, robot_backend=backend)
+policy_action_16 = policy(observation_without_wheel_joint_state)
+env.step(policy_action_16)  # wheel 四列由 RL 决定，不被 planner 覆盖</pre>
+
+  <h2>9. M1 奖励参数对齐</h2>
+  <div class="box warn"><b>方法：</b>保留 Go2 的 reward key 和优化语义，但不能直接复制几何阈值。每项先确认输入量、单位、M1 selector 和物理尺度，再决定数值。奖励权重不是长度，不能统一按比例缩放。</div>
+  <table><thead><tr><th>类别</th><th>需核验项目</th><th>M1 规则</th></tr></thead><tbody>
+    <tr><td>Joint reference</td><td>reference_joint_pos/vel/max</td><td>只选择 12 planner joints；std/tolerance 按 M1 joint limits 与正常腿部幅度验证。</td></tr>
+    <tr><td>Foot tracking</td><td>reference_foot_pos、active swing</td><td>使用四个 FOOT_LINK 轮心；z/contact offset 包含 wheel radius。</td></tr>
+    <tr><td>Collision</td><td>geometry collision、undesired contact</td><td>使用 M1 base/link 名称和已有 wheel/calf/thigh primitive surface；不得套 Go2 regex。</td></tr>
+    <tr><td>Air time/slide</td><td>feet_air_time、feet_slide、variance</td><td>正常轮式接触/滚动不能被当作脚掌滑动；基于轮心接触与 trot swing 周期重定阈值。</td></tr>
+    <tr><td>Root height</td><td>root z、terrain following</td><td>平地参考 <code>M1_ROOT_Z_M</code>；非平地为 terrain + wheel radius + clearance。</td></tr>
+    <tr><td>Clearance</td><td>swing、obstacle-over</td><td>基于轮盘半径/厚度/水平包络；只有选中语义障碍轨迹才触发抬腿。</td></tr>
+    <tr><td>Posture</td><td>joint_pos、standstill scale</td><td>腿部 12 维保持 M1 默认站姿；轮子不得被姿态奖励拉回零角。</td></tr>
+    <tr><td>Action regularization</td><td>action_rate、torque/acceleration</td><td>可覆盖 16 action，但腿与轮子使用独立 selector/scale；依据 M1 actuator 与 wheel speed 上限。</td></tr>
+    <tr><td>Orientation</td><td>bad_orientation、gravity</td><td>角度语义保持，结合 M1 轮距、腿长、root frame 验证阈值。</td></tr>
+    <tr><td>Velocity</td><td>lin/ang tracking 与 command range</td><td>算法语义不变；上限按 wheel radius、可用轮速和 M1 稳定性核验。</td></tr>
+    <tr><td>Termination</td><td>root/foot/joint distance、standstill</td><td>joint distance 12 维；foot distance 比较轮心；轮子不得触发 planner joint violation。</td></tr>
+  </tbody></table>
+  <p>每个修改参数都要在提交说明中给出：旧值、M1 新值、单位、来源（USD/公式/实测/实验）、影响项和测试。没有来源的“调到能跑”不接受。</p>
+
+  <h2>10. RL 算法必须完全复现</h2>
+  <h3>10.1 AME PPO</h3>
+  <pre>num_steps_per_env=40, save_interval=100
+num_learning_epochs=5, num_mini_batches=4, learning_rate=1e-3
+clip_param=0.2, gamma=0.99, lam=0.95
+value_loss_coef=1.0, entropy_coef=0.01, max_grad_norm=1.0
+use_clipped_value_loss=True, schedule="adaptive", desired_kl=0.01
+policy="ActorCriticAME", map_channels=6, map_size=16
+mha_dim=64, num_heads=16
+actor_hidden_dims=[512,256,128], critic_hidden_dims=[512,256,128]
+activation="elu", init_noise_std=1.0</pre>
+  <h3>10.2 AME-AMP</h3>
+  <pre>algorithm="ParallelismAMPPPO", policy="AmpActorCriticAME"
+amp_window_frames=24, amp_dt=0.02
+amp_reward_weight=0.1, amp_value_loss_coef=1.0
+amp_warmup_iterations=500, amp_weight_ramp_iterations=100
+disc_learning_rate=1e-4, disc_epochs=2, disc_batch_size=4096
+disc_replay_capacity=32768, amp_value_hidden_dims=[256,128]</pre>
+  <ul>
+    <li>AMP reward、AMP GAE、AMP value loss、discriminator replay 的 inactive/standstill mask 完全一致。</li>
+    <li>复用 adaptive KL、std clipping、clipped value、finite gradient 和 actor guidance warmup。</li>
+    <li>checkpoint 同时保存/恢复 policy、base critic、AMP value head、discriminator、optimizer、replay 和 signature。</li>
+    <li>AME checkpoint warm-start 到 AME-AMP 必须复用 <code>AmeAmpOnPolicyRunner</code> 的兼容逻辑。</li>
+  </ul>
+
+  <h2>11. Agent 执行顺序</h2>
+  <ol>
+    <li>先写 contract 测试：16 action、12 planner state、无 wheel policy/AMP state、M1 joint/body selectors。</li>
+    <li>把 Go2 专用 reference manager 改为 backend 驱动，保留 Go2 默认行为。</li>
+    <li>创建 M1 AME env/config，完成 observation 与 16 维 action wiring。</li>
+    <li>创建 M1 AME-AMP env/config，接入 12 维 reference window 与无 wheel AMP context。</li>
+    <li>逐项完成第 9 节 reward/termination 尺寸对齐和测试。</li>
+    <li>新增两个 Python launcher、两个 headless launcher 和独立 env ids。</li>
+    <li>按 8 env、1024 env 顺序完成真实 Isaac Lab smoke。</li>
+    <li>按 contract、adapter、AME、AME-AMP、reward、smoke evidence 分拆提交。</li>
+  </ol>
+
+  <h2>12. 测试与验收</h2>
+  <pre>export PYTHONPATH="$PWD/Go2Pvcnn:$PWD/Go2Pvcnn/Go2Pvcnn"
+/share/home/tm884089579940000/a915071960/lhy/miniconda3/envs/env_isaacsim/bin/python -m pytest -q \
+  Go2Pvcnn/tests/test_m1_ame_config_static.py \
+  Go2Pvcnn/tests/test_m1_ame_amp_contract.py \
+  Go2Pvcnn/tests/test_m1_parallelism_rl_adapter.py \
+  Go2Pvcnn/tests/test_m1_rl_reward_geometry.py
+
+# 真实 smoke，先 8 env，再 1024 env
+./Go2Pvcnn/scripts/train_m1_cross_large_complex_ame_headless.sh \
+  --num_envs 8 --max_iterations 1 --seed 42
+./Go2Pvcnn/scripts/train_m1_cross_large_complex_ame_amp_headless.sh \
+  --num_envs 8 --max_iterations 1 --seed 42</pre>
+  <p>日志必须记录：env id、USD 路径、action=16、policy/critic/AMP context shapes、planner joint=12、GPU 显存、NaN/Inf/OOM/Traceback 状态与 checkpoint 路径。</p>
+
+  <h2>13. 禁止事项与完成定义</h2>
+  <div class="box danger"><ul>
+    <li>禁止复制或修改 ParallelismAMPPPO、AmpActorCriticAME、discriminator、Runner 核心算法来适配 M1。</li>
+    <li>禁止把 wheel joint 塞进 policy state、AMP critic/context、ParallelismState 或 reference joint reward。</li>
+    <li>禁止使用未经核验的 <code>joint_names=".*"</code>、<code>body_names=".*_foot"</code>。</li>
+    <li>禁止逐 env 调 planner、逐 env 查 USD、CPU IK 或训练 step 内动态构造 joint index。</li>
+    <li>禁止为了 smoke 关闭碰撞、删除终止项、跳过 reward 或把 action 置零。</li>
+  </ul></div>
+  <div class="box ok"><b>完成定义：</b><code>m1_rl</code> 包含可训练的 M1 AME/AME-AMP 配置与入口；算法行为和参数与 <code>parallelism-amp</code> 一致；差异只存在于 M1 资产、12/16 维接口、几何及奖励尺寸；Go2 不回归；两套 M1 smoke 都完成至少一个 RL update 并保存证据。</div>
+</main></body></html>
