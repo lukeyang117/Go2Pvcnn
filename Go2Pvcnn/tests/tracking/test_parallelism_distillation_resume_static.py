@@ -23,7 +23,7 @@ def test_resume_launcher_explicitly_selects_student_and_teacher_checkpoints() ->
     assert '--load_checkpoint "${STUDENT_CHECKPOINT}"' in source
     assert "--load_run" not in source
     assert "--teacher_checkpoint" in source
-    assert "2026-08-18_20-30-59/6def073/model_4999.pt" in source
+    assert "2026-08-20_21-20-52/91b27a4/model_9899.pt" in source
 
 
 def test_fresh_launcher_uses_the_new_teacher_checkpoint() -> None:

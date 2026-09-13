@@ -732,6 +732,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "parallelism_tracking_cross_large_complex",
             "parallelism_tracking_cross_large_complex_distillation",
             "cross_large_complex_ppo",
+            "cross_large_complex_semloco",
         ],
         help="Experiment/task to play.",
     )
@@ -1395,7 +1396,19 @@ def _make_env_wrapper(env, *, gym_module, vec_env_cls, tensor_dict_cls, clip_act
                 teacher_obs = self._flatten_group(
                     obs_dict, ["teacher_elevation_semantic_map", "teacher_state"]
                 )
-                return student_obs, {"observations": {"teacher": teacher_obs}}
+                critic_obs = self._flatten_group(
+                    obs_dict, ["critic_elevation_semantic_map", "critic_state"]
+                )
+                distillation_context = obs_dict["distillation_context"].reshape(
+                    obs_dict["distillation_context"].shape[0], -1
+                )
+                return student_obs, {
+                    "observations": {
+                        "teacher": teacher_obs,
+                        "critic": critic_obs,
+                        "distillation_context": distillation_context,
+                    }
+                }
             policy_obs = self._flatten_group(obs_dict, ["policy_elevation_semantic_map", "policy_state"])
             critic_obs = self._flatten_group(obs_dict, ["critic_elevation_semantic_map", "critic_state"])
             return policy_obs, {"observations": {"critic": critic_obs}}
@@ -1494,6 +1507,7 @@ def main() -> int:
         ParallelismTrackingCrossLargeComplexDistillationEnvCfg_PLAY,
     )
     from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg_PLAY
+    from semloco.semloco_env_cfg import SemlocoCrossLargeComplexEnvCfg_PLAY
     from tracking.parallelism_small_obstacles_env_cfg import ParallelismTrackingSmallObstaclesEnvCfg_PLAY
     from tracking.parallelism_tracking_env_cfg import ParallelismTrackingFlatEnvCfg_PLAY
     import go2_pvcnn.tasks.register_envs  # noqa: F401
@@ -1537,6 +1551,10 @@ def main() -> int:
         "cross_large_complex_ppo": (
             CrossLargeComplexPpoEnvCfg_PLAY,
             "Isaac-Go2-Cross-Large-Complex-PPO-v0",
+        ),
+        "cross_large_complex_semloco": (
+            SemlocoCrossLargeComplexEnvCfg_PLAY,
+            "Isaac-Go2-Cross-Large-Complex-SemLoco-v0",
         ),
     }
 

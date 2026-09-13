@@ -17,11 +17,11 @@ STUDENT_CHECKPOINT="/share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pv
   --experiment parallelism_tracking_cross_large_complex_distillation \
   --num_envs 1024 \
   --headless \
-  --max_iterations 6000 \
+  --max_iterations 3000 \
   --resume \
   --load_checkpoint "${STUDENT_CHECKPOINT}" \
   --keep_std \
-  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-18_20-30-59/6def073/model_4999.pt \
+  --teacher_checkpoint /share/home/tm884089579940000/a915071960/lhy/kinematic/Go2Pvcnn/logs/rsl_rl/parallelism_tracking_cross_large_complex/2026-08-20_21-20-52/91b27a4/model_9899.pt \
   --teacher-ratio-start 0.0 \
   --teacher-ratio-end 0.0 \
   --ppo-coef 1.0 \

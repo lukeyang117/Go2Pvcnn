@@ -34,6 +34,9 @@ checkpoints/
 data/*/
 !data/*/.gitkeep
 
+# External source repositories kept locally for reference
+raw/
+
 # OS
 .DS_Store
 Thumbs.db

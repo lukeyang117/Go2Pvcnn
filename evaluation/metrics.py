@@ -77,7 +77,7 @@ class EpisodeAccumulator:
         self.large_collision |= large
         self.small_collision |= small
         self.fallen |= fall
-        self.contact_steps += (large | small).to(torch.long)
+        self.contact_steps += ((large | small) & valid).to(torch.long)
         self.valid_steps += valid.to(torch.long)
         self.total_steps += torch.ones_like(self.total_steps)
 
@@ -97,7 +97,7 @@ class EpisodeAccumulator:
                     "fall": bool(self.fallen[index].item()),
                     "traversed_path_m": float(self.path_m[index].item()),
                     "command_progress_m": float(self.progress_m[index].item()),
-                    "contact_step_rate": float(self.contact_steps[index].item() / max(1, self.total_steps[index].item())),
+                    "contact_step_rate": float(self.contact_steps[index].item() / max(1, self.valid_steps[index].item())),
                     "valid_step_count": int(self.valid_steps[index].item()),
                     "step_count": int(self.total_steps[index].item()),
                 }

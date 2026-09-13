@@ -6,6 +6,10 @@ This page indexes verification evidence. Keep it short enough to scan.
 
 | 2026-09-11 | SemLoco 统一 benchmark 接入 | 默认 adapter、七类 CLI/launcher、真实 IsaacLab 1024-env smoke | pass | regression `34 passed`; `1024 x 48`: `6 episodes`, `27 valid_windows`, `5224.88 env-steps/s`; finite outputs; no residual process | [T305](../todo/T305-policy-benchmark.md) | [integration smoke](2026-09-11-policy-benchmark-semloco-integration-smoke.md) |
 
+| 2026-09-11 | AME / AME-AMP 统一 benchmark 接入 | 专用 adapter、六类 CLI/launcher、真实 IsaacLab 1024-env smoke | pass | regression `47 passed`; AME `1024 x 48`: `9 episodes`, `27 valid_windows`, `3557.26 env-steps/s`; AME-AMP: `8`, `27`, `4414.48`; finite outputs; no residual process | [T305](../todo/T305-policy-benchmark.md) | [integration smoke](2026-09-11-policy-benchmark-ame-integration-smoke.md) |
+
+| 2026-09-06 | small_runway 缺失与 Distillation 无结果排查 | 真实 IsaacLab 1024-env AMP/Distillation small runway、wrapper observation contract、shutdown 异常传播 | pass; root cause fixed | AMP `1024 x 48`: `104 episodes`, `27 valid_windows`, `3222.23 env-steps/s`; Distillation `1024 x 48`: `30 episodes`, `27 valid_windows`, `4131.79 env-steps/s`; regression `50 passed`; no NaN/Inf/OOM/traceback | [T305](../todo/T305-policy-benchmark.md) | [debug](2026-09-06-policy-benchmark-small-runway-distillation-debug.md) |
+
 | 2026-09-03 | 统一策略 benchmark harness 与 1024-env smoke | AMP / Distillation / PPO / Teacher 单权重评测、24 帧 valid-only MSE、固定 manifest | pass | unit `20 passed`; real AMP `1024 x 48`, `5683.82 env-steps/s`, `6 episodes`, `27 valid_windows`, no NaN/Inf/OOM/Traceback | [T305](../todo/T305-policy-benchmark.md) | [implementation and smoke](2026-09-03-policy-benchmark-implementation-and-smoke.md) |
 
 | 2026-09-03 | AMP / Distillation / PPO 统一策略评测设计 | 中文 HTML 规格、三套仿真 suite、500-env 固定布局、120 组 mixed velocity、valid-only MSE、单权重顺序运行 | design approved; implementation pending | HTML 361 lines; `git diff --check` pass; no runtime test started | [T305](../todo/T305-policy-benchmark.md) | [design](2026-09-03-policy-benchmark-design.md) |

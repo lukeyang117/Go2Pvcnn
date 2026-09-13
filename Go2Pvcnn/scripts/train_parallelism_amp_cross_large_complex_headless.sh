@@ -23,7 +23,7 @@ exec "${ISAAC_ENV}/bin/python" \
   --experiment parallelism_tracking_cross_large_complex_amp \
   --num_envs "${NUM_ENVS:-1024}" \
   --headless \
-  --max_iterations "${MAX_ITERATIONS:-2000}" \
+  --max_iterations "${MAX_ITERATIONS:-3500}" \
   --resume \
   --load_checkpoint "${CHECKPOINT}" \
   --keep_std

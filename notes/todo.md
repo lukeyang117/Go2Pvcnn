@@ -6,6 +6,13 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 - 2026-09-11 T305 统一策略评测新增 SemLoco：复用默认 adapter，最新 `model_19999.pt` 通过真实 1024 env x 48 transitions smoke，得到 `27 valid_windows` 与 `5224.88 env-steps/s`，详见 [SemLoco integration smoke](log/2026-09-11-policy-benchmark-semloco-integration-smoke.md)。
 
+- 2026-09-11 T305 统一策略评测新增 AME 与 AME-AMP：专用 adapter 与六类 launcher 已提交，两个最新最长 checkpoint 均通过真实 1024 env x 48 transitions smoke，分别得到 `27` 个 valid windows，详见 [integration smoke](log/2026-09-11-policy-benchmark-ame-integration-smoke.md)。
+
+- 2026-09-03 T305 统一策略评测已实现并完成真实 AMP 验收：1024 env x 48 transitions，`5683.82 env-steps/s`、`6 episodes`、`27 valid_windows`，无 NaN/Inf/OOM/Traceback。四模型、三套 suite、固定 manifest、24/23 timing、valid-only MSE 和正式汇总入口均已落地，见 [T305 branch page](todo/T305-policy-benchmark.md)。
+- 2026-09-06 T305 真实 `small_runway` 已验收：AMP 与修复后的 Distillation 均通过 1024 env x 48 steps；此前缺失源于 suite 从未启动，Distillation 无结果源于 wrapper 漏传 critic/context，详见 [debug log](log/2026-09-06-policy-benchmark-small-runway-distillation-debug.md)。
+
+- 2026-08-31 最新 AMP 长跑 `2026-08-28_18-54-54/4161d7b` 已完成到 iteration `3499`，但行为在训练中后期崩溃：`Policy/mean_noise_std` 峰值 `13.66`，末尾仍为 `4.99`；`valid_bad_orientation` 末尾约 `0.963`；`AMP/value_loss` 峰值 `1.13e6` 实为基础 critic，真正 `AMP/amp_value_loss` 峰值约 `167.7`。根因跟踪转入“AMP PPO std/KL 控制与判别器饱和”开放节点，见 [长跑诊断](log/2026-08-31-parallelism-amp-long-run-diagnosis.md)。
+
 - 2026-08-28 Parallelism AMP actor guidance now warms up after the existing AMP Critic/discriminator path: actor AMP weight is `0` through iteration `500`, ramps to `0.1` by `600`, and then stays fixed. The real `1024 env x 4 iteration` resume smoke and focused `24`-test suite pass without NaN/Inf/Traceback/OOM. See [warm-up verification](log/2026-08-28-parallelism-amp-warmup-real-smoke.md), [AMP smoke evidence](log/2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md), and the [Chinese HTML design](../docs/superpowers/specs/2026-08-27-parallelism-joint-amp-design-zh.html).
 
   Branch details: [T304 Parallelism AMP](todo/T304-parallelism-amp.md).
@@ -200,12 +207,15 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 ## Active Fronts
 
+- [T305 统一策略评测 Benchmark](todo/T305-policy-benchmark.md): 六类模型 harness 和真实接线 smoke 已完成；下一步运行六个正式 checkpoint 的三套 suite 并生成论文统计。
+
 - [T303 Parallelism flat foot planner](todo/T303-parallelism-flat-foot-planner.md): verify state. Self-contained flat/highmap batched planner, RL adapter, and viewer backend route are implemented on branch `Parallelism`; real Isaac viewer smoke is the next follow-up.
 
 - [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md): final Task 16 flat is closed (`19/19`, real KKT, full package `284 passed`). Task 17 small-obstacle crossing is the active behavior gate; Tasks 18-19 large/viewer/RL-batch/performance remain blocked behind it.
 
 | Front | State | Why It Matters Now | Next Step |
 | --- | --- | --- | --- |
+| T305 | verification | AMP/Distillation/PPO/Teacher/AME/AME-AMP need a reproducible paired simulation benchmark for complex mixed terrain, large-obstacle avoidance, small-obstacle crossing, and valid planner tracking MSE. | six-model harness and AME variants smoke verified; formal paper sweep remains open. |
 | T302q | active | Flat-small run `2026-06-11_18-31-19` has stable locomotion and signal-first clearance is nonzero, but curriculum never opens and the semantic signal is tiny. | Redesign curriculum metrics/gate aggregation before another long run; optionally eval `model_20700.pt` only as behavior sanity. |
 | T302s | active | Fixed command ranges opened terrain curriculum, and controlled crossing eval now has sufficient path-obstacle opportunities. `model_28900.pt` still has `foot_over_count=0` and overpass success `0/15`, so the current training signal is not teaching clean low-small overpass. | Redesign training to provide staged/dense path-aligned crossing signal instead of continuing this run blindly. |
 | T302r | active | Geometry clearance is implemented and confirmed nonzero in training logs, but its magnitude is tiny (`~1e-7` mean), so it is not yet a strong learning signal. | Decide whether to rescale clearance reward and/or add part-level diagnostics after curriculum metric cleanup. |
@@ -220,6 +230,7 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 
 | Root | Status | Stage | Branch | Current | Refs |
 | --- | --- | --- | --- | --- | --- |
+| T305 | verify | unified policy benchmark | `parallelism-amp` | six-model harness and AME/AME-AMP 1024-env smoke passed; formal sweep pending | design [2026-09-03](../docs/superpowers/specs/2026-09-03-policy-benchmark-design-zh.html); latest [2026-09-11](log/2026-09-11-policy-benchmark-ame-integration-smoke.md) |
 | T303 | verify | Parallelism flat foot planner | `Parallelism` | Self-contained 24-frame trot foot planner, 50 candidates per foot, torch single-pass filter/score, RL adapter, and viewer backend route; real viewer smoke remains open. | design [2026-07-27](../docs/superpowers/specs/2026-07-27-parallelism-flat-foot-planner-design.html); latest log [2026-07-27](log/2026-07-27-parallelism-flat-foot-planner-implementation.md) |
 | T302q | active | flat small-obstacle avoidance RL reward | [T302q](todo/T302q-flat-small-avoidance-reward-plan.md) | Local implementation complete; focused regression, pycompile, fresh IsaacLab train smoke, and old-checkpoint resume smoke pass; small-collision eval smoke remains open. | design [2026-06-10](../docs/superpowers/specs/2026-06-10-flat-small-obstacle-avoidance-reward-design.html); latest log [2026-06-10 20:35](log/2026-06-10-2035-t302q-flat-small-local-implementation-and-smoke.md) |
 | T302r | active | Go2 geometry clearance reward | [T302r](todo/T302r-go2-geometry-clearance-reward-plan.md) | Local implementation, smoke, and radius/margin probe pass; signal-first params can produce nonzero reward, but TensorBoard sanity is still open. | design [2026-06-11](../docs/superpowers/specs/2026-06-11-go2-body-geometry-clearance-reward-design.html); latest log [2026-06-11 18:10](log/2026-06-11-1810-t302r-clearance-radius-margin-probe.md) |
@@ -242,6 +253,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | T000 | done | notes workflow | [T000](todo/T000-notes-workflow.md) | memory system bootstrapped | feature `7cf6c11` |
 
 ## Open Leaves
+
+- T305.3 formal paper evaluation: run paired conditions for all six weights and generate confidence intervals and paired statistics; [branch page](todo/T305-policy-benchmark.md), [latest smoke](log/2026-09-11-policy-benchmark-ame-integration-smoke.md).
 
 - T302v Task 17 small-obstacle gate: start with one controlled cuboid at `vx=0.2m/s`, require safe behind touchdown, convex region, nominal and whole-leg sweep safety, strict crossing, and zero world-map collision before expanding phases/shapes/speeds; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [flat prerequisite](log/2026-07-23-joint-mpc-rti-final-flat-gate-closure.md).
 - T302v.7 support-driven gait quality: current root command integration carries both stance and swing feet; define stance-slip, swing touchdown-lead, and root/support phase metrics before behavior changes; [branch page](todo/T302v-joint-mpc-rti-gpu.md), [quantification](log/2026-07-17-joint-mpc-root-foot-propulsion-order-quantification.md).
@@ -270,6 +283,8 @@ This page is the fast-start dashboard for agent work. Detailed memory lives in [
 | T302k.17 | T302k | verify | P0 | Nominal extraction Task 1 is implemented, committed, and covered by local regression tests. | [T302k](todo/T302k-parametric-mpc-trajectory-contract.md#open-children) |
 
 ## Branch Pages
+
+- [T305-policy-benchmark.md](todo/T305-policy-benchmark.md)
 
 - [T302v joint MPC RTI GPU](todo/T302v-joint-mpc-rti-gpu.md)
 

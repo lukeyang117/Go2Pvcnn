@@ -15,4 +15,4 @@ export LD_LIBRARY_PATH="${ISAAC_ENV}/lib/python3.10/site-packages/torch/lib:${IS
   --experiment cross_large_complex_ppo \
   --num_envs "${NUM_ENVS:-1024}" \
   --headless \
-  --max_iterations "${MAX_ITERATIONS:-20000}"
+  --max_iterations "${MAX_ITERATIONS:-10000}"

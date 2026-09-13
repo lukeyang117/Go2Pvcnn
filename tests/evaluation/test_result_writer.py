@@ -21,3 +21,14 @@ def test_result_writer_rejects_hash_mismatch(tmp_path) -> None:
         assert "hash" in str(exc)
     else:
         raise AssertionError("expected hash mismatch")
+
+
+def test_result_writer_preserves_multiple_episodes_for_same_condition(tmp_path) -> None:
+    writer = ResultWriter(tmp_path, {"manifest_hash": "x"})
+    writer.write_episode({"condition_id": "same", "episode": 1})
+    writer.write_episode({"condition_id": "same", "episode": 2})
+
+    records = []
+    for path in sorted((tmp_path / "episodes").glob("*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    assert [row["episode"] for row in records] == [1, 2]

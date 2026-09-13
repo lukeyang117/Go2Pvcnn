@@ -16,6 +16,7 @@ class ResultWriter:
         self.episodes.mkdir(parents=True, exist_ok=True)
         self.progress_path = self.root / "progress.json"
         self.manifest_path = self.root / "run_manifest.json"
+        self._next_episode_index = len(tuple(self.episodes.glob("*.jsonl")))
         candidate = dict(run_manifest)
         candidate.setdefault("schema_version", 1)
         if self.manifest_path.exists():
@@ -31,7 +32,8 @@ class ResultWriter:
         if not condition_id:
             raise ValueError("episode record requires condition_id")
         safe_id = condition_id.replace("/", "_").replace("\\", "_")
-        target = self.episodes / f"{safe_id}.jsonl"
+        target = self.episodes / f"{safe_id}__episode_{self._next_episode_index:08d}.jsonl"
+        self._next_episode_index += 1
         payload = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
         self._atomic_text(target, payload)
         return target

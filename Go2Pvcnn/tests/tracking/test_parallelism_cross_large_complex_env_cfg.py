@@ -62,7 +62,8 @@ def test_cross_large_teacher_training_script_is_fresh() -> None:
     source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_distilation.sh").read_text()
     assert "parallelism_tracking_cross_large_complex" in source
     assert "--headless" in source
-    assert "--max_iterations 2000" in source
+    assert 'MAX_ITERATIONS="${MAX_ITERATIONS:-2000}"' in source
+    assert '--max_iterations "${MAX_ITERATIONS}"' in source
     assert "--resume" not in source
     assert "--load_run" not in source
     assert "--load_checkpoint" not in source
@@ -73,5 +74,5 @@ def test_cross_large_resume_script_loads_latest_requested_checkpoint() -> None:
     source = (ROOT / "scripts/train_parallelism_large_obstacles_rl_headless_resume.sh").read_text()
     assert "--resume" in source
     assert "--keep_std" in source
-    assert "--load_run 2026-08-18_20-30-59/6def073" in source
-    assert "--load_checkpoint model_4999.pt" in source
+    assert "--load_run 2026-08-20_17-05-30/91b27a4" in source
+    assert "--load_checkpoint model_1900.pt" in source

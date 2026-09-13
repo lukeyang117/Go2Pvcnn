@@ -15,6 +15,12 @@ that.
 
 - Long-run AMP quality and reward-weight tuning remain open; this task validates
   the training data path and stability smoke.
+- Long-run behavior collapse is reproduced in `2026-08-28_18-54-54/4161d7b`:
+  action std grows without an upper bound, `valid_bad_orientation` reaches
+  `0.963`, and the discriminator remains saturated near 100% expert/agent
+  accuracy. Immediate hypotheses are missing std/KL control in the AMP PPO
+  override and a non-informative saturated D signal; `AMP/amp_value_loss` is
+  not the dominant exploding metric.
 
 ## Closed Children Archive
 
@@ -25,6 +31,7 @@ that.
 
 - [2026-08-27 AMP batched transition and smoke](../log/2026-08-27-parallelism-amp-batched-transition-and-1024-smoke.md)
 - [2026-08-28 AMP warm-up and real smoke](../log/2026-08-28-parallelism-amp-warmup-real-smoke.md)
+- [2026-08-31 AMP long-run diagnosis](../log/2026-08-31-parallelism-amp-long-run-diagnosis.md)
 
 ## Git Refs
 
@@ -34,8 +41,10 @@ that.
 
 ## Next Step
 
-Use the AMP launcher with a longer resume run after selecting reward/value
-coefficients. Distillation and pure PPO launchers remain unchanged.
+Before another long run, instrument AMP reward/active-ratio and KL, then test
+the AMP PPO update against standard PPO KL/std controls. Keep reward/value
+coefficient changes separate from optimizer-control changes. Distillation and
+pure PPO launchers remain unchanged.
 
 ## Node Details
 

@@ -23,3 +23,15 @@ def test_episode_accumulator_tracks_path_and_progress() -> None:
     record = acc.finish(torch.tensor([0]))[0]
     assert record["traversed_path_m"] == torch.sqrt(torch.tensor(2.0)).item()
     assert record["command_progress_m"] == 1.0
+
+
+def test_episode_accumulator_contact_rate_uses_valid_steps() -> None:
+    acc = EpisodeAccumulator(1, torch.device("cpu"))
+    root = torch.zeros(1, 3)
+    command = torch.tensor([[1.0, 0.0, 0.0]])
+    acc.update(root, command, torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.ones(1, dtype=torch.bool))
+    acc.update(root, command, torch.ones(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool))
+    acc.update(root, command, torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool), torch.ones(1, dtype=torch.bool), torch.ones(1, dtype=torch.bool))
+
+    record = acc.finish(torch.tensor([0]))[0]
+    assert record["contact_step_rate"] == 0.0
