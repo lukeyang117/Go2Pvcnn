@@ -137,6 +137,28 @@ env.step(policy_action_16)  # wheel 四列由 RL 决定，不被 planner 覆盖<
     <tr><td>Velocity</td><td>lin/ang tracking 与 command range</td><td>算法语义不变；上限按 wheel radius、可用轮速和 M1 稳定性核验。</td></tr>
     <tr><td>Termination</td><td>root/foot/joint distance、standstill</td><td>joint distance 12 维；foot distance 比较轮心；轮子不得触发 planner joint violation。</td></tr>
   </tbody></table>
+  <h3>9.1 可直接落地的 M1 尺寸基线</h3>
+  <p>下面是实现 M1 reward/config 时的第一版基线，不把 Go2 数值整体按比例缩放。Agent 必须从 M1 常量导入这些值；最终实验标定只能在此基线之上进行。</p>
+  <table><thead><tr><th>参数/奖励项</th><th>M1 基线</th><th>处理方式</th></tr></thead><tbody>
+    <tr><td><code>scene.robot.init_state.pos.z</code> / flat root</td><td><code>M1_ROOT_Z_M = 0.515910 m</code></td><td>由 <code>wheel_radius + 0.26*cos(hip) + 0.28*cos(hip+knee)</code> 计算，禁止继续使用 Go2 的 <code>0.30 m</code>。</td></tr>
+    <tr><td>foot reference / touchdown</td><td>四个 M1 FOOT_LINK 轮心；接触面向下偏移 <code>0.095958 m</code></td><td>USD 的 FOOT_LINK 是轮心，不是地面接触点；reference 和实际值必须使用同一坐标定义。</td></tr>
+    <tr><td>foot position std / distance threshold</td><td>初始 <code>0.10 m</code> / <code>0.25 m</code>，作为待实测项</td><td>先用 wheel horizontal envelope <code>0.119208 m</code> 检查量级，再按 8-env 平地、box、楼梯误差分布标定。</td></tr>
+    <tr><td>swing / obstacle-over clearance</td><td>wheel radius <code>0.095958 m</code> + 额外 clearance；thickness <code>0.04650 m</code></td><td>障碍检测使用轮盘水平包络 <code>0.119208 m</code>；垂向条件必须覆盖轮盘半径，不能只抬轮心。</td></tr>
+    <tr><td>joint reference / limit rewards</td><td>只选 12 个 ABAD/HIP/KNEE；HIP <code>[-2.443,2.443]</code>、KNEE <code>[-2.801,2.801]</code> rad，ABAD 使用分腿限位</td><td>reference_joint_pos/vel/max、dof_pos_limits 禁止选中轮子；std 以 M1 正常轨迹相对默认站姿的 95 分位误差标定。</td></tr>
+    <tr><td>joint vel/acc/torque/energy</td><td>腿部与轮子分开统计；轮子不进入 Parallelism reference</td><td>算法语义保持 Go2；数值按 M1 actuator、轮速上限和关节单位复核，不用腿部角速度阈值约束轮子滚动。</td></tr>
+    <tr><td>air-time / slide / variance</td><td>接触对象为轮盘；正常滚动不是非法 slide</td><td>只有选中的障碍 swing 才计入离地；平地 trot 周期的 xy 滑行必须与抬腿 mask 分开。</td></tr>
+    <tr><td>undesired contact / collision</td><td>M1 thigh/hip/calf box 和 wheel cylinder；wheel radius <code>0.095958 m</code></td><td>接触阈值单位是 N，不按长度缩放；body selector 使用 M1 实际名称，轮子接触不等于腿部非法碰撞。</td></tr>
+    <tr><td>root / orientation / velocity</td><td>root z 使用 M1_ROOT_Z 或 terrain + wheel radius + clearance；速度由 <code>v = r*omega</code> 反推</td><td>位置阈值按 M1 wheelbase/leg reach 标定；角度语义先保持 Go2；速度上限需检查轮速饱和，不能直接复制 Go2 上限。</td></tr>
+    <tr><td>reward weights / AME-AMP 超参数</td><td>保持 <code>parallelism-amp</code> 原值和更新语义</td><td>权重不是几何长度；AMP critic、discriminator、PPO/GAE、replay 不因 M1 尺寸变化而修改。</td></tr>
+  </tbody></table>
+  <div class="box danger"><b>实现硬约束：</b>所有 M1 reward selector 使用命名索引：<code>M1_PLANNER_JOINT_NAMES</code>、<code>M1_WHEEL_JOINT_NAMES</code>、四个 M1 FOOT_LINK 和 M1 collision body selector。禁止无验证地继承 <code>joint_names=".*"</code> 或 <code>body_names=".*_foot"</code>。</div>
+  <h3>9.2 参数验收顺序</h3>
+  <ol>
+    <li>静态检查每个 reward term 的 selector、shape、单位和 M1 解析 ids；reference joint 必须为 12 维，RL action 必须为 16 维。</li>
+    <li>几何检查默认站姿下四个轮心高度、轮底高度、root z 和 foot reference 偏差均有限；平地不触发 clearance/非法接触。</li>
+    <li>行为检查平地轮式滑行、非平地 terrain-following、box/楼梯跨越小障碍，记录 reward 均值、95 分位和触发次数。</li>
+    <li>一次只改一个尺寸相关参数，并保存 Go2/M1 参数快照，确保不改变 Go2 分支。</li>
+  </ol>
   <p>每个修改参数都要在提交说明中给出：旧值、M1 新值、单位、来源（USD/公式/实测/实验）、影响项和测试。没有来源的“调到能跑”不接受。</p>
 
   <h2>10. RL 算法必须完全复现</h2>
