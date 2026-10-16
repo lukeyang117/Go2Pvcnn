@@ -147,6 +147,103 @@ class SemanticObstacleCurriculumState:
     episode_had_small_collision: torch.Tensor | None = None
 
 
+CURRICULUM_STATE_FORMAT_VERSION = 1
+
+
+def _curriculum_root(env):
+    return getattr(env, "unwrapped", env)
+
+
+def _sync_terrain_origins(terrain, scene) -> None:
+    origin_device = getattr(terrain.terrain_origins, "device", None)
+    levels = torch.as_tensor(terrain.terrain_levels, dtype=torch.long, device=origin_device)
+    terrain_types = torch.as_tensor(terrain.terrain_types, dtype=torch.long, device=levels.device)
+    # IsaacLab's TerrainImporter owns and updates ``env_origins``.  Calling its
+    # public method keeps this compatible with InteractiveScene, whose
+    # ``scene.env_origins`` is a read-only property in current IsaacLab.
+    update_origins = getattr(terrain, "update_env_origins", None)
+    if callable(update_origins):
+        env_ids = torch.arange(levels.numel(), dtype=torch.long, device=levels.device)
+        no_move = torch.zeros_like(env_ids, dtype=torch.bool)
+        update_origins(env_ids, no_move, no_move)
+    else:
+        origins = terrain.terrain_origins[levels, terrain_types].clone()
+        current = getattr(terrain, "env_origins", None)
+        if isinstance(current, torch.Tensor) and tuple(current.shape) == tuple(origins.shape):
+            current.copy_(origins.to(device=current.device, dtype=current.dtype))
+        else:
+            terrain.env_origins = origins
+    if hasattr(scene, "env_origins"):
+        # Older test doubles expose a writable attribute; InteractiveScene does
+        # not.  In the latter case the property already reads terrain origins.
+        try:
+            scene.env_origins = terrain.env_origins
+        except AttributeError:
+            pass
+
+
+def capture_terrain_curriculum_state(env) -> dict[str, object] | None:
+    """Capture the mutable terrain curriculum state in a portable CPU payload."""
+    root = _curriculum_root(env)
+    scene = getattr(root, "scene", None)
+    terrain = getattr(scene, "terrain", None)
+    if terrain is None or not all(hasattr(terrain, name) for name in ("terrain_levels", "terrain_types")):
+        return None
+    state = getattr(root, "_semantic_obstacle_curriculum_state", None)
+    collision = getattr(state, "episode_had_small_collision", None)
+    return {
+        "format_version": CURRICULUM_STATE_FORMAT_VERSION,
+        "terrain_levels": torch.as_tensor(terrain.terrain_levels).detach().cpu().clone(),
+        "terrain_types": torch.as_tensor(terrain.terrain_types).detach().cpu().clone(),
+        "episode_had_small_collision": (
+            None if collision is None else torch.as_tensor(collision).detach().cpu().clone()
+        ),
+    }
+
+
+def restore_terrain_curriculum_state(env, snapshot: dict[str, object] | None, *, legacy_level: int = 1) -> str:
+    """Restore terrain rows/origins, or explicitly warm-start old checkpoints at row one."""
+    root = _curriculum_root(env)
+    scene = getattr(root, "scene", None)
+    terrain = getattr(scene, "terrain", None)
+    if terrain is None or not all(hasattr(terrain, name) for name in ("terrain_levels", "terrain_types")):
+        return "unavailable"
+    current_levels = torch.as_tensor(terrain.terrain_levels)
+    current_types = torch.as_tensor(terrain.terrain_types)
+    if snapshot is None:
+        max_level = int(getattr(terrain, "max_terrain_level", 10)) - 1
+        level = max(0, min(int(legacy_level), max_level))
+        terrain.terrain_levels.fill_(level)
+        mode = "legacy_row1_warm_start"
+    else:
+        if int(snapshot.get("format_version", -1)) != CURRICULUM_STATE_FORMAT_VERSION:
+            raise ValueError("Unsupported AME curriculum state format")
+        saved_levels = torch.as_tensor(snapshot.get("terrain_levels"), dtype=current_levels.dtype)
+        saved_types = torch.as_tensor(snapshot.get("terrain_types"), dtype=current_types.dtype)
+        if tuple(saved_levels.shape) != tuple(current_levels.shape) or tuple(saved_types.shape) != tuple(current_types.shape):
+            raise ValueError("AME curriculum state shape does not match the runtime environment")
+        if not torch.equal(saved_types.cpu(), current_types.detach().cpu()):
+            raise ValueError("AME curriculum terrain column assignment does not match the runtime environment")
+        terrain.terrain_levels.copy_(saved_levels.to(device=current_levels.device))
+        mode = "checkpoint_state"
+    _sync_terrain_origins(terrain, scene)
+    collision = snapshot.get("episode_had_small_collision") if snapshot is not None else None
+    if collision is not None:
+        collision = torch.as_tensor(collision, dtype=torch.bool, device=current_levels.device)
+        if collision.numel() != current_levels.numel():
+            raise ValueError("AME curriculum collision-state shape does not match the runtime environment")
+    state = getattr(root, "_semantic_obstacle_curriculum_state", None)
+    if state is None:
+        state = SemanticObstacleCurriculumState()
+        root._semantic_obstacle_curriculum_state = state
+    state.episode_had_small_collision = (
+        torch.zeros_like(current_levels, dtype=torch.bool) if collision is None else collision.clone()
+    )
+    return mode
+
+
+
+
 def _ensure_episode_collision_state(
     state: SemanticObstacleCurriculumState,
     num_envs: int,
@@ -209,6 +306,9 @@ __all__ = [
     "SemanticObstacleCount",
     "SemanticObstacleCurriculumCfg",
     "SemanticObstacleCurriculumState",
+    "CURRICULUM_STATE_FORMAT_VERSION",
+    "capture_terrain_curriculum_state",
+    "restore_terrain_curriculum_state",
     "clamp_row_index",
     "count_for_row",
     "count_to_dict",
