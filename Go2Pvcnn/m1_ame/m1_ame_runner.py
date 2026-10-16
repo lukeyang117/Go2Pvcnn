@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from ame_baseline.actor_critic_ame import ActorCriticAME
+from m1_ame.m1_actor_critic_ame import M1ActorCriticAME
 from m1_ame import M1_AME_ACTION_DIM, M1_AME_CRITIC_OBS_DIM, M1_AME_POLICY_OBS_DIM
 from rsl_rl.runners import on_policy_runner
 
@@ -17,7 +17,7 @@ M1_AME_ARCHITECTURE_SIGNATURE = "m1_ame_xyz_semantic_v1_c6_s16_mha64_h16"
 
 class M1AmeOnPolicyRunner(on_policy_runner.OnPolicyRunner):
     def __init__(self, *args, **kwargs):
-        on_policy_runner.ActorCriticAME = ActorCriticAME
+        on_policy_runner.ActorCriticAME = M1ActorCriticAME
         super().__init__(*args, **kwargs)
         self.source_metadata = None
 

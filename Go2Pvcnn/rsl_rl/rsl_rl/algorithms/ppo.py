@@ -250,6 +250,7 @@ class PPO:
     def update(self):
         mean_value_loss = 0
         mean_surrogate_loss = 0
+        num_valid_updates = 0
         if self.actor_critic.is_recurrent:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
@@ -326,6 +327,13 @@ class PPO:
             # Compute PPO loss
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
 
+            # A non-finite rollout/minibatch must not poison the policy.  This
+            # is a no-op for the normal finite PPO path and protects long M1
+            # runs when a transient physics or network value becomes invalid.
+            if not torch.isfinite(loss).all():
+                self.optimizer.zero_grad()
+                continue
+
             # Gradient step
             self.optimizer.zero_grad()
             loss.backward()
@@ -339,14 +347,18 @@ class PPO:
                         param.grad.data /= self.world_size
             
             # Clip gradients (only actor_critic, PVCNN not trained)
-            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            grad_norm = nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            if not torch.isfinite(grad_norm).all():
+                self.optimizer.zero_grad()
+                continue
             
             self.optimizer.step()
 
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
+            num_valid_updates += 1
 
-        num_updates = self.num_learning_epochs * self.num_mini_batches
+        num_updates = max(num_valid_updates, 1)
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         
