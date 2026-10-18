@@ -87,6 +87,10 @@ class M1AmeOnPolicyRunner(on_policy_runner.OnPolicyRunner):
         super().log(locs, width=width, pad=pad)
         if self.writer is None:
             return
+        from m1_ame.m1_diagnostics import collect_m1_joint_diagnostics
+
+        for key, value in collect_m1_joint_diagnostics(self.env).items():
+            self.writer.add_scalar(f"M1/{key}", float(value.item()), locs["it"])
         root = getattr(self.env, "unwrapped", self.env)
         manager = getattr(root, "curriculum_manager", None)
         states = getattr(manager, "_curriculum_state", {}) if manager is not None else {}

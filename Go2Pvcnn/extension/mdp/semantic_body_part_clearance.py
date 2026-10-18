@@ -553,6 +553,7 @@ def infer_current_small_semantic_contact(
     asset_cfg,
     scanner_cfg,
     contact_sensor_cfg,
+    body_name_patterns=None,
     small_semantic_ids=(1,),
     force_threshold=1.0,
     force_scale=25.0,
@@ -566,13 +567,19 @@ def infer_current_small_semantic_contact(
     scanner = env.scene[scanner_cfg.name]
     contact_sensor = env.scene[contact_sensor_cfg.name]
     root = getattr(env, "unwrapped", env)
-    body_ids = getattr(root, "_semantic_body_part_clearance_body_ids", None)
+    patterns = body_name_patterns or {"foot": ".*_foot", "calf": ".*_calf", "thigh": ".*_thigh"}
+    cache = getattr(root, "_semantic_body_part_clearance_body_ids_by_pattern", None)
+    if cache is None:
+        cache = {}
+        root._semantic_body_part_clearance_body_ids_by_pattern = cache
+    cache_key = tuple(sorted((str(key), str(value)) for key, value in patterns.items()))
+    body_ids = cache.get(cache_key)
     if body_ids is None:
-        foot_ids, _ = robot.find_bodies(".*_foot")
-        calf_ids, _ = robot.find_bodies(".*_calf")
-        thigh_ids, _ = robot.find_bodies(".*_thigh")
-        body_ids = {"foot": foot_ids, "calf": calf_ids, "thigh": thigh_ids}
-        root._semantic_body_part_clearance_body_ids = body_ids
+        body_ids = {
+            key: robot.find_bodies(pattern)[0]
+            for key, pattern in patterns.items()
+        }
+        cache[cache_key] = body_ids
     device = torch.as_tensor(robot.data.body_pos_w).device
     terrain = _current_scanner_terrain(scanner, device=device)
     points = _current_body_part_sample_points(

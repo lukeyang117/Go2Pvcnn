@@ -151,6 +151,7 @@ def _flat_episode_curriculum_info(
     env: ManagerBasedRLEnv,
     cfg_name: str = "semantic_obstacle_curriculum",
     completed_env_ids: torch.Tensor | None = None,
+    body_name_patterns: dict[str, str] | None = None,
 ) -> tuple[object | None, dict[str, torch.Tensor | bool]]:
     device = torch.device(getattr(env, "device", "cpu"))
     cfg = getattr(env.cfg, cfg_name, None)
@@ -190,6 +191,7 @@ def _flat_episode_curriculum_info(
                 asset_cfg=SceneEntityCfg("robot"),
                 scanner_cfg=SceneEntityCfg("semantic_height_scanner"),
                 contact_sensor_cfg=SceneEntityCfg("contact_forces"),
+                body_name_patterns=body_name_patterns,
                 small_semantic_ids=(1,),
                 force_threshold=float(cfg.collision_force_threshold),
             )
@@ -298,6 +300,7 @@ def terrain_levels_vel_semantic_plane_gate(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     cfg_name: str = "semantic_obstacle_curriculum",
     excluded_terrain_names: tuple[str, ...] = (),
+    body_name_patterns: dict[str, str] | None = None,
 ) -> dict[str, torch.Tensor]:
     """Terrain curriculum with semantic collision gate applied only to flat env move-up."""
     device = torch.device(getattr(env, "device", "cpu"))
@@ -314,7 +317,12 @@ def terrain_levels_vel_semantic_plane_gate(
     terrain_move_down = distance < torch.norm(command[env_ids_t, :2], dim=1) * env.max_episode_length_s * 0.5
     terrain_move_down = torch.logical_and(terrain_move_down, torch.logical_not(terrain_move_up))
 
-    cfg, info = _flat_episode_curriculum_info(env, cfg_name=cfg_name, completed_env_ids=env_ids_t)
+    cfg, info = _flat_episode_curriculum_info(
+        env,
+        cfg_name=cfg_name,
+        completed_env_ids=env_ids_t,
+        body_name_patterns=body_name_patterns,
+    )
     terrain_types = getattr(terrain, "terrain_types", None)
     terrain_names = _terrain_names_from_env(env)
     if cfg is None or terrain_types is None or len(terrain_names) == 0:
@@ -356,4 +364,14 @@ def terrain_levels_vel_semantic_plane_gate(
 
     return {
         "mean_terrain_level": torch.mean(terrain.terrain_levels.float()),
+        "mean_root_distance": torch.mean(distance),
+        "mean_root_world_x": torch.mean(asset.data.root_pos_w[env_ids_t, 0]),
+        "mean_root_world_y": torch.mean(asset.data.root_pos_w[env_ids_t, 1]),
+        "mean_env_origin_x": torch.mean(env.scene.env_origins[env_ids_t, 0]),
+        "mean_env_origin_y": torch.mean(env.scene.env_origins[env_ids_t, 1]),
+        "mean_local_root_x": torch.mean(asset.data.root_pos_w[env_ids_t, 0] - env.scene.env_origins[env_ids_t, 0]),
+        "mean_local_root_y": torch.mean(asset.data.root_pos_w[env_ids_t, 1] - env.scene.env_origins[env_ids_t, 1]),
+        "mean_command_speed": torch.mean(torch.linalg.vector_norm(command[env_ids_t, :2], dim=1)),
+        "move_up_fraction": torch.mean(move_up.to(dtype=torch.float32)),
+        "move_down_fraction": torch.mean(move_down.to(dtype=torch.float32)),
     }

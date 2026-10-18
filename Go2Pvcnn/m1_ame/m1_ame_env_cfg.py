@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -28,6 +30,30 @@ from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
 
 
 M1_AME_JOINT_SELECTOR = tuple(M1_USD_JOINT_NAMES)
+
+
+def m1_reset_root_state_uniform(env, env_ids, pose_range, velocity_range, asset_cfg=SceneEntityCfg("robot")):
+    """Synchronize the semantic terrain origin before resetting the M1 root pose."""
+
+    if env_ids is None:
+        ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+    elif isinstance(env_ids, slice):
+        ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)[env_ids]
+    else:
+        ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
+    terrain = getattr(env.scene, "terrain", None)
+    if terrain is not None and all(
+        hasattr(terrain, name) for name in ("terrain_origins", "terrain_levels", "terrain_types")
+    ):
+        no_move = torch.zeros(ids.shape, dtype=torch.bool, device=ids.device)
+        terrain.update_env_origins(ids, no_move, no_move)
+    return isaac_mdp.reset_root_state_uniform(
+        env,
+        ids,
+        pose_range=pose_range,
+        velocity_range=velocity_range,
+        asset_cfg=asset_cfg,
+    )
 
 
 @configclass
@@ -78,6 +104,21 @@ class M1AmeEventsCfg(TeacherElevationTrajectoryMpcSemanticEventCfg):
             "operation": "add",
         },
     )
+    sync_root_to_terrain = EventTerm(
+        func=m1_reset_root_state_uniform,
+        mode="startup",
+        params={
+            "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)},
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
+        },
+    )
     base_external_force_torque = EventTerm(
         func=isaac_mdp.apply_external_force_torque,
         mode="reset",
@@ -85,6 +126,21 @@ class M1AmeEventsCfg(TeacherElevationTrajectoryMpcSemanticEventCfg):
             "asset_cfg": SceneEntityCfg("robot", body_names=["BASE_LINK"]),
             "force_range": (0.0, 0.0),
             "torque_range": (-0.0, 0.0),
+        },
+    )
+    reset_base = EventTerm(
+        func=m1_reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
         },
     )
 

@@ -30,6 +30,8 @@ def test_m1_ame_config_contains_m1_asset_and_full_joint_state():
     assert "last_action" in source
     assert "planner_owned_reference_cache = False" in source
     assert "use_batched_reference_trajectory = False" in source
+    assert "m1_reset_root_state_uniform" in source
+    assert "sync_root_to_terrain" in source
 
 
 def test_m1_ame_does_not_add_parallelism_reference_observations():
