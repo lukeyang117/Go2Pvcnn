@@ -24,8 +24,14 @@ from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
     TeacherElevationTrajectoryMpcSemanticSceneCfg,
     TeacherElevationTrajectoryMpcSemanticEventCfg,
 )
-from m1_ame.m1_ame_rewards import M1AmeRewardsCfg, M1AmeTerminationsCfg
+from m1_ame.m1_ame_rewards import (
+    M1AmeRewardsCfg,
+    M1AmeTerminationsCfg,
+    M1_LEG_JOINT_NAMES,
+    M1_WHEEL_JOINT_NAMES,
+)
 from m1_ame.m1_ame_curriculum import M1AmeCurriculumCfg
+from m1_ame.m1_mixed_actions import M1MixedJointActionCfg
 from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
 
 
@@ -80,14 +86,16 @@ class M1AmeSceneCfg(TeacherElevationTrajectoryMpcSemanticSceneCfg):
 
 @configclass
 class M1AmeActionsCfg:
-    """Sixteen M1 joint-position actions in USD order."""
+    """Sixteen M1 actions in USD order: legs position-controlled, wheels velocity-controlled."""
 
-    JointPositionAction = isaac_mdp.JointPositionActionCfg(
+    MixedJointAction = M1MixedJointActionCfg(
         asset_name="robot",
         joint_names=list(M1_AME_JOINT_SELECTOR),
-        scale=0.25,
-        use_default_offset=True,
-        clip={".*": (-100.0, 100.0)},
+        leg_joint_names=list(M1_LEG_JOINT_NAMES),
+        wheel_joint_names=list(M1_WHEEL_JOINT_NAMES),
+        leg_scale=0.25,
+        wheel_scale=8.0,
+        wheel_velocity_limit=8.0,
     )
 
 

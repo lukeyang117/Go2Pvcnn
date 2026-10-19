@@ -34,6 +34,16 @@ def test_m1_ame_config_contains_m1_asset_and_full_joint_state():
     assert "sync_root_to_terrain" in source
 
 
+def test_m1_ame_config_uses_mixed_leg_position_wheel_velocity_action():
+    source = (PACKAGE / "m1_ame_env_cfg.py").read_text(encoding="utf-8")
+
+    assert "M1MixedJointActionCfg" in source
+    assert "leg_joint_names=list(M1_LEG_JOINT_NAMES)" in source
+    assert "wheel_joint_names=list(M1_WHEEL_JOINT_NAMES)" in source
+    assert "wheel_scale=8.0" in source
+    assert "JointPositionActionCfg" not in source
+
+
 def test_m1_ame_does_not_add_parallelism_reference_observations():
     source = (PACKAGE / "m1_ame_env_cfg.py").read_text(encoding="utf-8")
 
