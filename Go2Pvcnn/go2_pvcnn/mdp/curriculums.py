@@ -219,6 +219,8 @@ def _flat_episode_curriculum_info(
         if completed_env_ids is not None
         else _completed_episode_env_ids(env, device=device)
     )
+    if _is_initial_reset(env):
+        reset_env_ids = torch.empty(0, dtype=torch.long, device=device)
     flags = state.episode_had_small_collision
     if flags is None or int(flags.numel()) != int(env.num_envs) or flags.device != device:
         flags = torch.zeros(int(env.num_envs), dtype=torch.bool, device=device)
@@ -272,6 +274,16 @@ def _completed_episode_env_ids(env, *, device: torch.device) -> torch.Tensor:
     return torch.empty(0, dtype=torch.long, device=device)
 
 
+def _is_initial_reset(env) -> bool:
+    """Identify IsaacLab's constructor reset, which has no completed episode."""
+
+    step_counter = getattr(env, "common_step_counter", None)
+    episode_length = getattr(env, "episode_length_buf", None)
+    if step_counter is None or episode_length is None:
+        return False
+    return int(step_counter) == 0 and not bool(torch.as_tensor(episode_length).any().item())
+
+
 def _env_bool_buffer(env, kind: str, *, device: torch.device) -> torch.Tensor:
     names_by_kind = {
         "time_out": ("time_out_buf", "time_outs", "truncated_buf"),
@@ -316,6 +328,9 @@ def terrain_levels_vel_semantic_plane_gate(
     terrain_move_up = distance > terrain.cfg.terrain_generator.size[0] / 2
     terrain_move_down = distance < torch.norm(command[env_ids_t, :2], dim=1) * env.max_episode_length_s * 0.5
     terrain_move_down = torch.logical_and(terrain_move_down, torch.logical_not(terrain_move_up))
+    if _is_initial_reset(env):
+        terrain_move_up = torch.zeros_like(terrain_move_up)
+        terrain_move_down = torch.zeros_like(terrain_move_down)
 
     cfg, info = _flat_episode_curriculum_info(
         env,

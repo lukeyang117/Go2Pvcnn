@@ -76,6 +76,8 @@ class M1MixedJointAction(ActionTerm):
             self.cfg.wheel_scale,
             default_leg_pos,
             self.cfg.wheel_velocity_limit,
+            self.cfg.leg_position_lower,
+            self.cfg.leg_position_upper,
         )
         self._processed_actions.zero_()
         self._processed_actions[:, self._leg_action_indices] = self._position_targets
@@ -105,6 +107,8 @@ class M1MixedJointActionCfg(ActionTermCfg):
     leg_scale: float = 0.25
     wheel_scale: float = 8.0
     wheel_velocity_limit: float = 8.0
+    leg_position_lower: tuple[float, ...] | None = None
+    leg_position_upper: tuple[float, ...] | None = None
 
 
 __all__ = ["M1MixedJointAction", "M1MixedJointActionCfg", "split_m1_mixed_action"]

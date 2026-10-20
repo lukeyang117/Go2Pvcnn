@@ -87,6 +87,13 @@ class M1AmeOnPolicyRunner(on_policy_runner.OnPolicyRunner):
         super().log(locs, width=width, pad=pad)
         if self.writer is None:
             return
+        actor_critic = getattr(self.alg, "actor_critic", None)
+        if actor_critic is not None and hasattr(actor_critic, "std"):
+            std = actor_critic.std.detach()
+            self.writer.add_scalar("Policy/action_std_min", float(std.min().item()), locs["it"])
+            self.writer.add_scalar("Policy/action_std_max", float(std.max().item()), locs["it"])
+        if hasattr(self.alg, "last_kl"):
+            self.writer.add_scalar("Loss/approx_kl", float(self.alg.last_kl), locs["it"])
         from m1_ame.m1_diagnostics import collect_m1_joint_diagnostics
 
         for key, value in collect_m1_joint_diagnostics(self.env).items():

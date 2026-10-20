@@ -11,6 +11,27 @@ from rsl_rl.modules import ActorCritic
 from rsl_rl.storage import RolloutStorage
 
 
+def approximate_gaussian_kl(
+    old_mu: torch.Tensor,
+    old_sigma: torch.Tensor,
+    mu: torch.Tensor,
+    sigma: torch.Tensor,
+    *,
+    normalize_by_action_dim: bool = False,
+) -> torch.Tensor:
+    """Compute diagonal-Gaussian KL per sample, optionally normalized by action width."""
+
+    sigma = sigma.clamp_min(1.0e-8)
+    old_sigma = old_sigma.clamp_min(1.0e-8)
+    elementwise = torch.log(sigma / old_sigma + 1.0e-5) + (
+        torch.square(old_sigma) + torch.square(old_mu - mu)
+    ) / (2.0 * torch.square(sigma)) - 0.5
+    kl = torch.sum(elementwise, dim=-1)
+    if normalize_by_action_dim:
+        kl = kl / max(int(old_mu.shape[-1]), 1)
+    return kl
+
+
 class PPO:
     actor_critic: ActorCritic
 
@@ -29,6 +50,7 @@ class PPO:
         use_clipped_value_loss=True,
         schedule="fixed",
         desired_kl=0.01,
+        normalize_kl_by_action_dim=False,
         device="cpu",
         clip_min_std=1e-15,
         pvcnn_model=None,
@@ -54,6 +76,8 @@ class PPO:
         self.desired_kl = desired_kl
         self.schedule = schedule
         self.learning_rate = learning_rate
+        self.normalize_kl_by_action_dim = bool(normalize_kl_by_action_dim)
+        self.last_kl = 0.0
 
         # PPO components
         self.actor_critic = actor_critic
@@ -282,14 +306,15 @@ class PPO:
             # KL
             if self.desired_kl is not None and self.schedule == "adaptive":
                 with torch.inference_mode():
-                    kl = torch.sum(
-                        torch.log(sigma_batch / old_sigma_batch + 1.0e-5)
-                        + (torch.square(old_sigma_batch) + torch.square(old_mu_batch - mu_batch))
-                        / (2.0 * torch.square(sigma_batch))
-                        - 0.5,
-                        axis=-1,
+                    kl = approximate_gaussian_kl(
+                        old_mu_batch,
+                        old_sigma_batch,
+                        mu_batch,
+                        sigma_batch,
+                        normalize_by_action_dim=self.normalize_kl_by_action_dim,
                     )
                     kl_mean = torch.mean(kl)
+                    self.last_kl = float(kl_mean.item())
                     
                     # 🔧 Multi-GPU: Synchronize KL divergence for consistent LR adjustment
                     if self.distributed:

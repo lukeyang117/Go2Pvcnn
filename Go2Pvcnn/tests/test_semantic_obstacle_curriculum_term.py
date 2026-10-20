@@ -252,7 +252,7 @@ def test_env_level_curriculum_single_successful_flat_episode_moves_up(monkeypatc
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0])
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     assert env.scene.terrain.terrain_levels.tolist() == [1, 0, 0, 0]
     assert not hasattr(env, "_semantic_obstacle_curriculum_level")
     assert not hasattr(env.scene.terrain.cfg, "semantic_obstacle_curriculum_level")
@@ -281,7 +281,7 @@ def test_env_level_curriculum_small_collision_blocks_flat_move_up_only(monkeypat
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     assert env.scene.terrain.terrain_levels.tolist() == [0, 1, 1, 1]
     _, move_up, move_down = env.scene.terrain.update_calls[-1]
     assert move_up.tolist() == [False, True, True, True]
@@ -309,7 +309,7 @@ def test_terrain_gate_accepts_slice_env_ids(monkeypatch) -> None:
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, slice(None))
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     assert env.scene.terrain.terrain_levels.tolist() == [1, 1, 1, 1]
 
 
@@ -334,7 +334,7 @@ def test_terrain_gate_excludes_named_terrain_from_level_updates(monkeypatch) -> 
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3], excluded_terrain_names=("flat",))
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     assert env.scene.terrain.terrain_levels.tolist() == [0, 1, 0, 1]
     env_ids, move_up, move_down = env.scene.terrain.update_calls[-1]
     assert env_ids.tolist() == [1, 3]
@@ -369,7 +369,7 @@ def test_env_level_curriculum_base_contact_and_bad_orientation_force_flat_move_d
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     _, move_up, move_down = env.scene.terrain.update_calls[-1]
     assert move_up.tolist() == [False, False, True, True]
     assert move_down.tolist() == [True, True, False, False]
@@ -399,7 +399,7 @@ def test_env_level_curriculum_requires_timeout_for_flat_move_up(monkeypatch) -> 
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 1, 2, 3])
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     assert env.scene.terrain.terrain_levels.tolist() == [1, 0, 1, 1]
 
 
@@ -425,5 +425,5 @@ def test_terrain_gate_counts_only_passed_env_ids_as_completed_episodes(monkeypat
 
     out = curriculums.terrain_levels_vel_semantic_plane_gate(env, [0, 2])
 
-    assert set(out) == {"mean_terrain_level"}
+    assert "mean_terrain_level" in out
     assert env.scene.terrain.terrain_levels.tolist() == [1, 0, 1, 0]

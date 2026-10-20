@@ -30,6 +30,7 @@ from extension.parallelism.types import ParallelismTerrain
 from go2_pvcnn.assets.m1 import M1_USD_JOINT_NAMES
 from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoRewardsCfg
 from tracking.m1_parallelism_viewer_env_cfg import M1_SUPPORT_BODY_NAMES
+from tracking import mdp as tracking_mdp
 from tracking.mdp.policy_geometry_rewards import parallelism_terrain_from_scan
 
 
@@ -45,6 +46,8 @@ M1_UNDESIRED_CONTACT_BODY_NAMES = M1_LEG_LINK_NAMES
 M1_LEG_JOINT_CFG = SceneEntityCfg("robot", joint_names=list(M1_LEG_JOINT_NAMES))
 M1_ALL_JOINT_CFG = SceneEntityCfg("robot", joint_names=list(M1_ALL_JOINT_NAMES))
 M1_WHEEL_BODY_CFG = SceneEntityCfg("robot", body_names=list(M1_SUPPORT_BODY_NAMES))
+M1_SUPPORT_SENSOR_CFG = SceneEntityCfg("contact_forces", body_names=list(M1_SUPPORT_BODY_NAMES))
+M1_SUPPORT_ASSET_CFG = SceneEntityCfg("robot", body_names=list(M1_SUPPORT_BODY_NAMES))
 
 _M1_PLANNER_INDICES = tuple(M1_ASSET_JOINT_NAMES.index(name) for name in M1_PLANNER_JOINT_NAMES)
 
@@ -175,9 +178,28 @@ class M1AmeRewardsCfg(CrossLargeComplexPpoRewardsCfg):
             "velocity_threshold": 0.3,
         },
     )
-    feet_air_time = None
-    air_time_variance = None
-    feet_slide = None
+    feet_air_time = RewTerm(
+        func=go2_mdp.feet_air_time,
+        weight=0.1,
+        params={
+            "sensor_cfg": M1_SUPPORT_SENSOR_CFG,
+            "command_name": "base_velocity",
+            "threshold": 0.5,
+        },
+    )
+    air_time_variance = RewTerm(
+        func=go2_mdp.air_time_variance_penalty,
+        weight=-1.0,
+        params={"sensor_cfg": M1_SUPPORT_SENSOR_CFG},
+    )
+    feet_slide = RewTerm(
+        func=go2_mdp.feet_slide,
+        weight=-0.1,
+        params={
+            "asset_cfg": M1_SUPPORT_ASSET_CFG,
+            "sensor_cfg": M1_SUPPORT_SENSOR_CFG,
+        },
+    )
     undesired_contacts = RewTerm(
         func=isaac_mdp.undesired_contacts,
         weight=-1.0,
@@ -198,7 +220,18 @@ class M1AmeRewardsCfg(CrossLargeComplexPpoRewardsCfg):
             "scanner_cfg": SceneEntityCfg("semantic_height_scanner"),
         },
     )
-    fixed_gait_contact_match = None
+    fixed_gait_contact_match = RewTerm(
+        func=tracking_mdp.fixed_gait_contact_match_reward,
+        weight=0.5,
+        params={
+            "command_name": "base_velocity",
+            "cycle_steps": 24,
+            "half_cycle_steps": 12,
+            "standstill_threshold": 0.05,
+            "contact_force_threshold": 1.0,
+            "sensor_cfg": M1_SUPPORT_SENSOR_CFG,
+        },
+    )
 
 
 @configclass

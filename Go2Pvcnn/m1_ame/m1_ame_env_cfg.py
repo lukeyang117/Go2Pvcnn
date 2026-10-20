@@ -15,7 +15,15 @@ from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 from ame_baseline.ame_env_cfg import AmeObservationsCfg
-from extension.parallelism.m1_kinematics import M1_ROOT_Z_M
+from extension.parallelism.m1_kinematics import (
+    M1_ABAD_LOWER,
+    M1_ABAD_UPPER,
+    M1_HIP_LOWER,
+    M1_HIP_UPPER,
+    M1_KNEE_LOWER,
+    M1_KNEE_UPPER,
+    M1_ROOT_Z_M,
+)
 from go2_pvcnn.assets.m1 import M1_CFG, M1_USD_JOINT_NAMES
 from go2_pvcnn.sensor.semantic_raycaster import SemanticGridRayCasterCfg
 from go2_pvcnn.tasks.teacher_elevation_trajectory_mpc_semantic_env_cfg import (
@@ -36,6 +44,16 @@ from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
 
 
 M1_AME_JOINT_SELECTOR = tuple(M1_USD_JOINT_NAMES)
+M1_LEG_POSITION_LOWER = tuple(
+    value
+    for triple in zip(M1_ABAD_LOWER, M1_HIP_LOWER, M1_KNEE_LOWER)
+    for value in triple
+)
+M1_LEG_POSITION_UPPER = tuple(
+    value
+    for triple in zip(M1_ABAD_UPPER, M1_HIP_UPPER, M1_KNEE_UPPER)
+    for value in triple
+)
 
 
 def m1_reset_root_state_uniform(env, env_ids, pose_range, velocity_range, asset_cfg=SceneEntityCfg("robot")):
@@ -93,9 +111,11 @@ class M1AmeActionsCfg:
         joint_names=list(M1_AME_JOINT_SELECTOR),
         leg_joint_names=list(M1_LEG_JOINT_NAMES),
         wheel_joint_names=list(M1_WHEEL_JOINT_NAMES),
-        leg_scale=0.25,
+        leg_scale=0.15,
         wheel_scale=8.0,
         wheel_velocity_limit=8.0,
+        leg_position_lower=M1_LEG_POSITION_LOWER,
+        leg_position_upper=M1_LEG_POSITION_UPPER,
     )
 
 
