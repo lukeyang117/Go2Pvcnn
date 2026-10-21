@@ -49,8 +49,18 @@ def collect_m1_joint_diagnostics(env) -> dict[str, torch.Tensor]:
         wheel_velocity = _rms(joint_vel, wheel_ids)
         if leg_velocity is not None:
             out["leg_velocity_rms"] = torch.nan_to_num(leg_velocity)
+            out["leg_velocity_abs_max"] = torch.nan_to_num(
+                torch.as_tensor(joint_vel).index_select(
+                    -1, torch.as_tensor(leg_ids, dtype=torch.long, device=joint_vel.device)
+                ).abs().amax()
+            )
         if wheel_velocity is not None:
             out["wheel_velocity_rms"] = torch.nan_to_num(wheel_velocity)
+            out["wheel_velocity_abs_max"] = torch.nan_to_num(
+                torch.as_tensor(joint_vel).index_select(
+                    -1, torch.as_tensor(wheel_ids, dtype=torch.long, device=joint_vel.device)
+                ).abs().amax()
+            )
     if applied_torque is not None:
         leg_torque = _rms(applied_torque, leg_ids)
         wheel_torque = _rms(applied_torque, wheel_ids)

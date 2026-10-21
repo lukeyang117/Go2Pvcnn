@@ -62,6 +62,8 @@ class M1AmeOnPolicyRunner(on_policy_runner.OnPolicyRunner):
         if load_optimizer:
             self.alg.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             self.alg.learning_rate = float(self.alg.optimizer.param_groups[0]["lr"])
+        if hasattr(self.alg.actor_critic, "clip_std"):
+            self.alg.actor_critic.clip_std()
         # Saved `iter` is the zero-based index of the update already completed.
         self.current_learning_iteration = int(checkpoint["iter"]) + 1
         checkpoint_path = Path(path).expanduser().resolve()
@@ -89,7 +91,7 @@ class M1AmeOnPolicyRunner(on_policy_runner.OnPolicyRunner):
             return
         actor_critic = getattr(self.alg, "actor_critic", None)
         if actor_critic is not None and hasattr(actor_critic, "std"):
-            std = actor_critic.std.detach()
+            std = getattr(actor_critic, "effective_action_std", actor_critic.std).detach()
             self.writer.add_scalar("Policy/action_std_min", float(std.min().item()), locs["it"])
             self.writer.add_scalar("Policy/action_std_max", float(std.max().item()), locs["it"])
         if hasattr(self.alg, "last_kl"):

@@ -16,12 +16,6 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 from ame_baseline.ame_env_cfg import AmeObservationsCfg
 from extension.parallelism.m1_kinematics import (
-    M1_ABAD_LOWER,
-    M1_ABAD_UPPER,
-    M1_HIP_LOWER,
-    M1_HIP_UPPER,
-    M1_KNEE_LOWER,
-    M1_KNEE_UPPER,
     M1_ROOT_Z_M,
 )
 from go2_pvcnn.assets.m1 import M1_CFG, M1_USD_JOINT_NAMES
@@ -40,20 +34,11 @@ from m1_ame.m1_ame_rewards import (
 )
 from m1_ame.m1_ame_curriculum import M1AmeCurriculumCfg
 from m1_ame.m1_mixed_actions import M1MixedJointActionCfg
+from m1_ame.m1_ame_safety import m1_joint_pos_rel_safe, m1_joint_vel_rel_safe
 from tracking.cross_large_complex_ppo_env_cfg import CrossLargeComplexPpoEnvCfg
 
 
 M1_AME_JOINT_SELECTOR = tuple(M1_USD_JOINT_NAMES)
-M1_LEG_POSITION_LOWER = tuple(
-    value
-    for triple in zip(M1_ABAD_LOWER, M1_HIP_LOWER, M1_KNEE_LOWER)
-    for value in triple
-)
-M1_LEG_POSITION_UPPER = tuple(
-    value
-    for triple in zip(M1_ABAD_UPPER, M1_HIP_UPPER, M1_KNEE_UPPER)
-    for value in triple
-)
 
 
 def m1_reset_root_state_uniform(env, env_ids, pose_range, velocity_range, asset_cfg=SceneEntityCfg("robot")):
@@ -114,8 +99,8 @@ class M1AmeActionsCfg:
         leg_scale=0.15,
         wheel_scale=8.0,
         wheel_velocity_limit=8.0,
-        leg_position_lower=M1_LEG_POSITION_LOWER,
-        leg_position_upper=M1_LEG_POSITION_UPPER,
+        normalized_action_limit=1.0,
+        leg_target_delta_limit=0.15,
     )
 
 
@@ -180,12 +165,12 @@ class M1AmeObservationsCfg(AmeObservationsCfg):
     @configclass
     class PolicyStateCfg(AmeObservationsCfg.PolicyStateCfg):
         joint_pos = ObsTerm(
-            func=isaac_mdp.joint_pos_rel,
+            func=m1_joint_pos_rel_safe,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=list(M1_AME_JOINT_SELECTOR))},
             noise=Unoise(n_min=-0.01, n_max=0.01),
         )
         joint_vel = ObsTerm(
-            func=isaac_mdp.joint_vel_rel,
+            func=m1_joint_vel_rel_safe,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=list(M1_AME_JOINT_SELECTOR))},
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )

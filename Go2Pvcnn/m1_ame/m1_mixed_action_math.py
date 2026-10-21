@@ -16,6 +16,9 @@ def split_m1_mixed_action(
     wheel_velocity_limit: float | None = None,
     leg_position_lower: Tensor | None = None,
     leg_position_upper: Tensor | None = None,
+    normalized_action_limit: float | None = None,
+    previous_leg_pos_target: Tensor | None = None,
+    leg_target_delta_limit: float | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Convert canonical 16-D actions into leg position and wheel velocity targets."""
 
@@ -33,6 +36,9 @@ def split_m1_mixed_action(
 
     leg_index_tensor = torch.as_tensor(leg_indices, device=actions.device, dtype=torch.long)
     wheel_index_tensor = torch.as_tensor(wheel_indices, device=actions.device, dtype=torch.long)
+    if normalized_action_limit is not None:
+        limit = abs(float(normalized_action_limit))
+        actions = torch.clamp(actions, min=-limit, max=limit)
     leg_action = actions.index_select(-1, leg_index_tensor)
     wheel_action = actions.index_select(-1, wheel_index_tensor)
     position_targets = default_leg_pos + float(leg_scale) * leg_action
@@ -49,6 +55,11 @@ def split_m1_mixed_action(
             raise ValueError("leg position limits must match the number of leg joints")
         position_targets = torch.maximum(position_targets, lower)
         position_targets = torch.minimum(position_targets, upper)
+    if previous_leg_pos_target is not None and leg_target_delta_limit is not None:
+        previous = torch.as_tensor(previous_leg_pos_target, device=actions.device, dtype=position_targets.dtype)
+        delta = float(abs(leg_target_delta_limit))
+        position_targets = torch.maximum(position_targets, previous - delta)
+        position_targets = torch.minimum(position_targets, previous + delta)
     velocity_targets = float(wheel_scale) * wheel_action
     if wheel_velocity_limit is not None:
         limit = abs(float(wheel_velocity_limit))

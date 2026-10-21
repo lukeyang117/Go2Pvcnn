@@ -6,7 +6,12 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-from extension.parallelism.m1_kinematics import M1_DEFAULT_ASSET_JOINT_POS, M1_ROOT_Z_M
+from extension.parallelism.m1_kinematics import (
+    M1_DEFAULT_ASSET_JOINT_POS,
+    M1_PLANNER_JOINT_NAMES,
+    M1_ROOT_Z_M,
+    M1_WHEEL_JOINT_NAMES,
+)
 
 
 M1_USD_PATH = Path(__file__).resolve().parents[4] / "m1" / "ZJ_V3_URDF_V1_0" / "ZJ_V3_URDF_V1_0.usd"
@@ -43,10 +48,19 @@ M1_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        "all_joints": ImplicitActuatorCfg(
-            joint_names_expr=[".*"],
+        "leg_joints": ImplicitActuatorCfg(
+            joint_names_expr=list(M1_PLANNER_JOINT_NAMES),
             stiffness=25.0,
             damping=0.5,
+            effort_limit_sim=150.0,
+            velocity_limit_sim=20.0,
+        ),
+        "wheel_joints": ImplicitActuatorCfg(
+            joint_names_expr=list(M1_WHEEL_JOINT_NAMES),
+            stiffness=0.0,
+            damping=0.5,
+            effort_limit_sim=50.0,
+            velocity_limit_sim=8.0,
         ),
     },
 )

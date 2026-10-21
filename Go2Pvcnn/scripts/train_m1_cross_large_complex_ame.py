@@ -129,7 +129,7 @@ def main() -> int:
         print(f"[AME] log_dir={log_dir}", flush=True)
 
         env = gym.make(env_id, cfg=env_cfg)
-        wrapped_env = AmeRslRlEnvWrapper(env, clip_actions=100.0)
+        wrapped_env = AmeRslRlEnvWrapper(env, clip_actions=1.0)
         policy_obs, extras = wrapped_env.get_observations()
         critic_obs = extras["observations"]["critic"]
         print(

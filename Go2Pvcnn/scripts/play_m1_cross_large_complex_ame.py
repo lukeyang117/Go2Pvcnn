@@ -62,7 +62,7 @@ def main() -> int:
         env_cfg.sim.device = device
         env_cfg.seed = args.seed
         env = gym.make(env_id, cfg=env_cfg)
-        wrapped = AmeRslRlEnvWrapper(env, clip_actions=100.0)
+        wrapped = AmeRslRlEnvWrapper(env, clip_actions=1.0)
         runner = M1AmeOnPolicyRunner(
             wrapped,
             copy.deepcopy(get_m1_ame_train_cfg()),

@@ -48,7 +48,7 @@ class M1MixedJointAction(ActionTerm):
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
         self._processed_actions = torch.zeros_like(self._raw_actions)
-        self._position_targets = torch.zeros(self.num_envs, len(self._leg_joint_ids), device=self.device)
+        self._position_targets = self._asset.data.default_joint_pos[:, self._leg_joint_ids].clone()
         self._velocity_targets = torch.zeros(self.num_envs, len(self._wheel_joint_ids), device=self.device)
 
     @property
@@ -66,8 +66,13 @@ class M1MixedJointAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor) -> None:
         if actions.shape != self._raw_actions.shape:
             raise ValueError(f"Invalid M1 mixed action shape: expected {tuple(self._raw_actions.shape)}, got {tuple(actions.shape)}")
-        self._raw_actions[:] = actions.to(self.device)
+        self._raw_actions[:] = torch.clamp(
+            actions.to(self.device),
+            min=-abs(float(self.cfg.normalized_action_limit)),
+            max=abs(float(self.cfg.normalized_action_limit)),
+        )
         default_leg_pos = self._asset.data.default_joint_pos[:, self._leg_joint_ids]
+        soft_limits = self._asset.data.soft_joint_pos_limits[:, self._leg_joint_ids]
         self._position_targets, self._velocity_targets = split_m1_mixed_action(
             self._raw_actions,
             self._leg_action_indices,
@@ -76,8 +81,11 @@ class M1MixedJointAction(ActionTerm):
             self.cfg.wheel_scale,
             default_leg_pos,
             self.cfg.wheel_velocity_limit,
-            self.cfg.leg_position_lower,
-            self.cfg.leg_position_upper,
+            soft_limits[..., 0],
+            soft_limits[..., 1],
+            self.cfg.normalized_action_limit,
+            self._position_targets,
+            self.cfg.leg_target_delta_limit,
         )
         self._processed_actions.zero_()
         self._processed_actions[:, self._leg_action_indices] = self._position_targets
@@ -92,7 +100,8 @@ class M1MixedJointAction(ActionTerm):
             env_ids = slice(None)
         self._raw_actions[env_ids] = 0.0
         self._processed_actions[env_ids] = 0.0
-        self._position_targets[env_ids] = 0.0
+        default_leg_pos = self._asset.data.default_joint_pos[:, self._leg_joint_ids]
+        self._position_targets[env_ids] = default_leg_pos[env_ids]
         self._velocity_targets[env_ids] = 0.0
 
 
@@ -109,6 +118,8 @@ class M1MixedJointActionCfg(ActionTermCfg):
     wheel_velocity_limit: float = 8.0
     leg_position_lower: tuple[float, ...] | None = None
     leg_position_upper: tuple[float, ...] | None = None
+    normalized_action_limit: float = 1.0
+    leg_target_delta_limit: float = 0.15
 
 
 __all__ = ["M1MixedJointAction", "M1MixedJointActionCfg", "split_m1_mixed_action"]
